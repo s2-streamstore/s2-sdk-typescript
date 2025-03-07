@@ -91,7 +91,7 @@ export type S2OperationConfig = {
 export enum AppendRetryPolicy {
     /**
      * Retry all eligible failures encountered during an append.
-     * This could result in append batches being duplicated on the stream.     
+     * This could result in append batches being duplicated on the stream.
      */
     All,
     /**
@@ -160,7 +160,7 @@ class S2Account {
         this.config.httpClient?.addHook("beforeRequest", (request) => {
             if (config?.authToken !== undefined) {
                 request.headers.set("Authorization", `Bearer ${config.authToken}`);
-            }            
+            }
         });
     }
 
@@ -269,7 +269,7 @@ class S2Basin {
         this.config.httpClient?.addHook("beforeRequest", (request) => {
             if (config?.authToken !== undefined) {
                 request.headers.set("Authorization", `Bearer ${config.authToken}`);
-            }            
+            }
         });
     }
 
@@ -353,7 +353,7 @@ class Stream {
         this.config.httpClient?.addHook("beforeRequest", (request) => {
             if (config?.authToken !== undefined) {
                 request.headers.set("Authorization", `Bearer ${config.authToken}`);
-            }            
+            }
         });
     }
 
