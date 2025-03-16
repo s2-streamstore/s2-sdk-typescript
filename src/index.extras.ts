@@ -419,9 +419,20 @@ class Stream {
         const maxBackoffMs = 5000;
         const maxRetries = this.config.maxRetries ?? 5;
         let retryCount = 0;
+        const PING_TIMEOUT_MS = 30000;
+        let lastPingTime = Date.now();
+        let pingTimeoutError: Error | null = null;
+
+        const checkPingTimeout = () => {
+            if (Date.now() - lastPingTime > PING_TIMEOUT_MS) {
+                pingTimeoutError = new Error('No ping received for over 30 seconds');
+            }
+        };
 
         while (true) {
             let stream: EventStream<ReadResponse> | undefined;
+            let pingInterval: ReturnType<typeof setInterval> | undefined;
+            
             try {
                 const response = await this._stream.read(
                     { ...currentRequest, stream: this.streamName },
@@ -433,33 +444,47 @@ class Stream {
                 );
                 stream = response as EventStream<ReadResponse>;
                 if (!stream) return;
+                
+                pingInterval = setInterval(checkPingTimeout, 1000);
 
-                for await (const event of stream) {
-                    yield event;
+                try {
+                    for await (const event of stream) {
+                        if (pingTimeoutError) throw pingTimeoutError;
 
-                    if (event.event === 'message') {
-                        const output = event as Message;
-                        if ('batch' in output.data) {
-                            const batch = output.data.batch;
-                            if (batch.records && batch.records.length > 0) {
-                                const lastRecord = batch.records[batch.records.length - 1];
-                                if (lastRecord) {
-                                    currentRequest = { ...currentRequest, startSeqNum: lastRecord.seqNum + 1 };
+                        if (event.event === 'ping') {
+                            lastPingTime = Date.now();
+                            continue;
+                        }
+
+                        yield event;
+
+                        if (event.event === 'message') {
+                            const output = event as Message;
+                            if ('batch' in output.data) {
+                                const batch = output.data.batch;
+                                if (batch.records && batch.records.length > 0) {
+                                    const lastRecord = batch.records[batch.records.length - 1];
+                                    if (lastRecord) {
+                                        currentRequest = { ...currentRequest, startSeqNum: lastRecord.seqNum + 1 };
+                                    }
                                 }
-                            }
-                            if (currentRequest.limit) {
-                                if (currentRequest.limit.count != null) {
-                                    currentRequest.limit.count = Math.max(0, currentRequest.limit.count - batch.records.length);
-                                }
-                                if (currentRequest.limit.bytes != null) {
-                                    currentRequest.limit.bytes = Math.max(0, currentRequest.limit.bytes - meteredBatchSize(batch));
+                                if (currentRequest.limit) {
+                                    if (currentRequest.limit.count != null) {
+                                        currentRequest.limit.count = Math.max(0, currentRequest.limit.count - batch.records.length);
+                                    }
+                                    if (currentRequest.limit.bytes != null) {
+                                        currentRequest.limit.bytes = Math.max(0, currentRequest.limit.bytes - meteredBatchSize(batch));
+                                    }
                                 }
                             }
                         }
                     }
+                } finally {
+                    if (pingInterval) clearInterval(pingInterval);
                 }
                 return;
             } catch (error) {
+                if (pingInterval) clearInterval(pingInterval);
                 if (error instanceof RetryableError) {
                     if (retryCount >= maxRetries) {
                         throw error;
