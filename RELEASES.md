@@ -89,3 +89,13 @@ Based on:
 - [typescript v0.8.3] .
 ### Releases
 - [NPM v0.8.3] https://www.npmjs.com/package/@s2-dev/streamstore/v/0.8.3 - .
+
+## 2025-03-29 00:20:03
+### Changes
+Based on:
+- OpenAPI Doc  
+- Speakeasy CLI 1.526.0 (2.563.0) https://github.com/speakeasy-api/speakeasy
+### Generated
+- [typescript v0.9.0] .
+### Releases
+- [NPM v0.9.0] https://www.npmjs.com/package/@s2-dev/streamstore/v/0.9.0 - .

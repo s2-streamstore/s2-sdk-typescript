@@ -18,7 +18,11 @@ export const ReadServerList = [
 ] as const;
 
 /**
- * Limit on how many records can be returned upto a maximum of 1000, or 1MiB of metered bytes.
+ * Limit how many records can be returned.
+ *
+ * @remarks
+ * This will get capped at the default limit,
+ * which is up to 1000 records or 1MiB of metered bytes.
  */
 export type Limit = {
   /**
@@ -45,7 +49,11 @@ export type ReadRequest = {
    */
   startSeqNum?: number | undefined;
   /**
-   * Limit on how many records can be returned upto a maximum of 1000, or 1MiB of metered bytes.
+   * Limit how many records can be returned.
+   *
+   * @remarks
+   * This will get capped at the default limit,
+   * which is up to 1000 records or 1MiB of metered bytes.
    */
   limit?: Limit | undefined;
   /**

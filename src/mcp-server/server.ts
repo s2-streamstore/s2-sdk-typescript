@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { S2Core } from "../core.js";
 import { SDKOptions } from "../lib/config.js";
 import type { ConsoleLogger } from "./console-logger.js";
+import { createRegisterPrompt } from "./prompts.js";
 import {
   createRegisterResource,
   createRegisterResourceTemplate,
@@ -36,7 +37,7 @@ export function createMCPServer(deps: {
 }) {
   const server = new McpServer({
     name: "S2",
-    version: "0.8.3",
+    version: "0.9.0",
   });
 
   const client = new S2Core({
@@ -62,7 +63,8 @@ export function createMCPServer(deps: {
     client,
     scopes,
   );
-  const register = { tool, resource, resourceTemplate };
+  const prompt = createRegisterPrompt(deps.logger, server, client, scopes);
+  const register = { tool, resource, resourceTemplate, prompt };
   void register; // suppress unused warnings
 
   tool(tool$accountListBasins);

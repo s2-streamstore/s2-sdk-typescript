@@ -1,21 +1,21 @@
-speakeasyVersion: 1.517.3
+speakeasyVersion: 1.526.0
 sources:
     S2 API:
         sourceNamespace: s-2-api
-        sourceRevisionDigest: sha256:fcd4b4ca21591d24e1e05f4cc8b37dd7c38d86f36fcdc0f3c7c893ab8d537ed2
-        sourceBlobDigest: sha256:1b3ef0abca7bf3448a722a6adebea3597b9a668c75a63d90603864a217268e6b
+        sourceRevisionDigest: sha256:f1d83361916b35822f541e0a01c355dde95ef6e49e35e64fd3d4cf7deb9e4aa2
+        sourceBlobDigest: sha256:9d293d7de1fd49273a04610c968cb7bc5b2523af81c04810beb7fb327eb20b42
         tags:
             - latest
-            - speakeasy-sdk-regen-1741998020
+            - speakeasy-sdk-regen-1743207618
             - 1.0.0
 targets:
     streamstore:
         source: S2 API
         sourceNamespace: s-2-api
-        sourceRevisionDigest: sha256:fcd4b4ca21591d24e1e05f4cc8b37dd7c38d86f36fcdc0f3c7c893ab8d537ed2
-        sourceBlobDigest: sha256:1b3ef0abca7bf3448a722a6adebea3597b9a668c75a63d90603864a217268e6b
+        sourceRevisionDigest: sha256:f1d83361916b35822f541e0a01c355dde95ef6e49e35e64fd3d4cf7deb9e4aa2
+        sourceBlobDigest: sha256:9d293d7de1fd49273a04610c968cb7bc5b2523af81c04810beb7fb327eb20b42
         codeSamplesNamespace: s-2-api-typescript-code-samples
-        codeSamplesRevisionDigest: sha256:542fbebe7a67b84c69a7e1ed24d219a598f4e8bf344da52e7b86eef006781e2a
+        codeSamplesRevisionDigest: sha256:8574a5eb372a1e15b92defed0cee747557e9c0541a2b0d8e4ff1348f7112f24b
 workflow:
     workflowVersion: 1.0.0
     speakeasyVersion: latest

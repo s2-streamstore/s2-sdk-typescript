@@ -15,35 +15,37 @@ import {
 } from "./sequencedrecordbatch.js";
 
 /**
- * Sequence number for the next record on this stream, in case the requested `start_seq_num` was larger.
+ * Sequence number that will be assigned to the next record on this stream.
  *
  * @remarks
- * If returned in a streaming read session, this will be a terminal reply.
+ * This will be returned either because the requested `start_seq_num` was larger,
+ * or in case of a limited read, equal to it.
  */
 export type NextSeqNum = {
   /**
-   * Sequence number for the next record on this stream, in case the requested `start_seq_num` was larger.
+   * Sequence number that will be assigned to the next record on this stream.
    *
    * @remarks
-   * If returned in a streaming read session, this will be a terminal reply.
+   * This will be returned either because the requested `start_seq_num` was larger,
+   * or in case of a limited read, equal to it.
    */
   nextSeqNum: number;
 };
 
 /**
- * Sequence number for the first record on this stream, in case the requested `start_seq_num` is smaller.
+ * Sequence number for the first record on this stream.
  *
  * @remarks
- * If returned in a streaming read session, this will be a terminal reply, to signal that there is uncertainty about whether some records may be omitted.
- * The client can re-establish the session starting at this sequence number.
+ * Typically this will be returned when the requested `start_seq_num` was smaller.
+ * It may also be returned during a session, if the stream gets concurrently trimmed.
  */
 export type FirstSeqNum = {
   /**
-   * Sequence number for the first record on this stream, in case the requested `start_seq_num` is smaller.
+   * Sequence number for the first record on this stream.
    *
    * @remarks
-   * If returned in a streaming read session, this will be a terminal reply, to signal that there is uncertainty about whether some records may be omitted.
-   * The client can re-establish the session starting at this sequence number.
+   * Typically this will be returned when the requested `start_seq_num` was smaller.
+   * It may also be returned during a session, if the stream gets concurrently trimmed.
    */
   firstSeqNum: number;
 };
@@ -52,8 +54,8 @@ export type FirstSeqNum = {
  * Batch of records.
  *
  * @remarks
- * This batch can be empty only if a `ReadLimit` was provided in the associated read request, but the first record
- * that could have been returned would violate the limit.
+ * It can only be empty when not in a session context (which implies a limit),
+ * if the first record that could have been retrieved would violate the limit.
  */
 export type Batch = {
   /**
@@ -63,7 +65,10 @@ export type Batch = {
 };
 
 /**
- * Reply which can be a batch of records, or a sequence number if the request could not be satisfied.
+ * Batch of records, or a sequence number if the read could not be satisfied.
+ *
+ * @remarks
+ * An empty batch or a sequence number output will be a terminal message in a session.
  */
 export type Output = Batch | FirstSeqNum | NextSeqNum;
 
