@@ -1,8 +1,8 @@
 # Batch
 
 Batch of records.
-This batch can be empty only if a `ReadLimit` was provided in the associated read request, but the first record
-that could have been returned would violate the limit.
+It can only be empty when not in a session context (which implies a limit),
+if the first record that could have been retrieved would violate the limit.
 
 ## Example Usage
 
