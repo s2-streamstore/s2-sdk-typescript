@@ -1,8 +1,8 @@
 # Batch
 
 Batch of records.
-It can only be empty when not in a session context (which implies a limit),
-if the first record that could have been retrieved would violate the limit.
+It can only be empty outside of a session context,
+if the request cannot be satisfied without violating its limit.
 
 ## Example Usage
 
@@ -20,8 +20,8 @@ let value: Batch = {
             value: "<value>",
           },
         ],
-        seqNum: 978619,
-        timestamp: 799159,
+        seqNum: 793742,
+        timestamp: 773663,
       },
     ],
   },

@@ -15,47 +15,33 @@ import {
 } from "./sequencedrecordbatch.js";
 
 /**
- * Sequence number that will be assigned to the next record on this stream.
+ * Tail of the stream, i.e. sequence number that will be assigned to the next record.
  *
  * @remarks
- * This will be returned either because the requested `start_seq_num` was larger,
- * or in case of a limited read, equal to it.
+ * It will primarily be returned either because the requested starting point was larger,
+ * or only in case of a limited read, equal to the tail.
+ * It will also be returned if there are no records on the stream between the requested
+ * starting point and the tail.
  */
 export type NextSeqNum = {
   /**
-   * Sequence number that will be assigned to the next record on this stream.
+   * Tail of the stream, i.e. sequence number that will be assigned to the next record.
    *
    * @remarks
-   * This will be returned either because the requested `start_seq_num` was larger,
-   * or in case of a limited read, equal to it.
+   * It will primarily be returned either because the requested starting point was larger,
+   * or only in case of a limited read, equal to the tail.
+   * It will also be returned if there are no records on the stream between the requested
+   * starting point and the tail.
    */
   nextSeqNum: number;
-};
-
-/**
- * Sequence number for the first record on this stream.
- *
- * @remarks
- * Typically this will be returned when the requested `start_seq_num` was smaller.
- * It may also be returned during a session, if the stream gets concurrently trimmed.
- */
-export type FirstSeqNum = {
-  /**
-   * Sequence number for the first record on this stream.
-   *
-   * @remarks
-   * Typically this will be returned when the requested `start_seq_num` was smaller.
-   * It may also be returned during a session, if the stream gets concurrently trimmed.
-   */
-  firstSeqNum: number;
 };
 
 /**
  * Batch of records.
  *
  * @remarks
- * It can only be empty when not in a session context (which implies a limit),
- * if the first record that could have been retrieved would violate the limit.
+ * It can only be empty outside of a session context,
+ * if the request cannot be satisfied without violating its limit.
  */
 export type Batch = {
   /**
@@ -65,12 +51,9 @@ export type Batch = {
 };
 
 /**
- * Batch of records, or a sequence number if the read could not be satisfied.
- *
- * @remarks
- * An empty batch or a sequence number output will be a terminal message in a session.
+ * Batch of records or the next sequence number on the stream.
  */
-export type Output = Batch | FirstSeqNum | NextSeqNum;
+export type Output = Batch | NextSeqNum;
 
 /** @internal */
 export const NextSeqNum$inboundSchema: z.ZodType<
@@ -131,64 +114,6 @@ export function nextSeqNumFromJSON(
 }
 
 /** @internal */
-export const FirstSeqNum$inboundSchema: z.ZodType<
-  FirstSeqNum,
-  z.ZodTypeDef,
-  unknown
-> = z.object({
-  first_seq_num: z.number().int(),
-}).transform((v) => {
-  return remap$(v, {
-    "first_seq_num": "firstSeqNum",
-  });
-});
-
-/** @internal */
-export type FirstSeqNum$Outbound = {
-  first_seq_num: number;
-};
-
-/** @internal */
-export const FirstSeqNum$outboundSchema: z.ZodType<
-  FirstSeqNum$Outbound,
-  z.ZodTypeDef,
-  FirstSeqNum
-> = z.object({
-  firstSeqNum: z.number().int(),
-}).transform((v) => {
-  return remap$(v, {
-    firstSeqNum: "first_seq_num",
-  });
-});
-
-/**
- * @internal
- * @deprecated This namespace will be removed in future versions. Use schemas and types that are exported directly from this module.
- */
-export namespace FirstSeqNum$ {
-  /** @deprecated use `FirstSeqNum$inboundSchema` instead. */
-  export const inboundSchema = FirstSeqNum$inboundSchema;
-  /** @deprecated use `FirstSeqNum$outboundSchema` instead. */
-  export const outboundSchema = FirstSeqNum$outboundSchema;
-  /** @deprecated use `FirstSeqNum$Outbound` instead. */
-  export type Outbound = FirstSeqNum$Outbound;
-}
-
-export function firstSeqNumToJSON(firstSeqNum: FirstSeqNum): string {
-  return JSON.stringify(FirstSeqNum$outboundSchema.parse(firstSeqNum));
-}
-
-export function firstSeqNumFromJSON(
-  jsonString: string,
-): SafeParseResult<FirstSeqNum, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => FirstSeqNum$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'FirstSeqNum' from JSON`,
-  );
-}
-
-/** @internal */
 export const Batch$inboundSchema: z.ZodType<Batch, z.ZodTypeDef, unknown> = z
   .object({
     batch: SequencedRecordBatch$inboundSchema,
@@ -239,15 +164,11 @@ export function batchFromJSON(
 export const Output$inboundSchema: z.ZodType<Output, z.ZodTypeDef, unknown> = z
   .union([
     z.lazy(() => Batch$inboundSchema),
-    z.lazy(() => FirstSeqNum$inboundSchema),
     z.lazy(() => NextSeqNum$inboundSchema),
   ]);
 
 /** @internal */
-export type Output$Outbound =
-  | Batch$Outbound
-  | FirstSeqNum$Outbound
-  | NextSeqNum$Outbound;
+export type Output$Outbound = Batch$Outbound | NextSeqNum$Outbound;
 
 /** @internal */
 export const Output$outboundSchema: z.ZodType<
@@ -256,7 +177,6 @@ export const Output$outboundSchema: z.ZodType<
   Output
 > = z.union([
   z.lazy(() => Batch$outboundSchema),
-  z.lazy(() => FirstSeqNum$outboundSchema),
   z.lazy(() => NextSeqNum$outboundSchema),
 ]);
 

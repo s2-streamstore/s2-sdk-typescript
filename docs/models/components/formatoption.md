@@ -5,7 +5,7 @@
 ```typescript
 import { FormatOption } from "@s2-dev/streamstore/models/components";
 
-let value: FormatOption = "json-binsafe";
+let value: FormatOption = "json";
 ```
 
 ## Values

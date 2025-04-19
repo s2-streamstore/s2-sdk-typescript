@@ -7,7 +7,7 @@ Current state of the basin.
 ```typescript
 import { BasinState } from "@s2-dev/streamstore/models/components";
 
-let value: BasinState = "creating";
+let value: BasinState = "deleting";
 ```
 
 ## Values

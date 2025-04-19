@@ -41,10 +41,7 @@ export type Event = ClosedEnum<typeof Event>;
 
 export type Message = {
   /**
-   * Batch of records, or a sequence number if the read could not be satisfied.
-   *
-   * @remarks
-   * An empty batch or a sequence number output will be a terminal message in a session.
+   * Batch of records or the next sequence number on the stream.
    */
   data: Output;
   event: Event;
