@@ -350,9 +350,7 @@ const s2 = new S2({
 async function run() {
   const result = await s2.basin.reconfigureStream({
     stream: "<value>",
-    streamConfig: {
-      storageClass: "unspecified",
-    },
+    streamConfig: {},
   });
 
   // Handle the result
@@ -379,9 +377,7 @@ const s2 = new S2Core({
 async function run() {
   const res = await basinReconfigureStream(s2, {
     stream: "<value>",
-    streamConfig: {
-      storageClass: "unspecified",
-    },
+    streamConfig: {},
   });
 
   if (!res.ok) {

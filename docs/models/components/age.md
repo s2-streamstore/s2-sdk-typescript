@@ -9,7 +9,7 @@ If set to 0, the stream will have infinite retention.
 import { Age } from "@s2-dev/streamstore/models/components";
 
 let value: Age = {
-  age: 7,
+  age: 41,
 };
 ```
 

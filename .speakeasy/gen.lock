@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: 02d1a42462defc610f7e2251c6b9dde7
+  docChecksum: c11c879c72cf65b0090712c1a77044fd
   docVersion: 1.0.0
-  speakeasyVersion: 1.526.1
-  generationVersion: 2.563.0
-  releaseVersion: 0.10.0
-  configChecksum: bb12b2b4cc1d1bea3b08930bf3c6ecbe
+  speakeasyVersion: 1.535.1
+  generationVersion: 2.585.2
+  releaseVersion: 0.10.1
+  configChecksum: 32dcfe76aacb238be65223963e2392ec
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
@@ -14,7 +14,7 @@ features:
   typescript:
     acceptHeaders: 2.81.2
     additionalDependencies: 0.1.0
-    core: 3.21.4
+    core: 3.21.6
     defaultEnabledRetries: 0.1.0
     devContainers: 2.90.0
     enumUnions: 0.1.0
@@ -24,7 +24,7 @@ features:
     globalSecurityCallbacks: 0.1.0
     globalSecurityFlattening: 0.1.0
     globalServerURLs: 2.82.4
-    mcpServer: 0.9.0
+    mcpServer: 0.9.2
     methodServerURLs: 2.82.1
     nullables: 0.1.1
     pagination: 2.83.0
@@ -57,7 +57,6 @@ generatedFiles:
   - docs/models/components/createstreamrequest.md
   - docs/models/components/errort.md
   - docs/models/components/event.md
-  - docs/models/components/firstseqnum.md
   - docs/models/components/formatoption.md
   - docs/models/components/header.md
   - docs/models/components/listbasinsresponse.md
@@ -231,12 +230,12 @@ examples:
     speakeasy-default-list-basins:
       responses:
         "200":
-          application/json: {"basins": [{"name": "<value>", "scope": "unspecified", "state": "unspecified"}], "has_more": true}
+          application/json: {"basins": [{"name": "<value>", "scope": "unspecified", "state": "unspecified"}], "has_more": false}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   get_basin_config:
     speakeasy-default-get-basin-config:
@@ -248,9 +247,9 @@ examples:
           application/json: {}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   create_basin:
     speakeasy-default-create-basin:
@@ -262,12 +261,12 @@ examples:
         application/json: {}
       responses:
         "201":
-          application/json: {"name": "<value>", "scope": "unspecified", "state": "active"}
+          application/json: {"name": "<value>", "scope": "unspecified", "state": "creating"}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   delete_basin:
     speakeasy-default-delete-basin:
@@ -277,11 +276,27 @@ examples:
       responses:
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "404":
           application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
+          application/json: {"error": "<value>"}
+  reconfigure_basin:
+    speakeasy-default-reconfigure-basin:
+      parameters:
+        path:
+          basin: "<value>"
+      requestBody:
+        application/json: {}
+      responses:
+        "200":
+          application/json: {}
+        "400":
+          application/json: {"error": "<value>"}
+        "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   list_streams:
     speakeasy-default-list-streams:
@@ -290,9 +305,9 @@ examples:
           application/json: {"has_more": false, "streams": []}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   get_stream_config:
     speakeasy-default-get-stream-config:
@@ -301,12 +316,12 @@ examples:
           stream: "<value>"
       responses:
         "200":
-          application/json: {"storage_class": "unspecified"}
+          application/json: {}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   create_stream:
     speakeasy-default-create-stream:
@@ -321,9 +336,9 @@ examples:
           application/json: {"created_at": 180107, "name": "<value>"}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   delete_stream:
     speakeasy-default-delete-stream:
@@ -333,11 +348,27 @@ examples:
       responses:
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "404":
           application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
+          application/json: {"error": "<value>"}
+  reconfigure_stream:
+    speakeasy-default-reconfigure-stream:
+      parameters:
+        path:
+          stream: "<value>"
+      requestBody:
+        application/json: {}
+      responses:
+        "200":
+          application/json: {}
+        "400":
+          application/json: {"error": "<value>"}
+        "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   read:
     speakeasy-default-read:
@@ -351,9 +382,9 @@ examples:
           application/json: {"next_seq_num": 609658}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   append:
     speakeasy-default-append:
@@ -368,9 +399,9 @@ examples:
           application/json: {"end_seq_num": 582963, "next_seq_num": 832685, "start_seq_num": 691053}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
+          application/json: {"error": "<value>"}
+        "500":
           application/json: {"error": "<value>"}
   check_tail:
     speakeasy-default-check-tail:
@@ -382,41 +413,9 @@ examples:
           application/json: {"next_seq_num": 483653}
         "400":
           application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
         "499":
-          application/json: {"error": "<value>"}
-  reconfigure_basin:
-    speakeasy-default-reconfigure-basin:
-      parameters:
-        path:
-          basin: "<value>"
-      requestBody:
-        application/json: {}
-      responses:
-        "200":
-          application/json: {}
-        "400":
           application/json: {"error": "<value>"}
         "500":
           application/json: {"error": "<value>"}
-        "499":
-          application/json: {"error": "<value>"}
-  reconfigure_stream:
-    speakeasy-default-reconfigure-stream:
-      parameters:
-        path:
-          stream: "<value>"
-      requestBody:
-        application/json: {"storage_class": "unspecified"}
-      responses:
-        "200":
-          application/json: {}
-        "400":
-          application/json: {"error": "<value>"}
-        "500":
-          application/json: {"error": "<value>"}
-        "499":
-          application/json: {"error": "<value>"}
-examplesVersion: 1.0.0
+examplesVersion: 1.0.1
 generatedTests: {}

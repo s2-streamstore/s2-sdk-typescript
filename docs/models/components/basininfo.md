@@ -10,7 +10,7 @@ import { BasinInfo } from "@s2-dev/streamstore/models/components";
 let value: BasinInfo = {
   name: "<value>",
   scope: "unspecified",
-  state: "deleting",
+  state: "creating",
 };
 ```
 

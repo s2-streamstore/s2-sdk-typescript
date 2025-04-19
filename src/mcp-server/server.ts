@@ -11,7 +11,7 @@ import {
   createRegisterResource,
   createRegisterResourceTemplate,
 } from "./resources.js";
-import { MCPScope, mcpScopes } from "./scopes.js";
+import { MCPScope } from "./scopes.js";
 import { createRegisterTool } from "./tools.js";
 import { tool$accountCreateBasin } from "./tools/accountCreateBasin.js";
 import { tool$accountDeleteBasin } from "./tools/accountDeleteBasin.js";
@@ -37,7 +37,7 @@ export function createMCPServer(deps: {
 }) {
   const server = new McpServer({
     name: "S2",
-    version: "0.10.0",
+    version: "0.10.1",
   });
 
   const client = new S2Core({
@@ -46,7 +46,7 @@ export function createMCPServer(deps: {
     serverIdx: deps.serverIdx,
   });
 
-  const scopes = new Set(deps.scopes ?? mcpScopes);
+  const scopes = new Set(deps.scopes);
 
   const allowedTools = deps.allowedTools && new Set(deps.allowedTools);
   const tool = createRegisterTool(

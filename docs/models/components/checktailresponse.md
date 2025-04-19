@@ -8,7 +8,7 @@ Check tail response.
 import { CheckTailResponse } from "@s2-dev/streamstore/models/components";
 
 let value: CheckTailResponse = {
-  nextSeqNum: 681820,
+  nextSeqNum: 844206,
 };
 ```
 

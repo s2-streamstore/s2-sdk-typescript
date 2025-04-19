@@ -10,8 +10,8 @@ let value: ListBasinsResponse = {
     basins: [
       {
         name: "<value>",
-        scope: "aws:us-east-1",
-        state: "creating",
+        scope: "unspecified",
+        state: "deleting",
       },
     ],
     hasMore: false,

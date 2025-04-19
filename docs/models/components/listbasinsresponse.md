@@ -11,7 +11,7 @@ let value: ListBasinsResponse = {
   basins: [
     {
       name: "<value>",
-      scope: "aws:us-east-1",
+      scope: "unspecified",
       state: "deleting",
     },
   ],
