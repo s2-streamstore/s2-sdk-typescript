@@ -21,14 +21,14 @@ export type BasinConfig = {
    * @remarks
    * using the default stream configuration.
    */
-  createStreamOnAppend?: boolean | null | undefined;
+  createStreamOnAppend: boolean;
   /**
    * Create stream on read if it doesn't exist,
    *
    * @remarks
    * using the default stream configuration.
    */
-  createStreamOnRead?: boolean | null | undefined;
+  createStreamOnRead: boolean;
   defaultStreamConfig?: StreamConfig | null | undefined;
 };
 
@@ -38,8 +38,8 @@ export const BasinConfig$inboundSchema: z.ZodType<
   z.ZodTypeDef,
   unknown
 > = z.object({
-  create_stream_on_append: z.nullable(z.boolean()).optional(),
-  create_stream_on_read: z.nullable(z.boolean()).optional(),
+  create_stream_on_append: z.boolean(),
+  create_stream_on_read: z.boolean(),
   default_stream_config: z.nullable(StreamConfig$inboundSchema).optional(),
 }).transform((v) => {
   return remap$(v, {
@@ -51,8 +51,8 @@ export const BasinConfig$inboundSchema: z.ZodType<
 
 /** @internal */
 export type BasinConfig$Outbound = {
-  create_stream_on_append?: boolean | null | undefined;
-  create_stream_on_read?: boolean | null | undefined;
+  create_stream_on_append: boolean;
+  create_stream_on_read: boolean;
   default_stream_config?: StreamConfig$Outbound | null | undefined;
 };
 
@@ -62,8 +62,8 @@ export const BasinConfig$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   BasinConfig
 > = z.object({
-  createStreamOnAppend: z.nullable(z.boolean()).optional(),
-  createStreamOnRead: z.nullable(z.boolean()).optional(),
+  createStreamOnAppend: z.boolean(),
+  createStreamOnRead: z.boolean(),
   defaultStreamConfig: z.nullable(StreamConfig$outboundSchema).optional(),
 }).transform((v) => {
   return remap$(v, {

@@ -86,7 +86,7 @@ async function $do(
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload.CreateBasinRequest, {
+  const body = encodeJSON("body", payload.CreateOrReconfigureBasinRequest, {
     explode: true,
   });
 

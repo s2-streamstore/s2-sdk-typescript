@@ -8,6 +8,7 @@ Manage basins
 ### Available Operations
 
 * [listBasins](#listbasins) - List basins.
+* [createBasin](#createbasin) - Create a basin.
 * [getBasinConfig](#getbasinconfig) - Get basin config.
 * [createOrReconfigureBasin](#createorreconfigurebasin) - Create or reconfigure a basin.
 * [deleteBasin](#deletebasin) - Delete a basin.
@@ -82,6 +83,85 @@ run();
 ### Response
 
 **Promise\<[operations.ListBasinsResponse](../../models/operations/listbasinsresponse.md)\>**
+
+### Errors
+
+| Error Type            | Status Code           | Content Type          |
+| --------------------- | --------------------- | --------------------- |
+| errors.ErrorResponse  | 400, 401              | application/json      |
+| errors.RetryableError | 499                   | application/json      |
+| errors.RetryableError | 500, 503, 504         | application/json      |
+| errors.APIError       | 4XX, 5XX              | \*/\*                 |
+
+## createBasin
+
+Create a basin.
+
+### Example Usage
+
+```typescript
+import { S2 } from "@s2-dev/streamstore";
+
+const s2 = new S2({
+  accessToken: process.env["S2_ACCESS_TOKEN"] ?? "",
+});
+
+async function run() {
+  const result = await s2.basins.createBasin({
+    basin: "<value>",
+  });
+
+  // Handle the result
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { S2Core } from "@s2-dev/streamstore/core.js";
+import { basinsCreateBasin } from "@s2-dev/streamstore/funcs/basinsCreateBasin.js";
+
+// Use `S2Core` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const s2 = new S2Core({
+  accessToken: process.env["S2_ACCESS_TOKEN"] ?? "",
+});
+
+async function run() {
+  const res = await basinsCreateBasin(s2, {
+    basin: "<value>",
+  });
+
+  if (!res.ok) {
+    throw res.error;
+  }
+
+  const { value: result } = res;
+
+  // Handle the result
+  console.log(result);
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [components.CreateBasinRequest](../../models/components/createbasinrequest.md)                                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[components.BasinInfo](../../models/components/basininfo.md)\>**
 
 ### Errors
 
@@ -187,7 +267,7 @@ const s2 = new S2({
 async function run() {
   const result = await s2.basins.createOrReconfigureBasin({
     basin: "<value>",
-    createBasinRequest: {},
+    createOrReconfigureBasinRequest: {},
   });
 
   // Handle the result
@@ -214,7 +294,7 @@ const s2 = new S2Core({
 async function run() {
   const res = await basinsCreateOrReconfigureBasin(s2, {
     basin: "<value>",
-    createBasinRequest: {},
+    createOrReconfigureBasinRequest: {},
   });
 
   if (!res.ok) {

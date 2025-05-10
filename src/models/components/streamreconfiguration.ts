@@ -28,7 +28,7 @@ import {
 export type StreamReconfiguration = {
   retentionPolicy?: RetentionPolicy | null | undefined;
   storageClass?: StorageClass | null | undefined;
-  timestamping: TimestampingReconfiguration;
+  timestamping?: TimestampingReconfiguration | null | undefined;
 };
 
 /** @internal */
@@ -39,7 +39,8 @@ export const StreamReconfiguration$inboundSchema: z.ZodType<
 > = z.object({
   retention_policy: z.nullable(RetentionPolicy$inboundSchema).optional(),
   storage_class: z.nullable(StorageClass$inboundSchema).optional(),
-  timestamping: TimestampingReconfiguration$inboundSchema,
+  timestamping: z.nullable(TimestampingReconfiguration$inboundSchema)
+    .optional(),
 }).transform((v) => {
   return remap$(v, {
     "retention_policy": "retentionPolicy",
@@ -51,7 +52,7 @@ export const StreamReconfiguration$inboundSchema: z.ZodType<
 export type StreamReconfiguration$Outbound = {
   retention_policy?: RetentionPolicy$Outbound | null | undefined;
   storage_class?: string | null | undefined;
-  timestamping: TimestampingReconfiguration$Outbound;
+  timestamping?: TimestampingReconfiguration$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -62,7 +63,8 @@ export const StreamReconfiguration$outboundSchema: z.ZodType<
 > = z.object({
   retentionPolicy: z.nullable(RetentionPolicy$outboundSchema).optional(),
   storageClass: z.nullable(StorageClass$outboundSchema).optional(),
-  timestamping: TimestampingReconfiguration$outboundSchema,
+  timestamping: z.nullable(TimestampingReconfiguration$outboundSchema)
+    .optional(),
 }).transform((v) => {
   return remap$(v, {
     retentionPolicy: "retention_policy",

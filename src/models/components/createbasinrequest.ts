@@ -21,6 +21,10 @@ import {
 export type Scope = BasinScope;
 
 export type CreateBasinRequest = {
+  /**
+   * Basin name.
+   */
+  basin: string;
   config?: BasinConfig | null | undefined;
   scope?: BasinScope | undefined;
 };
@@ -72,12 +76,14 @@ export const CreateBasinRequest$inboundSchema: z.ZodType<
   z.ZodTypeDef,
   unknown
 > = z.object({
+  basin: z.string(),
   config: z.nullable(BasinConfig$inboundSchema).optional(),
   scope: BasinScope$inboundSchema.optional(),
 });
 
 /** @internal */
 export type CreateBasinRequest$Outbound = {
+  basin: string;
   config?: BasinConfig$Outbound | null | undefined;
   scope?: string | undefined;
 };
@@ -88,6 +94,7 @@ export const CreateBasinRequest$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   CreateBasinRequest
 > = z.object({
+  basin: z.string(),
   config: z.nullable(BasinConfig$outboundSchema).optional(),
   scope: BasinScope$outboundSchema.optional(),
 });

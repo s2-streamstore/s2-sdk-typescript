@@ -10,11 +10,11 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type StreamInfo = {
   /**
-   * Creation time in seconds since Unix epoch.
+   * Creation time in ISO 8601 format.
    */
   createdAt: string;
   /**
-   * Deletion time in seconds since Unix epoch, if the stream is being deleted.
+   * Deletion time in ISO 8601 format, if the stream is being deleted.
    */
   deletedAt?: string | null | undefined;
   /**

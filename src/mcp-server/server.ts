@@ -16,6 +16,7 @@ import { createRegisterTool } from "./tools.js";
 import { tool$accessTokensIssueAccessToken } from "./tools/accessTokensIssueAccessToken.js";
 import { tool$accessTokensListAccessTokens } from "./tools/accessTokensListAccessTokens.js";
 import { tool$accessTokensRevokeAccessToken } from "./tools/accessTokensRevokeAccessToken.js";
+import { tool$basinsCreateBasin } from "./tools/basinsCreateBasin.js";
 import { tool$basinsCreateOrReconfigureBasin } from "./tools/basinsCreateOrReconfigureBasin.js";
 import { tool$basinsDeleteBasin } from "./tools/basinsDeleteBasin.js";
 import { tool$basinsGetBasinConfig } from "./tools/basinsGetBasinConfig.js";
@@ -23,6 +24,7 @@ import { tool$basinsListBasins } from "./tools/basinsListBasins.js";
 import { tool$basinsReconfigureBasin } from "./tools/basinsReconfigureBasin.js";
 import { tool$recordsCheckTail } from "./tools/recordsCheckTail.js";
 import { tool$streamsCreateOrReconfigureStream } from "./tools/streamsCreateOrReconfigureStream.js";
+import { tool$streamsCreateStream } from "./tools/streamsCreateStream.js";
 import { tool$streamsDeleteStream } from "./tools/streamsDeleteStream.js";
 import { tool$streamsGetStreamConfig } from "./tools/streamsGetStreamConfig.js";
 import { tool$streamsListStreams } from "./tools/streamsListStreams.js";
@@ -38,7 +40,7 @@ export function createMCPServer(deps: {
 }) {
   const server = new McpServer({
     name: "S2",
-    version: "0.11.2",
+    version: "0.11.3",
   });
 
   const client = new S2Core({
@@ -72,11 +74,13 @@ export function createMCPServer(deps: {
   tool(tool$accessTokensIssueAccessToken);
   tool(tool$accessTokensRevokeAccessToken);
   tool(tool$basinsListBasins);
+  tool(tool$basinsCreateBasin);
   tool(tool$basinsGetBasinConfig);
   tool(tool$basinsCreateOrReconfigureBasin);
   tool(tool$basinsDeleteBasin);
   tool(tool$basinsReconfigureBasin);
   tool(tool$streamsListStreams);
+  tool(tool$streamsCreateStream);
   tool(tool$streamsGetStreamConfig);
   tool(tool$streamsCreateOrReconfigureStream);
   tool(tool$streamsDeleteStream);

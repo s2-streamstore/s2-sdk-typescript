@@ -29,7 +29,7 @@ export type CreateOrReconfigureStreamRequest = {
    * Provide a client request token header for idempotent retry behaviour.
    */
   s2RequestToken?: string | undefined;
-  streamConfig: components.StreamConfig;
+  streamConfig?: components.StreamConfig | null | undefined;
 };
 
 /** @internal */
@@ -40,7 +40,7 @@ export const CreateOrReconfigureStreamRequest$inboundSchema: z.ZodType<
 > = z.object({
   stream: z.string(),
   "s2-request-token": z.string().optional(),
-  StreamConfig: components.StreamConfig$inboundSchema,
+  StreamConfig: z.nullable(components.StreamConfig$inboundSchema).optional(),
 }).transform((v) => {
   return remap$(v, {
     "s2-request-token": "s2RequestToken",
@@ -52,7 +52,7 @@ export const CreateOrReconfigureStreamRequest$inboundSchema: z.ZodType<
 export type CreateOrReconfigureStreamRequest$Outbound = {
   stream: string;
   "s2-request-token"?: string | undefined;
-  StreamConfig: components.StreamConfig$Outbound;
+  StreamConfig?: components.StreamConfig$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -63,7 +63,7 @@ export const CreateOrReconfigureStreamRequest$outboundSchema: z.ZodType<
 > = z.object({
   stream: z.string(),
   s2RequestToken: z.string().optional(),
-  streamConfig: components.StreamConfig$outboundSchema,
+  streamConfig: z.nullable(components.StreamConfig$outboundSchema).optional(),
 }).transform((v) => {
   return remap$(v, {
     s2RequestToken: "s2-request-token",

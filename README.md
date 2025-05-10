@@ -315,6 +315,7 @@ run();
 ### [basins](docs/sdks/basins/README.md)
 
 * [listBasins](docs/sdks/basins/README.md#listbasins) - List basins.
+* [createBasin](docs/sdks/basins/README.md#createbasin) - Create a basin.
 * [getBasinConfig](docs/sdks/basins/README.md#getbasinconfig) - Get basin config.
 * [createOrReconfigureBasin](docs/sdks/basins/README.md#createorreconfigurebasin) - Create or reconfigure a basin.
 * [deleteBasin](docs/sdks/basins/README.md#deletebasin) - Delete a basin.
@@ -328,6 +329,7 @@ run();
 ### [streams](docs/sdks/streams/README.md)
 
 * [listStreams](docs/sdks/streams/README.md#liststreams) - List streams.
+* [createStream](docs/sdks/streams/README.md#createstream) - Create a stream.
 * [getStreamConfig](docs/sdks/streams/README.md#getstreamconfig) - Get stream configuration.
 * [createOrReconfigureStream](docs/sdks/streams/README.md#createorreconfigurestream) - Create or reconfigure a stream.
 * [deleteStream](docs/sdks/streams/README.md#deletestream) - Delete a stream.
@@ -354,6 +356,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`accessTokensIssueAccessToken`](docs/sdks/accesstokens/README.md#issueaccesstoken) - Issue a new access token.
 - [`accessTokensListAccessTokens`](docs/sdks/accesstokens/README.md#listaccesstokens) - List access tokens.
 - [`accessTokensRevokeAccessToken`](docs/sdks/accesstokens/README.md#revokeaccesstoken) - Revoke an access token.
+- [`basinsCreateBasin`](docs/sdks/basins/README.md#createbasin) - Create a basin.
 - [`basinsCreateOrReconfigureBasin`](docs/sdks/basins/README.md#createorreconfigurebasin) - Create or reconfigure a basin.
 - [`basinsDeleteBasin`](docs/sdks/basins/README.md#deletebasin) - Delete a basin.
 - [`basinsGetBasinConfig`](docs/sdks/basins/README.md#getbasinconfig) - Get basin config.
@@ -361,6 +364,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`basinsReconfigureBasin`](docs/sdks/basins/README.md#reconfigurebasin) - Reconfigure a basin.
 - [`recordsCheckTail`](docs/sdks/records/README.md#checktail) - Check the tail.
 - [`streamsCreateOrReconfigureStream`](docs/sdks/streams/README.md#createorreconfigurestream) - Create or reconfigure a stream.
+- [`streamsCreateStream`](docs/sdks/streams/README.md#createstream) - Create a stream.
 - [`streamsDeleteStream`](docs/sdks/streams/README.md#deletestream) - Delete a stream.
 - [`streamsGetStreamConfig`](docs/sdks/streams/README.md#getstreamconfig) - Get stream configuration.
 - [`streamsListStreams`](docs/sdks/streams/README.md#liststreams) - List streams.

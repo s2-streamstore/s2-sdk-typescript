@@ -3,7 +3,7 @@
  */
 
 import { S2Core } from "../core.js";
-import { encodeJSON, encodeSimple } from "../lib/encodings.js";
+import { encodeJSON } from "../lib/encodings.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
@@ -21,21 +21,20 @@ import {
 } from "../models/errors/httpclienterrors.js";
 import * as errors from "../models/errors/index.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
-import { CreateOrReconfigureStreamServerList } from "../models/operations/createorreconfigurestream.js";
-import * as operations from "../models/operations/index.js";
+import { CreateStreamServerList } from "../models/operations/createstream.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create or reconfigure a stream.
+ * Create a stream.
  */
-export function streamsCreateOrReconfigureStream(
+export function streamsCreateStream(
   client: S2Core,
-  request: operations.CreateOrReconfigureStreamRequest,
+  request: components.CreateStreamRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    components.StreamInfo | undefined,
+    components.StreamInfo,
     | errors.ErrorResponse
     | errors.RetryableError
     | errors.RetryableError
@@ -57,12 +56,12 @@ export function streamsCreateOrReconfigureStream(
 
 async function $do(
   client: S2Core,
-  request: operations.CreateOrReconfigureStreamRequest,
+  request: components.CreateStreamRequest,
   options?: RequestOptions,
 ): Promise<
   [
     Result<
-      components.StreamInfo | undefined,
+      components.StreamInfo,
       | errors.ErrorResponse
       | errors.RetryableError
       | errors.RetryableError
@@ -79,40 +78,25 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) =>
-      operations.CreateOrReconfigureStreamRequest$outboundSchema.parse(value),
+    (value) => components.CreateStreamRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload.StreamConfig, { explode: true });
+  const body = encodeJSON("body", payload, { explode: true });
 
   const baseURL = options?.serverURL
-    || pathToFunc(CreateOrReconfigureStreamServerList[0], {
-      charEncoding: "percent",
-    })({
+    || pathToFunc(CreateStreamServerList[0], { charEncoding: "percent" })({
       basin: "",
     });
 
-  const pathParams = {
-    stream: encodeSimple("stream", payload.stream, {
-      explode: false,
-      charEncoding: "percent",
-    }),
-  };
-
-  const path = pathToFunc("/streams/{stream}")(pathParams);
+  const path = pathToFunc("/streams")();
 
   const headers = new Headers(compactMap({
     "Content-Type": "application/json",
     Accept: "application/json",
-    "s2-request-token": encodeSimple(
-      "s2-request-token",
-      payload["s2-request-token"],
-      { explode: false, charEncoding: "none" },
-    ),
   }));
 
   const secConfig = await extractSecurity(client._options.accessToken);
@@ -121,7 +105,7 @@ async function $do(
 
   const context = {
     baseURL: baseURL ?? "",
-    operationID: "create_or_reconfigure_stream",
+    operationID: "create_stream",
     oAuth2Scopes: [],
 
     resolvedSecurity: requestSecurity,
@@ -135,7 +119,7 @@ async function $do(
 
   const requestRes = client._createRequest(context, {
     security: requestSecurity,
-    method: "PUT",
+    method: "POST",
     baseURL: baseURL,
     path: path,
     headers: headers,
@@ -163,7 +147,7 @@ async function $do(
   };
 
   const [result] = await M.match<
-    components.StreamInfo | undefined,
+    components.StreamInfo,
     | errors.ErrorResponse
     | errors.RetryableError
     | errors.RetryableError
@@ -175,8 +159,7 @@ async function $do(
     | RequestTimeoutError
     | ConnectionError
   >(
-    M.json(201, components.StreamInfo$inboundSchema.optional()),
-    M.nil(204, components.StreamInfo$inboundSchema.optional()),
+    M.json(201, components.StreamInfo$inboundSchema),
     M.jsonErr([400, 401], errors.ErrorResponse$inboundSchema),
     M.jsonErr(499, errors.RetryableError$inboundSchema),
     M.jsonErr([500, 503, 504], errors.RetryableError$inboundSchema),
