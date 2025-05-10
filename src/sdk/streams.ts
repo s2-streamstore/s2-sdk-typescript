@@ -3,6 +3,7 @@
  */
 
 import { streamsCreateOrReconfigureStream } from "../funcs/streamsCreateOrReconfigureStream.js";
+import { streamsCreateStream } from "../funcs/streamsCreateStream.js";
 import { streamsDeleteStream } from "../funcs/streamsDeleteStream.js";
 import { streamsGetStreamConfig } from "../funcs/streamsGetStreamConfig.js";
 import { streamsListStreams } from "../funcs/streamsListStreams.js";
@@ -22,6 +23,20 @@ export class Streams extends ClientSDK {
     options?: RequestOptions,
   ): Promise<PageIterator<operations.ListStreamsResponse, { cursor: string }>> {
     return unwrapResultIterator(streamsListStreams(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create a stream.
+   */
+  async createStream(
+    request: components.CreateStreamRequest,
+    options?: RequestOptions,
+  ): Promise<components.StreamInfo> {
+    return unwrapAsync(streamsCreateStream(
       this,
       request,
       options,

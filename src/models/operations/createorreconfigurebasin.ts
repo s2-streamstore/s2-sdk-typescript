@@ -11,6 +11,10 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type CreateOrReconfigureBasinRequest = {
   /**
+   * Provide a client request token header for idempotent retry behaviour.
+   */
+  s2RequestToken?: string | undefined;
+  /**
    * Basin name, which must be globally unique.
    *
    * @remarks
@@ -18,11 +22,10 @@ export type CreateOrReconfigureBasinRequest = {
    * letters, numbers and hyphens. It cannot begin or end with a hyphen.
    */
   basin: string;
-  /**
-   * Provide a client request token header for idempotent retry behaviour.
-   */
-  s2RequestToken?: string | undefined;
-  createBasinRequest: components.CreateBasinRequest;
+  createOrReconfigureBasinRequest?:
+    | components.CreateOrReconfigureBasinRequest
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -31,21 +34,26 @@ export const CreateOrReconfigureBasinRequest$inboundSchema: z.ZodType<
   z.ZodTypeDef,
   unknown
 > = z.object({
-  basin: z.string(),
   "s2-request-token": z.string().optional(),
-  CreateBasinRequest: components.CreateBasinRequest$inboundSchema,
+  basin: z.string(),
+  CreateOrReconfigureBasinRequest: z.nullable(
+    components.CreateOrReconfigureBasinRequest$inboundSchema,
+  ).optional(),
 }).transform((v) => {
   return remap$(v, {
     "s2-request-token": "s2RequestToken",
-    "CreateBasinRequest": "createBasinRequest",
+    "CreateOrReconfigureBasinRequest": "createOrReconfigureBasinRequest",
   });
 });
 
 /** @internal */
 export type CreateOrReconfigureBasinRequest$Outbound = {
-  basin: string;
   "s2-request-token"?: string | undefined;
-  CreateBasinRequest: components.CreateBasinRequest$Outbound;
+  basin: string;
+  CreateOrReconfigureBasinRequest?:
+    | components.CreateOrReconfigureBasinRequest$Outbound
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -54,13 +62,15 @@ export const CreateOrReconfigureBasinRequest$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   CreateOrReconfigureBasinRequest
 > = z.object({
-  basin: z.string(),
   s2RequestToken: z.string().optional(),
-  createBasinRequest: components.CreateBasinRequest$outboundSchema,
+  basin: z.string(),
+  createOrReconfigureBasinRequest: z.nullable(
+    components.CreateOrReconfigureBasinRequest$outboundSchema,
+  ).optional(),
 }).transform((v) => {
   return remap$(v, {
     s2RequestToken: "s2-request-token",
-    createBasinRequest: "CreateBasinRequest",
+    createOrReconfigureBasinRequest: "CreateOrReconfigureBasinRequest",
   });
 });
 

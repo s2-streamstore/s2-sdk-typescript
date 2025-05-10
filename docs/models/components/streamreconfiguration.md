@@ -5,9 +5,7 @@
 ```typescript
 import { StreamReconfiguration } from "@s2-dev/streamstore/models/components";
 
-let value: StreamReconfiguration = {
-  timestamping: {},
-};
+let value: StreamReconfiguration = {};
 ```
 
 ## Fields
@@ -16,4 +14,4 @@ let value: StreamReconfiguration = {
 | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
 | `retentionPolicy`                                                                                | *components.RetentionPolicy*                                                                     | :heavy_minus_sign:                                                                               | N/A                                                                                              |
 | `storageClass`                                                                                   | [components.StorageClass](../../models/components/storageclass.md)                               | :heavy_minus_sign:                                                                               | N/A                                                                                              |
-| `timestamping`                                                                                   | [components.TimestampingReconfiguration](../../models/components/timestampingreconfiguration.md) | :heavy_check_mark:                                                                               | N/A                                                                                              |
+| `timestamping`                                                                                   | [components.TimestampingReconfiguration](../../models/components/timestampingreconfiguration.md) | :heavy_minus_sign:                                                                               | N/A                                                                                              |

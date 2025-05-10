@@ -24,7 +24,7 @@ export type AccessTokenInfo = {
    */
   autoPrefixStreams?: boolean | undefined;
   /**
-   * Expiration time in seconds since Unix epoch.
+   * Expiration time in ISO 8601 format.
    *
    * @remarks
    * If not set, the expiration will be set to that of the requestor's token.

@@ -5,6 +5,7 @@
 export * from "./checktail.js";
 export * from "./createorreconfigurebasin.js";
 export * from "./createorreconfigurestream.js";
+export * from "./createstream.js";
 export * from "./deletebasin.js";
 export * from "./deletestream.js";
 export * from "./getbasinconfig.js";
