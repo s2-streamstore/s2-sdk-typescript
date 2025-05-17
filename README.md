@@ -22,7 +22,7 @@ S2 API: Serverless API for streaming data backed by object storage.
 <!-- $toc-max-depth=2 -->
 * [streamstore](#streamstore)
   * [SDK Installation](#sdk-installation)
-  * [Requirements](#requirements)  
+  * [Requirements](#requirements)
   * [SDK Example Usage](#sdk-example-usage)
   * [Authentication](#authentication)
   * [Available Resources and Operations](#available-resources-and-operations)
