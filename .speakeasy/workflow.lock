@@ -6,6 +6,7 @@ sources:
         sourceBlobDigest: sha256:4bc1704f809899669246aa5fc6f55d3c91647120c90568641842796d8ef5f679
         tags:
             - latest
+            - speakeasy-sdk-regen-1746836451
             - 1.0.0
 targets:
     streamstore:
