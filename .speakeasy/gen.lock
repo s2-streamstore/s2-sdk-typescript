@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: 4707541e20676787419cb4924aa93c5b
+  docChecksum: c3c648cb0b31271382a9a12f6046780d
   docVersion: 1.0.0
-  speakeasyVersion: 1.548.4
-  generationVersion: 2.605.6
-  releaseVersion: 0.13.2
-  configChecksum: b6d4789153bcec24abe3854f358fa080
+  speakeasyVersion: 1.551.0
+  generationVersion: 2.610.0
+  releaseVersion: 0.13.3
+  configChecksum: 66c5344a3f8a484711402c93dde2c7a6
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
@@ -90,9 +90,9 @@ generatedFiles:
   - docs/models/components/timestampingreconfiguration.md
   - docs/models/errors/appendconditionfailed.md
   - docs/models/errors/errorresponse.md
-  - docs/models/errors/one.md
+  - docs/models/errors/fencingtoken.md
+  - docs/models/errors/seqnum.md
   - docs/models/errors/tailresponse.md
-  - docs/models/errors/two.md
   - docs/models/operations/appendrequest.md
   - docs/models/operations/checktailrequest.md
   - docs/models/operations/createorreconfigurebasinrequest.md
@@ -532,7 +532,7 @@ examples:
         "400":
           application/json: {"message": "<value>"}
         "412":
-          application/json: {"FencingTokenMismatch": "<value>"}
+          application/json: {"seq_num_mismatch": 955507}
         "499":
           application/json: {"error": "<value>"}
         "500":

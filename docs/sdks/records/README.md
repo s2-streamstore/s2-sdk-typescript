@@ -187,8 +187,8 @@ run();
 | Error Type           | Status Code          | Content Type         |
 | -------------------- | -------------------- | -------------------- |
 | errors.ErrorResponse | 400, 401, 404, 409   | application/json     |
-| errors.One           | 412                  | application/json     |
-| errors.Two           | 412                  | application/json     |
+| errors.FencingToken  | 412                  | application/json     |
+| errors.SeqNum        | 412                  | application/json     |
 | errors.ErrorResponse | 500                  | application/json     |
 | errors.APIError      | 4XX, 5XX             | \*/\*                |
 

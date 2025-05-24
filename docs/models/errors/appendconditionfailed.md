@@ -5,19 +5,19 @@ Failure response message when an Append is aborted due to a failed condition.
 
 ## Supported Types
 
-### `errors.One`
+### `errors.FencingToken`
 
 ```typescript
-const value: errors.One = {
+const value: errors.FencingToken = {
   fencingTokenMismatch: "<value>",
 };
 ```
 
-### `errors.Two`
+### `errors.SeqNum`
 
 ```typescript
-const value: errors.Two = {
-  seqNumMismatch: 288761,
+const value: errors.SeqNum = {
+  seqNumMismatch: 122504,
 };
 ```
 

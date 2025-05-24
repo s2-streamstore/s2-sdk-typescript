@@ -1,4 +1,4 @@
-# Two
+# SeqNum
 
 Sequence number did not match the tail of the stream.
 The expected next sequence number is returned.
@@ -6,7 +6,7 @@ The expected next sequence number is returned.
 ## Example Usage
 
 ```typescript
-import { Two } from "@s2-dev/streamstore/models/errors";
+import { SeqNum } from "@s2-dev/streamstore/models/errors";
 
 // No examples available for this model
 ```

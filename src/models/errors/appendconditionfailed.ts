@@ -14,7 +14,7 @@ import { SDKValidationError } from "./sdkvalidationerror.js";
  * @remarks
  * The expected next sequence number is returned.
  */
-export type TwoData = {
+export type SeqNumData = {
   /**
    * Sequence number did not match the tail of the stream.
    *
@@ -30,7 +30,7 @@ export type TwoData = {
  * @remarks
  * The expected next sequence number is returned.
  */
-export class Two extends Error {
+export class SeqNum extends Error {
   /**
    * Sequence number did not match the tail of the stream.
    *
@@ -40,9 +40,9 @@ export class Two extends Error {
   seqNumMismatch: number;
 
   /** The original data that was passed to this error instance. */
-  data$: TwoData;
+  data$: SeqNumData;
 
-  constructor(err: TwoData) {
+  constructor(err: SeqNumData) {
     const message = "message" in err && typeof err.message === "string"
       ? err.message
       : `API error occurred: ${JSON.stringify(err)}`;
@@ -51,7 +51,7 @@ export class Two extends Error {
 
     this.seqNumMismatch = err.seqNumMismatch;
 
-    this.name = "Two";
+    this.name = "SeqNum";
   }
 }
 
@@ -59,14 +59,14 @@ export class Two extends Error {
  * Fencing token did not match.
  *
  * @remarks
- * The expected fencing token is returned.
+ * The expected fencing token is returned, encoded with base64.
  */
-export type OneData = {
+export type FencingTokenData = {
   /**
    * Fencing token did not match.
    *
    * @remarks
-   * The expected fencing token is returned.
+   * The expected fencing token is returned, encoded with base64.
    */
   fencingTokenMismatch: string;
 };
@@ -75,21 +75,21 @@ export type OneData = {
  * Fencing token did not match.
  *
  * @remarks
- * The expected fencing token is returned.
+ * The expected fencing token is returned, encoded with base64.
  */
-export class One extends Error {
+export class FencingToken extends Error {
   /**
    * Fencing token did not match.
    *
    * @remarks
-   * The expected fencing token is returned.
+   * The expected fencing token is returned, encoded with base64.
    */
   fencingTokenMismatch: string;
 
   /** The original data that was passed to this error instance. */
-  data$: OneData;
+  data$: FencingTokenData;
 
-  constructor(err: OneData) {
+  constructor(err: FencingTokenData) {
     const message = "message" in err && typeof err.message === "string"
       ? err.message
       : `API error occurred: ${JSON.stringify(err)}`;
@@ -98,43 +98,46 @@ export class One extends Error {
 
     this.fencingTokenMismatch = err.fencingTokenMismatch;
 
-    this.name = "One";
+    this.name = "FencingToken";
   }
 }
 
 /**
  * Failure response message when an Append is aborted due to a failed condition.
  */
-export type AppendConditionFailed = One | Two;
+export type AppendConditionFailed = FencingToken | SeqNum;
 
 /** @internal */
-export const Two$inboundSchema: z.ZodType<Two, z.ZodTypeDef, unknown> = z
+export const SeqNum$inboundSchema: z.ZodType<SeqNum, z.ZodTypeDef, unknown> = z
   .object({
-    SeqNumMismatch: z.number().int(),
+    seq_num_mismatch: z.number().int(),
   })
   .transform((v) => {
     const remapped = remap$(v, {
-      "SeqNumMismatch": "seqNumMismatch",
+      "seq_num_mismatch": "seqNumMismatch",
     });
 
-    return new Two(remapped);
+    return new SeqNum(remapped);
   });
 
 /** @internal */
-export type Two$Outbound = {
-  SeqNumMismatch: number;
+export type SeqNum$Outbound = {
+  seq_num_mismatch: number;
 };
 
 /** @internal */
-export const Two$outboundSchema: z.ZodType<Two$Outbound, z.ZodTypeDef, Two> = z
-  .instanceof(Two)
+export const SeqNum$outboundSchema: z.ZodType<
+  SeqNum$Outbound,
+  z.ZodTypeDef,
+  SeqNum
+> = z.instanceof(SeqNum)
   .transform(v => v.data$)
   .pipe(
     z.object({
       seqNumMismatch: z.number().int(),
     }).transform((v) => {
       return remap$(v, {
-        seqNumMismatch: "SeqNumMismatch",
+        seqNumMismatch: "seq_num_mismatch",
       });
     }),
   );
@@ -143,43 +146,49 @@ export const Two$outboundSchema: z.ZodType<Two$Outbound, z.ZodTypeDef, Two> = z
  * @internal
  * @deprecated This namespace will be removed in future versions. Use schemas and types that are exported directly from this module.
  */
-export namespace Two$ {
-  /** @deprecated use `Two$inboundSchema` instead. */
-  export const inboundSchema = Two$inboundSchema;
-  /** @deprecated use `Two$outboundSchema` instead. */
-  export const outboundSchema = Two$outboundSchema;
-  /** @deprecated use `Two$Outbound` instead. */
-  export type Outbound = Two$Outbound;
+export namespace SeqNum$ {
+  /** @deprecated use `SeqNum$inboundSchema` instead. */
+  export const inboundSchema = SeqNum$inboundSchema;
+  /** @deprecated use `SeqNum$outboundSchema` instead. */
+  export const outboundSchema = SeqNum$outboundSchema;
+  /** @deprecated use `SeqNum$Outbound` instead. */
+  export type Outbound = SeqNum$Outbound;
 }
 
 /** @internal */
-export const One$inboundSchema: z.ZodType<One, z.ZodTypeDef, unknown> = z
-  .object({
-    FencingTokenMismatch: z.string(),
-  })
+export const FencingToken$inboundSchema: z.ZodType<
+  FencingToken,
+  z.ZodTypeDef,
+  unknown
+> = z.object({
+  fencing_token_mismatch: z.string(),
+})
   .transform((v) => {
     const remapped = remap$(v, {
-      "FencingTokenMismatch": "fencingTokenMismatch",
+      "fencing_token_mismatch": "fencingTokenMismatch",
     });
 
-    return new One(remapped);
+    return new FencingToken(remapped);
   });
 
 /** @internal */
-export type One$Outbound = {
-  FencingTokenMismatch: string;
+export type FencingToken$Outbound = {
+  fencing_token_mismatch: string;
 };
 
 /** @internal */
-export const One$outboundSchema: z.ZodType<One$Outbound, z.ZodTypeDef, One> = z
-  .instanceof(One)
+export const FencingToken$outboundSchema: z.ZodType<
+  FencingToken$Outbound,
+  z.ZodTypeDef,
+  FencingToken
+> = z.instanceof(FencingToken)
   .transform(v => v.data$)
   .pipe(
     z.object({
       fencingTokenMismatch: z.string(),
     }).transform((v) => {
       return remap$(v, {
-        fencingTokenMismatch: "FencingTokenMismatch",
+        fencingTokenMismatch: "fencing_token_mismatch",
       });
     }),
   );
@@ -188,13 +197,13 @@ export const One$outboundSchema: z.ZodType<One$Outbound, z.ZodTypeDef, One> = z
  * @internal
  * @deprecated This namespace will be removed in future versions. Use schemas and types that are exported directly from this module.
  */
-export namespace One$ {
-  /** @deprecated use `One$inboundSchema` instead. */
-  export const inboundSchema = One$inboundSchema;
-  /** @deprecated use `One$outboundSchema` instead. */
-  export const outboundSchema = One$outboundSchema;
-  /** @deprecated use `One$Outbound` instead. */
-  export type Outbound = One$Outbound;
+export namespace FencingToken$ {
+  /** @deprecated use `FencingToken$inboundSchema` instead. */
+  export const inboundSchema = FencingToken$inboundSchema;
+  /** @deprecated use `FencingToken$outboundSchema` instead. */
+  export const outboundSchema = FencingToken$outboundSchema;
+  /** @deprecated use `FencingToken$Outbound` instead. */
+  export type Outbound = FencingToken$Outbound;
 }
 
 /** @internal */
@@ -202,10 +211,15 @@ export const AppendConditionFailed$inboundSchema: z.ZodType<
   AppendConditionFailed,
   z.ZodTypeDef,
   unknown
-> = z.union([z.lazy(() => One$inboundSchema), z.lazy(() => Two$inboundSchema)]);
+> = z.union([
+  z.lazy(() => FencingToken$inboundSchema),
+  z.lazy(() => SeqNum$inboundSchema),
+]);
 
 /** @internal */
-export type AppendConditionFailed$Outbound = One$Outbound | Two$Outbound;
+export type AppendConditionFailed$Outbound =
+  | FencingToken$Outbound
+  | SeqNum$Outbound;
 
 /** @internal */
 export const AppendConditionFailed$outboundSchema: z.ZodType<
@@ -213,8 +227,8 @@ export const AppendConditionFailed$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   AppendConditionFailed
 > = z.union([
-  z.lazy(() => One$outboundSchema),
-  z.lazy(() => Two$outboundSchema),
+  z.lazy(() => FencingToken$outboundSchema),
+  z.lazy(() => SeqNum$outboundSchema),
 ]);
 
 /**
