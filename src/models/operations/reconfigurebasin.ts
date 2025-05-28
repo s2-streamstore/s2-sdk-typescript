@@ -11,11 +11,7 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type ReconfigureBasinRequest = {
   /**
-   * Basin name, which must be globally unique.
-   *
-   * @remarks
-   * The name must be between 8 and 48 characters, comprising lowercase
-   * letters, numbers and hyphens. It cannot begin or end with a hyphen.
+   * Basin name.
    */
   basin: string;
   basinReconfiguration: components.BasinReconfiguration;

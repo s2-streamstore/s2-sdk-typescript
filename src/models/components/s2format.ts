@@ -6,8 +6,8 @@ import * as z from "zod";
 import { ClosedEnum } from "../../types/enums.js";
 
 export const S2Format = {
-  Json: "json",
-  JsonBinsafe: "json-binsafe",
+  Raw: "raw",
+  Base64: "base64",
 } as const;
 export type S2Format = ClosedEnum<typeof S2Format>;
 

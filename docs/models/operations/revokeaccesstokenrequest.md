@@ -12,6 +12,6 @@ let value: RevokeAccessTokenRequest = {
 
 ## Fields
 
-| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
-| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `id`                                                                               | *string*                                                                           | :heavy_check_mark:                                                                 | Access token ID.<br/>It must be unique to the account and between 1 and 96 characters. |
+| Field              | Type               | Required           | Description        |
+| ------------------ | ------------------ | ------------------ | ------------------ |
+| `id`               | *string*           | :heavy_check_mark: | Access token ID.   |

@@ -18,18 +18,14 @@ export const AppendServerList = [
 
 export type AppendRequest = {
   /**
-   * Stream name, which must be unique within the basin.
-   *
-   * @remarks
-   * It can be an arbitrary string up to 512 characters.
+   * Stream name.
    */
   stream: string;
   /**
-   * Recognized when the Content-Type is `application/json`.
+   * Define treatment of blob fields when exchanging records as JSON.
    *
    * @remarks
-   * json: UTF-8 data
-   * json-binsafe: Base64-encoded binary data
+   * The default is `raw`.
    */
   s2Format?: components.S2Format | undefined;
   /**

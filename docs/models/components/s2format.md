@@ -5,11 +5,11 @@
 ```typescript
 import { S2Format } from "@s2-dev/streamstore/models/components";
 
-let value: S2Format = "json";
+let value: S2Format = "raw";
 ```
 
 ## Values
 
 ```typescript
-"json" | "json-binsafe"
+"raw" | "base64"
 ```

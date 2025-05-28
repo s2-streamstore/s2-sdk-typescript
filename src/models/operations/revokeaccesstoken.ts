@@ -10,9 +10,6 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 export type RevokeAccessTokenRequest = {
   /**
    * Access token ID.
-   *
-   * @remarks
-   * It must be unique to the account and between 1 and 96 characters.
    */
   id: string;
 };

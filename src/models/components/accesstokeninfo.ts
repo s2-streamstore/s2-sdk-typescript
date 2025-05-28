@@ -34,7 +34,7 @@ export type AccessTokenInfo = {
    * Access token ID.
    *
    * @remarks
-   * It must be unique to the account and between 1 and 96 characters.
+   * It must be unique to the account and between 1 and 96 bytes in length.
    */
   id: string;
   scope: AccessTokenScope;

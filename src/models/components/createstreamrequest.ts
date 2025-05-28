@@ -16,7 +16,10 @@ import {
 export type CreateStreamRequest = {
   config?: StreamConfig | null | undefined;
   /**
-   * Stream name.
+   * Stream name that is unique to the basin.
+   *
+   * @remarks
+   * It can be between 1 and 512 bytes in length.
    */
   stream: string;
 };

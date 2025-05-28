@@ -18,10 +18,7 @@ export const CreateOrReconfigureStreamServerList = [
 
 export type CreateOrReconfigureStreamRequest = {
   /**
-   * Stream name, which must be unique within the basin.
-   *
-   * @remarks
-   * It can be an arbitrary string up to 512 characters.
+   * Stream name.
    */
   stream: string;
   /**
