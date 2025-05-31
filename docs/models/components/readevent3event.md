@@ -5,11 +5,11 @@
 ```typescript
 import { ReadEvent3Event } from "@s2-dev/streamstore/models/components";
 
-let value: ReadEvent3Event = "ping";
+let value: ReadEvent3Event = "error";
 ```
 
 ## Values
 
 ```typescript
-"ping"
+"error"
 ```

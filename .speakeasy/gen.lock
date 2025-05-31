@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: 250768e4ef5834289e8a29690e872b72
+  docChecksum: 5bdd29eb8fec1b4c708f6c1f8dff5d0a
   docVersion: 1.0.0
-  speakeasyVersion: 1.552.0
-  generationVersion: 2.610.0
-  releaseVersion: 0.14.0
-  configChecksum: 24080e00bd67ae119ef5394d503effdd
+  speakeasyVersion: 1.554.1
+  generationVersion: 2.616.1
+  releaseVersion: 0.15.0
+  configChecksum: e1ccfd85b738d1d43b8ed2424eb2d2a1
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
@@ -31,7 +31,7 @@ features:
     pagination: 2.83.0
     responseFormat: 0.2.3
     retries: 2.83.0
-    sdkHooks: 0.2.0
+    sdkHooks: 0.3.0
     serverEvents: 0.1.5
     serverEventsSentinels: 0.1.0
     unions: 2.85.8
@@ -47,11 +47,14 @@ generatedFiles:
   - docs/lib/utils/retryconfig.md
   - docs/models/components/accesstokeninfo.md
   - docs/models/components/accesstokenscope.md
+  - docs/models/components/accountmetricset.md
+  - docs/models/components/accumulation.md
   - docs/models/components/appendack.md
   - docs/models/components/appendinput.md
   - docs/models/components/appendrecord.md
   - docs/models/components/basinconfig.md
   - docs/models/components/basininfo.md
+  - docs/models/components/basinmetricset.md
   - docs/models/components/basinreconfiguration.md
   - docs/models/components/basinscope.md
   - docs/models/components/basinstate.md
@@ -63,10 +66,18 @@ generatedFiles:
   - docs/models/components/errort.md
   - docs/models/components/event.md
   - docs/models/components/exact.md
+  - docs/models/components/four.md
+  - docs/models/components/gauge.md
+  - docs/models/components/gaugevalues.md
   - docs/models/components/issueaccesstokenresponse.md
+  - docs/models/components/label.md
   - docs/models/components/listaccesstokensresponse.md
   - docs/models/components/listbasinsresponse.md
   - docs/models/components/liststreamsresponse.md
+  - docs/models/components/metric.md
+  - docs/models/components/metric1.md
+  - docs/models/components/metricsetresponse.md
+  - docs/models/components/metricunit.md
   - docs/models/components/one.md
   - docs/models/components/operation.md
   - docs/models/components/permittedoperationgroups.md
@@ -75,12 +86,15 @@ generatedFiles:
   - docs/models/components/prefix.md
   - docs/models/components/readbatch.md
   - docs/models/components/readevent.md
+  - docs/models/components/readevent2.md
   - docs/models/components/readevent3event.md
+  - docs/models/components/readevent4event.md
   - docs/models/components/readeventevent.md
   - docs/models/components/readwritepermissions.md
   - docs/models/components/resourceset.md
   - docs/models/components/retentionpolicy.md
   - docs/models/components/s2format.md
+  - docs/models/components/scalar.md
   - docs/models/components/scope.md
   - docs/models/components/security.md
   - docs/models/components/sequencedrecord.md
@@ -90,15 +104,21 @@ generatedFiles:
   - docs/models/components/streamposition.md
   - docs/models/components/streamreconfiguration.md
   - docs/models/components/tailresponse.md
+  - docs/models/components/three.md
+  - docs/models/components/timeseriesinterval.md
   - docs/models/components/timestampingconfig.md
   - docs/models/components/timestampingmode.md
   - docs/models/components/timestampingreconfiguration.md
+  - docs/models/components/two.md
+  - docs/models/components/values.md
   - docs/models/errors/appendconditionfailed.md
   - docs/models/errors/errorresponse.md
   - docs/models/errors/fencingtoken.md
   - docs/models/errors/seqnum.md
   - docs/models/errors/tailresponse.md
+  - docs/models/operations/accountmetricsrequest.md
   - docs/models/operations/appendrequest.md
+  - docs/models/operations/basinmetricsrequest.md
   - docs/models/operations/checktailrequest.md
   - docs/models/operations/createorreconfigurebasinrequest.md
   - docs/models/operations/createorreconfigurestreamrequest.md
@@ -117,8 +137,10 @@ generatedFiles:
   - docs/models/operations/reconfigurebasinrequest.md
   - docs/models/operations/reconfigurestreamrequest.md
   - docs/models/operations/revokeaccesstokenrequest.md
+  - docs/models/operations/streammetricsrequest.md
   - docs/sdks/accesstokens/README.md
   - docs/sdks/basins/README.md
+  - docs/sdks/metrics/README.md
   - docs/sdks/records/README.md
   - docs/sdks/s2/README.md
   - docs/sdks/streams/README.md
@@ -135,6 +157,9 @@ generatedFiles:
   - src/funcs/basinsGetBasinConfig.ts
   - src/funcs/basinsListBasins.ts
   - src/funcs/basinsReconfigureBasin.ts
+  - src/funcs/metricsAccountMetrics.ts
+  - src/funcs/metricsBasinMetrics.ts
+  - src/funcs/metricsStreamMetrics.ts
   - src/funcs/recordsAppend.ts
   - src/funcs/recordsCheckTail.ts
   - src/funcs/recordsRead.ts
@@ -187,6 +212,9 @@ generatedFiles:
   - src/mcp-server/tools/basinsGetBasinConfig.ts
   - src/mcp-server/tools/basinsListBasins.ts
   - src/mcp-server/tools/basinsReconfigureBasin.ts
+  - src/mcp-server/tools/metricsAccountMetrics.ts
+  - src/mcp-server/tools/metricsBasinMetrics.ts
+  - src/mcp-server/tools/metricsStreamMetrics.ts
   - src/mcp-server/tools/recordsAppend.ts
   - src/mcp-server/tools/recordsCheckTail.ts
   - src/mcp-server/tools/recordsRead.ts
@@ -198,22 +226,30 @@ generatedFiles:
   - src/mcp-server/tools/streamsReconfigureStream.ts
   - src/models/components/accesstokeninfo.ts
   - src/models/components/accesstokenscope.ts
+  - src/models/components/accountmetricset.ts
+  - src/models/components/accumulation.ts
   - src/models/components/appendack.ts
   - src/models/components/appendinput.ts
   - src/models/components/appendrecord.ts
   - src/models/components/basinconfig.ts
   - src/models/components/basininfo.ts
+  - src/models/components/basinmetricset.ts
   - src/models/components/basinreconfiguration.ts
   - src/models/components/basinscope.ts
   - src/models/components/basinstate.ts
   - src/models/components/createbasinrequest.ts
   - src/models/components/createorreconfigurebasinrequest.ts
   - src/models/components/createstreamrequest.ts
+  - src/models/components/gauge.ts
   - src/models/components/index.ts
   - src/models/components/issueaccesstokenresponse.ts
+  - src/models/components/label.ts
   - src/models/components/listaccesstokensresponse.ts
   - src/models/components/listbasinsresponse.ts
   - src/models/components/liststreamsresponse.ts
+  - src/models/components/metric.ts
+  - src/models/components/metricsetresponse.ts
+  - src/models/components/metricunit.ts
   - src/models/components/operation.ts
   - src/models/components/permittedoperationgroups.ts
   - src/models/components/pingeventdata.ts
@@ -223,6 +259,7 @@ generatedFiles:
   - src/models/components/resourceset.ts
   - src/models/components/retentionpolicy.ts
   - src/models/components/s2format.ts
+  - src/models/components/scalar.ts
   - src/models/components/security.ts
   - src/models/components/sequencedrecord.ts
   - src/models/components/storageclass.ts
@@ -231,6 +268,7 @@ generatedFiles:
   - src/models/components/streamposition.ts
   - src/models/components/streamreconfiguration.ts
   - src/models/components/tailresponse.ts
+  - src/models/components/timeseriesinterval.ts
   - src/models/components/timestampingconfig.ts
   - src/models/components/timestampingmode.ts
   - src/models/components/timestampingreconfiguration.ts
@@ -241,7 +279,9 @@ generatedFiles:
   - src/models/errors/index.ts
   - src/models/errors/sdkvalidationerror.ts
   - src/models/errors/tailresponse.ts
+  - src/models/operations/accountmetrics.ts
   - src/models/operations/append.ts
+  - src/models/operations/basinmetrics.ts
   - src/models/operations/checktail.ts
   - src/models/operations/createorreconfigurebasin.ts
   - src/models/operations/createorreconfigurestream.ts
@@ -258,9 +298,11 @@ generatedFiles:
   - src/models/operations/reconfigurebasin.ts
   - src/models/operations/reconfigurestream.ts
   - src/models/operations/revokeaccesstoken.ts
+  - src/models/operations/streammetrics.ts
   - src/sdk/accesstokens.ts
   - src/sdk/basins.ts
   - src/sdk/index.ts
+  - src/sdk/metrics.ts
   - src/sdk/records.ts
   - src/sdk/sdk.ts
   - src/sdk/streams.ts
@@ -558,6 +600,39 @@ examples:
         "499":
           application/json: {"error": "<value>"}
         "500":
+          application/json: {"message": "<value>"}
+  account_metrics:
+    speakeasy-default-account-metrics:
+      parameters:
+        query:
+          set: "account_ops"
+      responses:
+        "200":
+          application/json: {"values": [{"gauge": {"name": "<value>", "unit": "operations", "values": []}}, {"label": {"name": "<value>", "values": ["<value 1>", "<value 2>"]}}]}
+        "400":
+          application/json: {"message": "<value>"}
+  basin_metrics:
+    speakeasy-default-basin-metrics:
+      parameters:
+        path:
+          basin: "<value>"
+        query:
+          set: "storage"
+      responses:
+        "200":
+          application/json: {"values": [{"scalar": {"name": "<value>", "unit": "operations", "value": 9897.85}}, {"label": {"name": "<value>", "values": ["<value 1>"]}}]}
+        "400":
+          application/json: {"message": "<value>"}
+  stream_metrics:
+    speakeasy-default-stream-metrics:
+      parameters:
+        path:
+          basin: "<value>"
+          stream: "<value>"
+      responses:
+        "200":
+          application/json: {"values": [{"scalar": {"name": "<value>", "unit": "operations", "value": 7152.04}}, {"label": {"name": "<value>", "values": ["<value 1>", "<value 2>"]}}]}
+        "400":
           application/json: {"message": "<value>"}
 examplesVersion: 1.0.2
 generatedTests: {}

@@ -1,7 +1,7 @@
 # FencingToken
 
 Fencing token did not match.
-The expected fencing token is returned, encoded with base64.
+The expected fencing token is returned.
 
 ## Example Usage
 
@@ -13,6 +13,6 @@ import { FencingToken } from "@s2-dev/streamstore/models/errors";
 
 ## Fields
 
-| Field                                                                                     | Type                                                                                      | Required                                                                                  | Description                                                                               |
-| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `fencingTokenMismatch`                                                                    | *string*                                                                                  | :heavy_check_mark:                                                                        | Fencing token did not match.<br/>The expected fencing token is returned, encoded with base64. |
+| Field                                                                | Type                                                                 | Required                                                             | Description                                                          |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `fencingTokenMismatch`                                               | *string*                                                             | :heavy_check_mark:                                                   | Fencing token did not match.<br/>The expected fencing token is returned. |

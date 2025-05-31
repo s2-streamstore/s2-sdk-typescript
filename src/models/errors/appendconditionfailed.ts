@@ -59,14 +59,14 @@ export class SeqNum extends Error {
  * Fencing token did not match.
  *
  * @remarks
- * The expected fencing token is returned, encoded with base64.
+ * The expected fencing token is returned.
  */
 export type FencingTokenData = {
   /**
    * Fencing token did not match.
    *
    * @remarks
-   * The expected fencing token is returned, encoded with base64.
+   * The expected fencing token is returned.
    */
   fencingTokenMismatch: string;
 };
@@ -75,14 +75,14 @@ export type FencingTokenData = {
  * Fencing token did not match.
  *
  * @remarks
- * The expected fencing token is returned, encoded with base64.
+ * The expected fencing token is returned.
  */
 export class FencingToken extends Error {
   /**
    * Fencing token did not match.
    *
    * @remarks
-   * The expected fencing token is returned, encoded with base64.
+   * The expected fencing token is returned.
    */
   fencingTokenMismatch: string;
 

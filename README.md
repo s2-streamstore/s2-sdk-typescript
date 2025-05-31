@@ -242,6 +242,12 @@ run();
 * [deleteBasin](docs/sdks/basins/README.md#deletebasin) - Delete a basin.
 * [reconfigureBasin](docs/sdks/basins/README.md#reconfigurebasin) - Reconfigure a basin.
 
+### [metrics](docs/sdks/metrics/README.md)
+
+* [accountMetrics](docs/sdks/metrics/README.md#accountmetrics) - Get account level metrics.
+* [basinMetrics](docs/sdks/metrics/README.md#basinmetrics) - Get metrics for a basin.
+* [streamMetrics](docs/sdks/metrics/README.md#streammetrics) - Get metrics for a stream.
+
 ### [records](docs/sdks/records/README.md)
 
 * [read](docs/sdks/records/README.md#read) - Retrieve records.
@@ -285,6 +291,9 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`basinsGetBasinConfig`](docs/sdks/basins/README.md#getbasinconfig) - Get basin config.
 - [`basinsListBasins`](docs/sdks/basins/README.md#listbasins) - List basins.
 - [`basinsReconfigureBasin`](docs/sdks/basins/README.md#reconfigurebasin) - Reconfigure a basin.
+- [`metricsAccountMetrics`](docs/sdks/metrics/README.md#accountmetrics) - Get account level metrics.
+- [`metricsBasinMetrics`](docs/sdks/metrics/README.md#basinmetrics) - Get metrics for a basin.
+- [`metricsStreamMetrics`](docs/sdks/metrics/README.md#streammetrics) - Get metrics for a stream.
 - [`recordsAppend`](docs/sdks/records/README.md#append) - Append records.
 - [`recordsCheckTail`](docs/sdks/records/README.md#checktail) - Check the tail.
 - [`recordsRead`](docs/sdks/records/README.md#read) - Retrieve records.

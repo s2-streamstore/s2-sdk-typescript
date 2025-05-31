@@ -19,24 +19,40 @@ import {
   ReadBatch$Outbound,
   ReadBatch$outboundSchema,
 } from "./readbatch.js";
+import {
+  TailResponse,
+  TailResponse$inboundSchema,
+  TailResponse$Outbound,
+  TailResponse$outboundSchema,
+} from "./tailresponse.js";
 
-export const ReadEvent3Event = {
+export const ReadEvent4Event = {
   Ping: "ping",
 } as const;
-export type ReadEvent3Event = ClosedEnum<typeof ReadEvent3Event>;
+export type ReadEvent4Event = ClosedEnum<typeof ReadEvent4Event>;
 
 export type Ping = {
   data: PingEventData;
+  event: ReadEvent4Event;
+};
+
+export const ReadEvent3Event = {
+  Error: "error",
+} as const;
+export type ReadEvent3Event = ClosedEnum<typeof ReadEvent3Event>;
+
+export type ErrorT = {
+  data: string;
   event: ReadEvent3Event;
 };
 
 export const ReadEventEvent = {
-  Error: "error",
+  Tail: "tail",
 } as const;
 export type ReadEventEvent = ClosedEnum<typeof ReadEventEvent>;
 
-export type ErrorT = {
-  data: string;
+export type ReadEvent2 = {
+  data: TailResponse;
   event: ReadEventEvent;
 };
 
@@ -51,27 +67,27 @@ export type Batch = {
   id: string;
 };
 
-export type ReadEvent = ErrorT | Ping | Batch;
+export type ReadEvent = ReadEvent2 | ErrorT | Ping | Batch;
 
 /** @internal */
-export const ReadEvent3Event$inboundSchema: z.ZodNativeEnum<
-  typeof ReadEvent3Event
-> = z.nativeEnum(ReadEvent3Event);
+export const ReadEvent4Event$inboundSchema: z.ZodNativeEnum<
+  typeof ReadEvent4Event
+> = z.nativeEnum(ReadEvent4Event);
 
 /** @internal */
-export const ReadEvent3Event$outboundSchema: z.ZodNativeEnum<
-  typeof ReadEvent3Event
-> = ReadEvent3Event$inboundSchema;
+export const ReadEvent4Event$outboundSchema: z.ZodNativeEnum<
+  typeof ReadEvent4Event
+> = ReadEvent4Event$inboundSchema;
 
 /**
  * @internal
  * @deprecated This namespace will be removed in future versions. Use schemas and types that are exported directly from this module.
  */
-export namespace ReadEvent3Event$ {
-  /** @deprecated use `ReadEvent3Event$inboundSchema` instead. */
-  export const inboundSchema = ReadEvent3Event$inboundSchema;
-  /** @deprecated use `ReadEvent3Event$outboundSchema` instead. */
-  export const outboundSchema = ReadEvent3Event$outboundSchema;
+export namespace ReadEvent4Event$ {
+  /** @deprecated use `ReadEvent4Event$inboundSchema` instead. */
+  export const inboundSchema = ReadEvent4Event$inboundSchema;
+  /** @deprecated use `ReadEvent4Event$outboundSchema` instead. */
+  export const outboundSchema = ReadEvent4Event$outboundSchema;
 }
 
 /** @internal */
@@ -88,7 +104,7 @@ export const Ping$inboundSchema: z.ZodType<Ping, z.ZodTypeDef, unknown> = z
         return z.NEVER;
       }
     }).pipe(PingEventData$inboundSchema),
-    event: ReadEvent3Event$inboundSchema,
+    event: ReadEvent4Event$inboundSchema,
   });
 
 /** @internal */
@@ -101,7 +117,7 @@ export type Ping$Outbound = {
 export const Ping$outboundSchema: z.ZodType<Ping$Outbound, z.ZodTypeDef, Ping> =
   z.object({
     data: PingEventData$outboundSchema,
-    event: ReadEvent3Event$outboundSchema,
+    event: ReadEvent4Event$outboundSchema,
   });
 
 /**
@@ -132,31 +148,31 @@ export function pingFromJSON(
 }
 
 /** @internal */
-export const ReadEventEvent$inboundSchema: z.ZodNativeEnum<
-  typeof ReadEventEvent
-> = z.nativeEnum(ReadEventEvent);
+export const ReadEvent3Event$inboundSchema: z.ZodNativeEnum<
+  typeof ReadEvent3Event
+> = z.nativeEnum(ReadEvent3Event);
 
 /** @internal */
-export const ReadEventEvent$outboundSchema: z.ZodNativeEnum<
-  typeof ReadEventEvent
-> = ReadEventEvent$inboundSchema;
+export const ReadEvent3Event$outboundSchema: z.ZodNativeEnum<
+  typeof ReadEvent3Event
+> = ReadEvent3Event$inboundSchema;
 
 /**
  * @internal
  * @deprecated This namespace will be removed in future versions. Use schemas and types that are exported directly from this module.
  */
-export namespace ReadEventEvent$ {
-  /** @deprecated use `ReadEventEvent$inboundSchema` instead. */
-  export const inboundSchema = ReadEventEvent$inboundSchema;
-  /** @deprecated use `ReadEventEvent$outboundSchema` instead. */
-  export const outboundSchema = ReadEventEvent$outboundSchema;
+export namespace ReadEvent3Event$ {
+  /** @deprecated use `ReadEvent3Event$inboundSchema` instead. */
+  export const inboundSchema = ReadEvent3Event$inboundSchema;
+  /** @deprecated use `ReadEvent3Event$outboundSchema` instead. */
+  export const outboundSchema = ReadEvent3Event$outboundSchema;
 }
 
 /** @internal */
 export const ErrorT$inboundSchema: z.ZodType<ErrorT, z.ZodTypeDef, unknown> = z
   .object({
     data: z.string(),
-    event: ReadEventEvent$inboundSchema,
+    event: ReadEvent3Event$inboundSchema,
   });
 
 /** @internal */
@@ -172,7 +188,7 @@ export const ErrorT$outboundSchema: z.ZodType<
   ErrorT
 > = z.object({
   data: z.string(),
-  event: ReadEventEvent$outboundSchema,
+  event: ReadEvent3Event$outboundSchema,
 });
 
 /**
@@ -199,6 +215,90 @@ export function errorFromJSON(
     jsonString,
     (x) => ErrorT$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ErrorT' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReadEventEvent$inboundSchema: z.ZodNativeEnum<
+  typeof ReadEventEvent
+> = z.nativeEnum(ReadEventEvent);
+
+/** @internal */
+export const ReadEventEvent$outboundSchema: z.ZodNativeEnum<
+  typeof ReadEventEvent
+> = ReadEventEvent$inboundSchema;
+
+/**
+ * @internal
+ * @deprecated This namespace will be removed in future versions. Use schemas and types that are exported directly from this module.
+ */
+export namespace ReadEventEvent$ {
+  /** @deprecated use `ReadEventEvent$inboundSchema` instead. */
+  export const inboundSchema = ReadEventEvent$inboundSchema;
+  /** @deprecated use `ReadEventEvent$outboundSchema` instead. */
+  export const outboundSchema = ReadEventEvent$outboundSchema;
+}
+
+/** @internal */
+export const ReadEvent2$inboundSchema: z.ZodType<
+  ReadEvent2,
+  z.ZodTypeDef,
+  unknown
+> = z.object({
+  data: z.string().transform((v, ctx) => {
+    try {
+      return JSON.parse(v);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `malformed json: ${err}`,
+      });
+      return z.NEVER;
+    }
+  }).pipe(TailResponse$inboundSchema),
+  event: ReadEventEvent$inboundSchema,
+});
+
+/** @internal */
+export type ReadEvent2$Outbound = {
+  data: TailResponse$Outbound;
+  event: string;
+};
+
+/** @internal */
+export const ReadEvent2$outboundSchema: z.ZodType<
+  ReadEvent2$Outbound,
+  z.ZodTypeDef,
+  ReadEvent2
+> = z.object({
+  data: TailResponse$outboundSchema,
+  event: ReadEventEvent$outboundSchema,
+});
+
+/**
+ * @internal
+ * @deprecated This namespace will be removed in future versions. Use schemas and types that are exported directly from this module.
+ */
+export namespace ReadEvent2$ {
+  /** @deprecated use `ReadEvent2$inboundSchema` instead. */
+  export const inboundSchema = ReadEvent2$inboundSchema;
+  /** @deprecated use `ReadEvent2$outboundSchema` instead. */
+  export const outboundSchema = ReadEvent2$outboundSchema;
+  /** @deprecated use `ReadEvent2$Outbound` instead. */
+  export type Outbound = ReadEvent2$Outbound;
+}
+
+export function readEvent2ToJSON(readEvent2: ReadEvent2): string {
+  return JSON.stringify(ReadEvent2$outboundSchema.parse(readEvent2));
+}
+
+export function readEvent2FromJSON(
+  jsonString: string,
+): SafeParseResult<ReadEvent2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReadEvent2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReadEvent2' from JSON`,
   );
 }
 
@@ -291,6 +391,7 @@ export const ReadEvent$inboundSchema: z.ZodType<
   z.ZodTypeDef,
   unknown
 > = z.union([
+  z.lazy(() => ReadEvent2$inboundSchema),
   z.lazy(() => ErrorT$inboundSchema),
   z.lazy(() => Ping$inboundSchema),
   z.lazy(() => Batch$inboundSchema),
@@ -298,6 +399,7 @@ export const ReadEvent$inboundSchema: z.ZodType<
 
 /** @internal */
 export type ReadEvent$Outbound =
+  | ReadEvent2$Outbound
   | ErrorT$Outbound
   | Ping$Outbound
   | Batch$Outbound;
@@ -308,6 +410,7 @@ export const ReadEvent$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   ReadEvent
 > = z.union([
+  z.lazy(() => ReadEvent2$outboundSchema),
   z.lazy(() => ErrorT$outboundSchema),
   z.lazy(() => Ping$outboundSchema),
   z.lazy(() => Batch$outboundSchema),
