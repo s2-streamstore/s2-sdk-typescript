@@ -24,6 +24,9 @@ export const Operation = {
   Read: "read",
   Trim: "trim",
   Fence: "fence",
+  AccountMetrics: "account-metrics",
+  BasinMetrics: "basin-metrics",
+  StreamMetrics: "stream-metrics",
 } as const;
 export type Operation = ClosedEnum<typeof Operation>;
 

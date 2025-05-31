@@ -5,6 +5,7 @@
 import { ClientSDK } from "../lib/sdks.js";
 import { AccessTokens } from "./accesstokens.js";
 import { Basins } from "./basins.js";
+import { Metrics } from "./metrics.js";
 import { Records } from "./records.js";
 import { Streams } from "./streams.js";
 
@@ -17,6 +18,11 @@ export class S2 extends ClientSDK {
   private _basins?: Basins;
   get basins(): Basins {
     return (this._basins ??= new Basins(this._options));
+  }
+
+  private _metrics?: Metrics;
+  get metrics(): Metrics {
+    return (this._metrics ??= new Metrics(this._options));
   }
 
   private _streams?: Streams;
