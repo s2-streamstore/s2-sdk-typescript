@@ -3,25 +3,28 @@
  */
 
 import * as z from "zod";
+import { S2Error } from "./s2error.js";
 
 export type ErrorResponseData = {
   code?: string | null | undefined;
   message: string;
 };
 
-export class ErrorResponse extends Error {
+export class ErrorResponse extends S2Error {
   code?: string | null | undefined;
 
   /** The original data that was passed to this error instance. */
   data$: ErrorResponseData;
 
-  constructor(err: ErrorResponseData) {
+  constructor(
+    err: ErrorResponseData,
+    httpMeta: { response: Response; request: Request; body: string },
+  ) {
     const message = "message" in err && typeof err.message === "string"
       ? err.message
       : `API error occurred: ${JSON.stringify(err)}`;
-    super(message);
+    super(message, httpMeta);
     this.data$ = err;
-
     if (err.code != null) this.code = err.code;
 
     this.name = "ErrorResponse";
@@ -36,9 +39,16 @@ export const ErrorResponse$inboundSchema: z.ZodType<
 > = z.object({
   code: z.nullable(z.string()).optional(),
   message: z.string(),
+  request$: z.instanceof(Request),
+  response$: z.instanceof(Response),
+  body$: z.string(),
 })
   .transform((v) => {
-    return new ErrorResponse(v);
+    return new ErrorResponse(v, {
+      request: v.request$,
+      response: v.response$,
+      body: v.body$,
+    });
   });
 
 /** @internal */

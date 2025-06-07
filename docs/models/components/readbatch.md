@@ -6,12 +6,7 @@
 import { ReadBatch } from "@s2-dev/streamstore/models/components";
 
 let value: ReadBatch = {
-  records: [
-    {
-      seqNum: 277716,
-      timestamp: 3426,
-    },
-  ],
+  records: [],
 };
 ```
 

@@ -7,7 +7,7 @@
 
 ```typescript
 const value: components.One = {
-  age: 2,
+  age: 495950,
 };
 ```
 

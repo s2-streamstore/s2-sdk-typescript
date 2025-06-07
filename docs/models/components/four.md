@@ -10,9 +10,7 @@ import { Four } from "@s2-dev/streamstore/models/components";
 let value: Four = {
   label: {
     name: "<value>",
-    values: [
-      "<value>",
-    ],
+    values: [],
   },
 };
 ```

@@ -9,8 +9,8 @@ let value: Batch = {
   data: {
     records: [
       {
-        seqNum: 793742,
-        timestamp: 773663,
+        seqNum: 773663,
+        timestamp: 695060,
       },
     ],
   },

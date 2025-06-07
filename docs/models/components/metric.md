@@ -10,7 +10,7 @@ const value: components.Metric1 = {
   scalar: {
     name: "<value>",
     unit: "operations",
-    value: 6.86,
+    value: 4809.88,
   },
 };
 ```
@@ -20,13 +20,11 @@ const value: components.Metric1 = {
 ```typescript
 const value: components.Two = {
   accumulation: {
-    bucketLength: "minute",
+    bucketLength: "day",
     name: "<value>",
-    unit: "operations",
+    unit: "bytes",
     values: [
-      [
-        1949.27,
-      ],
+      [],
     ],
   },
 };
@@ -40,9 +38,7 @@ const value: components.Three = {
     name: "<value>",
     unit: "bytes",
     values: [
-      [
-        482494,
-      ],
+      [],
     ],
   },
 };
@@ -54,9 +50,7 @@ const value: components.Three = {
 const value: components.Four = {
   label: {
     name: "<value>",
-    values: [
-      "<value>",
-    ],
+    values: [],
   },
 };
 ```

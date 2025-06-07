@@ -7,8 +7,8 @@ import { TailResponse } from "@s2-dev/streamstore/models/components";
 
 let value: TailResponse = {
   tail: {
-    seqNum: 478866,
-    timestamp: 414821,
+    seqNum: 786094,
+    timestamp: 783488,
   },
 };
 ```

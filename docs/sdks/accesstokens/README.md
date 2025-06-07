@@ -27,7 +27,6 @@ const s2 = new S2({
 async function run() {
   const result = await s2.accessTokens.listAccessTokens({});
 
-  // Handle the result
   console.log(result);
 }
 
@@ -50,15 +49,12 @@ const s2 = new S2Core({
 
 async function run() {
   const res = await accessTokensListAccessTokens(s2, {});
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("accessTokensListAccessTokens failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -103,7 +99,6 @@ async function run() {
     scope: {},
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -129,15 +124,12 @@ async function run() {
     id: "<id>",
     scope: {},
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("accessTokensIssueAccessToken failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -205,14 +197,12 @@ async function run() {
   const res = await accessTokensRevokeAccessToken(s2, {
     id: "<id>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    
+  } else {
+    console.log("accessTokensRevokeAccessToken failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  
 }
 
 run();

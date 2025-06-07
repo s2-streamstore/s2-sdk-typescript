@@ -17,8 +17,8 @@ let value: AppendAck = {
     timestamp: 913959,
   },
   tail: {
-    seqNum: 112878,
-    timestamp: 979879,
+    seqNum: 786094,
+    timestamp: 783488,
   },
 };
 ```

@@ -31,7 +31,6 @@ async function run() {
   const result = await s2.basins.listBasins({});
 
   for await (const page of result) {
-    // Handle the page
     console.log(page);
   }
 }
@@ -55,16 +54,13 @@ const s2 = new S2Core({
 
 async function run() {
   const res = await basinsListBasins(s2, {});
-
-  if (!res.ok) {
-    throw res.error;
-  }
-
-  const { value: result } = res;
-
-  for await (const page of result) {
-    // Handle the page
+  if (res.ok) {
+    const { value: result } = res;
+    for await (const page of result) {
     console.log(page);
+  }
+  } else {
+    console.log("basinsListBasins failed:", res.error);
   }
 }
 
@@ -109,7 +105,6 @@ async function run() {
     basin: "<value>",
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -134,15 +129,12 @@ async function run() {
   const res = await basinsCreateBasin(s2, {
     basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("basinsCreateBasin failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -186,7 +178,6 @@ async function run() {
     basin: "<value>",
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -211,15 +202,12 @@ async function run() {
   const res = await basinsGetBasinConfig(s2, {
     basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("basinsGetBasinConfig failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -263,7 +251,6 @@ async function run() {
     basin: "<value>",
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -288,15 +275,12 @@ async function run() {
   const res = await basinsCreateOrReconfigureBasin(s2, {
     basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("basinsCreateOrReconfigureBasin failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -364,14 +348,12 @@ async function run() {
   const res = await basinsDeleteBasin(s2, {
     basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    
+  } else {
+    console.log("basinsDeleteBasin failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  
 }
 
 run();
@@ -416,7 +398,6 @@ async function run() {
     basinReconfiguration: {},
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -442,15 +423,12 @@ async function run() {
     basin: "<value>",
     basinReconfiguration: {},
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("basinsReconfigureBasin failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();

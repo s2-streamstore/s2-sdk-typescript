@@ -6,13 +6,7 @@
 import { ListBasinsResponse } from "@s2-dev/streamstore/models/components";
 
 let value: ListBasinsResponse = {
-  basins: [
-    {
-      name: "<value>",
-      scope: "aws:us-east-1",
-      state: "active",
-    },
-  ],
+  basins: [],
   hasMore: false,
 };
 ```

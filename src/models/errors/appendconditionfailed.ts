@@ -6,6 +6,7 @@ import * as z from "zod";
 import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
+import { S2Error } from "./s2error.js";
 import { SDKValidationError } from "./sdkvalidationerror.js";
 
 /**
@@ -30,7 +31,7 @@ export type SeqNumData = {
  * @remarks
  * The expected next sequence number is returned.
  */
-export class SeqNum extends Error {
+export class SeqNum extends S2Error {
   /**
    * Sequence number did not match the tail of the stream.
    *
@@ -42,13 +43,15 @@ export class SeqNum extends Error {
   /** The original data that was passed to this error instance. */
   data$: SeqNumData;
 
-  constructor(err: SeqNumData) {
+  constructor(
+    err: SeqNumData,
+    httpMeta: { response: Response; request: Request; body: string },
+  ) {
     const message = "message" in err && typeof err.message === "string"
       ? err.message
       : `API error occurred: ${JSON.stringify(err)}`;
-    super(message);
+    super(message, httpMeta);
     this.data$ = err;
-
     this.seqNumMismatch = err.seqNumMismatch;
 
     this.name = "SeqNum";
@@ -77,7 +80,7 @@ export type FencingTokenData = {
  * @remarks
  * The expected fencing token is returned.
  */
-export class FencingToken extends Error {
+export class FencingToken extends S2Error {
   /**
    * Fencing token did not match.
    *
@@ -89,13 +92,15 @@ export class FencingToken extends Error {
   /** The original data that was passed to this error instance. */
   data$: FencingTokenData;
 
-  constructor(err: FencingTokenData) {
+  constructor(
+    err: FencingTokenData,
+    httpMeta: { response: Response; request: Request; body: string },
+  ) {
     const message = "message" in err && typeof err.message === "string"
       ? err.message
       : `API error occurred: ${JSON.stringify(err)}`;
-    super(message);
+    super(message, httpMeta);
     this.data$ = err;
-
     this.fencingTokenMismatch = err.fencingTokenMismatch;
 
     this.name = "FencingToken";
@@ -111,13 +116,20 @@ export type AppendConditionFailed = FencingToken | SeqNum;
 export const SeqNum$inboundSchema: z.ZodType<SeqNum, z.ZodTypeDef, unknown> = z
   .object({
     seq_num_mismatch: z.number().int(),
+    request$: z.instanceof(Request),
+    response$: z.instanceof(Response),
+    body$: z.string(),
   })
   .transform((v) => {
     const remapped = remap$(v, {
       "seq_num_mismatch": "seqNumMismatch",
     });
 
-    return new SeqNum(remapped);
+    return new SeqNum(remapped, {
+      request: v.request$,
+      response: v.response$,
+      body: v.body$,
+    });
   });
 
 /** @internal */
@@ -162,13 +174,20 @@ export const FencingToken$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   fencing_token_mismatch: z.string(),
+  request$: z.instanceof(Request),
+  response$: z.instanceof(Response),
+  body$: z.string(),
 })
   .transform((v) => {
     const remapped = remap$(v, {
       "fencing_token_mismatch": "fencingTokenMismatch",
     });
 
-    return new FencingToken(remapped);
+    return new FencingToken(remapped, {
+      request: v.request$,
+      response: v.response$,
+      body: v.body$,
+    });
   });
 
 /** @internal */

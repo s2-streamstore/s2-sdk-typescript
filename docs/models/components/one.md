@@ -6,7 +6,7 @@
 import { One } from "@s2-dev/streamstore/models/components";
 
 let value: One = {
-  age: 50,
+  age: 495950,
 };
 ```
 

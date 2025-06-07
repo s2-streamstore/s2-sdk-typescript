@@ -7,12 +7,7 @@
 
 ```typescript
 const value: components.ReadBatch = {
-  records: [
-    {
-      seqNum: 193692,
-      timestamp: 515739,
-    },
-  ],
+  records: [],
 };
 ```
 

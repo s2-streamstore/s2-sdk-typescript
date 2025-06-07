@@ -7,9 +7,7 @@ import { Label } from "@s2-dev/streamstore/models/components";
 
 let value: Label = {
   name: "<value>",
-  values: [
-    "<value>",
-  ],
+  values: [],
 };
 ```
 

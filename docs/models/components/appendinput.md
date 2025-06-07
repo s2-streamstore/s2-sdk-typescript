@@ -8,9 +8,7 @@ Payload of an Append request message.
 import { AppendInput } from "@s2-dev/streamstore/models/components";
 
 let value: AppendInput = {
-  records: [
-    {},
-  ],
+  records: [],
 };
 ```
 

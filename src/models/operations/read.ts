@@ -50,6 +50,14 @@ export type ReadRequest = {
    */
   bytes?: number | undefined;
   /**
+   * Exclusive timestamp to read until.
+   *
+   * @remarks
+   * If provided, this is applied as an additional constraint on top of the `limit`,
+   * and will guarantee that all records returned have timestamps < the provided `until`.
+   */
+  until?: number | undefined;
+  /**
    * Basin name for basin-specific endpoints
    */
   s2Basin: string;
@@ -72,6 +80,7 @@ export const ReadRequest$inboundSchema: z.ZodType<
   tail_offset: z.number().int().optional(),
   count: z.number().int().optional(),
   bytes: z.number().int().optional(),
+  until: z.number().int().optional(),
   "s2-basin": z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -91,6 +100,7 @@ export type ReadRequest$Outbound = {
   tail_offset?: number | undefined;
   count?: number | undefined;
   bytes?: number | undefined;
+  until?: number | undefined;
   "s2-basin": string;
 };
 
@@ -107,6 +117,7 @@ export const ReadRequest$outboundSchema: z.ZodType<
   tailOffset: z.number().int().optional(),
   count: z.number().int().optional(),
   bytes: z.number().int().optional(),
+  until: z.number().int().optional(),
   s2Basin: z.string(),
 }).transform((v) => {
   return remap$(v, {

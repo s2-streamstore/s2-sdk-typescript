@@ -10,8 +10,8 @@ const value: components.Batch = {
   data: {
     records: [
       {
-        seqNum: 634244,
-        timestamp: 40328,
+        seqNum: 773663,
+        timestamp: 695060,
       },
     ],
   },
@@ -26,8 +26,8 @@ const value: components.Batch = {
 const value: components.ReadEvent2 = {
   data: {
     tail: {
-      seqNum: 682558,
-      timestamp: 286393,
+      seqNum: 786094,
+      timestamp: 783488,
     },
   },
   event: "tail",
@@ -48,7 +48,7 @@ const value: components.ErrorT = {
 ```typescript
 const value: components.Ping = {
   data: {
-    timestamp: 352303,
+    timestamp: 743406,
   },
   event: "ping",
 };

@@ -14,9 +14,7 @@ let value: Two = {
     name: "<value>",
     unit: "bytes",
     values: [
-      [
-        97324,
-      ],
+      [],
     ],
   },
 };
