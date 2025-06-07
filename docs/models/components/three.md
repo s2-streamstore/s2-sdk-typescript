@@ -10,11 +10,9 @@ import { Three } from "@s2-dev/streamstore/models/components";
 let value: Three = {
   gauge: {
     name: "<value>",
-    unit: "operations",
+    unit: "bytes",
     values: [
-      [
-        234253,
-      ],
+      [],
     ],
   },
 };

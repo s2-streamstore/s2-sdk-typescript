@@ -4,6 +4,7 @@
 
 import * as z from "zod";
 import * as components from "../components/index.js";
+import { S2Error } from "./s2error.js";
 
 export type TailResponseData = {
   /**
@@ -12,7 +13,7 @@ export type TailResponseData = {
   tail: components.StreamPosition;
 };
 
-export class TailResponse extends Error {
+export class TailResponse extends S2Error {
   /**
    * Position of a record in a stream.
    */
@@ -21,13 +22,15 @@ export class TailResponse extends Error {
   /** The original data that was passed to this error instance. */
   data$: TailResponseData;
 
-  constructor(err: TailResponseData) {
+  constructor(
+    err: TailResponseData,
+    httpMeta: { response: Response; request: Request; body: string },
+  ) {
     const message = "message" in err && typeof err.message === "string"
       ? err.message
       : `API error occurred: ${JSON.stringify(err)}`;
-    super(message);
+    super(message, httpMeta);
     this.data$ = err;
-
     this.tail = err.tail;
 
     this.name = "TailResponse";
@@ -41,9 +44,16 @@ export const TailResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   tail: components.StreamPosition$inboundSchema,
+  request$: z.instanceof(Request),
+  response$: z.instanceof(Response),
+  body$: z.string(),
 })
   .transform((v) => {
-    return new TailResponse(v);
+    return new TailResponse(v, {
+      request: v.request$,
+      response: v.response$,
+      body: v.body$,
+    });
   });
 
 /** @internal */

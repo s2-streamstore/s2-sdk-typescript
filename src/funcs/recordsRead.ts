@@ -10,7 +10,6 @@ import { safeParse } from "../lib/schemas.js";
 import { RequestOptions } from "../lib/sdks.js";
 import { extractSecurity, resolveGlobalSecurity } from "../lib/security.js";
 import { pathToFunc } from "../lib/url.js";
-import { APIError } from "../models/errors/apierror.js";
 import {
   ConnectionError,
   InvalidRequestError,
@@ -19,6 +18,8 @@ import {
   UnexpectedClientError,
 } from "../models/errors/httpclienterrors.js";
 import * as errors from "../models/errors/index.js";
+import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
+import { S2Error } from "../models/errors/s2error.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as operations from "../models/operations/index.js";
 import { ReadServerList } from "../models/operations/read.js";
@@ -45,14 +46,14 @@ export function recordsRead(
     operations.ReadResponse,
     | errors.ErrorResponse
     | errors.TailResponse
-    | errors.ErrorResponse
-    | APIError
-    | SDKValidationError
-    | UnexpectedClientError
-    | InvalidRequestError
+    | S2Error
+    | ResponseValidationError
+    | ConnectionError
     | RequestAbortedError
     | RequestTimeoutError
-    | ConnectionError
+    | InvalidRequestError
+    | UnexpectedClientError
+    | SDKValidationError
   >
 > {
   return new APIPromise($do(
@@ -72,14 +73,14 @@ async function $do(
       operations.ReadResponse,
       | errors.ErrorResponse
       | errors.TailResponse
-      | errors.ErrorResponse
-      | APIError
-      | SDKValidationError
-      | UnexpectedClientError
-      | InvalidRequestError
+      | S2Error
+      | ResponseValidationError
+      | ConnectionError
       | RequestAbortedError
       | RequestTimeoutError
-      | ConnectionError
+      | InvalidRequestError
+      | UnexpectedClientError
+      | SDKValidationError
     >,
     APICall,
   ]
@@ -115,6 +116,7 @@ async function $do(
     "seq_num": payload.seq_num,
     "tail_offset": payload.tail_offset,
     "timestamp": payload.timestamp,
+    "until": payload.until,
   });
 
   const headers = new Headers(compactMap({
@@ -184,14 +186,14 @@ async function $do(
     operations.ReadResponse,
     | errors.ErrorResponse
     | errors.TailResponse
-    | errors.ErrorResponse
-    | APIError
-    | SDKValidationError
-    | UnexpectedClientError
-    | InvalidRequestError
+    | S2Error
+    | ResponseValidationError
+    | ConnectionError
     | RequestAbortedError
     | RequestTimeoutError
-    | ConnectionError
+    | InvalidRequestError
+    | UnexpectedClientError
+    | SDKValidationError
   >(
     M.json(200, operations.ReadResponse$inboundSchema),
     M.sse(200, operations.ReadResponse$inboundSchema, {
@@ -202,7 +204,7 @@ async function $do(
     M.jsonErr(500, errors.ErrorResponse$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
-  )(response, { extraFields: responseFields });
+  )(response, req, { extraFields: responseFields });
   if (!result.ok) {
     return [result, { status: "complete", request: req, response }];
   }

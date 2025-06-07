@@ -58,16 +58,14 @@ async function run() {
     stream: "<value>",
     s2Basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
-  }
-
-  const { value: result } = res;
-
-  for await (const event of result) {
+  if (res.ok) {
+    const { value: result } = res;
+    for await (const event of result) {
     // Handle the event
     console.log(event);
+  }
+  } else {
+    console.log("recordsRead failed:", res.error);
   }
 }
 
@@ -122,7 +120,6 @@ async function run() {
     },
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -154,15 +151,12 @@ async function run() {
       ],
     },
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("recordsAppend failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -211,7 +205,6 @@ async function run() {
     s2Basin: "<value>",
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -237,15 +230,12 @@ async function run() {
     stream: "<value>",
     s2Basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("recordsCheckTail failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();

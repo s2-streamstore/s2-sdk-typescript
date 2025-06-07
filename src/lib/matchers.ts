@@ -3,12 +3,11 @@
  */
 
 import { APIError } from "../models/errors/apierror.js";
-import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
-import { Result } from "../types/fp.js";
+import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
+import { ERR, OK, Result } from "../types/fp.js";
 import { discardSentinel } from "./event-streams.js";
 import { matchResponse, matchStatusCode, StatusCodePredicate } from "./http.js";
 import { isPlainObject } from "./is-plain-object.js";
-import { safeParse } from "./schemas.js";
 
 export type Encoding =
   | "jsonl"
@@ -177,17 +176,19 @@ export type MatchedError<Matchers> = Matchers extends Matcher<any, infer E>[]
   : never;
 export type MatchFunc<T, E> = (
   response: Response,
+  request: Request,
   options?: { resultKey?: string; extraFields?: Record<string, unknown> },
 ) => Promise<[result: Result<T, E>, raw: unknown]>;
 
 export function match<T, E>(
   ...matchers: Array<Matcher<T, E>>
-): MatchFunc<T, E | APIError | SDKValidationError> {
+): MatchFunc<T, E | APIError | ResponseValidationError> {
   return async function matchFunc(
     response: Response,
+    request: Request,
     options?: { resultKey?: string; extraFields?: Record<string, unknown> },
   ): Promise<
-    [result: Result<T, E | APIError | SDKValidationError>, raw: unknown]
+    [result: Result<T, E | APIError | ResponseValidationError>, raw: unknown]
   > {
     let raw: unknown;
     let matcher: Matcher<T, E> | undefined;
@@ -206,21 +207,22 @@ export function match<T, E>(
     }
 
     if (!matcher) {
-      const responseBody = await response.text();
       return [{
         ok: false,
-        error: new APIError(
-          "Unexpected API response status or content-type",
+        error: new APIError("Unexpected Status or Content-Type", {
           response,
-          responseBody,
-        ),
-      }, responseBody];
+          request,
+          body: await response.text().catch(() => ""),
+        }),
+      }, raw];
     }
 
     const encoding = matcher.enc;
+    let body = "";
     switch (encoding) {
       case "json":
-        raw = await response.json();
+        body = await response.text();
+        raw = JSON.parse(body);
         break;
       case "jsonl":
         raw = response.body;
@@ -232,7 +234,8 @@ export function match<T, E>(
         raw = response.body;
         break;
       case "text":
-        raw = await response.text();
+        body = await response.text();
+        raw = body;
         break;
       case "sse":
         raw = response.body && matcher.sseSentinel
@@ -240,10 +243,12 @@ export function match<T, E>(
           : response.body;
         break;
       case "nil":
-        raw = await discardResponseBody(response);
+        body = await response.text();
+        raw = undefined;
         break;
       case "fail":
-        raw = await response.text();
+        body = await response.text();
+        raw = body;
         break;
       default:
         encoding satisfies never;
@@ -253,11 +258,7 @@ export function match<T, E>(
     if (matcher.enc === "fail") {
       return [{
         ok: false,
-        error: new APIError(
-          "API error occurred",
-          response,
-          typeof raw === "string" ? raw : "",
-        ),
+        error: new APIError("API error occurred", { request, response, body }),
       }, raw];
     }
 
@@ -269,6 +270,9 @@ export function match<T, E>(
         ...options?.extraFields,
         ...(matcher.hdrs ? { Headers: unpackHeaders(response.headers) } : null),
         ...(isPlainObject(raw) ? raw : null),
+        request$: request,
+        response$: response,
+        body$: body,
       };
     } else if (resultKey) {
       data = {
@@ -287,18 +291,20 @@ export function match<T, E>(
     }
 
     if ("err" in matcher) {
-      const result = safeParse(
+      const result = safeParseResponse(
         data,
         (v: unknown) => matcher.schema.parse(v),
         "Response validation failed",
+        { request, response, body },
       );
       return [result.ok ? { ok: false, error: result.value } : result, raw];
     } else {
       return [
-        safeParse(
+        safeParseResponse(
           data,
           (v: unknown) => matcher.schema.parse(v),
           "Response validation failed",
+          { request, response, body },
         ),
         raw,
       ];
@@ -321,25 +327,22 @@ export function unpackHeaders(headers: Headers): Record<string, string[]> {
   return out;
 }
 
-/**
- * Discards the response body to free up resources.
- *
- * To learn why this is need, see the undici docs:
- * https://undici.nodejs.org/#/?id=garbage-collection
- */
-export async function discardResponseBody(res: Response) {
-  const reader = res.body?.getReader();
-  if (reader == null) {
-    return;
-  }
-
+function safeParseResponse<Inp, Out>(
+  rawValue: Inp,
+  fn: (value: Inp) => Out,
+  errorMessage: string,
+  httpMeta: { response: Response; request: Request; body: string },
+): Result<Out, ResponseValidationError> {
   try {
-    let done = false;
-    while (!done) {
-      const res = await reader.read();
-      done = res.done;
-    }
-  } finally {
-    reader.releaseLock();
+    return OK(fn(rawValue));
+  } catch (err) {
+    return ERR(
+      new ResponseValidationError(errorMessage, {
+        cause: err,
+        rawValue,
+        rawMessage: errorMessage,
+        ...httpMeta,
+      }),
+    );
   }
 }

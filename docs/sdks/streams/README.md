@@ -33,7 +33,6 @@ async function run() {
   });
 
   for await (const page of result) {
-    // Handle the page
     console.log(page);
   }
 }
@@ -59,16 +58,13 @@ async function run() {
   const res = await streamsListStreams(s2, {
     s2Basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
-  }
-
-  const { value: result } = res;
-
-  for await (const page of result) {
-    // Handle the page
+  if (res.ok) {
+    const { value: result } = res;
+    for await (const page of result) {
     console.log(page);
+  }
+  } else {
+    console.log("streamsListStreams failed:", res.error);
   }
 }
 
@@ -117,7 +113,6 @@ async function run() {
     },
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -145,15 +140,12 @@ async function run() {
       stream: "<value>",
     },
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("streamsCreateStream failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -199,7 +191,6 @@ async function run() {
     s2Basin: "<value>",
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -225,15 +216,12 @@ async function run() {
     stream: "<value>",
     s2Basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("streamsGetStreamConfig failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -279,7 +267,6 @@ async function run() {
     s2Basin: "<value>",
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -305,15 +292,12 @@ async function run() {
     stream: "<value>",
     s2Basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("streamsCreateOrReconfigureStream failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();
@@ -384,14 +368,12 @@ async function run() {
     stream: "<value>",
     s2Basin: "<value>",
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    
+  } else {
+    console.log("streamsDeleteStream failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  
 }
 
 run();
@@ -438,7 +420,6 @@ async function run() {
     streamReconfiguration: {},
   });
 
-  // Handle the result
   console.log(result);
 }
 
@@ -465,15 +446,12 @@ async function run() {
     s2Basin: "<value>",
     streamReconfiguration: {},
   });
-
-  if (!res.ok) {
-    throw res.error;
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("streamsReconfigureStream failed:", res.error);
   }
-
-  const { value: result } = res;
-
-  // Handle the result
-  console.log(result);
 }
 
 run();

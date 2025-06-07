@@ -6,7 +6,7 @@
 import { ListStreamsResponse } from "@s2-dev/streamstore/models/components";
 
 let value: ListStreamsResponse = {
-  hasMore: false,
+  hasMore: true,
   streams: [
     {
       createdAt: "<value>",

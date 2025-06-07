@@ -8,10 +8,11 @@ import { MetricSetResponse } from "@s2-dev/streamstore/models/components";
 let value: MetricSetResponse = {
   values: [
     {
-      label: {
+      gauge: {
         name: "<value>",
+        unit: "bytes",
         values: [
-          "<value>",
+          [],
         ],
       },
     },

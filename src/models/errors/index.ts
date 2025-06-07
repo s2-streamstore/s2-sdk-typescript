@@ -6,5 +6,6 @@ export * from "./apierror.js";
 export * from "./appendconditionfailed.js";
 export * from "./errorresponse.js";
 export * from "./httpclienterrors.js";
+export * from "./responsevalidationerror.js";
 export * from "./sdkvalidationerror.js";
 export * from "./tailresponse.js";

@@ -8,11 +8,7 @@ import { Gauge } from "@s2-dev/streamstore/models/components";
 let value: Gauge = {
   name: "<value>",
   unit: "bytes",
-  values: [
-    [
-      315000,
-    ],
-  ],
+  values: [],
 };
 ```
 

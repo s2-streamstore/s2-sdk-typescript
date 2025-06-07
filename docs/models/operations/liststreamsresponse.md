@@ -5,17 +5,7 @@
 ```typescript
 import { ListStreamsResponse } from "@s2-dev/streamstore/models/operations";
 
-let value: ListStreamsResponse = {
-  result: {
-    hasMore: false,
-    streams: [
-      {
-        createdAt: "<value>",
-        name: "<value>",
-      },
-    ],
-  },
-};
+let value: ListStreamsResponse = {};
 ```
 
 ## Fields

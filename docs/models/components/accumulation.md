@@ -11,7 +11,10 @@ let value: Accumulation = {
   unit: "operations",
   values: [
     [
-      5852.69,
+      730872,
+    ],
+    [
+      145468,
     ],
   ],
 };

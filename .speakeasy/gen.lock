@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: 5bdd29eb8fec1b4c708f6c1f8dff5d0a
+  docChecksum: 507e316afce458988017a21e2b372b9c
   docVersion: 1.0.0
-  speakeasyVersion: 1.555.0
-  generationVersion: 2.618.0
-  releaseVersion: 0.15.0
-  configChecksum: e1ccfd85b738d1d43b8ed2424eb2d2a1
+  speakeasyVersion: 1.557.0
+  generationVersion: 2.623.0
+  releaseVersion: 0.15.1
+  configChecksum: dc653c655a3f30c45451ad99da7e0bd9
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
@@ -277,6 +277,8 @@ generatedFiles:
   - src/models/errors/errorresponse.ts
   - src/models/errors/httpclienterrors.ts
   - src/models/errors/index.ts
+  - src/models/errors/responsevalidationerror.ts
+  - src/models/errors/s2error.ts
   - src/models/errors/sdkvalidationerror.ts
   - src/models/errors/tailresponse.ts
   - src/models/operations/accountmetrics.ts
