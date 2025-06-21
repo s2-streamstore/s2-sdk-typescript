@@ -7,13 +7,13 @@ Usage metrics and data.
 
 ### Available Operations
 
-* [accountMetrics](#accountmetrics) - Get account level metrics.
-* [basinMetrics](#basinmetrics) - Get metrics for a basin.
-* [streamMetrics](#streammetrics) - Get metrics for a stream.
+* [accountMetrics](#accountmetrics) - Account-level metrics.
+* [basinMetrics](#basinmetrics) - Basin-level metrics.
+* [streamMetrics](#streammetrics) - Stream-level metrics.
 
 ## accountMetrics
 
-Get account level metrics.
+Account-level metrics.
 
 ### Example Usage
 
@@ -26,7 +26,7 @@ const s2 = new S2({
 
 async function run() {
   const result = await s2.metrics.accountMetrics({
-    set: "account_ops",
+    set: "account-ops",
   });
 
   console.log(result);
@@ -51,7 +51,7 @@ const s2 = new S2Core({
 
 async function run() {
   const res = await metricsAccountMetrics(s2, {
-    set: "account_ops",
+    set: "account-ops",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -86,7 +86,7 @@ run();
 
 ## basinMetrics
 
-Get metrics for a basin.
+Basin-level metrics.
 
 ### Example Usage
 
@@ -161,7 +161,7 @@ run();
 
 ## streamMetrics
 
-Get metrics for a stream.
+Stream-level metrics.
 
 ### Example Usage
 

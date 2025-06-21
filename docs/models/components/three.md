@@ -1,6 +1,6 @@
 # Three
 
-A named series of (timestamp, value) points each representing an instantaneous value.
+Named series of `(timestamp, value)` points each representing an instantaneous value.
 
 ## Example Usage
 

@@ -12,7 +12,7 @@ const args = {
 
 export const tool$basinsGetBasinConfig: ToolDefinition<typeof args> = {
   name: "basins-get-basin-config",
-  description: `Get basin config.`,
+  description: `Get basin configuration.`,
   scopes: ["read", "read", "read"],
   args,
   tool: async (client, args, ctx) => {

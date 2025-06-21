@@ -11,15 +11,14 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type ListBasinsRequest = {
   /**
-   * List basin names that begin with this prefix.
+   * Filter to basins whose names begin with this prefix.
    */
   prefix?: string | undefined;
   /**
-   * Only return basins names that lexicographically start after this name.
+   * Filter to basins whose names lexicographically start after this string.
    *
    * @remarks
-   * This can be the last basin name seen in a previous listing, to continue from there.
-   * It must be greater than or equal to the `prefix` if that is specified.
+   * It must be greater than or equal to the `prefix` if specified.
    */
   startAfter?: string | undefined;
   /**

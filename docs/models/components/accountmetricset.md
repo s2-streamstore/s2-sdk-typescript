@@ -5,11 +5,11 @@
 ```typescript
 import { AccountMetricSet } from "@s2-dev/streamstore/models/components";
 
-let value: AccountMetricSet = "active_basins";
+let value: AccountMetricSet = "active-basins";
 ```
 
 ## Values
 
 ```typescript
-"active_basins" | "account_ops"
+"active-basins" | "account-ops"
 ```

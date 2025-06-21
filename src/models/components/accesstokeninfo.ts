@@ -19,8 +19,7 @@ export type AccessTokenInfo = {
    * Namespace streams based on the configured stream-level scope, which must be a prefix.
    *
    * @remarks
-   * Stream name arguments will be automatically prefixed, and the prefix will be stripped
-   * when listing streams.
+   * Stream name arguments will be automatically prefixed, and the prefix will be stripped when listing streams.
    */
   autoPrefixStreams?: boolean | undefined;
   /**

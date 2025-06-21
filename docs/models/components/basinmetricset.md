@@ -5,11 +5,11 @@
 ```typescript
 import { BasinMetricSet } from "@s2-dev/streamstore/models/components";
 
-let value: BasinMetricSet = "read_ops";
+let value: BasinMetricSet = "read-ops";
 ```
 
 ## Values
 
 ```typescript
-"storage" | "append_ops" | "read_ops" | "read_throughput" | "append_throughput" | "basin_ops"
+"storage" | "append-ops" | "read-ops" | "read-throughput" | "append-throughput" | "basin-ops"
 ```

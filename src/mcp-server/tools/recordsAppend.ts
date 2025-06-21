@@ -12,9 +12,7 @@ const args = {
 
 export const tool$recordsAppend: ToolDefinition<typeof args> = {
   name: "records-append",
-  description: `Append records.
-
-Append a batch of records to a stream.`,
+  description: `Append records.`,
   scopes: ["write", "write", "write"],
   args,
   tool: async (client, args, ctx) => {

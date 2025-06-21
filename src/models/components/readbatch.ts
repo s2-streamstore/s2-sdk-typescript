@@ -21,10 +21,7 @@ import {
 
 export type ReadBatch = {
   /**
-   * Records that are durably sequenced on the stream,
-   *
-   * @remarks
-   * retrieved based on the requested criteria.
+   * Records that are durably sequenced on the stream, retrieved based on the requested criteria.
    */
   records: Array<SequencedRecord>;
   tail?: StreamPosition | null | undefined;

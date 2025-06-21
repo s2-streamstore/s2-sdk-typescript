@@ -24,11 +24,8 @@ export type Gauge = {
    * Timeseries values.
    *
    * @remarks
-   *
-   * Each element is a tuple containing the seconds since Unix epoch, followed by the data
-   * point.
-   *
-   * The data point represents the value at the instant of the epoch.
+   * Each element is a tuple of a timestamp in Unix epoch seconds and a data point.
+   * The data point represents the value at the instant of the timestamp.
    */
   values: Array<Array<number | number>>;
 };

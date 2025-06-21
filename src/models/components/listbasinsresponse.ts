@@ -20,7 +20,7 @@ export type ListBasinsResponse = {
    */
   basins: Array<BasinInfo>;
   /**
-   * Indicates that there are more results that can be listed with `start_after`.
+   * Indicates that there are more basins that match the criteria.
    */
   hasMore: boolean;
 };

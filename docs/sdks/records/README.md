@@ -7,13 +7,13 @@ Manage records
 
 ### Available Operations
 
-* [read](#read) - Retrieve records.
+* [read](#read) - Read records.
 * [append](#append) - Append records.
 * [checkTail](#checktail) - Check the tail.
 
 ## read
 
-Retrieve a batch of records, or set `Accept: text/event-stream` to stream using server-sent events.
+Read records.
 
 ### Example Usage
 
@@ -97,7 +97,7 @@ run();
 
 ## append
 
-Append a batch of records to a stream.
+Append records.
 
 ### Example Usage
 
@@ -188,7 +188,7 @@ run();
 
 ## checkTail
 
-Check the tail of a stream.
+Check the tail.
 
 ### Example Usage
 

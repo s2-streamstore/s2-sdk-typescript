@@ -12,7 +12,7 @@ const args = {
 
 export const tool$metricsAccountMetrics: ToolDefinition<typeof args> = {
   name: "metrics-account-metrics",
-  description: `Get account level metrics.`,
+  description: `Account-level metrics.`,
   scopes: ["read", "read", "read"],
   args,
   tool: async (client, args, ctx) => {

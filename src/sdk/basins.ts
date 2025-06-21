@@ -44,7 +44,7 @@ export class Basins extends ClientSDK {
   }
 
   /**
-   * Get basin config.
+   * Get basin configuration.
    */
   async getBasinConfig(
     request: operations.GetBasinConfigRequest,

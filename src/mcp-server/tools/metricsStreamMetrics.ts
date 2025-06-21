@@ -12,7 +12,7 @@ const args = {
 
 export const tool$metricsStreamMetrics: ToolDefinition<typeof args> = {
   name: "metrics-stream-metrics",
-  description: `Get metrics for a stream.`,
+  description: `Stream-level metrics.`,
   scopes: ["read", "read", "read"],
   args,
   tool: async (client, args, ctx) => {

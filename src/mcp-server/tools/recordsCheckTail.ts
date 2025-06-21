@@ -12,9 +12,7 @@ const args = {
 
 export const tool$recordsCheckTail: ToolDefinition<typeof args> = {
   name: "records-check-tail",
-  description: `Check the tail.
-
-Check the tail of a stream.`,
+  description: `Check the tail.`,
   scopes: ["read", "read", "read"],
   args,
   tool: async (client, args, ctx) => {

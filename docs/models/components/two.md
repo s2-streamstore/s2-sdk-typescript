@@ -1,6 +1,6 @@
 # Two
 
-A named series of (timestamp, value) points representing an accumulation over a specified
+Named series of `(timestamp, value)` points representing an accumulation over a specified
 bucket.
 
 ## Example Usage

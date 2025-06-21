@@ -1,6 +1,6 @@
 # Metric1
 
-A single named value.
+Single named value.
 
 ## Example Usage
 

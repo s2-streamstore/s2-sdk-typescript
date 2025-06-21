@@ -7,11 +7,11 @@ import { ClosedEnum } from "../../types/enums.js";
 
 export const BasinMetricSet = {
   Storage: "storage",
-  AppendOps: "append_ops",
-  ReadOps: "read_ops",
-  ReadThroughput: "read_throughput",
-  AppendThroughput: "append_throughput",
-  BasinOps: "basin_ops",
+  AppendOps: "append-ops",
+  ReadOps: "read-ops",
+  ReadThroughput: "read-throughput",
+  AppendThroughput: "append-throughput",
+  BasinOps: "basin-ops",
 } as const;
 export type BasinMetricSet = ClosedEnum<typeof BasinMetricSet>;
 

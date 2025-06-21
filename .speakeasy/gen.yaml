@@ -20,7 +20,7 @@ generation:
     oAuth2ClientCredentialsEnabled: true
     oAuth2PasswordEnabled: true
 typescript:
-  version: 0.15.1
+  version: 0.15.2
   additionalDependencies:
     dependencies:
       uuid: ^9.0.1
@@ -32,6 +32,7 @@ typescript:
   author: Speakeasy
   baseErrorName: S2Error
   clientServerStatusCodesAsErrors: true
+  constFieldsAlwaysOptional: true
   defaultErrorName: APIError
   enableCustomCodeRegions: false
   enableMCPServer: true

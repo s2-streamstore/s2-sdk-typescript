@@ -6,8 +6,8 @@ import * as z from "zod";
 import { ClosedEnum } from "../../types/enums.js";
 
 export const AccountMetricSet = {
-  ActiveBasins: "active_basins",
-  AccountOps: "account_ops",
+  ActiveBasins: "active-basins",
+  AccountOps: "account-ops",
 } as const;
 export type AccountMetricSet = ClosedEnum<typeof AccountMetricSet>;
 

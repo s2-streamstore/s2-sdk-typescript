@@ -31,12 +31,8 @@ export type Accumulation = {
    * Timeseries values.
    *
    * @remarks
-   *
-   * Each element is a tuple containing the seconds since Unix epoch, followed by the data
-   * point.
-   *
-   * The data point represented the accumulated value for a bucket of time, starting
-   * at the provided epoch, lasting for the duration of the `bucket_length` parameter above.
+   * Each element is a tuple of a timestamp in Unix epoch seconds and a data point.
+   * The data point represents the accumulated value for a bucket of time starting at the provided timestamp, lasting for the duration of the `bucket_length` parameter.
    */
   values: Array<Array<number | number>>;
 };

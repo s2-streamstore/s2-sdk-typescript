@@ -108,7 +108,7 @@ export class FencingToken extends S2Error {
 }
 
 /**
- * Failure response message when an Append is aborted due to a failed condition.
+ * Aborted due to a failed condition.
  */
 export type AppendConditionFailed = FencingToken | SeqNum;
 

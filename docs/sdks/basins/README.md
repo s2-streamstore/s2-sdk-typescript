@@ -9,7 +9,7 @@ Manage basins
 
 * [listBasins](#listbasins) - List basins.
 * [createBasin](#createbasin) - Create a basin.
-* [getBasinConfig](#getbasinconfig) - Get basin config.
+* [getBasinConfig](#getbasinconfig) - Get basin configuration.
 * [createOrReconfigureBasin](#createorreconfigurebasin) - Create or reconfigure a basin.
 * [deleteBasin](#deletebasin) - Delete a basin.
 * [reconfigureBasin](#reconfigurebasin) - Reconfigure a basin.
@@ -162,7 +162,7 @@ run();
 
 ## getBasinConfig
 
-Get basin config.
+Get basin configuration.
 
 ### Example Usage
 

@@ -16,17 +16,11 @@ import {
 
 export type BasinConfig = {
   /**
-   * Create stream on append if it doesn't exist,
-   *
-   * @remarks
-   * using the default stream configuration.
+   * Create stream on append if it doesn't exist, using the default stream configuration.
    */
   createStreamOnAppend?: boolean | undefined;
   /**
-   * Create stream on read if it doesn't exist,
-   *
-   * @remarks
-   * using the default stream configuration.
+   * Create stream on read if it doesn't exist, using the default stream configuration.
    */
   createStreamOnRead?: boolean | undefined;
   defaultStreamConfig?: StreamConfig | null | undefined;

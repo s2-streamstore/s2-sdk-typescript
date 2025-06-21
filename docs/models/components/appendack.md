@@ -1,6 +1,6 @@
 # AppendAck
 
-Success response message to an Append request.
+Success response to an `append` request.
 
 ## Example Usage
 

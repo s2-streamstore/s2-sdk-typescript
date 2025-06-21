@@ -25,8 +25,7 @@ export type CreateBasinRequest = {
    * Basin name which must be globally unique.
    *
    * @remarks
-   * It can be between 8 and 48 characters in length,
-   * and comprise lowercase letters, numbers and hyphens.
+   * It can be between 8 and 48 characters in length, and comprise lowercase letters, numbers and hyphens.
    * It cannot begin or end with a hyphen.
    */
   basin: string;

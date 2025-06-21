@@ -15,19 +15,19 @@ import {
 } from "./appendrecord.js";
 
 /**
- * Payload of an Append request message.
+ * Payload of an `append` request.
  */
 export type AppendInput = {
   /**
-   * Enforce a fencing token which must have been previously set by a `fence` command record.
+   * Enforce a fencing token, which starts out as an empty string that can be overridden by a `fence` command record.
    */
   fencingToken?: string | null | undefined;
   matchSeqNum?: number | null | undefined;
   /**
-   * Batch of records to append atomically, which must contain at least one record, and no more
+   * Batch of records to append atomically, which must contain at least one record, and no more than 1000.
    *
    * @remarks
-   * than 1000. The total size of a batch of records may not exceed 1MiB of metered bytes.
+   * The total size of a batch of records may not exceed 1 MiB of metered bytes.
    */
   records: Array<AppendRecord>;
 };

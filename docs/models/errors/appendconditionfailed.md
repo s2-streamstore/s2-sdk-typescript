@@ -1,6 +1,6 @@
 # AppendConditionFailed
 
-Failure response message when an Append is aborted due to a failed condition.
+Aborted due to a failed condition.
 
 
 ## Supported Types

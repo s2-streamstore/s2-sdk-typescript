@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: 94891daed78ae55c25e2983a02adc27b
+  docChecksum: 5416f08dfbac3e260cbaf2d0f02c9d73
   docVersion: 1.0.0
-  speakeasyVersion: 1.559.0
-  generationVersion: 2.624.0
-  releaseVersion: 0.15.1
-  configChecksum: dc653c655a3f30c45451ad99da7e0bd9
+  speakeasyVersion: 1.568.0
+  generationVersion: 2.632.2
+  releaseVersion: 0.15.2
+  configChecksum: c5f5deac5e8ed5522dc2365b1eebef87
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
@@ -14,8 +14,8 @@ features:
   typescript:
     acceptHeaders: 2.81.2
     additionalDependencies: 0.1.0
-    constsAndDefaults: 0.1.11
-    core: 3.21.10
+    constsAndDefaults: 0.1.12
+    core: 3.21.11
     defaultEnabledRetries: 0.1.0
     devContainers: 2.90.0
     enumUnions: 0.1.0
@@ -34,7 +34,7 @@ features:
     sdkHooks: 0.3.0
     serverEvents: 0.1.5
     serverEventsSentinels: 0.1.0
-    unions: 2.85.9
+    unions: 2.85.11
 generatedFiles:
   - .devcontainer/README.md
   - .devcontainer/devcontainer.json
@@ -607,7 +607,7 @@ examples:
     speakeasy-default-account-metrics:
       parameters:
         query:
-          set: "account_ops"
+          set: "account-ops"
       responses:
         "200":
           application/json: {"values": [{"gauge": {"name": "<value>", "unit": "operations", "values": []}}, {"label": {"name": "<value>", "values": ["<value 1>", "<value 2>"]}}]}
