@@ -10,11 +10,11 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type ListAccessTokensRequest = {
   /**
-   * List access tokens that begin with this prefix.
+   * Filter to access tokens whose ID begins with this prefix.
    */
   prefix?: string | undefined;
   /**
-   * Only return access tokens that lexicographically start after this ID.
+   * Filter to access tokens whose ID lexicographically starts after this string.
    */
   startAfter?: string | undefined;
   /**

@@ -18,15 +18,14 @@ export const ListStreamsServerList = [
 
 export type ListStreamsRequest = {
   /**
-   * List stream names that begin with this prefix.
+   * Filter to streams whose name begins with this prefix.
    */
   prefix?: string | undefined;
   /**
-   * Only return stream names that lexicographically start after this name.
+   * Filter to streams whose name begins with this prefix.
    *
    * @remarks
-   * This can be the last stream name seen in a previous listing, to continue from there.
-   * It must be greater than or equal to the prefix if specified.
+   * It must be greater than or equal to the `prefix` if specified.
    */
   startAfter?: string | undefined;
   /**

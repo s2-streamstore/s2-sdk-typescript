@@ -22,7 +22,7 @@ export type CreateOrReconfigureStreamRequest = {
    */
   stream: string;
   /**
-   * Provide a client request token header for idempotent retry behaviour.
+   * Client-specified request token for idempotent retries.
    */
   s2RequestToken?: string | undefined;
   /**

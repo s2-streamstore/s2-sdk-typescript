@@ -12,7 +12,7 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class Metrics extends ClientSDK {
   /**
-   * Get account level metrics.
+   * Account-level metrics.
    */
   async accountMetrics(
     request: operations.AccountMetricsRequest,
@@ -26,7 +26,7 @@ export class Metrics extends ClientSDK {
   }
 
   /**
-   * Get metrics for a basin.
+   * Basin-level metrics.
    */
   async basinMetrics(
     request: operations.BasinMetricsRequest,
@@ -40,7 +40,7 @@ export class Metrics extends ClientSDK {
   }
 
   /**
-   * Get metrics for a stream.
+   * Stream-level metrics.
    */
   async streamMetrics(
     request: operations.StreamMetricsRequest,

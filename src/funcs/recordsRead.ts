@@ -32,10 +32,7 @@ export enum ReadAcceptEnum {
 }
 
 /**
- * Retrieve records.
- *
- * @remarks
- * Retrieve a batch of records, or set `Accept: text/event-stream` to stream using server-sent events.
+ * Read records.
  */
 export function recordsRead(
   client: S2Core,

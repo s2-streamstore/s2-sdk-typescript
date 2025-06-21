@@ -10,19 +10,19 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type AccountMetricsRequest = {
   /**
-   * Metric type to return.
+   * Metric set to return.
    */
   set: components.AccountMetricSet;
   /**
-   * Start timestamp, in Unix epoch seconds, if applicable for metric set.
+   * Start timestamp as Unix epoch seconds, if applicable for the metric set.
    */
   start?: number | undefined;
   /**
-   * End timestamp, in Unix epoch seconds, if applicable for metric set.
+   * End timestamp as Unix epoch seconds, if applicable for the metric set.
    */
   end?: number | undefined;
   /**
-   * For timeseries metric sets, the interval to aggregate over.
+   * Interval to aggregate over for timeseries metric sets.
    */
   interval?: components.TimeseriesInterval | undefined;
 };

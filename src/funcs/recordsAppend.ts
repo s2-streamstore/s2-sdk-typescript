@@ -29,9 +29,6 @@ import { Result } from "../types/fp.js";
 
 /**
  * Append records.
- *
- * @remarks
- * Append a batch of records to a stream.
  */
 export function recordsAppend(
   client: S2Core,

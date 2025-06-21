@@ -32,21 +32,21 @@ import {
 } from "./scalar.js";
 
 /**
- * A set of string labels.
+ * Set of string labels.
  */
 export type Four = {
   label: Label;
 };
 
 /**
- * A named series of (timestamp, value) points each representing an instantaneous value.
+ * Named series of `(timestamp, value)` points each representing an instantaneous value.
  */
 export type Three = {
   gauge: Gauge;
 };
 
 /**
- * A named series of (timestamp, value) points representing an accumulation over a specified
+ * Named series of `(timestamp, value)` points representing an accumulation over a specified
  *
  * @remarks
  * bucket.
@@ -56,7 +56,7 @@ export type Two = {
 };
 
 /**
- * A single named value.
+ * Single named value.
  */
 export type Metric1 = {
   scalar: Scalar;

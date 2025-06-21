@@ -7,7 +7,19 @@ import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+/**
+ * Age in seconds for automatic trimming of records older than this threshold.
+ *
+ * @remarks
+ * If this is set to 0, the stream will have infinite retention.
+ */
 export type One = {
+  /**
+   * Age in seconds for automatic trimming of records older than this threshold.
+   *
+   * @remarks
+   * If this is set to 0, the stream will have infinite retention.
+   */
   age: number;
 };
 

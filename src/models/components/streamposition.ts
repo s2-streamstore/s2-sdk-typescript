@@ -17,7 +17,7 @@ export type StreamPosition = {
    */
   seqNum: number;
   /**
-   * Timestamp, which may be user-specified or assigned by the service.
+   * Timestamp, which may be client-specified or assigned by the service.
    *
    * @remarks
    * If it is assigned by the service, it will represent milliseconds since Unix epoch.

@@ -18,7 +18,7 @@ export type TimestampingConfig = {
    * Allow client-specified timestamps to exceed the arrival time.
    *
    * @remarks
-   * If this is false or not set, client timestamps will be capped at the arrival time.
+   * If this is `false` or not set, client timestamps will be capped at the arrival time.
    */
   uncapped?: boolean | null | undefined;
 };

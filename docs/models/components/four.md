@@ -1,6 +1,6 @@
 # Four
 
-A set of string labels.
+Set of string labels.
 
 ## Example Usage
 

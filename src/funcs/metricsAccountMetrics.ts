@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Get account level metrics.
+ * Account-level metrics.
  */
 export function metricsAccountMetrics(
   client: S2Core,

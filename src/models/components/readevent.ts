@@ -67,7 +67,7 @@ export type Batch = {
   id: string;
 };
 
-export type ReadEvent = ReadEvent2 | ErrorT | Ping | Batch;
+export type ReadEvent = Batch | ReadEvent2 | ErrorT | Ping;
 
 /** @internal */
 export const ReadEvent4Event$inboundSchema: z.ZodNativeEnum<
@@ -391,18 +391,18 @@ export const ReadEvent$inboundSchema: z.ZodType<
   z.ZodTypeDef,
   unknown
 > = z.union([
+  z.lazy(() => Batch$inboundSchema),
   z.lazy(() => ReadEvent2$inboundSchema),
   z.lazy(() => ErrorT$inboundSchema),
   z.lazy(() => Ping$inboundSchema),
-  z.lazy(() => Batch$inboundSchema),
 ]);
 
 /** @internal */
 export type ReadEvent$Outbound =
+  | Batch$Outbound
   | ReadEvent2$Outbound
   | ErrorT$Outbound
-  | Ping$Outbound
-  | Batch$Outbound;
+  | Ping$Outbound;
 
 /** @internal */
 export const ReadEvent$outboundSchema: z.ZodType<
@@ -410,10 +410,10 @@ export const ReadEvent$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   ReadEvent
 > = z.union([
+  z.lazy(() => Batch$outboundSchema),
   z.lazy(() => ReadEvent2$outboundSchema),
   z.lazy(() => ErrorT$outboundSchema),
   z.lazy(() => Ping$outboundSchema),
-  z.lazy(() => Batch$outboundSchema),
 ]);
 
 /**

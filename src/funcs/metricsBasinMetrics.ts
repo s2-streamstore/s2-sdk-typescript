@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Get metrics for a basin.
+ * Basin-level metrics.
  */
 export function metricsBasinMetrics(
   client: S2Core,

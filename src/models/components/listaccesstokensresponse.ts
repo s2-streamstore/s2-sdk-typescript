@@ -16,11 +16,11 @@ import {
 
 export type ListAccessTokensResponse = {
   /**
-   * Access tokens information.
+   * Matching access tokens.
    */
   accessTokens: Array<AccessTokenInfo>;
   /**
-   * Indicates that there are more results that can be listed with `start_after`.
+   * Indicates that there are more access tokens that match the criteria.
    */
   hasMore: boolean;
 };

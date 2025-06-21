@@ -11,7 +11,7 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type CreateOrReconfigureBasinRequest = {
   /**
-   * Provide a client request token header for idempotent retry behaviour.
+   * Client-specified request token for idempotent retries.
    */
   s2RequestToken?: string | undefined;
   /**

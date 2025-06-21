@@ -14,7 +14,7 @@ import {
 } from "./streamposition.js";
 
 /**
- * Success response message to an Append request.
+ * Success response to an `append` request.
  */
 export type AppendAck = {
   /**

@@ -12,9 +12,7 @@ const args = {
 
 export const tool$recordsRead: ToolDefinition<typeof args> = {
   name: "records-read",
-  description: `Retrieve records.
-
-Retrieve a batch of records, or set \`Accept: text/event-stream\` to stream using server-sent events.`,
+  description: `Read records.`,
   scopes: ["read", "read", "read"],
   args,
   tool: async (client, args, ctx) => {

@@ -29,9 +29,6 @@ import { Result } from "../types/fp.js";
 
 /**
  * Check the tail.
- *
- * @remarks
- * Check the tail of a stream.
  */
 export function recordsCheckTail(
   client: S2Core,
