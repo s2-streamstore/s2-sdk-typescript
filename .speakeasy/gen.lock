@@ -3,10 +3,10 @@ id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
   docChecksum: 74df11759dfd1195ffa1d7f837b4fd60
   docVersion: 1.0.0
-  speakeasyVersion: 1.568.0
-  generationVersion: 2.632.2
-  releaseVersion: 0.15.2
-  configChecksum: c5f5deac5e8ed5522dc2365b1eebef87
+  speakeasyVersion: 1.571.2
+  generationVersion: 2.640.2
+  releaseVersion: 0.15.3
+  configChecksum: 1329be46cee508214d8907a7318264b7
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
