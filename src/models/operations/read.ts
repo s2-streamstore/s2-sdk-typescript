@@ -169,12 +169,9 @@ export const ReadResponse$inboundSchema: z.ZodType<
 > = z.union([
   components.ReadBatch$inboundSchema,
   z.instanceof(ReadableStream<Uint8Array>).transform(stream => {
-    return new EventStream({
-      stream,
-      decoder(rawEvent) {
-        const schema = components.ReadEvent$inboundSchema;
-        return schema.parse(rawEvent);
-      },
+    return new EventStream(stream, rawEvent => {
+      if (rawEvent.data === "[DONE]") return { done: true };
+      return { value: components.ReadEvent$inboundSchema.parse(rawEvent) };
     });
   }),
 ]);

@@ -488,7 +488,7 @@ run();
 ### Error Classes
 **Primary errors:**
 * [`S2Error`](./src/models/errors/s2error.ts): The base class for HTTP error responses.
-  * [`ErrorResponse`](docs/models/errors/errorresponse.md): .
+  * [`ErrorResponse`](./src/models/errors/errorresponse.ts): .
 
 <details><summary>Less common errors (9)</summary>
 
@@ -503,9 +503,9 @@ run();
 
 
 **Inherit from [`S2Error`](./src/models/errors/s2error.ts)**:
-* [`FencingToken`](docs/models/errors/fencingtoken.md): Fencing token did not match. The expected fencing token is returned. Status code `412`. Applicable to 1 of 21 methods.*
-* [`SeqNum`](docs/models/errors/seqnum.md): Sequence number did not match the tail of the stream. The expected next sequence number is returned. Status code `412`. Applicable to 1 of 21 methods.*
-* [`TailResponse`](docs/models/errors/tailresponse.md): . Status code `416`. Applicable to 1 of 21 methods.*
+* [`FencingToken`](./src/models/errors/fencingtoken.ts): Fencing token did not match. The expected fencing token is returned. Status code `412`. Applicable to 1 of 21 methods.*
+* [`SeqNum`](./src/models/errors/seqnum.ts): Sequence number did not match the tail of the stream. The expected next sequence number is returned. Status code `412`. Applicable to 1 of 21 methods.*
+* [`TailResponse`](./src/models/errors/tailresponse.ts): . Status code `416`. Applicable to 1 of 21 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>
