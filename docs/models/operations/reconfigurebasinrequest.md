@@ -7,6 +7,7 @@ import { ReconfigureBasinRequest } from "@s2-dev/streamstore/models/operations";
 
 let value: ReconfigureBasinRequest = {
   basin: "<value>",
+  basinReconfiguration: {},
 };
 ```
 

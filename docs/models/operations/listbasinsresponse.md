@@ -5,7 +5,12 @@
 ```typescript
 import { ListBasinsResponse } from "@s2-dev/streamstore/models/operations";
 
-let value: ListBasinsResponse = {};
+let value: ListBasinsResponse = {
+  result: {
+    basins: [],
+    hasMore: false,
+  },
+};
 ```
 
 ## Fields

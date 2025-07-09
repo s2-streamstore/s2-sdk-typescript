@@ -7,6 +7,9 @@ import { CreateStreamRequest } from "@s2-dev/streamstore/models/operations";
 
 let value: CreateStreamRequest = {
   s2Basin: "<value>",
+  createStreamRequest: {
+    stream: "<value>",
+  },
 };
 ```
 

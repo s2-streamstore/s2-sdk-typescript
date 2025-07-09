@@ -85,3 +85,20 @@ actions:
     description: Add SSE sentinel for streaming reads
     update:
       x-speakeasy-sse-sentinel: '[DONE]'
+  - target: $.paths.*["get", "put", "delete"]
+    description: Configure retries
+    update:
+      x-speakeasy-retries:
+        strategy: backoff
+        backoff:
+          initialInterval: 500
+          maxInterval: 60000
+          maxElapsedTime: 3600000
+          exponent: 1.5
+        statusCodes:
+          - 429
+          - 499
+          - 500
+          - 503
+          - 504
+        retryConnectionErrors: true

@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: 74df11759dfd1195ffa1d7f837b4fd60
+  docChecksum: a73e5b508d86407301adfafa2196e33a
   docVersion: 1.0.0
-  speakeasyVersion: 1.576.0
-  generationVersion: 2.651.2
-  releaseVersion: 0.15.4
-  configChecksum: f63604e0cbf70d8765c84f7aa26f2db1
+  speakeasyVersion: 1.580.0
+  generationVersion: 2.654.2
+  releaseVersion: 0.15.5
+  configChecksum: 0ea3cde3b8f81dda822a0ba57268066b
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
