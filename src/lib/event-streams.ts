@@ -43,7 +43,7 @@ export class EventStream<T extends ServerEvent<unknown>>
   }
 
   // Polyfill for older browsers
-  [Symbol.asyncIterator](): AsyncIterableIterator<T, void, unknown> {
+  [Symbol.asyncIterator](): AsyncIterableIterator<T> {
     const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
     if (typeof fn === "function") return fn.call(this);
     const reader = this.getReader();
