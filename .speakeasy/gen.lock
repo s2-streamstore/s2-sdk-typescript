@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: a73e5b508d86407301adfafa2196e33a
+  docChecksum: 3784b90b69dec1de20c83fbbfdcaa0da
   docVersion: 1.0.0
-  speakeasyVersion: 1.580.0
-  generationVersion: 2.654.2
-  releaseVersion: 0.15.5
-  configChecksum: 0ea3cde3b8f81dda822a0ba57268066b
+  speakeasyVersion: 1.586.0
+  generationVersion: 2.661.4
+  releaseVersion: 0.15.6
+  configChecksum: f936ef9a5d014d06c3102f119ceb3483
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
@@ -15,7 +15,7 @@ features:
     acceptHeaders: 2.81.2
     additionalDependencies: 0.1.0
     constsAndDefaults: 0.1.12
-    core: 3.21.13
+    core: 3.21.14
     defaultEnabledRetries: 0.1.0
     devContainers: 2.90.0
     enumUnions: 0.1.0
@@ -32,7 +32,7 @@ features:
     responseFormat: 0.2.3
     retries: 2.83.0
     sdkHooks: 0.3.0
-    serverEvents: 0.1.5
+    serverEvents: 0.1.6
     serverEventsSentinels: 0.1.0
     unions: 2.85.11
 generatedFiles:
@@ -99,6 +99,7 @@ generatedFiles:
   - docs/models/components/storageclass.md
   - docs/models/components/streamconfig.md
   - docs/models/components/streaminfo.md
+  - docs/models/components/streammetricset.md
   - docs/models/components/streamposition.md
   - docs/models/components/streamreconfiguration.md
   - docs/models/components/tailresponse.md
@@ -267,6 +268,7 @@ generatedFiles:
   - src/models/components/storageclass.ts
   - src/models/components/streamconfig.ts
   - src/models/components/streaminfo.ts
+  - src/models/components/streammetricset.ts
   - src/models/components/streamposition.ts
   - src/models/components/streamreconfiguration.ts
   - src/models/components/tailresponse.ts
@@ -391,6 +393,8 @@ examples:
           application/json: {"error": "<value>"}
         "500":
           application/json: {"error": "<value>"}
+        "200":
+          application/json: {"name": "<value>", "scope": "aws:us-east-1", "state": "deleting"}
   get_basin_config:
     speakeasy-default-get-basin-config:
       parameters:
@@ -420,6 +424,8 @@ examples:
           application/json: {"error": "<value>"}
         "500":
           application/json: {"error": "<value>"}
+        "200":
+          application/json: {"name": "<value>", "scope": "aws:us-east-1", "state": "active"}
   delete_basin:
     speakeasy-default-delete-basin:
       parameters:
@@ -633,6 +639,8 @@ examples:
         path:
           basin: "<value>"
           stream: "<value>"
+        query:
+          set: "storage"
       responses:
         "200":
           application/json: {"values": [{"scalar": {"name": "<value>", "unit": "operations", "value": 7152.04}}, {"label": {"name": "<value>", "values": ["<value 1>", "<value 2>"]}}]}

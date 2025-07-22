@@ -42,6 +42,7 @@ export * from "./sequencedrecord.js";
 export * from "./storageclass.js";
 export * from "./streamconfig.js";
 export * from "./streaminfo.js";
+export * from "./streammetricset.js";
 export * from "./streamposition.js";
 export * from "./streamreconfiguration.js";
 export * from "./tailresponse.js";

@@ -64,6 +64,10 @@ export type ReadRequest = {
    */
   until?: number | undefined;
   /**
+   * Clamp the start position at the tail position.
+   */
+  clamp?: boolean | undefined;
+  /**
    * Basin name for basin-specific endpoints
    */
   s2Basin: string;
@@ -87,6 +91,7 @@ export const ReadRequest$inboundSchema: z.ZodType<
   count: z.number().int().optional(),
   bytes: z.number().int().optional(),
   until: z.number().int().optional(),
+  clamp: z.boolean().optional(),
   "s2-basin": z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -107,6 +112,7 @@ export type ReadRequest$Outbound = {
   count?: number | undefined;
   bytes?: number | undefined;
   until?: number | undefined;
+  clamp?: boolean | undefined;
   "s2-basin": string;
 };
 
@@ -124,6 +130,7 @@ export const ReadRequest$outboundSchema: z.ZodType<
   count: z.number().int().optional(),
   bytes: z.number().int().optional(),
   until: z.number().int().optional(),
+  clamp: z.boolean().optional(),
   s2Basin: z.string(),
 }).transform((v) => {
   return remap$(v, {

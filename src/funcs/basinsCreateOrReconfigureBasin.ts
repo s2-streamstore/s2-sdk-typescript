@@ -196,7 +196,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(201, components.BasinInfo$inboundSchema.optional()),
+    M.json([200, 201], components.BasinInfo$inboundSchema.optional()),
     M.nil(204, components.BasinInfo$inboundSchema.optional()),
     M.jsonErr(400, errors.ErrorResponse$inboundSchema),
     M.fail("4XX"),

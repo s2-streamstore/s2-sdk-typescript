@@ -109,6 +109,7 @@ async function $do(
 
   const query = encodeFormQuery({
     "bytes": payload.bytes,
+    "clamp": payload.clamp,
     "count": payload.count,
     "seq_num": payload.seq_num,
     "tail_offset": payload.tail_offset,

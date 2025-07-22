@@ -5,9 +5,26 @@
 import * as z from "zod";
 import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
+import * as components from "../components/index.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
 export type StreamMetricsRequest = {
+  /**
+   * Metric set to return.
+   */
+  set: components.StreamMetricSet;
+  /**
+   * Start timestamp as Unix epoch seconds, if applicable for the metric set.
+   */
+  start?: number | undefined;
+  /**
+   * End timestamp as Unix epoch seconds, if applicable for metric set.
+   */
+  end?: number | undefined;
+  /**
+   * Interval to aggregate over for timeseries metric sets.
+   */
+  interval?: components.TimeseriesInterval | undefined;
   /**
    * Basin name.
    */
@@ -24,12 +41,20 @@ export const StreamMetricsRequest$inboundSchema: z.ZodType<
   z.ZodTypeDef,
   unknown
 > = z.object({
+  set: components.StreamMetricSet$inboundSchema,
+  start: z.number().int().optional(),
+  end: z.number().int().optional(),
+  interval: components.TimeseriesInterval$inboundSchema.optional(),
   basin: z.string(),
   stream: z.string(),
 });
 
 /** @internal */
 export type StreamMetricsRequest$Outbound = {
+  set: string;
+  start?: number | undefined;
+  end?: number | undefined;
+  interval?: string | undefined;
   basin: string;
   stream: string;
 };
@@ -40,6 +65,10 @@ export const StreamMetricsRequest$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   StreamMetricsRequest
 > = z.object({
+  set: components.StreamMetricSet$outboundSchema,
+  start: z.number().int().optional(),
+  end: z.number().int().optional(),
+  interval: components.TimeseriesInterval$outboundSchema.optional(),
   basin: z.string(),
   stream: z.string(),
 });

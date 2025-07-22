@@ -174,6 +174,7 @@ const s2 = new S2({
 
 async function run() {
   const result = await s2.metrics.streamMetrics({
+    set: "storage",
     basin: "<value>",
     stream: "<value>",
   });
@@ -200,6 +201,7 @@ const s2 = new S2Core({
 
 async function run() {
   const res = await metricsStreamMetrics(s2, {
+    set: "storage",
     basin: "<value>",
     stream: "<value>",
   });
