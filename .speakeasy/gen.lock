@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: 2d20490e-9921-47d5-9711-d3c4b91c8cfa
 management:
-  docChecksum: 3784b90b69dec1de20c83fbbfdcaa0da
+  docChecksum: 76d8867e9c1fc8897fc8f35f456e5c46
   docVersion: 1.0.0
-  speakeasyVersion: 1.586.0
-  generationVersion: 2.661.4
-  releaseVersion: 0.15.6
-  configChecksum: f936ef9a5d014d06c3102f119ceb3483
+  speakeasyVersion: 1.587.1
+  generationVersion: 2.662.0
+  releaseVersion: 0.15.7
+  configChecksum: f7636fc181cf624bf84ca732e3f30694
   repoURL: https://github.com/s2-streamstore/s2-sdk-typescript.git
   installationURL: https://github.com/s2-streamstore/s2-sdk-typescript
   published: true
@@ -15,7 +15,7 @@ features:
     acceptHeaders: 2.81.2
     additionalDependencies: 0.1.0
     constsAndDefaults: 0.1.12
-    core: 3.21.14
+    core: 3.21.15
     defaultEnabledRetries: 0.1.0
     devContainers: 2.90.0
     enumUnions: 0.1.0
@@ -63,6 +63,8 @@ generatedFiles:
   - docs/models/components/createorreconfigurebasinrequest.md
   - docs/models/components/createorreconfigurebasinrequestscope.md
   - docs/models/components/createstreamrequest.md
+  - docs/models/components/deleteonemptyconfig.md
+  - docs/models/components/deleteonemptyreconfiguration.md
   - docs/models/components/errort.md
   - docs/models/components/event.md
   - docs/models/components/exact.md
@@ -243,6 +245,8 @@ generatedFiles:
   - src/models/components/createbasinrequest.ts
   - src/models/components/createorreconfigurebasinrequest.ts
   - src/models/components/createstreamrequest.ts
+  - src/models/components/deleteonemptyconfig.ts
+  - src/models/components/deleteonemptyreconfiguration.ts
   - src/models/components/gauge.ts
   - src/models/components/index.ts
   - src/models/components/issueaccesstokenresponse.ts

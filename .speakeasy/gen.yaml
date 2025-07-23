@@ -24,7 +24,7 @@ generation:
     generateNewTests: false
     skipResponseBodyAssertions: false
 typescript:
-  version: 0.15.6
+  version: 0.15.7
   additionalDependencies:
     dependencies:
       uuid: ^9.0.1

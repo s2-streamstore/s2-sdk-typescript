@@ -18,6 +18,8 @@ export * from "./basinstate.js";
 export * from "./createbasinrequest.js";
 export * from "./createorreconfigurebasinrequest.js";
 export * from "./createstreamrequest.js";
+export * from "./deleteonemptyconfig.js";
+export * from "./deleteonemptyreconfiguration.js";
 export * from "./gauge.js";
 export * from "./issueaccesstokenresponse.js";
 export * from "./label.js";

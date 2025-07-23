@@ -8,6 +8,12 @@ import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import {
+  DeleteOnEmptyConfig,
+  DeleteOnEmptyConfig$inboundSchema,
+  DeleteOnEmptyConfig$Outbound,
+  DeleteOnEmptyConfig$outboundSchema,
+} from "./deleteonemptyconfig.js";
+import {
   RetentionPolicy,
   RetentionPolicy$inboundSchema,
   RetentionPolicy$Outbound,
@@ -26,6 +32,7 @@ import {
 } from "./timestampingconfig.js";
 
 export type StreamConfig = {
+  deleteOnEmpty?: DeleteOnEmptyConfig | null | undefined;
   retentionPolicy?: RetentionPolicy | null | undefined;
   storageClass?: StorageClass | null | undefined;
   timestamping?: TimestampingConfig | null | undefined;
@@ -37,11 +44,13 @@ export const StreamConfig$inboundSchema: z.ZodType<
   z.ZodTypeDef,
   unknown
 > = z.object({
+  delete_on_empty: z.nullable(DeleteOnEmptyConfig$inboundSchema).optional(),
   retention_policy: z.nullable(RetentionPolicy$inboundSchema).optional(),
   storage_class: z.nullable(StorageClass$inboundSchema).optional(),
   timestamping: z.nullable(TimestampingConfig$inboundSchema).optional(),
 }).transform((v) => {
   return remap$(v, {
+    "delete_on_empty": "deleteOnEmpty",
     "retention_policy": "retentionPolicy",
     "storage_class": "storageClass",
   });
@@ -49,6 +58,7 @@ export const StreamConfig$inboundSchema: z.ZodType<
 
 /** @internal */
 export type StreamConfig$Outbound = {
+  delete_on_empty?: DeleteOnEmptyConfig$Outbound | null | undefined;
   retention_policy?: RetentionPolicy$Outbound | null | undefined;
   storage_class?: string | null | undefined;
   timestamping?: TimestampingConfig$Outbound | null | undefined;
@@ -60,11 +70,13 @@ export const StreamConfig$outboundSchema: z.ZodType<
   z.ZodTypeDef,
   StreamConfig
 > = z.object({
+  deleteOnEmpty: z.nullable(DeleteOnEmptyConfig$outboundSchema).optional(),
   retentionPolicy: z.nullable(RetentionPolicy$outboundSchema).optional(),
   storageClass: z.nullable(StorageClass$outboundSchema).optional(),
   timestamping: z.nullable(TimestampingConfig$outboundSchema).optional(),
 }).transform((v) => {
   return remap$(v, {
+    deleteOnEmpty: "delete_on_empty",
     retentionPolicy: "retention_policy",
     storageClass: "storage_class",
   });
