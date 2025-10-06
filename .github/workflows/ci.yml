@@ -22,7 +22,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build
-        run: pnpm run build
+        run: bun run build
 
   check:
     runs-on: ubuntu-latest
