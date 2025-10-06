@@ -1,12 +1,14 @@
 {
   "name": "s2-sdk-typescript-v2",
-  "module": "index.ts",
   "type": "module",
   "scripts": {
     "build": "tsc",
     "test": "vitest --run",
     "check": "biome check --write && tsc --noEmit",
     "format": "biome format --write"
+  },
+  "exports": {
+    ".": "./dist/index.js"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.5",

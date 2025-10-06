@@ -99,7 +99,7 @@ declare class BasinService {
   reconfigureStream(): void;
 }
 
-declare class S2 {
+export declare class S2 {
   basin(name: string): BasinService;
   // stubs
   listBasins(): void;
