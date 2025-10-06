@@ -7,8 +7,13 @@
     "check": "biome check --write && tsc --noEmit",
     "format": "biome format --write"
   },
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.5",
