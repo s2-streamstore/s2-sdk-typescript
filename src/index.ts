@@ -5,19 +5,29 @@ import {
   type BasinMetricsData,
   basinMetrics,
   type CreateBasinData,
+  type CreateStreamData,
   createBasin,
+  createStream,
   type DeleteBasinData,
+  type DeleteStreamData,
   deleteBasin,
+  deleteStream,
   type GetBasinConfigData,
+  type GetStreamConfigData,
   getBasinConfig,
+  getStreamConfig,
   type IssueAccessTokenData,
   issueAccessToken,
   type ListAccessTokensData,
+  type ListStreamsData,
   listAccessTokens,
   listBasins,
+  listStreams,
   type ReconfigureBasinData,
+  type ReconfigureStreamData,
   type RevokeAccessTokenData,
   reconfigureBasin,
+  reconfigureStream,
   revokeAccessToken,
   type StreamMetricsData,
   streamMetrics,
@@ -319,6 +329,112 @@ class S2Streams {
   constructor(client: Client) {
     this.client = client;
   }
+
+  public async list(
+    args?: DataToObject<ListStreamsData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await listStreams({
+      client: this.client,
+      query: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async create(
+    args: DataToObject<CreateStreamData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await createStream({
+      client: this.client,
+      body: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async getConfig(
+    args: DataToObject<GetStreamConfigData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await getStreamConfig({
+      client: this.client,
+      path: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async delete(
+    args: DataToObject<DeleteStreamData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await deleteStream({
+      client: this.client,
+      path: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async reconfigure(
+    args: DataToObject<ReconfigureStreamData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await reconfigureStream({
+      client: this.client,
+      path: args,
+      body: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
 }
 
 class S2Stream {
@@ -387,4 +503,6 @@ const s2 = new S2({
 });
 
 const basins = await s2.basins.list();
-console.log(basins.basins);
+const accessTokens = await s2.accessTokens.list();
+const basin = s2.basin("test");
+const streams = await basin.streams.list();
