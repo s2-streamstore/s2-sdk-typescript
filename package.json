@@ -4,16 +4,17 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest --run",
-    "check": "biome check --write && tsc --noEmit",
+    "check": "biome check && tsc --noEmit",
+    "check:write": "biome check --write",
     "format": "biome format --write",
     "gen:openapi": "openapi-ts"
   },
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
+  "module": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "default": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
     }
   },
   "devDependencies": {
@@ -26,6 +27,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "effect": "^3.18.4",
     "openapi-fetch": "^0.14.1"
   }
 }

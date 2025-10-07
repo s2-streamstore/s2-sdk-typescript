@@ -1,25 +1,22 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.2.5/schema.json",
   "files": {
-    "includes": ["src/**/*.ts", "*.json"]
+    "includes": ["src/**/*.ts", "*.json", "!src/generated/**/*.ts"]
   },
   "formatter": {
-    "enabled": true
+    "enabled": true,
+    "formatWithErrors": true
   },
   "linter": {
-    "enabled": true,
-
-    "rules": {
-      "correctness": {
-        "noUnusedVariables": {
-          "level": "warning",
-          "fix": "none"
-        },
-        "noUnusedImports": {
-          "level": "warning",
-          "fix": "none"
-        }
-      }
+    "enabled": false
+  },
+  "json": {
+    "formatter": {
+      "indentWidth": 2,
+      "indentStyle": "space"
+    },
+    "parser": {
+      "allowTrailingCommas": true
     }
   },
   "assist": {

@@ -1,168 +1,182 @@
-interface StreamPosition {
-  seqNum: number;
-  timestamp: number;
-}
+import { Redacted } from "effect";
+import {
+  type CreateBasinData,
+  createBasin,
+  type DeleteBasinData,
+  deleteBasin,
+  type GetBasinConfigData,
+  getBasinConfig,
+  listBasins,
+  type ReconfigureBasinData,
+  reconfigureBasin,
+} from "./generated";
+import { createClient, createConfig } from "./generated/client";
+import type { Client } from "./generated/client/types.gen";
 
-interface BaseOptions {
+type S2ClientOptions = {
+  accessToken: string;
+};
+
+type S2RequestOptions = {
   signal?: AbortSignal;
-}
-
-type ReadStart = {
-  seqNum: number;
-} | {
-  timestamp: number;
-} | {
-  tailOffset: number;
 };
 
-type ReadLimit = {
-  count?: number;
-  bytes?: number;
-};
+type DataToObject<T> = (T extends { body: infer B } ? B : {}) &
+  (T extends { path: infer P } ? P : {}) &
+  (T extends { query: infer Q } ? Q : {});
 
-type ReadArgs<Format extends "string" | "bytes" = "string"> = {
-  clamp?: boolean;
-  until?: number;
-  wait?: number;
-  as?: Format;
-} & ReadStart & ReadLimit;
-
-type Header = [string, string];
-
-interface SequencedRecord<Data extends string | Uint8Array> {
-  body?: Data;
-  headers?: Header[];
-  seq_num: number;
-  timestamp: number;
+export class S2Error extends Error {
+  public readonly code?: string;
+  public readonly status?: number;
+  public readonly data?: Record<string, unknown>;
+  constructor({
+    message,
+    code,
+    status,
+    data,
+  }: {
+    message: string;
+    code?: string;
+    status?: number;
+    data?: Record<string, unknown>;
+  }) {
+    super(message);
+    this.code = code;
+    this.status = status;
+    this.data = data;
+  }
 }
 
-interface ReadResponse<Data extends string | Uint8Array> {
-  records: SequencedRecord<Data>[];
-  tail: StreamPosition | null;
-}
-
-interface AppendRecord<Data extends string | Uint8Array> {
-  body: Data;
-  headers?: Header[];
-}
-
-interface AppendArgs<Data extends string | Uint8Array> {
-  records: AppendRecord<Data>[];
-  fencingToken?: string;
-  matchSeqNum?: number;
-}
-
-interface AppendResponse {
-  start: StreamPosition;
-  end: StreamPosition;
-  tail: StreamPosition;
-}
-
-interface AppendAck {
-  start: StreamPosition;
-  end: StreamPosition;
-  tail: StreamPosition;
-}
-
-interface ReadEvent<Data extends string | Uint8Array> {
-  records: SequencedRecord<Data>[];
-  tail: StreamPosition | null;
-}
-
-declare class ReadSession<Data extends string | Uint8Array> implements AsyncDisposable, AsyncIterable<ReadEvent<Data>> {
-  [Symbol.asyncDispose](): Promise<void>;
-  [Symbol.asyncIterator](): AsyncIterator<ReadEvent<Data>>;
-}
-declare class AppendSession implements AsyncDisposable {
-  [Symbol.asyncDispose](): Promise<void>;
-  acks(): AsyncIterableIterator<AppendAck>;
-  send<Data extends string | Uint8Array>(records: AppendRecord<Data> | AppendRecord<Data>[], opts?: BaseOptions): Promise<void>;
-}
-
-declare class StreamService {
-  read(args: ReadArgs<"string">, opts?: BaseOptions): Promise<ReadResponse<string>>;
-  read(args: ReadArgs<"bytes">, opts?: BaseOptions): Promise<ReadResponse<Uint8Array>>;
-  readSession(args?: ReadArgs<"string">, opts?: BaseOptions): ReadSession<string>;
-  readSession(args?: ReadArgs<"bytes">, opts?: BaseOptions): ReadSession<Uint8Array>;
-  append<Data extends string | Uint8Array>(args: AppendArgs<Data>, opts?: BaseOptions): Promise<AppendResponse>;
-  appendSession(opts?: BaseOptions): AppendSession;
-  checkTail(opts?: BaseOptions): Promise<StreamPosition>;
-}
-
-declare class BasinService {
-  stream(name: string): StreamService;
-  // stubs
-  listStreams(): void;
-  createStream(): void;
-  deleteStream(): void;
-  getStreamConfig(): void;
-  reconfigureStream(): void;
-}
-
-export declare class S2 {
-  basin(name: string): BasinService;
-  // stubs
-  listBasins(): void;
-  createBasin(): void;
-  deleteBasin(): void;
-  getBasinConfig(): void;
-  reconfigureBasin(): void;
-  listAccessTokens(): void;
-  issueAccessToken(): void;
-  revokeAccessToken(): void;
-  getAccountMetrics(): void;
-  getBasinMetrics(): void;
-  getStreamMetrics(): void;
-}
-
-async function _example() {
-  const s2 = new S2();
-  const stream = s2.basin("my-basin").stream("my-stream");
-  const tail = await stream.checkTail();
-
-  const _stringRecord = await stream.read({
-    seqNum: tail.seqNum,
-    count: 10,
-  });
-  
-  const _bytesRecord = await stream.read({
-    seqNum: tail.seqNum,
-    count: 10,
-    as: "bytes",
-  });
-
-  await stream.append({
-    records: [
-      {
-        body: "Hello, world!",
-      },
-    ],
-  });
-
-  await using readSession = stream.readSession();
-  await using appendSession = stream.appendSession();
-
-  const appendTask = (async () => {
-    for await (const ack of appendSession.acks()) {
-      console.log(ack);
-    }
-
-    for (let i = 0; i < 10; i++) {
-      await appendSession.send({
-        body: `Hello, world! ${i}`,
-      });
-    }
-  })();
-
-  let readCount = 0;
-  for await (const event of readSession) {
-    console.log(event.records);
-    readCount += event.records.length;
-
-    if (readCount >= 10) {
-      break;
-    }
+class S2Basins {
+  private client: Client;
+  constructor(client: Client) {
+    this.client = client;
   }
 
-  await appendTask;
+  public async list(options?: S2RequestOptions) {
+    const response = await listBasins({
+      client: this.client,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async create(
+    args: DataToObject<CreateBasinData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await createBasin({
+      client: this.client,
+      body: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async getConfig(
+    args: DataToObject<GetBasinConfigData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await getBasinConfig({
+      client: this.client,
+      path: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async delete(
+    args: DataToObject<DeleteBasinData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await deleteBasin({
+      client: this.client,
+      path: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
+
+  public async reconfigure(
+    args: DataToObject<ReconfigureBasinData>,
+    options?: S2RequestOptions
+  ) {
+    const response = await reconfigureBasin({
+      client: this.client,
+      path: args,
+      body: args,
+      ...options,
+    });
+
+    if (response.error) {
+      throw new S2Error({
+        message: response.error.message,
+        code: response.error.code ?? undefined,
+        status: response.response.status,
+      });
+    }
+
+    return response.data;
+  }
 }
+
+export class S2 {
+  private accessToken: Redacted.Redacted;
+  private client: Client;
+
+  public basins: S2Basins;
+
+  constructor(options: S2ClientOptions) {
+    this.accessToken = Redacted.make(options.accessToken);
+    this.client = createClient(
+      createConfig({
+        baseUrl: "https://aws.s2.dev/v1",
+        auth: () => Redacted.value(this.accessToken),
+      })
+    );
+    this.basins = new S2Basins(this.client);
+  }
+}
+
+const s2 = new S2({
+  accessToken: "123",
+});
+
+const basins = await s2.basins.list();
+console.log(basins.basins);
