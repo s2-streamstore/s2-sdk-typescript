@@ -6,8 +6,7 @@
     "test": "vitest --run",
     "check": "biome check --write && tsc --noEmit",
     "format": "biome format --write",
-    "gen:openapi": "openapi-typescript https://raw.githubusercontent.com/s2-streamstore/s2-protos/refs/heads/main/s2/v1/openapi.json -o ./src/generated/api.ts",
-    "gen:openapi2": "openapi-ts"
+    "gen:openapi": "openapi-ts"
   },
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
