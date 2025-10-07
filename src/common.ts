@@ -1,11 +1,11 @@
 export type S2ClientOptions = {
-  accessToken: string;
+	accessToken: string;
 };
 
 export type S2RequestOptions = {
-  signal?: AbortSignal;
+	signal?: AbortSignal;
 };
 
 export type DataToObject<T> = (T extends { body: infer B } ? B : {}) &
-  (T extends { path: infer P } ? P : {}) &
-  (T extends { query: infer Q } ? Q : {});
+	(T extends { path: infer P } ? P : {}) &
+	(T extends { query: infer Q } ? Q : {});
