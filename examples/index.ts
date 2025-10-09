@@ -20,3 +20,20 @@ const streamResults = await Promise.all(
   )
 );
 console.log("streams", streamResults);
+
+if (streams.streams[0]) {
+  const stream = basin.stream(streams.streams[0].name);
+  const stringRead = await stream.read();
+  console.log("read", stringRead.records?.[0]?.body, stringRead.records?.[0]?.headers);
+  const bytesRead = await stream.read({ as: "bytes" });
+  console.log("read bytes", bytesRead.records?.[0]?.body, bytesRead.records?.[0]?.headers);
+
+  const append = await stream.append({
+    records: [{
+      body: "Hello, world!",
+    }, {
+      body: new Uint8Array([1, 2, 3]),
+    }],
+  });
+  console.log("append", append);
+}
