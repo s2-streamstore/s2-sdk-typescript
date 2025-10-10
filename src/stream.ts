@@ -102,9 +102,14 @@ export class S2Stream {
 		args: AppendArgs,
 		options?: S2RequestOptions,
 	): Promise<AppendAck> {
-		const hasBytes = args.records.some(
-			(record) => record.body instanceof Uint8Array,
-		);
+		const hasBytes =
+			args.records.some((record) => record.body instanceof Uint8Array) ||
+			args.records.some((record) =>
+				record.headers?.some(
+					(header) =>
+						header[0] instanceof Uint8Array || header[1] instanceof Uint8Array,
+				),
+			);
 
 		const encodedRecords: AppendRecord<string>[] = args.records.map(
 			(record) => ({
@@ -113,6 +118,13 @@ export class S2Stream {
 					record.body instanceof Uint8Array
 						? record.body.toBase64()
 						: record.body,
+				headers: record.headers?.map(
+					(header) =>
+						header.map((h) => (h instanceof Uint8Array ? h.toBase64() : h)) as [
+							string,
+							string,
+						],
+				),
 			}),
 		);
 
@@ -181,9 +193,10 @@ type ReadArgs<Format extends "string" | "bytes" = "string"> =
 
 type AppendRecord<T extends string | Uint8Array = string> = Omit<
 	GeneratedAppendRecord,
-	"body"
+	"body" | "headers"
 > & {
 	body?: T;
+	headers?: Array<[T, T]>;
 };
 
 type AppendArgs = Omit<GeneratedAppendInput, "records"> & {

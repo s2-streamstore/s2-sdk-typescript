@@ -31,8 +31,22 @@ if (streams.streams[0]) {
   const append = await stream.append({
     records: [{
       body: "Hello, world!",
+      headers: [[
+        "foo",
+        "bar",
+      ]]
     }, {
       body: new Uint8Array([1, 2, 3]),
+      headers: [[
+        new TextEncoder().encode("foo"),
+        new TextEncoder().encode("bar"),
+      ], [
+        new TextEncoder().encode("baz"),
+        "bak",
+      ], [
+        "qux",
+        new TextEncoder().encode("quux"),
+      ]]
     }],
   });
   console.log("append", append);
