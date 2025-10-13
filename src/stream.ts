@@ -9,7 +9,6 @@ import {
 	type ReadBatch as GeneratedReadBatch,
 	type SequencedRecord as GeneratedSequencedRecord,
 	type ReadData,
-	type ReadEvent,
 	read,
 	type StreamPosition,
 } from "./generated";
@@ -172,8 +171,10 @@ export class S2Stream {
 	): Promise<ReadSession<Format>> {
 		return await ReadSession.create(this.client, this.name, args, options);
 	}
-	public async appendSession(): Promise<AppendSession> {
-		return new AppendSession();
+	public async appendSession(
+		options?: S2RequestOptions,
+	): Promise<AppendSession> {
+		return await AppendSession.create(this.client, this.name, options);
 	}
 }
 
@@ -300,13 +301,36 @@ class ReadSession<
 }
 
 class AppendSession
-	extends WritableStream<AppendRecord>
+	extends WritableStream<AppendArgs>
 	implements AsyncDisposable
 {
+	private _lastSeenPosition: AppendAck | undefined = undefined;
+
+	static async create(
+		client: Client,
+		name: string,
+		options?: S2RequestOptions,
+	) {
+		return new AppendSession();
+	}
+
+	private constructor() {
+		super();
+	}
+
 	[Symbol.asyncDispose]() {
 		return this.abort(new Error("Abort"));
 	}
+
 	acks(): ReadableStream<AppendAck> {
 		return {} as any;
+	}
+
+	append(body: AppendArgs) {
+		return;
+	}
+
+	get lastSeenPosition() {
+		return this._lastSeenPosition;
 	}
 }
