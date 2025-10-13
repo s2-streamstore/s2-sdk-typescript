@@ -1,5 +1,6 @@
 {
   "name": "s2-sdk-typescript-v2",
+  "version": "0.0.0",
   "type": "module",
   "scripts": {
     "build": "tsc",
@@ -7,7 +8,10 @@
     "check": "biome check && tsc --noEmit",
     "check:write": "biome check --write",
     "format": "biome format --write",
-    "gen:openapi": "openapi-ts"
+    "gen:openapi": "openapi-ts",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "bun run build && changeset publish"
   },
   "module": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
@@ -19,6 +23,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.5",
+    "@changesets/cli": "^2.29.7",
     "@hey-api/openapi-ts": "0.85.0",
     "openapi-typescript": "^7.9.1",
     "vitest": "^3.2.4"
