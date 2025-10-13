@@ -13,6 +13,7 @@ import {
 	read,
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
+import { EventStream } from "./lib/event-stream";
 
 export class S2Stream {
 	private readonly client: Client;
@@ -48,15 +49,16 @@ export class S2Stream {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadBatch<Format>> {
+		const { as, ...queryParams } = args ?? {};
 		const response = await read({
 			client: this.client,
 			path: {
 				stream: this.name,
 			},
 			headers: {
-				...(args?.as === "bytes" ? { "s2-format": "base64" } : {}),
+				...(as === "bytes" ? { "s2-format": "base64" } : {}),
 			},
-			query: args,
+			query: queryParams,
 			...options,
 		});
 		if (response.error) {
@@ -65,12 +67,12 @@ export class S2Stream {
 					message: response.error.message,
 					code: response.error.code ?? undefined,
 					status: response.response.status,
-					data: response.error,
 				});
 			} else {
-				// special case for 416
+				// special case for 416 - Range Not Satisfiable
 				throw new S2Error({
-					message: "Range not satisfiable",
+					message:
+						"Range not satisfiable: requested position is beyond the stream tail. Use 'clamp: true' to start from the tail instead.",
 					status: response.response.status,
 					data: response.error,
 				});
@@ -111,22 +113,22 @@ export class S2Stream {
 				),
 			);
 
-		const encodedRecords: AppendRecord<string>[] = args.records.map(
-			(record) => ({
-				...record,
-				body:
-					record.body instanceof Uint8Array
-						? record.body.toBase64()
-						: record.body,
-				headers: record.headers?.map(
-					(header) =>
-						header.map((h) => (h instanceof Uint8Array ? h.toBase64() : h)) as [
-							string,
-							string,
-						],
-				),
-			}),
-		);
+		const encodedRecords = args.records.map((record) => ({
+			...record,
+			body:
+				record.body instanceof Uint8Array
+					? record.body.toBase64()
+					: record.body,
+			headers: record.headers?.map(
+				(header) =>
+					header.map((h) => (h instanceof Uint8Array ? h.toBase64() : h)) as [
+						string,
+						string,
+					],
+			),
+		}));
+
+		console.log("encodedRecords", encodedRecords);
 
 		const response = await append({
 			client: this.client,
@@ -160,8 +162,11 @@ export class S2Stream {
 		}
 		return response.data;
 	}
-	public async readSession(): Promise<ReadSession> {
-		return new ReadSession();
+	public async readSession<Format extends "string" | "bytes" = "string">(
+		args?: ReadArgs<Format>,
+		options?: S2RequestOptions,
+	): Promise<ReadSession<Format>> {
+		return await ReadSession.create(this.client, this.name, args, options);
 	}
 	public async appendSession(): Promise<AppendSession> {
 		return new AppendSession();
@@ -191,25 +196,70 @@ type ReadArgs<Format extends "string" | "bytes" = "string"> =
 		as?: Format;
 	};
 
-type AppendRecord<T extends string | Uint8Array = string> = Omit<
-	GeneratedAppendRecord,
-	"body" | "headers"
-> & {
-	body?: T;
-	headers?: Array<[T, T]>;
+type AppendRecord = Omit<GeneratedAppendRecord, "body" | "headers"> & {
+	body?: string | Uint8Array;
+	headers?: Array<[string | Uint8Array, string | Uint8Array]>;
 };
 
 type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
-	records: Array<AppendRecord<string | Uint8Array>>;
+	records: Array<AppendRecord>;
 };
 
-class ReadSession extends ReadableStream<ReadEvent> implements AsyncDisposable {
-	[Symbol.asyncDispose]() {
-		return this.cancel(new Error("Abort"));
+class ReadSession<
+	Format extends "string" | "bytes" = "string",
+> extends EventStream<SequencedRecord<Format>> {
+	static async create<Format extends "string" | "bytes" = "string">(
+		client: Client,
+		name: string,
+		args?: ReadArgs<Format>,
+		options?: S2RequestOptions,
+	): Promise<ReadSession<Format>> {
+		const { as, ...queryParams } = args ?? {};
+		const response = await read({
+			client,
+			path: {
+				stream: name,
+			},
+			headers: {
+				accept: "text/event-stream",
+				...(as === "bytes" ? { "s2-format": "base64" } : {}),
+			},
+			query: queryParams,
+			...options,
+		});
+		console.log("response", response);
+		if (response.error) {
+			if ("message" in response.error) {
+				throw new S2Error({
+					message: response.error.message,
+					code: response.error.code ?? undefined,
+					status: response.response.status,
+				});
+			} else {
+				// special case for 416 - Range Not Satisfiable
+				throw new S2Error({
+					message:
+						"Range not satisfiable: requested position is beyond the stream tail. Use 'clamp: true' to start from the tail instead.",
+					status: response.response.status,
+					data: response.error,
+				});
+			}
+		}
+		if (!response.response.body) {
+			throw new S2Error({
+				message: "No body in SSE response",
+			});
+		}
+		return new ReadSession(response.response.body, args?.as ?? "string");
+	}
+
+	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
+		super(stream, (x) => x as any);
 	}
 }
+
 class AppendSession
-	extends WritableStream<AppendAck>
+	extends WritableStream<AppendRecord>
 	implements AsyncDisposable
 {
 	[Symbol.asyncDispose]() {

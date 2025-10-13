@@ -14,9 +14,36 @@ export class S2Error extends Error {
 		status?: number;
 		data?: Record<string, unknown>;
 	}) {
-		super(message);
+		// Include full data in the error message for better visibility
+		const dataStr = data ? `\nData: ${JSON.stringify(data, null, 2)}` : "";
+		super(`${message}${dataStr}`);
 		this.code = code;
 		this.status = status;
 		this.data = data;
+		this.name = "S2Error";
+	}
+
+	public toString() {
+		return `${this.message} (code: ${this.code}, status: ${this.status}, data: ${JSON.stringify(this.data, null, 2)})`;
+	}
+
+	public toJSON() {
+		return {
+			message: this.message,
+			code: this.code,
+			status: this.status,
+			data: this.data,
+		};
+	}
+
+	public [Symbol.for("nodejs.util.inspect.custom")]() {
+		return {
+			name: "S2Error",
+			message: this.message,
+			code: this.code,
+			status: this.status,
+			data: this.data,
+			stack: this.stack,
+		};
 	}
 }

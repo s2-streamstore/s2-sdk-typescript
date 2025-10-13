@@ -22,10 +22,14 @@ const streamResults = await Promise.all(
 console.log("streams", streamResults);
 
 if (streams.streams[0]) {
+  console.log("reading stream", streams.streams[0].name);
   const stream = basin.stream(streams.streams[0].name);
-  const stringRead = await stream.read();
+  const stringRead = await stream.read({
+    count: 5,
+    seq_num: 0
+  });
   console.log("read", stringRead.records?.[0]?.body, stringRead.records?.[0]?.headers);
-  const bytesRead = await stream.read({ as: "bytes" });
+  const bytesRead = await stream.read({ as: "bytes", count: 5, seq_num: 0 });
   console.log("read bytes", bytesRead.records?.[0]?.body, bytesRead.records?.[0]?.headers);
 
   const append = await stream.append({
@@ -50,4 +54,11 @@ if (streams.streams[0]) {
     }],
   });
   console.log("append", append);
+  const readSession = await stream.readSession({
+    clamp: true,
+    tail_offset: 10
+  });
+  for await (const record of readSession) {
+    console.log("record", record);
+  }
 }
