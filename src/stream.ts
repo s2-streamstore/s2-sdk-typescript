@@ -11,6 +11,7 @@ import {
 	type ReadData,
 	type ReadEvent,
 	read,
+	type StreamPosition,
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
 import { EventStream } from "./lib/event-stream";
@@ -118,17 +119,20 @@ export class S2Stream {
 			body:
 				record.body instanceof Uint8Array
 					? record.body.toBase64()
-					: record.body,
+					: hasBytes && record.body
+						? new TextEncoder().encode(record.body).toBase64()
+						: record.body,
 			headers: record.headers?.map(
 				(header) =>
-					header.map((h) => (h instanceof Uint8Array ? h.toBase64() : h)) as [
-						string,
-						string,
-					],
+					header.map((h) =>
+						h instanceof Uint8Array
+							? h.toBase64()
+							: hasBytes
+								? new TextEncoder().encode(h).toBase64()
+								: h,
+					) as [string, string],
 			),
 		}));
-
-		console.log("encodedRecords", encodedRecords);
 
 		const response = await append({
 			client: this.client,
@@ -213,7 +217,7 @@ class ReadSession<
 		name: string,
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
-	): Promise<ReadSession<Format>> {
+	) {
 		const { as, ...queryParams } = args ?? {};
 		const response = await read({
 			client,
@@ -225,9 +229,9 @@ class ReadSession<
 				...(as === "bytes" ? { "s2-format": "base64" } : {}),
 			},
 			query: queryParams,
+			parseAs: "stream",
 			...options,
 		});
-		console.log("response", response);
 		if (response.error) {
 			if ("message" in response.error) {
 				throw new S2Error({
@@ -253,8 +257,45 @@ class ReadSession<
 		return new ReadSession(response.response.body, args?.as ?? "string");
 	}
 
+	private _streamPosition: StreamPosition | undefined = undefined;
+
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
-		super(stream, (x) => x as any);
+		super(stream, (msg) => {
+			// Parse SSE events according to the S2 protocol
+			if (msg.event === "batch" && msg.data) {
+				const batch: ReadBatch<Format> = JSON.parse(msg.data);
+				// If format is bytes, decode base64 to Uint8Array
+				if (format === "bytes") {
+					for (const record of batch.records ?? []) {
+						if (record.body && typeof record.body === "string") {
+							(record as any).body = Uint8Array.fromBase64(record.body);
+						}
+						if (record.headers) {
+							(record as any).headers = record.headers.map((header) =>
+								header.map((h) =>
+									typeof h === "string" ? Uint8Array.fromBase64(h) : h,
+								),
+							);
+						}
+					}
+				}
+				if (batch.tail) {
+					this._streamPosition = batch.tail;
+				}
+				return { done: false, batch: true, value: batch.records ?? [] };
+			}
+			if (msg.event === "error") {
+				// Handle error events
+				throw new S2Error({ message: msg.data ?? "Unknown error" });
+			}
+
+			// Skip ping events and other events
+			return { done: false };
+		});
+	}
+
+	public get streamPosition() {
+		return this._streamPosition;
 	}
 }
 

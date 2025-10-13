@@ -8,13 +8,31 @@ export type SseMessage<T> = {
 	id?: string | undefined;
 	retry?: number | undefined;
 };
+
+type ParseResult<T> =
+	| {
+			done: true;
+			value?: undefined;
+			batch?: undefined;
+	  }
+	| {
+			done: false;
+			batch?: false;
+			value?: T;
+	  }
+	| {
+			done: false;
+			batch: true;
+			value: T[];
+	  };
+
 export class EventStream<T>
 	extends ReadableStream<T>
 	implements AsyncDisposable
 {
 	constructor(
 		responseBody: ReadableStream<Uint8Array>,
-		parse: (x: SseMessage<string>) => IteratorResult<T, undefined>,
+		parse: (x: SseMessage<string>) => ParseResult<T>,
 	) {
 		const upstream = responseBody.getReader();
 		let buffer: Uint8Array = new Uint8Array();
@@ -32,10 +50,17 @@ export class EventStream<T>
 						const message = buffer.slice(0, match.index);
 						buffer = buffer.slice(match.index + match.length);
 						const item = parseMessage(message, parse);
-						if (item?.value) return downstream.enqueue(item.value);
-						if (item?.done) {
-							await upstream.cancel("done");
-							return downstream.close();
+						if (item) {
+							if (item.batch) {
+								for (const chunk of item.value) {
+									downstream.enqueue(chunk);
+								}
+							} else if (item.value) {
+								downstream.enqueue(item.value);
+							} else if (item.done) {
+								await upstream.cancel("done");
+								downstream.close();
+							}
 						}
 					}
 				} catch (e) {
@@ -115,7 +140,7 @@ function findBoundary(
 }
 function parseMessage<T>(
 	chunk: Uint8Array,
-	parse: (x: SseMessage<string>) => IteratorResult<T, undefined>,
+	parse: (x: SseMessage<string>) => ParseResult<T>,
 ) {
 	const text = new TextDecoder().decode(chunk);
 	const lines = text.split(/\r\n|\r|\n/);
