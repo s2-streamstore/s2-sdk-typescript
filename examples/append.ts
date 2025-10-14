@@ -13,10 +13,24 @@ const streams = await basin.streams.list();
 if (streams.streams[0]) {
   const stream = basin.stream(streams.streams[0].name);
   console.log(`appending to s2://${basins.basins[0].name}/${streams.streams[0].name}`);
-  await stream.append({
+  const session = await stream.appendSession();
+  session.append({
     records: [{
       body: `Hello`,
     }]
   });
+  session.append({
+    records: [{
+      body: `Hello`,
+    }]
+  });
+  session.append({
+    records: [{
+      body: `Hello`,
+    }]
+  });
+  for await (const ack of session.acks()) {
+    console.log("ack", ack);
+  }
   console.log("appended");
 }

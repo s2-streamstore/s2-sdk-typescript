@@ -174,7 +174,7 @@ export class S2Stream {
 	public async appendSession(
 		options?: S2RequestOptions,
 	): Promise<AppendSession> {
-		return await AppendSession.create(this.client, this.name, options);
+		return await AppendSession.create(this, options);
 	}
 }
 
@@ -300,34 +300,157 @@ class ReadSession<
 	}
 }
 
+class AcksStream extends ReadableStream<AppendAck> implements AsyncDisposable {
+	constructor(
+		setController: (
+			controller: ReadableStreamDefaultController<AppendAck>,
+		) => void,
+	) {
+		super({
+			start: (controller) => {
+				setController(controller);
+			},
+		});
+	}
+
+	async [Symbol.asyncDispose]() {
+		await this.cancel("disposed");
+	}
+
+	// Polyfill for older browsers
+	[Symbol.asyncIterator](): AsyncIterableIterator<AppendAck> {
+		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		if (typeof fn === "function") return fn.call(this);
+		const reader = this.getReader();
+		return {
+			next: async () => {
+				const r = await reader.read();
+				if (r.done) {
+					reader.releaseLock();
+					return { done: true, value: undefined };
+				}
+				return { done: false, value: r.value };
+			},
+			throw: async (e) => {
+				await reader.cancel(e);
+				reader.releaseLock();
+				return { done: true, value: undefined };
+			},
+			return: async () => {
+				await reader.cancel("done");
+				reader.releaseLock();
+				return { done: true, value: undefined };
+			},
+			[Symbol.asyncIterator]() {
+				return this;
+			},
+		};
+	}
+}
+
 class AppendSession
 	extends WritableStream<AppendArgs>
 	implements AsyncDisposable
 {
 	private _lastSeenPosition: AppendAck | undefined = undefined;
+	private buffer: AppendArgs[] = [];
+	private inFlight = false;
+	private readonly options?: S2RequestOptions;
+	private readonly stream: S2Stream;
+	private acksController:
+		| ReadableStreamDefaultController<AppendAck>
+		| undefined;
+	private _acksStream: AcksStream | undefined;
+	private closed = false;
 
-	static async create(
-		client: Client,
-		name: string,
-		options?: S2RequestOptions,
-	) {
-		return new AppendSession();
+	static async create(stream: S2Stream, options?: S2RequestOptions) {
+		return new AppendSession(stream, options);
 	}
 
-	private constructor() {
-		super();
+	private constructor(stream: S2Stream, options?: S2RequestOptions) {
+		let writableController: WritableStreamDefaultController;
+		super({
+			start: (controller) => {
+				writableController = controller;
+			},
+			write: async (chunk) => {
+				await this.append(chunk);
+			},
+			close: async () => {
+				this.closed = true;
+				// Wait for any in-flight requests and buffer to drain
+				await this.waitForDrain();
+			},
+			abort: async (reason) => {
+				this.closed = true;
+				this.buffer = [];
+				// Clean up resources
+			},
+		});
+		this.options = options;
+		this.stream = stream;
 	}
 
 	[Symbol.asyncDispose]() {
-		return this.abort(new Error("Abort"));
+		return this.abort(new S2Error({ message: "Abort" }));
 	}
 
-	acks(): ReadableStream<AppendAck> {
-		return {} as any;
+	acks(): AcksStream {
+		if (!this._acksStream) {
+			this._acksStream = new AcksStream((controller) => {
+				this.acksController = controller;
+			});
+		}
+		return this._acksStream;
 	}
 
-	append(body: AppendArgs) {
-		return;
+	async append(args: AppendArgs): Promise<void> {
+		if (this.closed) {
+			throw new S2Error({ message: "AppendSession is closed" });
+		}
+
+		// Add to buffer
+		this.buffer.push(args);
+
+		// Process buffer if nothing is in flight
+		if (!this.inFlight) {
+			await this.processBuffer();
+		}
+	}
+
+	private async processBuffer(): Promise<void> {
+		while (this.buffer.length > 0 && !this.closed) {
+			this.inFlight = true;
+			const args = this.buffer.shift()!;
+
+			try {
+				const ack = await this.stream.append(args, this.options);
+				this._lastSeenPosition = ack;
+
+				// Emit ack to the acks stream if it exists
+				if (this.acksController) {
+					this.acksController.enqueue(ack);
+				}
+			} catch (error) {
+				this.inFlight = false;
+				// Re-throw the error
+				throw error;
+			}
+
+			this.inFlight = false;
+		}
+	}
+
+	private async waitForDrain(): Promise<void> {
+		// Wait until buffer is empty and nothing is in flight
+		while (this.buffer.length > 0 || this.inFlight) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+
+		// Close the acks stream if it exists
+		if (this.acksController) {
+			this.acksController.close();
+		}
 	}
 
 	get lastSeenPosition() {
