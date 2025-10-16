@@ -27,12 +27,6 @@ export const AppendRecord = {
 				return undefined;
 			} else if (Array.isArray(additionalHeaders)) {
 				return [["", command] as [string, string], ...additionalHeaders];
-			} else if (additionalHeaders instanceof Headers) {
-				const h: [string, string][] = [];
-				additionalHeaders.forEach((value: string, key: string) => {
-					h.push([key, value]);
-				});
-				return [["", command] as [string, string], ...h];
 			} else {
 				return [
 					["", command] as [string, string],

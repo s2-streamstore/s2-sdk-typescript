@@ -33,16 +33,12 @@ if (streams.streams[0]) {
   console.log("read bytes", bytesRead.records?.[0]?.body, bytesRead.records?.[0]?.headers);
 
   const append = await stream.append([
-    
-    
     AppendRecord.make("Hello, world!", {
       "foo": "bar",
     }),
-    
     AppendRecord.make(new Uint8Array([1, 2, 3]), {
       "foo": "bar",
     }),
-    
     AppendRecord.make(new Uint8Array([1, 2, 3]),  [[
         new TextEncoder().encode("foo"),
         new TextEncoder().encode("bar"),
@@ -53,10 +49,17 @@ if (streams.streams[0]) {
         "qux",
         new TextEncoder().encode("quux"),
       ]]),
-    
     AppendRecord.fence("my-fence"),
     AppendRecord.trim(0),
     AppendRecord.command("foo"),
+    // still can just make by hand:
+    {
+      body: "hello, world!",
+      headers: [
+        ["foo", "bar"],
+      ],
+      timestamp: new Date().getTime(),
+    }
   ]);
   console.log("append", append);
   const readSession = await stream.readSession({

@@ -1,10 +1,18 @@
 import { AppendRecord, S2 } from "../src";
 
-async function main() {
-	const s2 = new S2({ accessToken: process.env.S2_ACCESS_TOKEN! });
-	const basin = s2.basin("my-basin");
-	const stream = basin.stream("my-stream");
+const s2 = new S2({
+  accessToken: process.env.S2_ACCESS_TOKEN!,
+});
 
+const basins = await s2.basins.list();
+if (!basins.basins[0]) {
+  throw new Error("No basin found");
+}
+const basin = s2.basin(basins.basins[0].name);
+const streams = await basin.streams.list();
+if (streams.streams[0]) {
+  const stream = basin.stream(streams.streams[0].name);
+  stream.append(AppendRecord.fence(""),)
 	// Create an append session
 	const session = await stream.appendSession();
 
@@ -12,7 +20,6 @@ async function main() {
 	const batcher = session.makeBatcher({
 		lingerDuration: 20, // 20ms
 		maxBatchSize: 10,
-		fencing_token: "my-fence", // Optional fencing token
 	});
 
 	// Submit individual records to the batcher
@@ -53,7 +60,5 @@ async function main() {
 	session2.submit([{ body: "test" }]);
 
 	await session2.close();
+
 }
-
-main();
-

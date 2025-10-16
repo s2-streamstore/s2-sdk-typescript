@@ -101,20 +101,16 @@ export class S2Stream {
 		}
 	}
 	public async append(
-		records: AppendArgs["records"],
+		records: AppendRecord | AppendRecord[],
 		args?: Omit<AppendArgs, "records">,
 		options?: S2RequestOptions,
 	): Promise<AppendAck> {
+		const recordsArray = Array.isArray(records) ? records : [records];
 		const normalizeHeaders = (
 			headers: AppendRecord["headers"],
 		): [string | Uint8Array, string | Uint8Array][] | undefined => {
-			if (headers === undefined) return undefined;
-			else if (headers instanceof Headers) {
-				const entries: [string | Uint8Array, string | Uint8Array][] = [];
-				headers.forEach((value, key) => {
-					entries.push([key, value]);
-				});
-				return entries;
+			if (headers === undefined) {
+				return undefined;
 			} else if (Array.isArray(headers)) {
 				return headers;
 			} else {
@@ -122,7 +118,7 @@ export class S2Stream {
 			}
 		};
 
-		const recordsWithNormalizedHeaders = records.map((record) => ({
+		const recordsWithNormalizedHeaders = recordsArray.map((record) => ({
 			...record,
 			headers: normalizeHeaders(record.headers),
 		}));
@@ -230,8 +226,7 @@ export type AppendRecord = Omit<GeneratedAppendRecord, "body" | "headers"> & {
 	body?: string | Uint8Array;
 	headers?:
 		| Array<[string | Uint8Array, string | Uint8Array]>
-		| Record<string, string | Uint8Array>
-		| Headers;
+		| Record<string, string | Uint8Array>;
 };
 
 type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
