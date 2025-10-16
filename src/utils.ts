@@ -24,7 +24,7 @@ export const AppendRecord = {
 	): AppendRecordType => {
 		const headers: AppendRecordType["headers"] = (() => {
 			if (!additionalHeaders) {
-				return undefined;
+				return [["", command]];
 			} else if (Array.isArray(additionalHeaders)) {
 				return [["", command] as [string, string], ...additionalHeaders];
 			} else {

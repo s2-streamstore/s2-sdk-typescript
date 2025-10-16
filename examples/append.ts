@@ -1,18 +1,17 @@
 import { AppendRecord, S2 } from "../src";
 
 const s2 = new S2({
-  accessToken: process.env.S2_ACCESS_TOKEN!,
+	accessToken: process.env.S2_ACCESS_TOKEN!,
 });
 
 const basins = await s2.basins.list();
 if (!basins.basins[0]) {
-  throw new Error("No basin found");
+	throw new Error("No basin found");
 }
 const basin = s2.basin(basins.basins[0].name);
 const streams = await basin.streams.list();
 if (streams.streams[0]) {
-  const stream = basin.stream(streams.streams[0].name);
-  stream.append(AppendRecord.fence(""),)
+	const stream = basin.stream(streams.streams[0].name);
 	// Create an append session
 	const session = await stream.appendSession();
 
@@ -32,9 +31,7 @@ if (streams.streams[0]) {
 	]);
 
 	// You can also submit directly to the session (bypasses batching)
-	session.submit([AppendRecord.make("urgent record")], {
-		fencing_token: "different-fence",
-	});
+	session.submit(AppendRecord.make("urgent record"));
 
 	// The batcher will continue batching
 	batcher.submit(AppendRecord.make("record 5"));
@@ -60,5 +57,4 @@ if (streams.streams[0]) {
 	session2.submit([{ body: "test" }]);
 
 	await session2.close();
-
 }

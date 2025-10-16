@@ -594,14 +594,17 @@ class AppendSession
 	 * The request will be queued and sent when no other request is in-flight.
 	 */
 	submit(
-		records: AppendArgs["records"],
+		records: AppendRecord | AppendRecord[],
 		args?: Omit<AppendArgs, "records">,
 	): void {
 		if (this.closed) {
 			throw new S2Error({ message: "AppendSession is closed" });
 		}
 
-		this.queue.push({ records, ...args });
+		this.queue.push({
+			records: Array.isArray(records) ? records : [records],
+			...args,
+		});
 
 		// Start processing if not already running
 		if (!this.processingPromise) {
