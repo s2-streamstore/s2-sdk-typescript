@@ -101,19 +101,44 @@ export class S2Stream {
 		}
 	}
 	public async append(
-		args: AppendArgs,
+		records: AppendArgs["records"],
+		args?: Omit<AppendArgs, "records">,
 		options?: S2RequestOptions,
 	): Promise<AppendAck> {
+		const normalizeHeaders = (
+			headers: AppendRecord["headers"],
+		): [string | Uint8Array, string | Uint8Array][] | undefined => {
+			if (headers === undefined) return undefined;
+			else if (headers instanceof Headers) {
+				const entries: [string | Uint8Array, string | Uint8Array][] = [];
+				headers.forEach((value, key) => {
+					entries.push([key, value]);
+				});
+				return entries;
+			} else if (Array.isArray(headers)) {
+				return headers;
+			} else {
+				return Object.entries(headers).map(([key, value]) => [key, value]);
+			}
+		};
+
+		const recordsWithNormalizedHeaders = records.map((record) => ({
+			...record,
+			headers: normalizeHeaders(record.headers),
+		}));
+
 		const hasBytes =
-			args.records.some((record) => record.body instanceof Uint8Array) ||
-			args.records.some((record) =>
+			recordsWithNormalizedHeaders.some(
+				(record) => record.body instanceof Uint8Array,
+			) ||
+			recordsWithNormalizedHeaders.some((record) =>
 				record.headers?.some(
 					(header) =>
 						header[0] instanceof Uint8Array || header[1] instanceof Uint8Array,
 				),
 			);
 
-		const encodedRecords = args.records.map((record) => ({
+		const encodedRecords = recordsWithNormalizedHeaders.map((record) => ({
 			...record,
 			body:
 				record.body instanceof Uint8Array
@@ -201,9 +226,12 @@ type ReadArgs<Format extends "string" | "bytes" = "string"> =
 		as?: Format;
 	};
 
-type AppendRecord = Omit<GeneratedAppendRecord, "body" | "headers"> & {
+export type AppendRecord = Omit<GeneratedAppendRecord, "body" | "headers"> & {
 	body?: string | Uint8Array;
-	headers?: Array<[string | Uint8Array, string | Uint8Array]>;
+	headers?:
+		| Array<[string | Uint8Array, string | Uint8Array]>
+		| Record<string, string | Uint8Array>
+		| Headers;
 };
 
 type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
@@ -348,12 +376,161 @@ class AcksStream extends ReadableStream<AppendAck> implements AsyncDisposable {
 	}
 }
 
+interface BatcherArgs {
+	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
+	lingerDuration?: number;
+	/** Maximum number of records in a batch (default: 1000) */
+	maxBatchSize?: number;
+	/** Optional fencing token to enforce (remains static across batches) */
+	fencing_token?: string;
+	/** Optional sequence number to match for first batch (auto-increments for subsequent batches) */
+	match_seq_num?: number;
+}
+
+/**
+ * Batches individual records and submits them to an AppendSession.
+ * Handles linger duration, batch size limits, and auto-incrementing match_seq_num.
+ */
+class Batcher
+	extends WritableStream<AppendRecord | AppendRecord[]>
+	implements AsyncDisposable
+{
+	private session: AppendSession;
+	private currentBatch: AppendRecord[] = [];
+	private lingerTimer: ReturnType<typeof setTimeout> | null = null;
+	private closed = false;
+	private readonly maxBatchSize: number;
+	private readonly lingerDuration: number;
+	private readonly fencing_token?: string;
+	private next_match_seq_num?: number;
+
+	constructor(session: AppendSession, args?: BatcherArgs) {
+		let writableController: WritableStreamDefaultController;
+
+		super({
+			start: (controller) => {
+				writableController = controller;
+			},
+			write: (chunk) => {
+				const records = Array.isArray(chunk) ? chunk : [chunk];
+				this.submit(records);
+			},
+			close: () => {
+				this.closed = true;
+				this.flush();
+				this.cleanup();
+			},
+			abort: (_reason) => {
+				this.closed = true;
+				this.currentBatch = [];
+				this.cleanup();
+			},
+		});
+
+		this.session = session;
+		this.maxBatchSize = args?.maxBatchSize ?? 1000;
+		this.lingerDuration = args?.lingerDuration ?? 5;
+		this.fencing_token = args?.fencing_token;
+		this.next_match_seq_num = args?.match_seq_num;
+	}
+
+	async [Symbol.asyncDispose]() {
+		await this.close();
+	}
+
+	/**
+	 * Submit one or more records to be batched.
+	 */
+	submit(records: AppendRecord | AppendRecord[]): void {
+		if (this.closed) {
+			throw new S2Error({ message: "Batcher is closed" });
+		}
+
+		let recordsArray = Array.isArray(records) ? records : [records];
+
+		while (recordsArray.length > 0) {
+			// Start linger timer on first record
+			if (this.currentBatch.length === 0 && this.lingerDuration > 0) {
+				this.startLingerTimer();
+			}
+
+			// Calculate how many records we can add to the current batch
+			const availableSpace = this.maxBatchSize - this.currentBatch.length;
+			const toAdd = recordsArray.slice(0, availableSpace);
+
+			this.currentBatch.push(...toAdd);
+			recordsArray = recordsArray.slice(availableSpace);
+
+			// Flush if we've hit the batch size limit
+			if (this.currentBatch.length >= this.maxBatchSize) {
+				this.flush();
+			}
+		}
+	}
+
+	/**
+	 * Flush the current batch to the session.
+	 */
+	flush(): void {
+		this.cancelLingerTimer();
+
+		if (this.currentBatch.length === 0) {
+			return;
+		}
+
+		const args: AppendArgs = {
+			records: this.currentBatch,
+			fencing_token: this.fencing_token,
+			match_seq_num: this.next_match_seq_num,
+		};
+
+		// Auto-increment match_seq_num for next batch
+		if (this.next_match_seq_num !== undefined) {
+			this.next_match_seq_num += this.currentBatch.length;
+		}
+
+		this.currentBatch = [];
+
+		// Submit to session
+		this.session.submit(args.records, {
+			fencing_token: args.fencing_token,
+			match_seq_num: args.match_seq_num,
+		});
+	}
+
+	private startLingerTimer(): void {
+		this.cancelLingerTimer();
+
+		this.lingerTimer = setTimeout(() => {
+			this.lingerTimer = null;
+			if (!this.closed && this.currentBatch.length > 0) {
+				this.flush();
+			}
+		}, this.lingerDuration);
+	}
+
+	private cancelLingerTimer(): void {
+		if (this.lingerTimer) {
+			clearTimeout(this.lingerTimer);
+			this.lingerTimer = null;
+		}
+	}
+
+	private cleanup(): void {
+		this.cancelLingerTimer();
+	}
+}
+
+/**
+ * Session for appending records to a stream.
+ * Queues append requests and ensures only one is in-flight at a time.
+ */
 class AppendSession
 	extends WritableStream<AppendArgs>
 	implements AsyncDisposable
 {
 	private _lastSeenPosition: AppendAck | undefined = undefined;
-	private buffer: AppendArgs[] = [];
+	private queue: AppendArgs[] = [];
 	private inFlight = false;
 	private readonly options?: S2RequestOptions;
 	private readonly stream: S2Stream;
@@ -362,6 +539,7 @@ class AppendSession
 		| undefined;
 	private _acksStream: AcksStream | undefined;
 	private closed = false;
+	private processingPromise: Promise<void> | null = null;
 
 	static async create(stream: S2Stream, options?: S2RequestOptions) {
 		return new AppendSession(stream, options);
@@ -369,32 +547,44 @@ class AppendSession
 
 	private constructor(stream: S2Stream, options?: S2RequestOptions) {
 		let writableController: WritableStreamDefaultController;
+
 		super({
 			start: (controller) => {
 				writableController = controller;
 			},
-			write: async (chunk) => {
-				await this.append(chunk);
+			write: (chunk) => {
+				this.submit(chunk.records, {
+					fencing_token: chunk.fencing_token,
+					match_seq_num: chunk.match_seq_num,
+				});
 			},
 			close: async () => {
 				this.closed = true;
-				// Wait for any in-flight requests and buffer to drain
 				await this.waitForDrain();
 			},
-			abort: async (reason) => {
+			abort: async (_reason) => {
 				this.closed = true;
-				this.buffer = [];
-				// Clean up resources
+				this.queue = [];
 			},
 		});
 		this.options = options;
 		this.stream = stream;
 	}
 
-	[Symbol.asyncDispose]() {
-		return this.abort(new S2Error({ message: "Abort" }));
+	async [Symbol.asyncDispose]() {
+		await this.close();
 	}
 
+	/**
+	 * Create a batcher that batches individual records and submits them to this session.
+	 */
+	makeBatcher(args?: BatcherArgs): Batcher {
+		return new Batcher(this, args);
+	}
+
+	/**
+	 * Get a stream of acknowledgements for appends.
+	 */
 	acks(): AcksStream {
 		if (!this._acksStream) {
 			this._acksStream = new AcksStream((controller) => {
@@ -404,27 +594,43 @@ class AppendSession
 		return this._acksStream;
 	}
 
-	async append(args: AppendArgs): Promise<void> {
+	/**
+	 * Submit an append request to the session.
+	 * The request will be queued and sent when no other request is in-flight.
+	 */
+	submit(
+		records: AppendArgs["records"],
+		args?: Omit<AppendArgs, "records">,
+	): void {
 		if (this.closed) {
 			throw new S2Error({ message: "AppendSession is closed" });
 		}
 
-		// Add to buffer
-		this.buffer.push(args);
+		this.queue.push({ records, ...args });
 
-		// Process buffer if nothing is in flight
-		if (!this.inFlight) {
-			await this.processBuffer();
+		// Start processing if not already running
+		if (!this.processingPromise) {
+			this.processingPromise = this.processLoop();
 		}
 	}
 
-	private async processBuffer(): Promise<void> {
-		while (this.buffer.length > 0 && !this.closed) {
+	/**
+	 * Main processing loop that sends queued requests one at a time.
+	 */
+	private async processLoop(): Promise<void> {
+		while (!this.closed && this.queue.length > 0) {
 			this.inFlight = true;
-			const args = this.buffer.shift()!;
+			const args = this.queue.shift()!;
 
 			try {
-				const ack = await this.stream.append(args, this.options);
+				const ack = await this.stream.append(
+					args.records,
+					{
+						fencing_token: args.fencing_token,
+						match_seq_num: args.match_seq_num,
+					},
+					this.options,
+				);
 				this._lastSeenPosition = ack;
 
 				// Emit ack to the acks stream if it exists
@@ -433,17 +639,25 @@ class AppendSession
 				}
 			} catch (error) {
 				this.inFlight = false;
+				this.processingPromise = null;
 				// Re-throw the error
 				throw error;
 			}
 
 			this.inFlight = false;
 		}
+
+		this.processingPromise = null;
 	}
 
 	private async waitForDrain(): Promise<void> {
-		// Wait until buffer is empty and nothing is in flight
-		while (this.buffer.length > 0 || this.inFlight) {
+		// Wait for processing to complete
+		if (this.processingPromise) {
+			await this.processingPromise;
+		}
+
+		// Wait until queue is empty and nothing is in flight
+		while (this.queue.length > 0 || this.inFlight) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
 

@@ -1,4 +1,4 @@
-import { S2 } from "../src";
+import { AppendRecord, S2 } from "../src";
 
 const s2 = new S2({
   accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -32,16 +32,18 @@ if (streams.streams[0]) {
   const bytesRead = await stream.read({ as: "bytes", count: 5, seq_num: 0 });
   console.log("read bytes", bytesRead.records?.[0]?.body, bytesRead.records?.[0]?.headers);
 
-  const append = await stream.append({
-    records: [{
-      body: "Hello, world!",
-      headers: [[
-        "foo",
-        "bar",
-      ]]
-    }, {
-      body: new Uint8Array([1, 2, 3]),
-      headers: [[
+  const append = await stream.append([
+    
+    
+    AppendRecord.make("Hello, world!", {
+      "foo": "bar",
+    }),
+    
+    AppendRecord.make(new Uint8Array([1, 2, 3]), {
+      "foo": "bar",
+    }),
+    
+    AppendRecord.make(new Uint8Array([1, 2, 3]),  [[
         new TextEncoder().encode("foo"),
         new TextEncoder().encode("bar"),
       ], [
@@ -50,9 +52,12 @@ if (streams.streams[0]) {
       ], [
         "qux",
         new TextEncoder().encode("quux"),
-      ]]
-    }],
-  });
+      ]]),
+    
+    AppendRecord.fence("my-fence"),
+    AppendRecord.trim(0),
+    AppendRecord.command("foo"),
+  ]);
   console.log("append", append);
   const readSession = await stream.readSession({
     clamp: true,
