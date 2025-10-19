@@ -392,6 +392,10 @@ class Batcher
 {
 	private session: AppendSession;
 	private currentBatch: AppendRecord[] = [];
+	private currentBatchResolvers: Array<{
+		resolve: (ack: AppendAck) => void;
+		reject: (error: any) => void;
+	}> = [];
 	private lingerTimer: ReturnType<typeof setTimeout> | null = null;
 	private closed = false;
 	private readonly maxBatchSize: number;
@@ -415,9 +419,19 @@ class Batcher
 				this.flush();
 				this.cleanup();
 			},
-			abort: (_reason) => {
+			abort: (reason) => {
 				this.closed = true;
+
+				// Reject all pending promises in the current batch
+				const error = new S2Error({
+					message: `Batcher was aborted: ${reason}`,
+				});
+				for (const resolver of this.currentBatchResolvers) {
+					resolver.reject(error);
+				}
+
 				this.currentBatch = [];
+				this.currentBatchResolvers = [];
 				this.cleanup();
 			},
 		});
@@ -435,32 +449,43 @@ class Batcher
 
 	/**
 	 * Submit one or more records to be batched.
+	 * Returns a promise that resolves when the batch containing these records is acknowledged.
 	 */
-	submit(records: AppendRecord | AppendRecord[]): void {
+	submit(records: AppendRecord | AppendRecord[]): Promise<AppendAck> {
 		if (this.closed) {
-			throw new S2Error({ message: "Batcher is closed" });
+			return Promise.reject(new S2Error({ message: "Batcher is closed" }));
 		}
 
-		let recordsArray = Array.isArray(records) ? records : [records];
+		return new Promise((resolve, reject) => {
+			let recordsArray = Array.isArray(records) ? records : [records];
 
-		while (recordsArray.length > 0) {
-			// Start linger timer on first record
-			if (this.currentBatch.length === 0 && this.lingerDuration > 0) {
-				this.startLingerTimer();
+			// All records in this submit call will belong to potentially multiple batches
+			// We only resolve when the LAST batch containing any of these records is acked
+			let lastBatchPromise: Promise<AppendAck> | null = null;
+
+			while (recordsArray.length > 0) {
+				// Start linger timer on first record
+				if (this.currentBatch.length === 0 && this.lingerDuration > 0) {
+					this.startLingerTimer();
+				}
+
+				// Calculate how many records we can add to the current batch
+				const availableSpace = this.maxBatchSize - this.currentBatch.length;
+				const toAdd = recordsArray.slice(0, availableSpace);
+
+				this.currentBatch.push(...toAdd);
+
+				// Store the resolver for these records
+				this.currentBatchResolvers.push({ resolve, reject });
+
+				recordsArray = recordsArray.slice(availableSpace);
+
+				// Flush if we've hit the batch size limit
+				if (this.currentBatch.length >= this.maxBatchSize) {
+					this.flush();
+				}
 			}
-
-			// Calculate how many records we can add to the current batch
-			const availableSpace = this.maxBatchSize - this.currentBatch.length;
-			const toAdd = recordsArray.slice(0, availableSpace);
-
-			this.currentBatch.push(...toAdd);
-			recordsArray = recordsArray.slice(availableSpace);
-
-			// Flush if we've hit the batch size limit
-			if (this.currentBatch.length >= this.maxBatchSize) {
-				this.flush();
-			}
-		}
+		});
 	}
 
 	/**
@@ -484,13 +509,30 @@ class Batcher
 			this.next_match_seq_num += this.currentBatch.length;
 		}
 
+		// Capture resolvers for this batch
+		const batchResolvers = this.currentBatchResolvers;
+		this.currentBatchResolvers = [];
 		this.currentBatch = [];
 
-		// Submit to session
-		this.session.submit(args.records, {
+		// Submit to session and handle promise
+		const promise = this.session.submit(args.records, {
 			fencing_token: args.fencing_token,
 			match_seq_num: args.match_seq_num,
 		});
+
+		// Resolve/reject all resolvers for this batch when the ack comes back
+		promise.then(
+			(ack) => {
+				for (const resolver of batchResolvers) {
+					resolver.resolve(ack);
+				}
+			},
+			(error) => {
+				for (const resolver of batchResolvers) {
+					resolver.reject(error);
+				}
+			},
+		);
 	}
 
 	private startLingerTimer(): void {
@@ -526,6 +568,10 @@ class AppendSession
 {
 	private _lastSeenPosition: AppendAck | undefined = undefined;
 	private queue: AppendArgs[] = [];
+	private pendingResolvers: Array<{
+		resolve: (ack: AppendAck) => void;
+		reject: (error: any) => void;
+	}> = [];
 	private inFlight = false;
 	private readonly options?: S2RequestOptions;
 	private readonly stream: S2Stream;
@@ -557,9 +603,18 @@ class AppendSession
 				this.closed = true;
 				await this.waitForDrain();
 			},
-			abort: async (_reason) => {
+			abort: async (reason) => {
 				this.closed = true;
 				this.queue = [];
+
+				// Reject all pending promises
+				const error = new S2Error({
+					message: `AppendSession was aborted: ${reason}`,
+				});
+				for (const resolver of this.pendingResolvers) {
+					resolver.reject(error);
+				}
+				this.pendingResolvers = [];
 			},
 		});
 		this.options = options;
@@ -592,24 +647,30 @@ class AppendSession
 	/**
 	 * Submit an append request to the session.
 	 * The request will be queued and sent when no other request is in-flight.
+	 * Returns a promise that resolves when the append is acknowledged or rejects on error.
 	 */
 	submit(
 		records: AppendRecord | AppendRecord[],
 		args?: Omit<AppendArgs, "records">,
-	): void {
+	): Promise<AppendAck> {
 		if (this.closed) {
-			throw new S2Error({ message: "AppendSession is closed" });
+			return Promise.reject(
+				new S2Error({ message: "AppendSession is closed" }),
+			);
 		}
 
-		this.queue.push({
-			records: Array.isArray(records) ? records : [records],
-			...args,
+		return new Promise((resolve, reject) => {
+			this.queue.push({
+				records: Array.isArray(records) ? records : [records],
+				...args,
+			});
+			this.pendingResolvers.push({ resolve, reject });
+
+			// Start processing if not already running
+			if (!this.processingPromise) {
+				this.processingPromise = this.processLoop();
+			}
 		});
-
-		// Start processing if not already running
-		if (!this.processingPromise) {
-			this.processingPromise = this.processLoop();
-		}
 	}
 
 	/**
@@ -619,6 +680,7 @@ class AppendSession
 		while (!this.closed && this.queue.length > 0) {
 			this.inFlight = true;
 			const args = this.queue.shift()!;
+			const resolver = this.pendingResolvers.shift()!;
 
 			try {
 				const ack = await this.stream.append(
@@ -635,9 +697,25 @@ class AppendSession
 				if (this.acksController) {
 					this.acksController.enqueue(ack);
 				}
+
+				// Resolve the promise for this request
+				resolver.resolve(ack);
 			} catch (error) {
 				this.inFlight = false;
 				this.processingPromise = null;
+
+				// Reject the promise for this request
+				resolver.reject(error);
+
+				// Reject all remaining pending promises
+				for (const pendingResolver of this.pendingResolvers) {
+					pendingResolver.reject(error);
+				}
+				this.pendingResolvers = [];
+
+				// Clear the queue
+				this.queue = [];
+
 				// Re-throw the error
 				throw error;
 			}

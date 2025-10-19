@@ -23,18 +23,29 @@ if (streams.streams[0]) {
 
 	// Submit individual records to the batcher
 	// These will be batched and sent automatically
-	batcher.submit(AppendRecord.make("record 1"));
-	batcher.submit(AppendRecord.make("record 2"));
-	batcher.submit([
+	// Now returns promises that resolve when acks are received
+	const promise1 = batcher.submit(AppendRecord.make("record 1"));
+	const promise2 = batcher.submit(AppendRecord.make("record 2"));
+	const promise3 = batcher.submit([
 		AppendRecord.make("record 3"),
 		AppendRecord.make("record 4"),
 	]);
 
 	// You can also submit directly to the session (bypasses batching)
-	session.submit(AppendRecord.make("urgent record"));
+	const urgentPromise = session.submit(AppendRecord.make("urgent record"));
 
 	// The batcher will continue batching
-	batcher.submit(AppendRecord.make("record 5"));
+	const promise4 = batcher.submit(AppendRecord.make("record 5"));
+
+	// Wait for all acks to come back
+	const allAcks = await Promise.all([
+		promise1,
+		promise2,
+		promise3,
+		urgentPromise,
+		promise4,
+	]);
+	console.log("All records acknowledged:", allAcks);
 
 	// Flush and close the batcher
 	batcher.flush();
@@ -54,7 +65,20 @@ if (streams.streams[0]) {
 		}
 	})();
 
-	session2.submit([{ body: "test" }]);
+	const ack = await session2.submit([{ body: "test" }]);
+	console.log("Single record ack:", ack);
 
 	await session2.close();
+
+	// Example: Error handling with promises
+	const session3 = await stream.appendSession();
+	try {
+		const errorPromise = session3.submit([{ body: "will fail" }]);
+		// If there's an error (e.g., network issue, validation error),
+		// the promise will reject
+		await errorPromise;
+	} catch (error) {
+		console.error("Append failed:", error);
+	}
+	await session3.close();
 }
