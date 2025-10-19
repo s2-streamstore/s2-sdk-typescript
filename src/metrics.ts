@@ -17,6 +17,14 @@ export class S2Metrics {
 		this.client = client;
 	}
 
+	/**
+	 * Account-level metrics.
+	 *
+	 * @param args.set Metric set to return
+	 * @param args.start Optional start timestamp (Unix seconds)
+	 * @param args.end Optional end timestamp (Unix seconds)
+	 * @param args.interval Optional aggregation interval for timeseries sets
+	 */
 	public async account(
 		args: DataToObject<AccountMetricsData>,
 		options?: S2RequestOptions,
@@ -38,6 +46,15 @@ export class S2Metrics {
 		return response.data;
 	}
 
+	/**
+	 * Basin-level metrics.
+	 *
+	 * @param args.basin Basin name
+	 * @param args.set Metric set to return
+	 * @param args.start Optional start timestamp (Unix seconds)
+	 * @param args.end Optional end timestamp (Unix seconds)
+	 * @param args.interval Optional aggregation interval for timeseries sets
+	 */
 	public async basin(
 		args: DataToObject<BasinMetricsData>,
 		options?: S2RequestOptions,
@@ -60,6 +77,16 @@ export class S2Metrics {
 		return response.data;
 	}
 
+	/**
+	 * Stream-level metrics.
+	 *
+	 * @param args.basin Basin name
+	 * @param args.stream Stream name
+	 * @param args.set Metric set to return
+	 * @param args.start Optional start timestamp (Unix seconds)
+	 * @param args.end Optional end timestamp (Unix seconds)
+	 * @param args.interval Optional aggregation interval for timeseries sets
+	 */
 	public async stream(
 		args: DataToObject<StreamMetricsData>,
 		options?: S2RequestOptions,

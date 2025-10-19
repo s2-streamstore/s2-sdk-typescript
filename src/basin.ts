@@ -11,6 +11,13 @@ export class S2Basin {
 	public readonly name: string;
 	public readonly streams: S2Streams;
 
+	/**
+	 * Create a basin-scoped client that talks to `https://{basin}.b.aws.s2.dev/v1`.
+	 *
+	 * Use this to work with streams inside a single basin.
+	 * @param name Basin name
+	 * @param accessToken Redacted access token from the parent `S2` client
+	 */
 	constructor(name: string, accessToken: Redacted.Redacted) {
 		this.name = name;
 		this.accessToken = accessToken;
@@ -23,6 +30,10 @@ export class S2Basin {
 		this.streams = new S2Streams(this.client);
 	}
 
+	/**
+	 * Create a stream-scoped helper bound to `this` basin.
+	 * @param name Stream name
+	 */
 	public stream(name: string) {
 		return new S2Stream(name, this.client);
 	}

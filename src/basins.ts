@@ -20,6 +20,13 @@ export class S2Basins {
 		this.client = client;
 	}
 
+	/**
+	 * List basins.
+	 *
+	 * @param options.prefix Return basins whose names start with the given prefix
+	 * @param options.start_after Name to start after (for pagination)
+	 * @param options.limit Max results (up to 1000)
+	 */
 	public async list(options?: S2RequestOptions) {
 		const response = await listBasins({
 			client: this.client,
@@ -37,6 +44,13 @@ export class S2Basins {
 		return response.data;
 	}
 
+	/**
+	 * Create a basin.
+	 *
+	 * @param args.basin Globally unique basin name (8-48 chars, lowercase letters, numbers, hyphens; cannot begin or end with a hyphen)
+	 * @param args.config Optional basin configuration (e.g. default stream config)
+	 * @param args.scope Basin scope
+	 */
 	public async create(
 		args: DataToObject<CreateBasinData>,
 		options?: S2RequestOptions,
@@ -58,6 +72,11 @@ export class S2Basins {
 		return response.data;
 	}
 
+	/**
+	 * Get basin configuration.
+	 *
+	 * @param args.basin Basin name
+	 */
 	public async getConfig(
 		args: DataToObject<GetBasinConfigData>,
 		options?: S2RequestOptions,
@@ -79,6 +98,11 @@ export class S2Basins {
 		return response.data;
 	}
 
+	/**
+	 * Delete a basin.
+	 *
+	 * @param args.basin Basin name
+	 */
 	public async delete(
 		args: DataToObject<DeleteBasinData>,
 		options?: S2RequestOptions,
@@ -100,6 +124,12 @@ export class S2Basins {
 		return response.data;
 	}
 
+	/**
+	 * Reconfigure a basin.
+	 *
+	 * @param args.basin Basin name
+	 * @param args.body Configuration fields to change (e.g. default stream config)
+	 */
 	public async reconfigure(
 		args: DataToObject<ReconfigureBasinData>,
 		options?: S2RequestOptions,

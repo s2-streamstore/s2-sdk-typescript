@@ -1,3 +1,10 @@
+/**
+ * Rich error type used by the SDK to surface HTTP and protocol errors.
+ *
+ * - `code` is the service error code when available.
+ * - `status` is the HTTP status code.
+ * - `data` may include structured error details (e.g. for conditional failures).
+ */
 export class S2Error extends Error {
 	public readonly code?: string;
 	public readonly status?: number;
@@ -9,9 +16,11 @@ export class S2Error extends Error {
 		status,
 		data,
 	}: {
+		/** Human-readable error message. */
 		message: string;
 		code?: string;
 		status?: number;
+		/** Additional error details when available. */
 		data?: Record<string, unknown>;
 	}) {
 		// Include full data in the error message for better visibility

@@ -4,6 +4,15 @@ type Headers =
 	| Record<string, string>
 	| Array<[string | Uint8Array, string | Uint8Array]>;
 
+/**
+ * Helpers to construct appendable records.
+ *
+ * These helpers mirror the OpenAPI record schema and add convenience builders for S2 command records:
+ * - `make` creates a normal record
+ * - `command` creates a command record with an empty-name header set to the command name
+ * - `fence` is a command record enforcing a fencing token
+ * - `trim` is a command record that encodes a sequence number for trimming
+ */
 export const AppendRecord = {
 	make: (
 		body?: string | Uint8Array,
@@ -17,6 +26,7 @@ export const AppendRecord = {
 		};
 	},
 	command: (
+		/** Command name (e.g. "fence" or "trim"). */
 		command: string,
 		body?: string | Uint8Array,
 		additionalHeaders?: Headers,

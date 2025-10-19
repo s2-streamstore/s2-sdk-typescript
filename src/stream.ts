@@ -25,6 +25,11 @@ export class S2Stream {
 		this.client = client;
 	}
 
+	/**
+	 * Check the tail of the stream.
+	 *
+	 * Returns the next sequence number and timestamp to be assigned (`tail`).
+	 */
 	public async checkTail(options?: S2RequestOptions) {
 		const response = await checkTail({
 			client: this.client,
@@ -45,6 +50,14 @@ export class S2Stream {
 		return response.data;
 	}
 
+	/**
+	 * Read records from the stream.
+	 *
+	 * - When `as: "bytes"` is provided, bodies and headers are decoded from base64 to `Uint8Array`.
+	 * - Supports starting position by `seq_num`, `timestamp`, or `tail_offset` and can clamp to the tail.
+	 * - Non-streaming reads are bounded by `count` and `bytes` (defaults 1000 and 1 MiB).
+	 * - Use `readSession` for streaming reads
+	 */
 	public async read<Format extends "string" | "bytes" = "string">(
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
@@ -100,6 +113,13 @@ export class S2Stream {
 			return res as any; // not sure why this is necessary
 		}
 	}
+	/**
+	 * Append one or more records to the stream.
+	 *
+	 * - Automatically base64-encodes when any body or header is a `Uint8Array`.
+	 * - Supports conditional appends via `fencing_token` and `match_seq_num`.
+	 * - Returns the acknowledged range and the stream tail after the append.
+	 */
 	public async append(
 		records: AppendRecord | AppendRecord[],
 		args?: Omit<AppendArgs, "records">,
@@ -186,12 +206,23 @@ export class S2Stream {
 		}
 		return response.data;
 	}
+	/**
+	 * Open a streaming read session
+	 *
+	 * Use the returned session as an async iterable or as a readable stream.
+	 * When `as: "bytes"` is provided, bodies and headers are decoded to `Uint8Array`.
+	 */
 	public async readSession<Format extends "string" | "bytes" = "string">(
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
 		return await ReadSession.create(this.client, this.name, args, options);
 	}
+	/**
+	 * Create an append session that guaranteeds ordering of submissions.
+	 *
+	 * Use this to coordinate high-throughput, sequential appends with backpressure.
+	 */
 	public async appendSession(
 		options?: S2RequestOptions,
 	): Promise<AppendSession> {

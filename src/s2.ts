@@ -7,14 +7,31 @@ import { createClient, createConfig } from "./generated/client";
 import type { Client } from "./generated/client/types.gen";
 import { S2Metrics } from "./metrics";
 
+/**
+ * Top-level S2 SDK client.
+ *
+ * - Authenticates with an access token and exposes account-scoped helpers for basins, streams, access tokens and metrics.
+ */
 export class S2 {
 	private readonly accessToken: Redacted.Redacted;
 	private readonly client: Client;
 
+	/**
+	 * Account-scoped basin management operations.
+	 *
+	 * - List, create, delete and reconfigure basins.
+	 */
 	public readonly basins: S2Basins;
+	/** Manage access tokens for the account (list, issue, revoke). */
 	public readonly accessTokens: S2AccessTokens;
+	/** Account, basin and stream level metrics. */
 	public readonly metrics: S2Metrics;
 
+	/**
+	 * Create a new S2 client.
+	 *
+	 * @param options Access token configuration.
+	 */
 	constructor(options: S2ClientOptions) {
 		this.accessToken = Redacted.make(options.accessToken);
 		this.client = createClient(
@@ -28,6 +45,11 @@ export class S2 {
 		this.metrics = new S2Metrics(this.client);
 	}
 
+	/**
+	 * Create a basin-scoped client bound to a specific basin name.
+	 *
+	 * @param name Basin name.
+	 */
 	public basin(name: string) {
 		return new S2Basin(name, this.accessToken);
 	}
