@@ -449,6 +449,8 @@ class Batcher
 
 	/**
 	 * Submit one or more records to be batched.
+	 * For array submits, the entire array is treated as an atomic unit and will never be split across batches.
+	 * If it doesn't fit in the current batch, the current batch is flushed and the array is queued in the next batch.
 	 * Returns a promise that resolves when the batch containing these records is acknowledged.
 	 */
 	submit(records: AppendRecord | AppendRecord[]): Promise<AppendAck> {
@@ -457,30 +459,41 @@ class Batcher
 		}
 
 		return new Promise((resolve, reject) => {
-			let recordsArray = Array.isArray(records) ? records : [records];
+			const recordsArray = Array.isArray(records) ? records : [records];
+			const isArraySubmit = Array.isArray(records) && records.length > 1;
 
-			// All records in this submit call will belong to potentially multiple batches
-			// We only resolve when the LAST batch containing any of these records is acked
-			let lastBatchPromise: Promise<AppendAck> | null = null;
+			// Start linger timer on first record added to an empty batch
+			if (this.currentBatch.length === 0 && this.lingerDuration > 0) {
+				this.startLingerTimer();
+			}
 
-			while (recordsArray.length > 0) {
-				// Start linger timer on first record
-				if (this.currentBatch.length === 0 && this.lingerDuration > 0) {
-					this.startLingerTimer();
+			if (isArraySubmit) {
+				// Treat the entire array as atomic: if it doesn't fit, flush current batch first
+				if (
+					this.currentBatch.length > 0 &&
+					this.currentBatch.length + recordsArray.length > this.maxBatchSize
+				) {
+					this.flush();
+					// After flush, if linger is enabled, restart the timer for the new batch
+					if (this.lingerDuration > 0) {
+						this.startLingerTimer();
+					}
 				}
 
-				// Calculate how many records we can add to the current batch
-				const availableSpace = this.maxBatchSize - this.currentBatch.length;
-				const toAdd = recordsArray.slice(0, availableSpace);
-
-				this.currentBatch.push(...toAdd);
-
-				// Store the resolver for these records
+				// Add the entire array (even if it exceeds maxBatchSize) as a single batch unit
+				this.currentBatch.push(...recordsArray);
 				this.currentBatchResolvers.push({ resolve, reject });
-
-				recordsArray = recordsArray.slice(availableSpace);
-
-				// Flush if we've hit the batch size limit
+				// Do not auto-flush here; allow linger timer or explicit flush to send the batch
+			} else {
+				// Single record submit — normal behavior
+				if (this.currentBatch.length >= this.maxBatchSize) {
+					this.flush();
+					if (this.lingerDuration > 0) {
+						this.startLingerTimer();
+					}
+				}
+				this.currentBatch.push(recordsArray[0]!);
+				this.currentBatchResolvers.push({ resolve, reject });
 				if (this.currentBatch.length >= this.maxBatchSize) {
 					this.flush();
 				}
@@ -716,8 +729,7 @@ class AppendSession
 				// Clear the queue
 				this.queue = [];
 
-				// Re-throw the error
-				throw error;
+				// Do not rethrow here to avoid unhandled rejection; callers already received rejection
 			}
 
 			this.inFlight = false;
