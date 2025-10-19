@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --project tsconfig.build.json",
     "test": "vitest --run",
     "check": "biome check && tsc --noEmit",
     "check:write": "biome check --write",

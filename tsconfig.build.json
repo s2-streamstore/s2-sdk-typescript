@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "**/*.test.ts",
+    "examples",
+    "openapi-ts.config.ts"
+  ]
+}
