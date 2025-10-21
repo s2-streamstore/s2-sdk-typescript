@@ -9,6 +9,16 @@ export type S2ClientOptions = {
 	 * Typically obtained via your S2 account or created using `s2.accessTokens.issue`.
 	 */
 	accessToken: string;
+	/**
+	 * Base URL for the S2 API.
+	 * Defaults to `https://aws.s2.dev`.
+	 */
+	baseUrl?: string;
+	/**
+	 * Function to make a basin-specific base URL.
+	 * Defaults to `https://{basin}.b.aws.s2.dev`.
+	 */
+	makeBasinBaseUrl?: (basin: string) => string;
 };
 
 /**

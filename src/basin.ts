@@ -18,12 +18,15 @@ export class S2Basin {
 	 * @param name Basin name
 	 * @param accessToken Redacted access token from the parent `S2` client
 	 */
-	constructor(name: string, accessToken: Redacted.Redacted) {
+	constructor(
+		name: string,
+		options: { accessToken: Redacted.Redacted; baseUrl: string },
+	) {
 		this.name = name;
-		this.accessToken = accessToken;
+		this.accessToken = options.accessToken;
 		this.client = createClient(
 			createConfig({
-				baseUrl: `https://${name}.b.aws.s2.dev/v1`,
+				baseUrl: options.baseUrl,
 				auth: () => Redacted.value(this.accessToken),
 			}),
 		);

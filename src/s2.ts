@@ -7,6 +7,10 @@ import { createClient, createConfig } from "./generated/client";
 import type { Client } from "./generated/client/types.gen";
 import { S2Metrics } from "./metrics";
 
+const defaultBaseUrl = "https://aws.s2.dev/v1";
+const defaultMakeBasinBaseUrl = (basin: string) =>
+	`https://${basin}.b.aws.s2.dev/v1`;
+
 /**
  * Top-level S2 SDK client.
  *
@@ -15,6 +19,7 @@ import { S2Metrics } from "./metrics";
 export class S2 {
 	private readonly accessToken: Redacted.Redacted;
 	private readonly client: Client;
+	private readonly makeBasinBaseUrl: (basin: string) => string;
 
 	/**
 	 * Account-scoped basin management operations.
@@ -36,13 +41,14 @@ export class S2 {
 		this.accessToken = Redacted.make(options.accessToken);
 		this.client = createClient(
 			createConfig({
-				baseUrl: "https://aws.s2.dev/v1",
+				baseUrl: options.baseUrl ?? defaultBaseUrl,
 				auth: () => Redacted.value(this.accessToken),
 			}),
 		);
 		this.basins = new S2Basins(this.client);
 		this.accessTokens = new S2AccessTokens(this.client);
 		this.metrics = new S2Metrics(this.client);
+		this.makeBasinBaseUrl = options.makeBasinBaseUrl ?? defaultMakeBasinBaseUrl;
 	}
 
 	/**
@@ -51,6 +57,9 @@ export class S2 {
 	 * @param name Basin name.
 	 */
 	public basin(name: string) {
-		return new S2Basin(name, this.accessToken);
+		return new S2Basin(name, {
+			accessToken: this.accessToken,
+			baseUrl: this.makeBasinBaseUrl(name),
+		});
 	}
 }
