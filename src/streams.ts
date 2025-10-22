@@ -14,6 +14,14 @@ import {
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
 
+export interface ListStreamsOptions extends DataToObject<ListStreamsData> {}
+export interface CreateStreamOptions extends DataToObject<CreateStreamData> {}
+export interface GetStreamConfigOptions
+	extends DataToObject<GetStreamConfigData> {}
+export interface DeleteStreamOptions extends DataToObject<DeleteStreamData> {}
+export interface ReconfigureStreamOptions
+	extends DataToObject<ReconfigureStreamData> {}
+
 export class S2Streams {
 	private readonly client: Client;
 	constructor(client: Client) {
@@ -27,10 +35,7 @@ export class S2Streams {
 	 * @param args.start_after Name to start after (for pagination)
 	 * @param args.limit Max results (up to 1000)
 	 */
-	public async list(
-		args?: DataToObject<ListStreamsData>,
-		options?: S2RequestOptions,
-	) {
+	public async list(args?: ListStreamsOptions, options?: S2RequestOptions) {
 		const response = await listStreams({
 			client: this.client,
 			query: args,
@@ -54,10 +59,7 @@ export class S2Streams {
 	 * @param args.stream Stream name (1-512 bytes, unique within the basin)
 	 * @param args.config Stream configuration (retention, storage class, timestamping, delete-on-empty)
 	 */
-	public async create(
-		args: DataToObject<CreateStreamData>,
-		options?: S2RequestOptions,
-	) {
+	public async create(args: CreateStreamOptions, options?: S2RequestOptions) {
 		const response = await createStream({
 			client: this.client,
 			body: args,
@@ -81,7 +83,7 @@ export class S2Streams {
 	 * @param args.stream Stream name
 	 */
 	public async getConfig(
-		args: DataToObject<GetStreamConfigData>,
+		args: GetStreamConfigOptions,
 		options?: S2RequestOptions,
 	) {
 		const response = await getStreamConfig({
@@ -106,10 +108,7 @@ export class S2Streams {
 	 *
 	 * @param args.stream Stream name
 	 */
-	public async delete(
-		args: DataToObject<DeleteStreamData>,
-		options?: S2RequestOptions,
-	) {
+	public async delete(args: DeleteStreamOptions, options?: S2RequestOptions) {
 		const response = await deleteStream({
 			client: this.client,
 			path: args,
@@ -134,7 +133,7 @@ export class S2Streams {
 	 * @param args.body Configuration fields to change
 	 */
 	public async reconfigure(
-		args: DataToObject<ReconfigureStreamData>,
+		args: ReconfigureStreamOptions,
 		options?: S2RequestOptions,
 	) {
 		const response = await reconfigureStream({

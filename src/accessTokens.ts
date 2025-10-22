@@ -10,6 +10,13 @@ import {
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
 
+export interface ListAccessTokensOptions
+	extends DataToObject<ListAccessTokensData> {}
+export interface IssueAccessTokenOptions
+	extends DataToObject<IssueAccessTokenData> {}
+export interface RevokeAccessTokenOptions
+	extends DataToObject<RevokeAccessTokenData> {}
+
 export class S2AccessTokens {
 	readonly client: Client;
 
@@ -25,7 +32,7 @@ export class S2AccessTokens {
 	 * @param args.limit Max results (up to 1000)
 	 */
 	public async list(
-		args?: DataToObject<ListAccessTokensData>,
+		args?: ListAccessTokensOptions,
 		options?: S2RequestOptions,
 	) {
 		const response = await listAccessTokens({
@@ -54,7 +61,7 @@ export class S2AccessTokens {
 	 * @param args.expires_at Expiration in ISO 8601; defaults to requestor's token expiry
 	 */
 	public async issue(
-		args: DataToObject<IssueAccessTokenData>,
+		args: IssueAccessTokenOptions,
 		options?: S2RequestOptions,
 	) {
 		const response = await issueAccessToken({
@@ -80,7 +87,7 @@ export class S2AccessTokens {
 	 * @param args.id Token ID to revoke
 	 */
 	public async revoke(
-		args: DataToObject<RevokeAccessTokenData>,
+		args: RevokeAccessTokenOptions,
 		options?: S2RequestOptions,
 	) {
 		const response = await revokeAccessToken({

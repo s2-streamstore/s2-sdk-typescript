@@ -10,6 +10,11 @@ import {
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
 
+export interface AccountMetricsOptions
+	extends DataToObject<AccountMetricsData> {}
+export interface BasinMetricsOptions extends DataToObject<BasinMetricsData> {}
+export interface StreamMetricsOptions extends DataToObject<StreamMetricsData> {}
+
 export class S2Metrics {
 	readonly client: Client;
 
@@ -26,7 +31,7 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async account(
-		args: DataToObject<AccountMetricsData>,
+		args: AccountMetricsOptions,
 		options?: S2RequestOptions,
 	) {
 		const response = await accountMetrics({
@@ -55,10 +60,7 @@ export class S2Metrics {
 	 * @param args.end Optional end timestamp (Unix seconds)
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
-	public async basin(
-		args: DataToObject<BasinMetricsData>,
-		options?: S2RequestOptions,
-	) {
+	public async basin(args: BasinMetricsOptions, options?: S2RequestOptions) {
 		const response = await basinMetrics({
 			client: this.client,
 			path: args,
@@ -87,10 +89,7 @@ export class S2Metrics {
 	 * @param args.end Optional end timestamp (Unix seconds)
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
-	public async stream(
-		args: DataToObject<StreamMetricsData>,
-		options?: S2RequestOptions,
-	) {
+	public async stream(args: StreamMetricsOptions, options?: S2RequestOptions) {
 		const response = await streamMetrics({
 			client: this.client,
 			path: args,
