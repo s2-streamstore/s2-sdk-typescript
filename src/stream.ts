@@ -231,25 +231,23 @@ export class S2Stream {
 	}
 }
 
-type Header<Format extends "string" | "bytes" = "string"> =
+export type Header<Format extends "string" | "bytes" = "string"> =
 	Format extends "string" ? [string, string] : [Uint8Array, Uint8Array];
 
-type ReadBatch<Format extends "string" | "bytes" = "string"> = Omit<
+export type ReadBatch<Format extends "string" | "bytes" = "string"> = Omit<
 	GeneratedReadBatch,
 	"records"
 > & {
 	records?: Array<SequencedRecord<Format>>;
 };
 
-type SequencedRecord<Format extends "string" | "bytes" = "string"> = Omit<
-	GeneratedSequencedRecord,
-	"body" | "headers"
-> & {
-	body?: Format extends "string" ? string : Uint8Array;
-	headers?: Array<Header<Format>>;
-};
+export type SequencedRecord<Format extends "string" | "bytes" = "string"> =
+	Omit<GeneratedSequencedRecord, "body" | "headers"> & {
+		body?: Format extends "string" ? string : Uint8Array;
+		headers?: Array<Header<Format>>;
+	};
 
-type ReadArgs<Format extends "string" | "bytes" = "string"> =
+export type ReadArgs<Format extends "string" | "bytes" = "string"> =
 	ReadData["query"] & {
 		as?: Format;
 	};
@@ -261,7 +259,7 @@ export type AppendRecord = Omit<GeneratedAppendRecord, "body" | "headers"> & {
 		| Record<string, string | Uint8Array>;
 };
 
-type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
+export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 	records: Array<AppendRecord>;
 };
 

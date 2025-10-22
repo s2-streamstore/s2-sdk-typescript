@@ -4,6 +4,8 @@ type Headers =
 	| Record<string, string>
 	| Array<[string | Uint8Array, string | Uint8Array]>;
 
+export type AppendRecord = AppendRecordType;
+
 /**
  * Helpers to construct appendable records.
  *
