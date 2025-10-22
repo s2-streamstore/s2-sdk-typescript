@@ -1,3 +1,4 @@
+import { Base64 } from "js-base64";
 import type { S2RequestOptions } from "./common";
 import { S2Error } from "./error";
 import {
@@ -97,20 +98,20 @@ export class S2Stream {
 				...response.data,
 				records: response.data.records?.map((record) => ({
 					...record,
-					body: record.body ? Uint8Array.fromBase64(record.body) : undefined,
+					body: record.body ? Base64.toUint8Array(record.body) : undefined,
 					headers: record.headers?.map(
 						(header) =>
-							header.map((h) => Uint8Array.fromBase64(h)) as [
+							header.map((h) => Base64.toUint8Array(h)) as [
 								Uint8Array,
 								Uint8Array,
 							],
 					),
 				})),
 			};
-			return res as any; // not sure why this is necessary
+			return res as ReadBatch<Format>;
 		} else {
 			const res: ReadBatch<"string"> = response.data;
-			return res as any; // not sure why this is necessary
+			return res as ReadBatch<Format>;
 		}
 	}
 	/**
@@ -158,17 +159,17 @@ export class S2Stream {
 			...record,
 			body:
 				record.body instanceof Uint8Array
-					? record.body.toBase64()
+					? Base64.fromUint8Array(record.body)
 					: hasBytes && record.body
-						? new TextEncoder().encode(record.body).toBase64()
+						? Base64.fromUint8Array(new TextEncoder().encode(record.body))
 						: record.body,
 			headers: record.headers?.map(
 				(header) =>
 					header.map((h) =>
 						h instanceof Uint8Array
-							? h.toBase64()
+							? Base64.fromUint8Array(h)
 							: hasBytes
-								? new TextEncoder().encode(h).toBase64()
+								? Base64.fromUint8Array(new TextEncoder().encode(h))
 								: h,
 					) as [string, string],
 			),
@@ -323,12 +324,12 @@ class ReadSession<
 				if (format === "bytes") {
 					for (const record of batch.records ?? []) {
 						if (record.body && typeof record.body === "string") {
-							(record as any).body = Uint8Array.fromBase64(record.body);
+							(record as any).body = Base64.toUint8Array(record.body);
 						}
 						if (record.headers) {
 							(record as any).headers = record.headers.map((header) =>
 								header.map((h) =>
-									typeof h === "string" ? Uint8Array.fromBase64(h) : h,
+									typeof h === "string" ? Base64.toUint8Array(h) : h,
 								),
 							);
 						}

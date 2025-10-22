@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "effect": "^3.18.4",
+    "js-base64": "^3.7.8",
     "openapi-fetch": "^0.14.1"
   }
 }
