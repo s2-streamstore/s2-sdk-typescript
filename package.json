@@ -13,12 +13,16 @@
     "version": "changeset version",
     "release": "bun run build && changeset publish"
   },
-  "module": "./dist/src/index.js",
-  "types": "./dist/src/index.d.ts",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "default": "./dist/src/index.js",
-      "types": "./dist/src/index.d.ts"
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./generated/types.gen": {
+      "default": "./dist/generated/types.gen.js",
+      "types": "./dist/generated/types.gen.d.ts"
     }
   },
   "devDependencies": {

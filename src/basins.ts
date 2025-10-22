@@ -7,12 +7,14 @@ import {
 	deleteBasin,
 	type GetBasinConfigData,
 	getBasinConfig,
+	type ListBasinsData,
 	listBasins,
 	type ReconfigureBasinData,
 	reconfigureBasin,
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
 
+export interface ListBasinsOptions extends DataToObject<ListBasinsData> {}
 export interface CreateBasinOptions extends DataToObject<CreateBasinData> {}
 export interface GetBasinConfigOptions
 	extends DataToObject<GetBasinConfigData> {}
@@ -30,13 +32,14 @@ export class S2Basins {
 	/**
 	 * List basins.
 	 *
-	 * @param options.prefix Return basins whose names start with the given prefix
-	 * @param options.start_after Name to start after (for pagination)
-	 * @param options.limit Max results (up to 1000)
+	 * @param args.prefix Return basins whose names start with the given prefix
+	 * @param args.start_after Name to start after (for pagination)
+	 * @param args.limit Max results (up to 1000)
 	 */
-	public async list(options?: S2RequestOptions) {
+	public async list(args?: ListBasinsOptions, options?: S2RequestOptions) {
 		const response = await listBasins({
 			client: this.client,
+			query: args,
 			...options,
 		});
 

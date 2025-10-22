@@ -7,6 +7,7 @@ export type {
 	CreateBasinOptions,
 	DeleteBasinOptions,
 	GetBasinConfigOptions,
+	ListBasinsOptions,
 	ReconfigureBasinOptions,
 } from "./basins";
 export { S2Error } from "./error";
