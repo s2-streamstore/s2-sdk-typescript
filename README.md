@@ -20,8 +20,7 @@
   </p>
 </div>
 
-The TypeScript SDK provides ergonomic wrappers and utilities to interact with the
-[S2 API](https://s2.dev/docs/rest/protocol).
+This TypeScript SDK is an ergonomic way to consume the [S2 REST API](https://s2.dev/docs/rest/protocol).
 
 > **Note:** This is a rewrite of the TypeScript SDK. The older version (0.15.3) is still available and can be installed:
 > ```bash
