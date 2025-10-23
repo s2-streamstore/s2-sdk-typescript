@@ -36,6 +36,10 @@ export type S2RequestOptions = {
  * single object. This lets public methods accept one coherent argument object
  * instead of three separate bags.
  */
-export type DataToObject<T> = (T extends { body: infer B } ? B : {}) &
-	(T extends { path: infer P } ? P : {}) &
-	(T extends { query: infer Q } ? Q : {});
+export type DataToObject<T> = (T extends { body?: infer B }
+	? B extends undefined | never
+		? {}
+		: B
+	: {}) &
+	(T extends { path?: infer P } ? (P extends undefined | never ? {} : P) : {}) &
+	(T extends { query?: infer Q } ? (Q extends undefined | never ? {} : Q) : {});

@@ -31,11 +31,11 @@ export class S2Basins {
 	/**
 	 * List basins.
 	 *
-	 * @param options.prefix Return basins whose names start with the given prefix
-	 * @param options.start_after Name to start after (for pagination)
-	 * @param options.limit Max results (up to 1000)
+	 * @param args.prefix Return basins whose names start with the given prefix
+	 * @param args.start_after Name to start after (for pagination)
+	 * @param args.limit Max results (up to 1000)
 	 */
-	public async list(args: ListBasinsArgs, options?: S2RequestOptions) {
+	public async list(args?: ListBasinsArgs, options?: S2RequestOptions) {
 		const response = await listBasins({
 			client: this.client,
 			query: args,
