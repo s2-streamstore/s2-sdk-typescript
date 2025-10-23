@@ -10,11 +10,11 @@ import {
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
 
-export interface ListAccessTokensOptions
+export interface ListAccessTokensArgs
 	extends DataToObject<ListAccessTokensData> {}
-export interface IssueAccessTokenOptions
+export interface IssueAccessTokenArgs
 	extends DataToObject<IssueAccessTokenData> {}
-export interface RevokeAccessTokenOptions
+export interface RevokeAccessTokenArgs
 	extends DataToObject<RevokeAccessTokenData> {}
 
 export class S2AccessTokens {
@@ -31,10 +31,7 @@ export class S2AccessTokens {
 	 * @param args.start_after Filter to IDs lexicographically after this value
 	 * @param args.limit Max results (up to 1000)
 	 */
-	public async list(
-		args?: ListAccessTokensOptions,
-		options?: S2RequestOptions,
-	) {
+	public async list(args?: ListAccessTokensArgs, options?: S2RequestOptions) {
 		const response = await listAccessTokens({
 			client: this.client,
 			query: args,
@@ -60,10 +57,7 @@ export class S2AccessTokens {
 	 * @param args.auto_prefix_streams Namespace stream names by configured prefix scope
 	 * @param args.expires_at Expiration in ISO 8601; defaults to requestor's token expiry
 	 */
-	public async issue(
-		args: IssueAccessTokenOptions,
-		options?: S2RequestOptions,
-	) {
+	public async issue(args: IssueAccessTokenArgs, options?: S2RequestOptions) {
 		const response = await issueAccessToken({
 			client: this.client,
 			body: args,
@@ -86,10 +80,7 @@ export class S2AccessTokens {
 	 *
 	 * @param args.id Token ID to revoke
 	 */
-	public async revoke(
-		args: RevokeAccessTokenOptions,
-		options?: S2RequestOptions,
-	) {
+	public async revoke(args: RevokeAccessTokenArgs, options?: S2RequestOptions) {
 		const response = await revokeAccessToken({
 			client: this.client,
 			path: args,

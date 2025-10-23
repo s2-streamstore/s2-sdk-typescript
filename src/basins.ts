@@ -7,17 +7,18 @@ import {
 	deleteBasin,
 	type GetBasinConfigData,
 	getBasinConfig,
+	type ListBasinsData,
 	listBasins,
 	type ReconfigureBasinData,
 	reconfigureBasin,
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
 
-export interface CreateBasinOptions extends DataToObject<CreateBasinData> {}
-export interface GetBasinConfigOptions
-	extends DataToObject<GetBasinConfigData> {}
-export interface DeleteBasinOptions extends DataToObject<DeleteBasinData> {}
-export interface ReconfigureBasinOptions
+export interface ListBasinsArgs extends DataToObject<ListBasinsData> {}
+export interface CreateBasinArgs extends DataToObject<CreateBasinData> {}
+export interface GetBasinConfigArgs extends DataToObject<GetBasinConfigData> {}
+export interface DeleteBasinArgs extends DataToObject<DeleteBasinData> {}
+export interface ReconfigureBasinArgs
 	extends DataToObject<ReconfigureBasinData> {}
 
 export class S2Basins {
@@ -34,9 +35,10 @@ export class S2Basins {
 	 * @param options.start_after Name to start after (for pagination)
 	 * @param options.limit Max results (up to 1000)
 	 */
-	public async list(options?: S2RequestOptions) {
+	public async list(args: ListBasinsArgs, options?: S2RequestOptions) {
 		const response = await listBasins({
 			client: this.client,
+			query: args,
 			...options,
 		});
 
@@ -58,7 +60,7 @@ export class S2Basins {
 	 * @param args.config Optional basin configuration (e.g. default stream config)
 	 * @param args.scope Basin scope
 	 */
-	public async create(args: CreateBasinOptions, options?: S2RequestOptions) {
+	public async create(args: CreateBasinArgs, options?: S2RequestOptions) {
 		const response = await createBasin({
 			client: this.client,
 			body: args,
@@ -81,10 +83,7 @@ export class S2Basins {
 	 *
 	 * @param args.basin Basin name
 	 */
-	public async getConfig(
-		args: GetBasinConfigOptions,
-		options?: S2RequestOptions,
-	) {
+	public async getConfig(args: GetBasinConfigArgs, options?: S2RequestOptions) {
 		const response = await getBasinConfig({
 			client: this.client,
 			path: args,
@@ -107,7 +106,7 @@ export class S2Basins {
 	 *
 	 * @param args.basin Basin name
 	 */
-	public async delete(args: DeleteBasinOptions, options?: S2RequestOptions) {
+	public async delete(args: DeleteBasinArgs, options?: S2RequestOptions) {
 		const response = await deleteBasin({
 			client: this.client,
 			path: args,
@@ -132,7 +131,7 @@ export class S2Basins {
 	 * @param args.body Configuration fields to change (e.g. default stream config)
 	 */
 	public async reconfigure(
-		args: ReconfigureBasinOptions,
+		args: ReconfigureBasinArgs,
 		options?: S2RequestOptions,
 	) {
 		const response = await reconfigureBasin({

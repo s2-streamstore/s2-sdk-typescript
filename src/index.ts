@@ -1,19 +1,20 @@
 export type {
-	IssueAccessTokenOptions,
-	ListAccessTokensOptions,
-	RevokeAccessTokenOptions,
+	IssueAccessTokenArgs,
+	ListAccessTokensArgs,
+	RevokeAccessTokenArgs,
 } from "./accessTokens";
 export type {
-	CreateBasinOptions,
-	DeleteBasinOptions,
-	GetBasinConfigOptions,
-	ReconfigureBasinOptions,
+	CreateBasinArgs,
+	DeleteBasinArgs,
+	GetBasinConfigArgs,
+	ListBasinsArgs,
+	ReconfigureBasinArgs,
 } from "./basins";
 export { S2Error } from "./error";
 export type {
-	AccountMetricsOptions,
-	BasinMetricsOptions,
-	StreamMetricsOptions,
+	AccountMetricsArgs,
+	BasinMetricsArgs,
+	StreamMetricsArgs,
 } from "./metrics";
 export { S2 } from "./s2";
 export type {
@@ -23,10 +24,10 @@ export type {
 	SequencedRecord,
 } from "./stream";
 export type {
-	CreateStreamOptions,
-	DeleteStreamOptions,
-	GetStreamConfigOptions,
-	ListStreamsOptions,
-	ReconfigureStreamOptions,
+	CreateStreamArgs,
+	DeleteStreamArgs,
+	GetStreamConfigArgs,
+	ListStreamsArgs,
+	ReconfigureStreamArgs,
 } from "./streams";
 export { AppendRecord } from "./utils";
