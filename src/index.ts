@@ -12,27 +12,6 @@ export type {
 } from "./basins";
 export { S2Error } from "./error";
 export type {
-	AccountMetricsArgs,
-	BasinMetricsArgs,
-	StreamMetricsArgs,
-} from "./metrics";
-export { S2 } from "./s2";
-export type {
-	AppendArgs,
-	ReadArgs,
-	ReadBatch,
-	SequencedRecord,
-} from "./stream";
-export type {
-	CreateStreamArgs,
-	DeleteStreamArgs,
-	GetStreamConfigArgs,
-	ListStreamsArgs,
-	ReconfigureStreamArgs,
-} from "./streams";
-export { AppendRecord } from "./utils";
-
-export type {
 	AccessTokenInfo,
 	AccessTokenScope,
 	AccountMetricSet,
@@ -65,3 +44,23 @@ export type {
 	TimestampingConfig,
 	TimestampingMode,
 } from "./generated/types.gen";
+export type {
+	AccountMetricsArgs,
+	BasinMetricsArgs,
+	StreamMetricsArgs,
+} from "./metrics";
+export { S2 } from "./s2";
+export type {
+	AppendArgs,
+	ReadArgs,
+	ReadBatch,
+	SequencedRecord,
+} from "./stream";
+export type {
+	CreateStreamArgs,
+	DeleteStreamArgs,
+	GetStreamConfigArgs,
+	ListStreamsArgs,
+	ReconfigureStreamArgs,
+} from "./streams";
+export { AppendRecord } from "./utils";
