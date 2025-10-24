@@ -1,0 +1,42 @@
+{
+  "name": "@s2-dev/streamstore",
+  "version": "0.16.3",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/s2-streamstore/s2-sdk-typescript"
+  },
+  "homepage": "https://s2.dev",
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "test": "vitest --run",
+    "check": "biome check && tsc --noEmit",
+    "check:write": "biome check --write",
+    "format": "biome format --write",
+    "gen:openapi": "openapi-ts"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "devDependencies": {
+    "@biomejs/biome": "2.2.5",
+    "@changesets/cli": "^2.29.7",
+    "@hey-api/openapi-ts": "^0.86.0",
+    "openapi-typescript": "^7.10.1",
+    "vitest": "^4.0.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
