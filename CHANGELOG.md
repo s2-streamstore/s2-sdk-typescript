@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.3
+
+### Patch Changes
+
+- c3ff5e4: remove all depdencies
+
 ## 0.16.2
 
 ### Patch Changes
