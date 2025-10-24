@@ -1,6 +1,6 @@
 {
   "name": "@s2-dev/streamstore",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "type": "module",
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
@@ -21,6 +21,10 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "devDependencies": {
     "@biomejs/biome": "2.2.5",
     "@changesets/cli": "^2.29.7",
