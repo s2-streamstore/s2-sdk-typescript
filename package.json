@@ -15,9 +15,7 @@
     "check:write": "biome check --write",
     "format": "biome format --write",
     "gen:openapi": "openapi-ts",
-    "changeset": "changeset",
-    "version": "changeset version",
-    "release": "bun run build && changeset publish --access public"
+    "publish": "changeset publish --access public"
   },
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
