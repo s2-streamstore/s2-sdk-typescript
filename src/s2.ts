@@ -1,10 +1,10 @@
-import { Redacted } from "effect";
 import { S2AccessTokens } from "./accessTokens";
 import { S2Basin } from "./basin";
 import { S2Basins } from "./basins";
 import type { S2ClientOptions } from "./common";
 import { createClient, createConfig } from "./generated/client";
 import type { Client } from "./generated/client/types.gen";
+import * as Redacted from "./lib/redacted";
 import { S2Metrics } from "./metrics";
 
 const defaultBaseUrl = "https://aws.s2.dev/v1";

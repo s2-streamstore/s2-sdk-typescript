@@ -1,6 +1,6 @@
-import { Redacted } from "effect";
 import { createClient, createConfig } from "./generated/client";
 import type { Client } from "./generated/client/types.gen";
+import * as Redacted from "./lib/redacted";
 import { S2Stream } from "./stream";
 import { S2Streams } from "./streams";
 
