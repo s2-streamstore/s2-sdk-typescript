@@ -225,8 +225,8 @@ export type DeleteOnEmptyReconfiguration = {
     min_age_secs?: number | null;
 };
 
-export type ErrorResponse = {
-    code?: string | null;
+export type ErrorInfo = {
+    code: string;
     message: string;
 };
 
@@ -362,7 +362,7 @@ export type PingEventData = {
 export type ReadBatch = {
     /**
      * Records that are durably sequenced on the stream, retrieved based on the requested criteria.
-     * This can only be empty in response to a regular (non-SSE) read, if the request cannot be satisfied without violating an explicit limit.
+     * This can only be empty in response to a unary read (i.e. not SSE), if the request cannot be satisfied without violating an explicit bound (`count`, `bytes`, or `until`).
      */
     records: Array<SequencedRecord>;
     tail?: null | StreamPosition;
@@ -557,8 +557,8 @@ export type ListAccessTokensData = {
 };
 
 export type ListAccessTokensErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
 };
 
 export type ListAccessTokensError = ListAccessTokensErrors[keyof ListAccessTokensErrors];
@@ -577,9 +577,9 @@ export type IssueAccessTokenData = {
 };
 
 export type IssueAccessTokenErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type IssueAccessTokenError = IssueAccessTokenErrors[keyof IssueAccessTokenErrors];
@@ -603,8 +603,8 @@ export type RevokeAccessTokenData = {
 };
 
 export type RevokeAccessTokenErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
 };
 
 export type RevokeAccessTokenError = RevokeAccessTokenErrors[keyof RevokeAccessTokenErrors];
@@ -635,8 +635,8 @@ export type ListBasinsData = {
 };
 
 export type ListBasinsErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
 };
 
 export type ListBasinsError = ListBasinsErrors[keyof ListBasinsErrors];
@@ -655,10 +655,9 @@ export type CreateBasinData = {
 };
 
 export type CreateBasinErrors = {
-    400: ErrorResponse;
-    401: ErrorResponse;
-    403: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type CreateBasinError = CreateBasinErrors[keyof CreateBasinErrors];
@@ -683,10 +682,9 @@ export type DeleteBasinData = {
 };
 
 export type DeleteBasinErrors = {
-    400: ErrorResponse;
-    401: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
 };
 
 export type DeleteBasinError = DeleteBasinErrors[keyof DeleteBasinErrors];
@@ -708,9 +706,9 @@ export type GetBasinConfigData = {
 };
 
 export type GetBasinConfigErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
 };
 
 export type GetBasinConfigError = GetBasinConfigErrors[keyof GetBasinConfigErrors];
@@ -734,9 +732,9 @@ export type ReconfigureBasinData = {
 };
 
 export type ReconfigureBasinErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
 };
 
 export type ReconfigureBasinError = ReconfigureBasinErrors[keyof ReconfigureBasinErrors];
@@ -766,7 +764,7 @@ export type CreateOrReconfigureBasinData = {
 };
 
 export type CreateOrReconfigureBasinErrors = {
-    400: ErrorResponse;
+    400: ErrorInfo;
 };
 
 export type CreateOrReconfigureBasinError = CreateOrReconfigureBasinErrors[keyof CreateOrReconfigureBasinErrors];
@@ -804,8 +802,8 @@ export type AccountMetricsData = {
 };
 
 export type AccountMetricsErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
 };
 
 export type AccountMetricsError = AccountMetricsErrors[keyof AccountMetricsErrors];
@@ -846,8 +844,8 @@ export type BasinMetricsData = {
 };
 
 export type BasinMetricsErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
 };
 
 export type BasinMetricsError = BasinMetricsErrors[keyof BasinMetricsErrors];
@@ -892,8 +890,8 @@ export type StreamMetricsData = {
 };
 
 export type StreamMetricsErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
 };
 
 export type StreamMetricsError = StreamMetricsErrors[keyof StreamMetricsErrors];
@@ -926,9 +924,9 @@ export type ListStreamsData = {
 };
 
 export type ListStreamsErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
 };
 
 export type ListStreamsError = ListStreamsErrors[keyof ListStreamsErrors];
@@ -947,10 +945,10 @@ export type CreateStreamData = {
 };
 
 export type CreateStreamErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type CreateStreamError = CreateStreamErrors[keyof CreateStreamErrors];
@@ -974,9 +972,9 @@ export type DeleteStreamData = {
 };
 
 export type DeleteStreamErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
 };
 
 export type DeleteStreamError = DeleteStreamErrors[keyof DeleteStreamErrors];
@@ -998,10 +996,10 @@ export type GetStreamConfigData = {
 };
 
 export type GetStreamConfigErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type GetStreamConfigError = GetStreamConfigErrors[keyof GetStreamConfigErrors];
@@ -1025,10 +1023,10 @@ export type ReconfigureStreamData = {
 };
 
 export type ReconfigureStreamErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type ReconfigureStreamError = ReconfigureStreamErrors[keyof ReconfigureStreamErrors];
@@ -1058,10 +1056,10 @@ export type CreateOrReconfigureStreamData = {
 };
 
 export type CreateOrReconfigureStreamErrors = {
-    400: ErrorResponse;
-    403: ErrorResponse;
-    404: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type CreateOrReconfigureStreamError = CreateOrReconfigureStreamErrors[keyof CreateOrReconfigureStreamErrors];
@@ -1133,12 +1131,11 @@ export type ReadData = {
 };
 
 export type ReadErrors = {
-    400: ErrorResponse;
-    401: ErrorResponse;
-    404: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    409: ErrorInfo;
     416: TailResponse;
-    500: ErrorResponse;
 };
 
 export type ReadError = ReadErrors[keyof ReadErrors];
@@ -1170,12 +1167,11 @@ export type AppendData = {
 };
 
 export type AppendErrors = {
-    400: ErrorResponse;
-    401: ErrorResponse;
-    404: ErrorResponse;
-    409: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    409: ErrorInfo;
     412: AppendConditionFailed;
-    500: ErrorResponse;
 };
 
 export type AppendError = AppendErrors[keyof AppendErrors];
@@ -1199,11 +1195,10 @@ export type CheckTailData = {
 };
 
 export type CheckTailErrors = {
-    400: ErrorResponse;
-    401: ErrorResponse;
-    404: ErrorResponse;
-    409: ErrorResponse;
-    500: ErrorResponse;
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type CheckTailError = CheckTailErrors[keyof CheckTailErrors];
