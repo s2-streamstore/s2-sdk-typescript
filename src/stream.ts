@@ -1,4 +1,3 @@
-import { Base64 } from "js-base64";
 import type { S2RequestOptions } from "./common";
 import { S2Error } from "./error";
 import {
@@ -14,6 +13,7 @@ import {
 	type StreamPosition,
 } from "./generated";
 import type { Client } from "./generated/client/types.gen";
+import { decodeFromBase64, encodeToBase64 } from "./lib/base64";
 import { EventStream } from "./lib/event-stream";
 
 export class S2Stream {
@@ -98,10 +98,10 @@ export class S2Stream {
 				...response.data,
 				records: response.data.records?.map((record) => ({
 					...record,
-					body: record.body ? Base64.toUint8Array(record.body) : undefined,
+					body: record.body ? decodeFromBase64(record.body) : undefined,
 					headers: record.headers?.map(
 						(header) =>
-							header.map((h) => Base64.toUint8Array(h)) as [
+							header.map((h) => decodeFromBase64(h)) as [
 								Uint8Array,
 								Uint8Array,
 							],
@@ -159,17 +159,17 @@ export class S2Stream {
 			...record,
 			body:
 				record.body instanceof Uint8Array
-					? Base64.fromUint8Array(record.body)
+					? encodeToBase64(record.body)
 					: hasBytes && record.body
-						? Base64.fromUint8Array(new TextEncoder().encode(record.body))
+						? encodeToBase64(new TextEncoder().encode(record.body))
 						: record.body,
 			headers: record.headers?.map(
 				(header) =>
 					header.map((h) =>
 						h instanceof Uint8Array
-							? Base64.fromUint8Array(h)
+							? encodeToBase64(h)
 							: hasBytes
-								? Base64.fromUint8Array(new TextEncoder().encode(h))
+								? encodeToBase64(new TextEncoder().encode(h))
 								: h,
 					) as [string, string],
 			),
@@ -322,12 +322,12 @@ class ReadSession<
 				if (format === "bytes") {
 					for (const record of batch.records ?? []) {
 						if (record.body && typeof record.body === "string") {
-							(record as any).body = Base64.toUint8Array(record.body);
+							(record as any).body = decodeFromBase64(record.body);
 						}
 						if (record.headers) {
 							(record as any).headers = record.headers.map((header) =>
 								header.map((h) =>
-									typeof h === "string" ? Base64.toUint8Array(h) : h,
+									typeof h === "string" ? decodeFromBase64(h) : h,
 								),
 							);
 						}
