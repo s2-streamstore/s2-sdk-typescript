@@ -2,6 +2,12 @@
   "name": "@s2-dev/streamstore",
   "version": "0.16.1",
   "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/s2-streamstore/s2-sdk-typescript"
+  },
+  "homepage": "https://s2.dev",
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "test": "vitest --run",
