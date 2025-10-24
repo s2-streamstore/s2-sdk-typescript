@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.4
+
+### Patch Changes
+
+- 480b08c: update to latest openapi spec
+
 ## 0.16.3
 
 ### Patch Changes
