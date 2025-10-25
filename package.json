@@ -14,7 +14,8 @@
     "check": "biome check && tsc --noEmit",
     "check:write": "biome check --write",
     "format": "biome format --write",
-    "gen:openapi": "openapi-ts"
+    "gen:openapi": "openapi-ts",
+    "docs": "typedoc"
   },
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
