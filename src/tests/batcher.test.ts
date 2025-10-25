@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppendAck } from "../generated";
-import type { AppendRecord } from "../stream";
-import { S2Stream } from "../stream";
+import type { AppendAck } from "../generated/index.js";
+import type { AppendRecord } from "../stream.js";
+import { S2Stream } from "../stream.js";
 
 const fakeClient: any = {};
 const makeStream = () => new S2Stream("test-stream", fakeClient);

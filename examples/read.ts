@@ -1,4 +1,4 @@
-import { S2 } from "../src";
+import { S2 } from "../src/index.js";
 
 const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,

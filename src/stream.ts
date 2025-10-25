@@ -96,17 +96,19 @@ export class S2Stream {
 		if (args?.as === "bytes") {
 			const res: ReadBatch<"bytes"> = {
 				...response.data,
-				records: response.data.records?.map((record: GeneratedSequencedRecord) => ({
-					...record,
-					body: record.body ? decodeFromBase64(record.body) : undefined,
-					headers: record.headers?.map(
-						(header: [string, string]) =>
-							header.map((h: string) => decodeFromBase64(h)) as [
-								Uint8Array,
-								Uint8Array,
-							],
-					),
-				})),
+				records: response.data.records?.map(
+					(record: GeneratedSequencedRecord) => ({
+						...record,
+						body: record.body ? decodeFromBase64(record.body) : undefined,
+						headers: record.headers?.map(
+							(header: [string, string]) =>
+								header.map((h: string) => decodeFromBase64(h)) as [
+									Uint8Array,
+									Uint8Array,
+								],
+						),
+					}),
+				),
 			};
 			return res as ReadBatch<Format>;
 		} else {

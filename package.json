@@ -9,22 +9,27 @@
   },
   "homepage": "https://s2.dev",
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "build": "rm -rf dist && tsc --project tsconfig.build.esm.json && tsc --project tsconfig.build.cjs.json && bun scripts/postbuild.ts && attw --pack",
     "test": "vitest --run",
-    "check": "biome check && tsc --noEmit && attw --pack",
+    "check": "biome check && tsc --noEmit",
     "check:write": "biome check --write",
     "format": "biome format --write",
-    "gen:openapi": "openapi-ts",
+    "gen:openapi": "openapi-ts && bun scripts/fix-generated-imports.ts",
     "docs": "typedoc"
   },
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
   "sideEffects": false,
   "exports": {
     ".": {
       "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
       }
     }
   },
@@ -38,6 +43,7 @@
     "@biomejs/biome": "2.2.5",
     "@changesets/cli": "^2.29.7",
     "@hey-api/openapi-ts": "^0.86.0",
+    "@types/bun": "^1.3.1",
     "openapi-typescript": "^7.10.1",
     "vitest": "^4.0.2"
   },

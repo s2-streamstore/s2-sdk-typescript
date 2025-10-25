@@ -1,5 +1,6 @@
 import type { DataToObject, S2RequestOptions } from "./common.js";
 import { S2Error } from "./error.js";
+import type { Client } from "./generated/client/types.gen.js";
 import {
 	type AccountMetricsData,
 	accountMetrics,
@@ -8,7 +9,6 @@ import {
 	type StreamMetricsData,
 	streamMetrics,
 } from "./generated/index.js";
-import type { Client } from "./generated/client/types.gen.js";
 
 export interface AccountMetricsArgs extends DataToObject<AccountMetricsData> {}
 export interface BasinMetricsArgs extends DataToObject<BasinMetricsData> {}
