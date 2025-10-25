@@ -115,7 +115,9 @@ for await (const record of readSession) {
 
 ## SDK Docs and Reference
 
-For detailed documentation and API reference, please visit the [S2 Documentation](https://s2.dev/docs).
+For detailed documentation for the SDK, please check the generated type docs [here](https://s2-streamstore.github.io/s2-sdk-typescript/).
+
+For API reference, please visit the [S2 Documentation](https://s2.dev/docs).
 
 ## Feedback
 
