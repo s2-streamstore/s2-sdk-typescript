@@ -1,5 +1,5 @@
-import type { DataToObject, S2RequestOptions } from "./common";
-import { S2Error } from "./error";
+import type { DataToObject, S2RequestOptions } from "./common.js";
+import { S2Error } from "./error.js";
 import {
 	type CreateStreamData,
 	createStream,
@@ -11,8 +11,8 @@ import {
 	listStreams,
 	type ReconfigureStreamData,
 	reconfigureStream,
-} from "./generated";
-import type { Client } from "./generated/client/types.gen";
+} from "./generated/index.js";
+import type { Client } from "./generated/client/types.gen.js";
 
 export interface ListStreamsArgs extends DataToObject<ListStreamsData> {}
 export interface CreateStreamArgs extends DataToObject<CreateStreamData> {}

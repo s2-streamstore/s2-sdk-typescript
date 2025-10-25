@@ -1,11 +1,11 @@
-import { S2AccessTokens } from "./accessTokens";
-import { S2Basin } from "./basin";
-import { S2Basins } from "./basins";
-import type { S2ClientOptions } from "./common";
-import { createClient, createConfig } from "./generated/client";
-import type { Client } from "./generated/client/types.gen";
-import * as Redacted from "./lib/redacted";
-import { S2Metrics } from "./metrics";
+import { S2AccessTokens } from "./accessTokens.js";
+import { S2Basin } from "./basin.js";
+import { S2Basins } from "./basins.js";
+import type { S2ClientOptions } from "./common.js";
+import { createClient, createConfig } from "./generated/client/index.js";
+import type { Client } from "./generated/client/types.gen.js";
+import * as Redacted from "./lib/redacted.js";
+import { S2Metrics } from "./metrics.js";
 
 const defaultBaseUrl = "https://aws.s2.dev/v1";
 const defaultMakeBasinBaseUrl = (basin: string) =>

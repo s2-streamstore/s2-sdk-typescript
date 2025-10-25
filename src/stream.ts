@@ -1,5 +1,6 @@
-import type { S2RequestOptions } from "./common";
-import { S2Error } from "./error";
+import type { S2RequestOptions } from "./common.js";
+import { S2Error } from "./error.js";
+import type { Client } from "./generated/client/types.gen.js";
 import {
 	type AppendAck,
 	append,
@@ -11,10 +12,9 @@ import {
 	type ReadData,
 	read,
 	type StreamPosition,
-} from "./generated";
-import type { Client } from "./generated/client/types.gen";
-import { decodeFromBase64, encodeToBase64 } from "./lib/base64";
-import { EventStream } from "./lib/event-stream";
+} from "./generated/index.js";
+import { decodeFromBase64, encodeToBase64 } from "./lib/base64.js";
+import { EventStream } from "./lib/event-stream.js";
 
 export class S2Stream {
 	private readonly client: Client;
@@ -96,12 +96,12 @@ export class S2Stream {
 		if (args?.as === "bytes") {
 			const res: ReadBatch<"bytes"> = {
 				...response.data,
-				records: response.data.records?.map((record) => ({
+				records: response.data.records?.map((record: GeneratedSequencedRecord) => ({
 					...record,
 					body: record.body ? decodeFromBase64(record.body) : undefined,
 					headers: record.headers?.map(
-						(header) =>
-							header.map((h) => decodeFromBase64(h)) as [
+						(header: [string, string]) =>
+							header.map((h: string) => decodeFromBase64(h)) as [
 								Uint8Array,
 								Uint8Array,
 							],

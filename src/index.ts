@@ -2,15 +2,15 @@ export type {
 	IssueAccessTokenArgs,
 	ListAccessTokensArgs,
 	RevokeAccessTokenArgs,
-} from "./accessTokens";
+} from "./accessTokens.js";
 export type {
 	CreateBasinArgs,
 	DeleteBasinArgs,
 	GetBasinConfigArgs,
 	ListBasinsArgs,
 	ReconfigureBasinArgs,
-} from "./basins";
-export { S2Error } from "./error";
+} from "./basins.js";
+export { S2Error } from "./error.js";
 export type {
 	AccessTokenInfo,
 	AccessTokenScope,
@@ -43,24 +43,24 @@ export type {
 	TimeseriesInterval,
 	TimestampingConfig,
 	TimestampingMode,
-} from "./generated/types.gen";
+} from "./generated/types.gen.js";
 export type {
 	AccountMetricsArgs,
 	BasinMetricsArgs,
 	StreamMetricsArgs,
-} from "./metrics";
-export { S2 } from "./s2";
+} from "./metrics.js";
+export { S2 } from "./s2.js";
 export type {
 	AppendArgs,
 	ReadArgs,
 	ReadBatch,
 	SequencedRecord,
-} from "./stream";
+} from "./stream.js";
 export type {
 	CreateStreamArgs,
 	DeleteStreamArgs,
 	GetStreamConfigArgs,
 	ListStreamsArgs,
 	ReconfigureStreamArgs,
-} from "./streams";
-export { AppendRecord } from "./utils";
+} from "./streams.js";
+export { AppendRecord } from "./utils.js";

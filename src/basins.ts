@@ -1,5 +1,5 @@
-import type { DataToObject, S2RequestOptions } from "./common";
-import { S2Error } from "./error";
+import type { DataToObject, S2RequestOptions } from "./common.js";
+import { S2Error } from "./error.js";
 import {
 	type CreateBasinData,
 	createBasin,
@@ -11,8 +11,8 @@ import {
 	listBasins,
 	type ReconfigureBasinData,
 	reconfigureBasin,
-} from "./generated";
-import type { Client } from "./generated/client/types.gen";
+} from "./generated/index.js";
+import type { Client } from "./generated/client/types.gen.js";
 
 export interface ListBasinsArgs extends DataToObject<ListBasinsData> {}
 export interface CreateBasinArgs extends DataToObject<CreateBasinData> {}

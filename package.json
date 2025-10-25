@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "test": "vitest --run",
-    "check": "biome check && tsc --noEmit",
+    "check": "biome check && tsc --noEmit && attw --pack",
     "check:write": "biome check --write",
     "format": "biome format --write",
     "gen:openapi": "openapi-ts",
@@ -19,10 +19,13 @@
   },
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
-      "default": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
     }
   },
   "files": [
@@ -31,6 +34,7 @@
     "LICENSE"
   ],
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
     "@biomejs/biome": "2.2.5",
     "@changesets/cli": "^2.29.7",
     "@hey-api/openapi-ts": "^0.86.0",

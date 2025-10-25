@@ -1,8 +1,8 @@
-import { createClient, createConfig } from "./generated/client";
-import type { Client } from "./generated/client/types.gen";
-import * as Redacted from "./lib/redacted";
-import { S2Stream } from "./stream";
-import { S2Streams } from "./streams";
+import { createClient, createConfig } from "./generated/client/index.js";
+import type { Client } from "./generated/client/types.gen.js";
+import * as Redacted from "./lib/redacted.js";
+import { S2Stream } from "./stream.js";
+import { S2Streams } from "./streams.js";
 
 export class S2Basin {
 	private readonly client: Client;
