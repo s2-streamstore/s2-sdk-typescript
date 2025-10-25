@@ -14,7 +14,7 @@
     "check": "biome check && tsc --noEmit",
     "check:write": "biome check --write",
     "format": "biome format --write",
-    "gen:openapi": "openapi-ts && bun scripts/fix-generated-imports.ts",
+    "gen:openapi": "openapi-ts",
     "docs": "typedoc"
   },
   "main": "./dist/cjs/index.js",
