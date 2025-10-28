@@ -1,4 +1,3 @@
-import type { DataToObject, S2RequestOptions } from "./common.js";
 import { S2Error } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
@@ -9,6 +8,7 @@ import {
 	type RevokeAccessTokenData,
 	revokeAccessToken,
 } from "./generated/index.js";
+import type { DataToObject, S2RequestOptions } from "./lib/common.js";
 
 export interface ListAccessTokensArgs
 	extends DataToObject<ListAccessTokensData> {}
