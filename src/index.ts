@@ -10,7 +10,12 @@ export type {
 	ListBasinsArgs,
 	ReconfigureBasinArgs,
 } from "./basins.js";
-export { S2Error } from "./error.js";
+export {
+	FencingTokenMismatchError,
+	RangeNotSatisfiableError,
+	S2Error,
+	SeqNumMismatchError,
+} from "./error.js";
 export type {
 	AccessTokenInfo,
 	AccessTokenScope,

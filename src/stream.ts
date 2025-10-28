@@ -1,5 +1,10 @@
 import type { S2RequestOptions } from "./common.js";
-import { S2Error } from "./error.js";
+import {
+	FencingTokenMismatchError,
+	RangeNotSatisfiableError,
+	S2Error,
+	SeqNumMismatchError,
+} from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	type AppendAck,
@@ -84,11 +89,8 @@ export class S2Stream {
 				});
 			} else {
 				// special case for 416 - Range Not Satisfiable
-				throw new S2Error({
-					message:
-						"Range not satisfiable: requested position is beyond the stream tail. Use 'clamp: true' to start from the tail instead.",
+				throw new RangeNotSatisfiableError({
 					status: response.response.status,
-					data: response.error,
 				});
 			}
 		}
@@ -199,12 +201,28 @@ export class S2Stream {
 					status: response.response.status,
 				});
 			} else {
-				// special case for 412
-				throw new S2Error({
-					message: "Append condition failed",
-					status: response.response.status,
-					data: response.error,
-				});
+				// special case for 412 - append condition failed
+				if ("seq_num_mismatch" in response.error) {
+					throw new SeqNumMismatchError({
+						message: "Append condition failed: sequence number mismatch",
+						code: "APPEND_CONDITION_FAILED",
+						status: response.response.status,
+						expectedSeqNum: response.error.seq_num_mismatch,
+					});
+				} else if ("fencing_token_mismatch" in response.error) {
+					throw new FencingTokenMismatchError({
+						message: "Append condition failed: fencing token mismatch",
+						code: "APPEND_CONDITION_FAILED",
+						status: response.response.status,
+						expectedFencingToken: response.error.fencing_token_mismatch,
+					});
+				} else {
+					// fallback for unknown 412 error format
+					throw new S2Error({
+						message: "Append condition failed",
+						status: response.response.status,
+					});
+				}
 			}
 		}
 		return response.data;
@@ -297,11 +315,8 @@ class ReadSession<
 				});
 			} else {
 				// special case for 416 - Range Not Satisfiable
-				throw new S2Error({
-					message:
-						"Range not satisfiable: requested position is beyond the stream tail. Use 'clamp: true' to start from the tail instead.",
+				throw new RangeNotSatisfiableError({
 					status: response.response.status,
-					data: response.error,
 				});
 			}
 		}

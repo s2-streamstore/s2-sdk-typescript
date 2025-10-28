@@ -8,51 +8,115 @@
 export class S2Error extends Error {
 	public readonly code?: string;
 	public readonly status?: number;
-	public readonly data?: Record<string, unknown>;
 
 	constructor({
 		message,
 		code,
 		status,
-		data,
 	}: {
-		/** Human-readable error message. */
 		message: string;
 		code?: string;
 		status?: number;
-		/** Additional error details when available. */
-		data?: Record<string, unknown>;
 	}) {
-		// Include full data in the error message for better visibility
-		const dataStr = data ? `\nData: ${JSON.stringify(data, null, 2)}` : "";
-		super(`${message}${dataStr}`);
+		super(message);
 		this.code = code;
 		this.status = status;
-		this.data = data;
 		this.name = "S2Error";
 	}
+}
 
-	public toString() {
-		return `${this.message} (code: ${this.code}, status: ${this.status}, data: ${JSON.stringify(this.data, null, 2)})`;
+/**
+ * Thrown when an append operation fails due to a sequence number mismatch.
+ *
+ * This occurs when you specify a `matchSeqNum` condition in your append request,
+ * but the current tail sequence number of the stream doesn't match.
+ *
+ * The `expectedSeqNum` property contains the actual next sequence number
+ * that should be used for a successful append.
+ */
+export class SeqNumMismatchError extends S2Error {
+	/** The expected next sequence number for the stream. */
+	public readonly expectedSeqNum: number;
+
+	constructor({
+		message,
+		code,
+		status,
+		expectedSeqNum,
+	}: {
+		message: string;
+		code?: string;
+		status?: number;
+		expectedSeqNum: number;
+	}) {
+		super({
+			message: `${message}\nExpected sequence number: ${expectedSeqNum}`,
+			code,
+			status,
+		});
+		this.name = "SeqNumMismatchError";
+		this.expectedSeqNum = expectedSeqNum;
 	}
+}
 
-	public toJSON() {
-		return {
-			message: this.message,
-			code: this.code,
-			status: this.status,
-			data: this.data,
-		};
+/**
+ * Thrown when an append operation fails due to a fencing token mismatch.
+ *
+ * This occurs when you specify a `fencingToken` condition in your append request,
+ * but the current fencing token of the stream doesn't match.
+ *
+ * The `expectedFencingToken` property contains the actual fencing token
+ * that should be used for a successful append.
+ */
+export class FencingTokenMismatchError extends S2Error {
+	/** The expected fencing token for the stream. */
+	public readonly expectedFencingToken: string;
+
+	constructor({
+		message,
+		code,
+		status,
+		expectedFencingToken,
+	}: {
+		message: string;
+		code?: string;
+		status?: number;
+		expectedFencingToken: string;
+	}) {
+		super({
+			message: `${message}\nExpected fencing token: ${expectedFencingToken}`,
+			code,
+			status,
+		});
+		this.name = "FencingTokenMismatchError";
+		this.expectedFencingToken = expectedFencingToken;
 	}
+}
 
-	public [Symbol.for("nodejs.util.inspect.custom")]() {
-		return {
-			name: "S2Error",
-			message: this.message,
-			code: this.code,
-			status: this.status,
-			data: this.data,
-			stack: this.stack,
-		};
+/**
+ * Thrown when a read operation fails because the requested position is beyond the stream tail.
+ *
+ * This occurs when you specify a `startSeqNum` that is greater than the current tail
+ * of the stream (HTTP 416 Range Not Satisfiable).
+ *
+ * To handle this gracefully, you can set `clamp: true` in your read options to
+ * automatically start from the tail instead of throwing an error.
+ */
+export class RangeNotSatisfiableError extends S2Error {
+	constructor({
+		message = "Range not satisfiable: requested position is beyond the stream tail. Use 'clamp: true' to start from the tail instead.",
+		code,
+		status = 416,
+	}: {
+		message?: string;
+		code?: string;
+		status?: number;
+	} = {}) {
+		super({
+			message,
+			code,
+			status,
+		});
+		this.name = "RangeNotSatisfiableError";
 	}
 }
