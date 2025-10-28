@@ -1,6 +1,6 @@
 {
   "name": "@s2-dev/streamstore",
-  "version": "0.16.6",
+  "version": "0.16.8",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -8,13 +8,16 @@
     "url": "https://github.com/s2-streamstore/s2-sdk-typescript"
   },
   "homepage": "https://s2.dev",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "rm -rf dist && tsc --project tsconfig.build.esm.json && tsc --project tsconfig.build.cjs.json && bun scripts/postbuild.ts && attw --pack",
     "test": "vitest --run",
     "check": "biome check && tsc --noEmit",
     "check:write": "biome check --write",
     "format": "biome format --write",
-    "publish": "changeset publish",
+    "release": "changeset publish",
     "pull:proto": "curl -o proto/s2.proto https://raw.githubusercontent.com/s2-streamstore/s2-protos/refs/heads/main/s2/v1/s2.proto",
     "pull:openapi": "curl -o openapi/s2.json https://raw.githubusercontent.com/s2-streamstore/s2-protos/refs/heads/main/s2/v1/openapi.json",
     "gen:openapi": "openapi-ts",
