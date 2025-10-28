@@ -13,6 +13,7 @@ import { S2Stream } from "../../../stream.js";
 import { decodeFromBase64, encodeToBase64 } from "../../base64.js";
 import type { S2RequestOptions } from "../../common.js";
 import { EventStream } from "../../event-stream.js";
+import * as Redacted from "../../redacted.js";
 import { BatcherImpl } from "../batcher.js";
 import type {
 	AcksStream,
@@ -360,18 +361,19 @@ export class FetchAppendSession
  */
 export class FetchTransport implements SessionTransport {
 	private readonly client: Client;
-
+	private readonly transportConfig: TransportConfig;
 	constructor(config: TransportConfig) {
 		this.client = createClient(
 			createConfig({
 				baseUrl: config.baseUrl,
-				auth: () => config.bearerToken,
+				auth: () => Redacted.value(config.accessToken),
 			}),
 		);
+		this.transportConfig = config;
 	}
 
 	async makeAppendSession(stream: string): Promise<AppendSession> {
-		const s2Stream = new S2Stream(stream, this.client);
+		const s2Stream = new S2Stream(stream, this.client, this.transportConfig);
 		return FetchAppendSession.create(s2Stream);
 	}
 

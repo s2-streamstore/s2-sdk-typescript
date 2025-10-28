@@ -1,4 +1,4 @@
-import type { AppendRecord as AppendRecordType } from "./stream.js";
+import type { AppendRecord as AppendRecordType } from "./lib/stream/types.js";
 
 type Headers =
 	| Record<string, string>

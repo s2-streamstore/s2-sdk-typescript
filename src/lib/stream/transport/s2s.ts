@@ -18,6 +18,7 @@ import type {
 	StreamPosition,
 } from "../../../generated/types.gen.js";
 import type { S2RequestOptions } from "../../common.js";
+import * as Redacted from "../../redacted.js";
 import { BatcherImpl } from "../batcher.js";
 import type {
 	AcksStream,
@@ -60,18 +61,21 @@ function convertAppendAck(proto: ProtoAppendAck): AppendAck {
  */
 export class S2STransport implements SessionTransport {
 	private baseUrl: string;
-	private bearerToken: string;
+	private bearerToken: Redacted.Redacted;
 	private connection?: http2.ClientHttp2Session;
 	private connectionPromise?: Promise<http2.ClientHttp2Session>;
 
 	constructor(config: TransportConfig) {
 		this.baseUrl = config.baseUrl;
-		this.bearerToken = config.bearerToken;
+		this.bearerToken = config.accessToken;
 	}
 
 	async makeAppendSession(stream: string): Promise<AppendSession> {
-		return S2SAppendSession.create(this.baseUrl, this.bearerToken, stream, () =>
-			this.getConnection(),
+		return S2SAppendSession.create(
+			this.baseUrl,
+			Redacted.value(this.bearerToken),
+			stream,
+			() => this.getConnection(),
 		);
 	}
 
@@ -82,7 +86,7 @@ export class S2STransport implements SessionTransport {
 	): Promise<ReadSession<Format>> {
 		return S2SReadSession.create(
 			this.baseUrl,
-			this.bearerToken,
+			Redacted.value(this.bearerToken),
 			stream,
 			args,
 			() => this.getConnection(),
@@ -611,7 +615,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 	static async create<Format extends "string" | "bytes" = "string">(
 		baseUrl: string,
-		bearerToken: string,
+		bearerToken: Redacted.Redacted,
 		streamName: string,
 		args: ReadArgs<Format> | undefined,
 		getConnection: () => Promise<http2.ClientHttp2Session>,
@@ -627,7 +631,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 	private constructor(
 		private baseUrl: string,
-		private bearerToken: string,
+		private bearerToken: Redacted.Redacted,
 		private streamName: string,
 		private args: ReadArgs<Format> | undefined,
 		private getConnection: () => Promise<http2.ClientHttp2Session>,
@@ -672,7 +676,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						":path": path,
 						":scheme": url.protocol.slice(0, -1),
 						":authority": url.host,
-						authorization: `Bearer ${bearerToken}`,
+						authorization: `Bearer ${Redacted.value(bearerToken)}`,
 						accept: "application/protobuf",
 						"content-type": "s2s/proto",
 					});

@@ -19,15 +19,39 @@ import {
 } from "./generated/index.js";
 import { decodeFromBase64, encodeToBase64 } from "./lib/base64.js";
 import type { S2RequestOptions } from "./lib/common.js";
+import { createSessionTransport } from "./lib/stream/factory.js";
+import type {
+	AppendArgs,
+	AppendRecord,
+	AppendSession,
+	ReadArgs,
+	ReadBatch,
+	ReadSession,
+	SessionTransport,
+	TransportConfig,
+} from "./lib/stream/types.js";
 
 export class S2Stream {
 	private readonly client: Client;
+	private readonly transportConfig: TransportConfig;
+	private _transport?: SessionTransport;
 
 	public readonly name: string;
 
-	constructor(name: string, client: Client) {
+	constructor(name: string, client: Client, transportConfig: TransportConfig) {
 		this.name = name;
 		this.client = client;
+		this.transportConfig = transportConfig;
+	}
+
+	/**
+	 * Get or create the transport instance
+	 */
+	private async getTransport(): Promise<SessionTransport> {
+		if (!this._transport) {
+			this._transport = await createSessionTransport(this.transportConfig);
+		}
+		return this._transport;
 	}
 
 	/**
@@ -236,7 +260,8 @@ export class S2Stream {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
-		return await ReadSession.create(this.client, this.name, args, options);
+		const transport = await this.getTransport();
+		return await transport.makeReadSession(this.name, args, options);
 	}
 	/**
 	 * Create an append session that guaranteeds ordering of submissions.
@@ -246,6 +271,7 @@ export class S2Stream {
 	public async appendSession(
 		options?: S2RequestOptions,
 	): Promise<AppendSession> {
-		return await AppendSession.create(this, options);
+		const transport = await this.getTransport();
+		return await transport.makeAppendSession(this.name);
 	}
 }

@@ -8,6 +8,7 @@ import type {
 	StreamPosition,
 } from "../../generated/index.js";
 import type { S2RequestOptions } from "../common.js";
+import type * as Redacted from "../redacted.js";
 
 export interface BatcherArgs {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
@@ -95,5 +96,5 @@ export interface SessionTransport {
 
 export interface TransportConfig {
 	baseUrl: string;
-	bearerToken: string;
+	accessToken: Redacted.Redacted;
 }

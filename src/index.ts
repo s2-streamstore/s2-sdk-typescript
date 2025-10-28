@@ -50,17 +50,21 @@ export type {
 	TimestampingMode,
 } from "./generated/types.gen.js";
 export type {
+	AppendArgs,
+	AppendSession,
+	ReadArgs,
+	ReadBatch,
+	ReadSession,
+	SequencedRecord,
+	SessionTransport,
+	TransportConfig,
+} from "./lib/stream/types.js";
+export type {
 	AccountMetricsArgs,
 	BasinMetricsArgs,
 	StreamMetricsArgs,
 } from "./metrics.js";
 export { S2 } from "./s2.js";
-export type {
-	AppendArgs,
-	ReadArgs,
-	ReadBatch,
-	SequencedRecord,
-} from "./stream.js";
 export type {
 	CreateStreamArgs,
 	DeleteStreamArgs,

@@ -104,9 +104,7 @@ export class S2SFrameParser {
 
 		// Read 3-byte length prefix (big-endian)
 		const length =
-			(this.buffer[0]! << 16) |
-			(this.buffer[1]! << 8) |
-			this.buffer[2]!;
+			(this.buffer[0]! << 16) | (this.buffer[1]! << 8) | this.buffer[2]!;
 
 		// Check if we have the full message
 		if (this.buffer.length < 3 + length) {

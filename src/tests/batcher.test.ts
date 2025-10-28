@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppendAck } from "../generated/index.js";
-import type { AppendRecord } from "../stream.js";
+import * as Redacted from "../lib/redacted.js";
+import type { AppendRecord } from "../lib/stream/types.js";
 import { S2Stream } from "../stream.js";
 
 const fakeClient: any = {};
-const makeStream = () => new S2Stream("test-stream", fakeClient);
+const fakeTransportConfig = {
+	baseUrl: "https://test.s2.dev/v1",
+	accessToken: Redacted.make("test-token"),
+};
+const makeStream = () =>
+	new S2Stream("test-stream", fakeClient, fakeTransportConfig);
 const makeAck = (n: number): AppendAck => ({
 	start: { seq_num: n - 1, timestamp: 0 },
 	end: { seq_num: n, timestamp: 0 },

@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppendAck } from "../generated/index.js";
-import type { AppendRecord } from "../stream.js";
+import * as Redacted from "../lib/redacted.js";
+import type { AppendRecord } from "../lib/stream/types.js";
 import { S2Stream } from "../stream.js";
 
 // Minimal Client shape to satisfy S2Stream constructor; we won't use it directly
 const fakeClient: any = {};
+const fakeTransportConfig = {
+	baseUrl: "https://test.s2.dev/v1",
+	accessToken: Redacted.make("test-token"),
+};
 
-const makeStream = () => new S2Stream("test-stream", fakeClient);
+const makeStream = () =>
+	new S2Stream("test-stream", fakeClient, fakeTransportConfig);
 
 const makeAck = (n: number): AppendAck => ({
 	start: { seq_num: n - 1, timestamp: 0 },
@@ -139,11 +145,11 @@ describe("AppendSession", () => {
 		expect(appendSpy).toHaveBeenCalledTimes(2); // 1 throw + 1 success
 	});
 
-	it("updates lastSeenPosition after successful append", async () => {
+	it("updates lastAckedPosition after successful append", async () => {
 		const stream = makeStream();
 		vi.spyOn(stream, "append").mockResolvedValue(makeAck(42));
 		const session = await stream.appendSession();
 		await session.submit([{ body: "z" }]);
-		expect(session.lastSeenPosition?.end.seq_num).toBe(42);
+		expect(session.lastAckedPosition()?.end.seq_num).toBe(42);
 	});
 });
