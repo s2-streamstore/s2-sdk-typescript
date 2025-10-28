@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.5
+
+### Patch Changes
+
+- 717e65e: custom error types
+
 ## 0.16.4
 
 ### Patch Changes
