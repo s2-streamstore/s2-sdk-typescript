@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.6
+
+### Patch Changes
+
+- 402392c: Fix release
+
 ## 0.16.5
 
 ### Patch Changes
