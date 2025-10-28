@@ -1,8 +1,7 @@
 import { defineConfig } from "@hey-api/openapi-ts";
 
 export default defineConfig({
-  input:
-    "https://raw.githubusercontent.com/s2-streamstore/s2-protos/refs/heads/main/s2/v1/openapi.json", // sign up at app.heyapi.dev
+  input: "./openapi/s2.json",
   output: {
     path: "src/generated",
     importFileExtension: ".js",
