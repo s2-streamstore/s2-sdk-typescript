@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.9
+
+### Patch Changes
+
+- 0f9c029: Rename publish -> release for CI
+
 ## 0.16.6
 
 ### Patch Changes
