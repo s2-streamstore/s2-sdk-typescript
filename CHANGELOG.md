@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.11
+
+### Patch Changes
+
+- ad4d2ee: Regenerate docs on release
+
 ## 0.16.10
 
 ### Patch Changes
