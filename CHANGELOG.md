@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.10
+
+### Patch Changes
+
+- 4135067: Regenerate docs on release
+
 ## 0.16.9
 
 ### Patch Changes
