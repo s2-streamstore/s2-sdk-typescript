@@ -35,3 +35,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Generate TypeDocs
+        if: steps.changesets.outputs.published == 'true'
+        run: bun run docs
+
+      - name: Commit and Push TypeDocs
+        if: steps.changesets.outputs.published == 'true'
+        run: |
+          git config --global user.email "mehul@s2.dev"
+          git config --global user.name "Mehul Arora"
+          git add -A
+          git diff --staged --quiet || git commit -m "docs: regenerate typedocs for release"
+          git push
