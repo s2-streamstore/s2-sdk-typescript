@@ -4,7 +4,8 @@
     "outDir": "dist/cjs",
     "module": "CommonJS",
     "moduleResolution": "node10",
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    "noUncheckedIndexedAccess": false
   },
   "include": ["src/**/*"],
   "exclude": [
