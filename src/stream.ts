@@ -457,8 +457,10 @@ class Batcher
 			start: (controller) => {
 				writableController = controller;
 			},
-			write: (chunk) =>
-				this.submit(Array.isArray(chunk) ? chunk : [chunk]).then((_) => {}),
+			write: (chunk) => {
+				const records = Array.isArray(chunk) ? chunk : [chunk];
+				this.submit(records);
+			},
 			close: () => {
 				this.closed = true;
 				this.flush();
@@ -651,11 +653,12 @@ class AppendSession
 			start: (controller) => {
 				writableController = controller;
 			},
-			write: (chunk) =>
+			write: (chunk) => {
 				this.submit(chunk.records, {
 					fencing_token: chunk.fencing_token,
 					match_seq_num: chunk.match_seq_num,
-				}).then((_) => {}),
+				});
+			},
 			close: async () => {
 				this.closed = true;
 				await this.waitForDrain();
