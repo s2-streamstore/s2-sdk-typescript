@@ -20,6 +20,7 @@ export class S2 {
 	private readonly accessToken: Redacted.Redacted;
 	private readonly client: Client;
 	private readonly makeBasinBaseUrl: (basin: string) => string;
+	private readonly includeBasinHeader: boolean;
 
 	/**
 	 * Account-scoped basin management operations.
@@ -49,6 +50,7 @@ export class S2 {
 		this.accessTokens = new S2AccessTokens(this.client);
 		this.metrics = new S2Metrics(this.client);
 		this.makeBasinBaseUrl = options.makeBasinBaseUrl ?? defaultMakeBasinBaseUrl;
+		this.includeBasinHeader = !!options.makeBasinBaseUrl;
 	}
 
 	/**
@@ -60,6 +62,7 @@ export class S2 {
 		return new S2Basin(name, {
 			accessToken: this.accessToken,
 			baseUrl: this.makeBasinBaseUrl(name),
+			includeBasinHeader: this.includeBasinHeader,
 		});
 	}
 }
