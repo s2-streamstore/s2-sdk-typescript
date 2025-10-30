@@ -54,7 +54,7 @@ export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 };
 
 export interface AcksStream
-	extends ReadableStream<AppendAck>,
+	extends Omit<ReadableStream<AppendAck>, typeof Symbol.asyncIterator>,
 		AsyncIterable<AppendAck>,
 		AsyncDisposable {}
 
@@ -79,14 +79,23 @@ export interface AppendSession
 }
 
 export interface ReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<SequencedRecord<Format>>,
+	extends Omit<
+			ReadableStream<SequencedRecord<Format>>,
+			typeof Symbol.asyncIterator
+		>,
 		AsyncIterable<SequencedRecord<Format>>,
 		AsyncDisposable {
 	lastReadPosition(): StreamPosition | undefined;
 }
 
+export interface AppendSessionArgs {}
+
 export interface SessionTransport {
-	makeAppendSession(stream: string): Promise<AppendSession>;
+	makeAppendSession(
+		stream: string,
+		args?: AppendSessionArgs,
+		options?: S2RequestOptions,
+	): Promise<AppendSession>;
 	makeReadSession<Format extends "string" | "bytes" = "string">(
 		stream: string,
 		args?: ReadArgs<Format>,
