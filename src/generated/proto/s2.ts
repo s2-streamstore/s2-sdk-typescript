@@ -340,7 +340,7 @@ class AppendRecord$Type extends MessageType<AppendRecord> {
             writer.tag(1, WireType.Varint).uint64(message.timestamp);
         /* repeated s2.v1.Header headers = 2; */
         for (let i = 0; i < message.headers.length; i++)
-            Header.internalBinaryWrite(message.headers[i]!, writer.tag(2, WireType.LengthDelimited).fork(), options).join();
+            Header.internalBinaryWrite(message.headers[i], writer.tag(2, WireType.LengthDelimited).fork(), options).join();
         /* bytes body = 3; */
         if (message.body.length)
             writer.tag(3, WireType.LengthDelimited).bytes(message.body);
@@ -398,7 +398,7 @@ class AppendInput$Type extends MessageType<AppendInput> {
     internalBinaryWrite(message: AppendInput, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated s2.v1.AppendRecord records = 1; */
         for (let i = 0; i < message.records.length; i++)
-            AppendRecord.internalBinaryWrite(message.records[i]!, writer.tag(1, WireType.LengthDelimited).fork(), options).join();
+            AppendRecord.internalBinaryWrite(message.records[i], writer.tag(1, WireType.LengthDelimited).fork(), options).join();
         /* optional uint64 match_seq_num = 2; */
         if (message.matchSeqNum !== undefined)
             writer.tag(2, WireType.Varint).uint64(message.matchSeqNum);
@@ -532,7 +532,7 @@ class SequencedRecord$Type extends MessageType<SequencedRecord> {
             writer.tag(2, WireType.Varint).uint64(message.timestamp);
         /* repeated s2.v1.Header headers = 3; */
         for (let i = 0; i < message.headers.length; i++)
-            Header.internalBinaryWrite(message.headers[i]!, writer.tag(3, WireType.LengthDelimited).fork(), options).join();
+            Header.internalBinaryWrite(message.headers[i], writer.tag(3, WireType.LengthDelimited).fork(), options).join();
         /* bytes body = 4; */
         if (message.body.length)
             writer.tag(4, WireType.LengthDelimited).bytes(message.body);
@@ -586,7 +586,7 @@ class ReadBatch$Type extends MessageType<ReadBatch> {
     internalBinaryWrite(message: ReadBatch, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated s2.v1.SequencedRecord records = 1; */
         for (let i = 0; i < message.records.length; i++)
-            SequencedRecord.internalBinaryWrite(message.records[i]!, writer.tag(1, WireType.LengthDelimited).fork(), options).join();
+            SequencedRecord.internalBinaryWrite(message.records[i], writer.tag(1, WireType.LengthDelimited).fork(), options).join();
         /* optional s2.v1.StreamPosition tail = 2; */
         if (message.tail)
             StreamPosition.internalBinaryWrite(message.tail, writer.tag(2, WireType.LengthDelimited).fork(), options).join();
