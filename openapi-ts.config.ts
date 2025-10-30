@@ -1,9 +1,10 @@
 import { defineConfig } from "@hey-api/openapi-ts";
 
 export default defineConfig({
-  input: "./openapi/s2.json",
+  input: "./s2-protos/s2/v1/openapi.json",
   output: {
     path: "src/generated",
     importFileExtension: ".js",
+    clean: false,
   },
 });

@@ -1,0 +1,65 @@
+name: Update s2-protos submodule
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  repository_dispatch:
+    types: [s2-proto-update]
+  workflow_dispatch:
+
+jobs:
+  update-protos:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Update Submodules
+        id: submodules
+        uses: sgoudham/update-git-submodules@v2.1.1
+        with:
+          submodules: s2-protos
+
+      - name: Setup Bun
+        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install Dependencies
+        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        run: bun install
+
+      - name: Regenerate Proto and OpenAPI files
+        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        run: |
+          mkdir -p src/generated/proto
+          bun run gen:proto
+          bun run gen:openapi
+          git add src/generated
+
+      - name: Create Pull Request
+        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          title: "chore: update s2-protos to ${{ steps.submodules.outputs['s2-protos--latestShortCommitSha'] }}"
+          branch: "protos/update-s2-protos-${{ steps.submodules.outputs['s2-protos--latestShortCommitSha'] }}"
+          body: |
+            ## s2-protos Update
+
+            ${{ steps.submodules.outputs.prBody }}
+
+            ### Changes
+            - Updated s2-protos submodule
+            - Regenerated proto TypeScript files
+            - Regenerated OpenAPI TypeScript files
+
+            **Commit:** ${{ steps.submodules.outputs['s2-protos--latestCommitSha'] }}
+          labels: |
+            dependencies
+            protos

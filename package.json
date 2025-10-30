@@ -19,12 +19,8 @@
     "format": "biome format --write",
     "version-with-docs": "changeset version && bun run docs && git add docs",
     "release": "changeset publish",
-    "pull": "bun run pull:proto && bun run pull:openapi",
-    "gen": "bun run gen:openapi && bun run gen:proto",
-    "pull:proto": "curl -o proto/s2.proto https://raw.githubusercontent.com/s2-streamstore/s2-protos/refs/heads/main/s2/v1/s2.proto",
-    "pull:openapi": "curl -o openapi/s2.json https://raw.githubusercontent.com/s2-streamstore/s2-protos/refs/heads/main/s2/v1/openapi.json",
     "gen:openapi": "openapi-ts",
-    "gen:proto": "mkdir -p ./src/generated/proto && protoc --ts_out ./src/generated/proto --ts_opt generate_dependencies --proto_path ./proto ./proto/s2.proto",
+    "gen:proto": "mkdir -p ./src/generated/proto && protoc --ts_out src/generated/proto --ts_opt generate_dependencies --proto_path s2-protos s2-protos/s2/v1/s2.proto",
     "docs": "typedoc"
   },
   "main": "./dist/cjs/index.js",
