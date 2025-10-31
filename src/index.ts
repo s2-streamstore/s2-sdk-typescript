@@ -59,8 +59,8 @@ export type {
 	AppendArgs,
 	ReadArgs,
 	ReadBatch,
-	SequencedRecord,
 	ReadSession,
+	SequencedRecord,
 } from "./stream.js";
 export type {
 	CreateStreamArgs,
