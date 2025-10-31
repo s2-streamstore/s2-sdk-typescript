@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.16.12
+
+### Patch Changes
+
+- 3e67680: Some bugfixes to AppendSession, adding option to supply basin header, and exposing the ReadSession type
+
 ## 0.16.11
 
 ### Patch Changes
