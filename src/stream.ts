@@ -283,7 +283,7 @@ export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 	records: Array<AppendRecord>;
 };
 
-class ReadSession<
+export class ReadSession<
 	Format extends "string" | "bytes" = "string",
 > extends EventStream<SequencedRecord<Format>> {
 	static async create<Format extends "string" | "bytes" = "string">(
