@@ -737,7 +737,7 @@ class AppendSession
 	 * Main processing loop that sends queued requests one at a time.
 	 */
 	private async processLoop(): Promise<void> {
-		while (!this.closed && this.queue.length > 0) {
+		while (this.queue.length > 0) {
 			this.inFlight = true;
 			const args = this.queue.shift()!;
 			const resolver = this.pendingResolvers.shift()!;
