@@ -338,7 +338,7 @@ export type BytesAppendArgs = Omit<GeneratedAppendInput, "records"> & {
 
 export type AppendArgs = StringAppendArgs | BytesAppendArgs;
 
-class ReadSession<
+export class ReadSession<
 	Format extends "string" | "bytes" = "string",
 > extends EventStream<SequencedRecord<Format>> {
 	static async create<Format extends "string" | "bytes" = "string">(
