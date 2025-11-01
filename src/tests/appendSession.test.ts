@@ -146,4 +146,65 @@ describe("AppendSession", () => {
 		await session.submit([{ body: "z" }]);
 		expect(session.lastSeenPosition?.end.seq_num).toBe(42);
 	});
+
+	it("applies backpressure when queue exceeds maxQueuedBytes", async () => {
+		const stream = makeStream();
+		const appendSpy = vi.spyOn(stream, "append");
+
+		// Create a session with very small max queued bytes (100 bytes)
+		const session = await stream.appendSession({
+			maxQueuedBytes: 100,
+		});
+
+		// Control when appends resolve
+		let resolveFirst: any;
+		const firstPromise = new Promise<AppendAck>((resolve) => {
+			resolveFirst = () => resolve(makeAck(1));
+		});
+
+		appendSpy.mockReturnValueOnce(firstPromise);
+		appendSpy.mockResolvedValueOnce(makeAck(2));
+		appendSpy.mockResolvedValueOnce(makeAck(3));
+
+		// Use the WritableStream interface (session IS a WritableStream)
+		const writer = session.getWriter();
+
+		// Submit first batch (50 bytes) - should succeed immediately
+		const largeBody = "x".repeat(42); // ~50 bytes with overhead
+		const p1 = writer.write({
+			records: [{ body: largeBody }],
+		});
+
+		// Submit second batch (50 bytes) - should also queue
+		const p2 = writer.write({
+			records: [{ body: largeBody }],
+		});
+
+		// Submit third batch (50 bytes) - should block due to backpressure
+		let thirdWriteStarted = false;
+		const p3 = (async () => {
+			await writer.write({ records: [{ body: largeBody }] });
+			thirdWriteStarted = true;
+		})();
+
+		// Give time for any immediate processing
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// Third write should be blocked waiting for capacity
+		expect(thirdWriteStarted).toBe(false);
+
+		// Resolve first append to free capacity
+		resolveFirst();
+		await p1;
+
+		// Now third should be able to proceed
+		await p2;
+		await p3;
+
+		expect(thirdWriteStarted).toBe(true);
+		expect(appendSpy).toHaveBeenCalledTimes(3);
+
+		await writer.close();
+	});
 });

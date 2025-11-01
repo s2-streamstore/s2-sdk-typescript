@@ -10,6 +10,8 @@ export type {
 	ListBasinsArgs,
 	ReconfigureBasinArgs,
 } from "./basins.js";
+export type { BatchOutput, BatchTransformArgs } from "./batch-transform.js";
+export { BatchTransform } from "./batch-transform.js";
 export {
 	FencingTokenMismatchError,
 	RangeNotSatisfiableError,
@@ -59,8 +61,8 @@ export type {
 	AppendArgs,
 	ReadArgs,
 	ReadBatch,
+	ReadRecord as SequencedRecord,
 	ReadSession,
-	SequencedRecord,
 } from "./stream.js";
 export type {
 	CreateStreamArgs,
@@ -69,4 +71,4 @@ export type {
 	ListStreamsArgs,
 	ReconfigureStreamArgs,
 } from "./streams.js";
-export { AppendRecord } from "./utils.js";
+export { AppendRecord, meteredSizeBytes, utf8ByteLength } from "./utils.js";
