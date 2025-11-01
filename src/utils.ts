@@ -5,6 +5,79 @@ import type {
 
 export type AppendRecord = AppendRecordType;
 
+function appendRecordMake(
+	body?: string,
+	headers?: AppendHeaders<"string">,
+	timestamp?: number,
+): AppendRecord;
+function appendRecordMake(
+	body?: Uint8Array,
+	headers?: AppendHeaders<"bytes">,
+	timestamp?: number,
+): AppendRecord;
+function appendRecordMake(
+	body?: string | Uint8Array,
+	headers?: AppendHeaders<"string"> | AppendHeaders<"bytes">,
+	timestamp?: number,
+): AppendRecord {
+	return {
+		body,
+		headers,
+		timestamp,
+	} as AppendRecord;
+}
+
+function appendRecordCommand(
+	command: string,
+	body?: string,
+	additionalHeaders?: AppendHeaders<"string">,
+	timestamp?: number,
+): AppendRecord;
+function appendRecordCommand(
+	command: Uint8Array,
+	body?: Uint8Array,
+	additionalHeaders?: AppendHeaders<"bytes">,
+	timestamp?: number,
+): AppendRecord;
+function appendRecordCommand(
+	command: string | Uint8Array,
+	body?: string | Uint8Array,
+	additionalHeaders?: AppendHeaders<"string"> | AppendHeaders<"bytes">,
+	timestamp?: number,
+): AppendRecord {
+	// Command records always have a header with empty key and command as value
+	// Additional headers can be merged in if provided
+	const headers = (() => {
+		if (typeof command === "string") {
+			// String format
+			if (additionalHeaders) {
+				if (Array.isArray(additionalHeaders)) {
+					return [["", command], ...additionalHeaders];
+				} else {
+					return {
+						"": command,
+						...additionalHeaders,
+					};
+				}
+			} else {
+				// No additional headers, just return command header in array format
+				return [["", command]];
+			}
+		} else {
+			// Bytes format - always use array format
+			const commandHeader: [Uint8Array, Uint8Array] = [
+				new TextEncoder().encode(""),
+				command,
+			];
+			return additionalHeaders
+				? [commandHeader, ...(additionalHeaders as AppendHeaders<"bytes">)]
+				: [commandHeader];
+		}
+	})();
+	// safety: we know the types are correct because of the overloads
+	return AppendRecord.make(body as any, headers as any, timestamp);
+}
+
 /**
  * Helpers to construct appendable records.
  *
@@ -16,33 +89,8 @@ export type AppendRecord = AppendRecordType;
  */
 export const AppendRecord = {
 	// overloads for only string or only bytes
-	make: <Format extends "string" | "bytes">(
-		body?: Format extends "string" ? string : Uint8Array,
-		headers?: AppendHeaders<Format>,
-		timestamp?: number,
-	): AppendRecord => {
-		return {
-			body,
-			headers,
-			timestamp,
-		} as AppendRecord;
-	},
-	command: <Format extends "string" | "bytes">(
-		/** Command name (e.g. "fence" or "trim"). */
-		command: string,
-		body?: Format extends "string" ? string : Uint8Array,
-		additionalHeaders?: AppendHeaders<Format>,
-		timestamp?: number,
-	): AppendRecord => {
-		const format = typeof body === "string" ? "string" : "bytes";
-		// todo: handle additional headers
-		const headers = (
-			format === "string"
-				? [["", command]]
-				: [[new TextEncoder().encode(""), new TextEncoder().encode(command)]]
-		) as AppendHeaders<Format>;
-		return AppendRecord.make(body, headers, timestamp);
-	},
+	make: appendRecordMake,
+	command: appendRecordCommand,
 	fence: (
 		fencing_token: string,
 		additionalHeaders?: AppendHeaders<"string">,
@@ -64,7 +112,12 @@ export const AppendRecord = {
 		const buffer = new Uint8Array(8);
 		const view = new DataView(buffer.buffer);
 		view.setBigUint64(0, BigInt(seqNum), false); // false = big-endian
-		return AppendRecord.command("trim", buffer, headers, timestamp);
+		return AppendRecord.command(
+			new TextEncoder().encode("trim"),
+			buffer,
+			headers,
+			timestamp,
+		);
 	},
 } as const;
 
