@@ -46,7 +46,7 @@ function appendRecordCommand(
 		if (typeof command === "string") {
 			return [["", command]];
 		}
-		return [new TextEncoder().encode(""), command];
+		return [[new TextEncoder().encode(""), command]];
 	})();
 	// safety: we know the types are correct because of the overloads
 	return AppendRecord.make(body as any, headers as any, timestamp);
