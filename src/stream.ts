@@ -326,7 +326,6 @@ export type BytesAppendRecord = Omit<
 	headers?: Array<[Uint8Array, Uint8Array]>;
 };
 
-
 export type AppendRecord = StringAppendRecord | BytesAppendRecord;
 
 export type StringAppendArgs = Omit<GeneratedAppendInput, "records"> & {
