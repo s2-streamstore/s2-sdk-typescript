@@ -331,6 +331,9 @@ export type AppendRecord =
 	| AppendRecordForFormat<"string">
 	| AppendRecordForFormat<"bytes">;
 
+export type StringAppendRecord = AppendRecordForFormat<"string">;
+export type BytesAppendRecord = AppendRecordForFormat<"bytes">;
+
 export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 	records: Array<AppendRecord>;
 };

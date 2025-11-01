@@ -13,9 +13,9 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		// Write 3 records quickly
-		writer.write({ format: "string", body: "a" });
-		writer.write({ format: "string", body: "b" });
-		writer.write({ format: "string", body: "c" });
+		writer.write({ body: "a" });
+		writer.write({ body: "b" });
+		writer.write({ body: "c" });
 
 		// Wait for linger duration
 		await new Promise((resolve) => setTimeout(resolve, 60));
@@ -42,8 +42,8 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		// Write 2 records - should flush immediately
-		writer.write({ format: "string", body: "a" });
-		writer.write({ format: "string", body: "b" });
+		writer.write({ body: "a" });
+		writer.write({ body: "b" });
 
 		// Should get batch immediately (no need to wait for linger)
 		const result = await reader.read();
@@ -51,8 +51,8 @@ describe("BatchTransform", () => {
 		expect(result.value?.records).toHaveLength(2);
 
 		// Write 2 more - should flush again
-		writer.write({ format: "string", body: "c" });
-		writer.write({ format: "string", body: "d" });
+		writer.write({ body: "c" });
+		writer.write({ body: "d" });
 
 		const result2 = await reader.read();
 		expect(result2.done).toBe(false);
@@ -75,9 +75,9 @@ describe("BatchTransform", () => {
 		const writePromise = (async () => {
 			// Each record is ~13 bytes (8 overhead + 5 body)
 			// Two records = ~26 bytes, adding third would exceed 30
-			await writer.write({ format: "string", body: "hello" }); // ~13 bytes
-			await writer.write({ format: "string", body: "world" }); // ~13 bytes
-			await writer.write({ format: "string", body: "test!" }); // ~13 bytes
+			await writer.write({ body: "hello" }); // ~13 bytes
+			await writer.write({ body: "world" }); // ~13 bytes
+			await writer.write({ body: "test!" }); // ~13 bytes
 			await writer.close();
 		})();
 
@@ -106,8 +106,8 @@ describe("BatchTransform", () => {
 
 		// Write and close in parallel with reading
 		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "a" });
-			await writer.write({ format: "string", body: "b" });
+			await writer.write({ body: "a" });
+			await writer.write({ body: "b" });
 			await writer.close();
 		})();
 
@@ -132,8 +132,8 @@ describe("BatchTransform", () => {
 		const writer = batcher.writable.getWriter();
 		const reader = batcher.readable.getReader();
 
-		writer.write({ format: "bytes", body: new Uint8Array([1, 2, 3]) });
-		writer.write({ format: "bytes", body: new Uint8Array([4, 5, 6]) });
+		writer.write({ body: new Uint8Array([1, 2, 3]) });
+		writer.write({ body: new Uint8Array([4, 5, 6]) });
 
 		await new Promise((resolve) => setTimeout(resolve, 60));
 
@@ -151,11 +151,7 @@ describe("BatchTransform", () => {
 		});
 
 		// Create a readable stream of records
-		const records = [
-			{ format: "string", body: "a" },
-			{ format: "string", body: "b" },
-			{ format: "string", body: "c" },
-		];
+		const records = [{ body: "a" }, { body: "b" }, { body: "c" }];
 
 		const sourceStream = new ReadableStream({
 			async start(controller) {
@@ -194,7 +190,7 @@ describe("BatchTransform", () => {
 
 		// Write 5 records rapidly
 		for (let i = 0; i < 5; i++) {
-			writer.write({ format: "string", body: `record-${i}` });
+			writer.write({ body: `record-${i}` });
 		}
 
 		// Wait for linger
@@ -255,10 +251,10 @@ describe("BatchTransform", () => {
 		// Write and read concurrently
 		const writePromise = (async () => {
 			// Write 2 records - should flush immediately due to maxBatchRecords
-			await writer.write({ format: "string", body: "a" });
-			await writer.write({ format: "string", body: "b" });
+			await writer.write({ body: "a" });
+			await writer.write({ body: "b" });
 			// Write one more and immediately close
-			await writer.write({ format: "string", body: "c" });
+			await writer.write({ body: "c" });
 			await writer.close();
 		})();
 
@@ -285,16 +281,16 @@ describe("BatchTransform", () => {
 
 		// Write and close in parallel with reading
 		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "a" });
-			await writer.write({ format: "string", body: "b" });
-			await writer.write({ format: "string", body: "c" });
+			await writer.write({ body: "a" });
+			await writer.write({ body: "b" });
+			await writer.write({ body: "c" });
 			await writer.close();
 		})();
 
 		// Consume with for-await
-		const batches: Array<Array<{ body?: string; format: string }>> = [];
+		const batches: Array<Array<{ body?: string }>> = [];
 		for await (const batch of batcher.readable as unknown as AsyncIterable<{
-			records: Array<{ body?: string; format: string }>;
+			records: Array<{ body?: string }>;
 		}>) {
 			batches.push(batch.records);
 		}
@@ -318,9 +314,7 @@ describe("BatchTransform", () => {
 		const largeBody = "x".repeat(100);
 
 		// Write and read concurrently to avoid deadlock
-		const writePromise = writer
-			.write({ format: "string", body: largeBody })
-			.catch((err) => err);
+		const writePromise = writer.write({ body: largeBody }).catch((err) => err);
 		const readPromise = reader.read().catch((err) => err);
 
 		// Either the write or read should fail with the error
@@ -347,9 +341,7 @@ describe("BatchTransform", () => {
 		const largeBody = new Uint8Array(50); // 50 bytes + 8 overhead = 58 bytes
 
 		// Write and read concurrently to avoid deadlock
-		const writePromise = writer
-			.write({ format: "bytes", body: largeBody })
-			.catch((err) => err);
+		const writePromise = writer.write({ body: largeBody }).catch((err) => err);
 		const readPromise = reader.read().catch((err) => err);
 
 		// Either the write or read should fail with the error
@@ -374,8 +366,8 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "a" });
-			await writer.write({ format: "string", body: "b" });
+			await writer.write({ body: "a" });
+			await writer.write({ body: "b" });
 			await writer.close();
 		})();
 
@@ -400,12 +392,12 @@ describe("BatchTransform", () => {
 
 		const writePromise = (async () => {
 			// First batch: 2 records
-			await writer.write({ format: "string", body: "a" });
-			await writer.write({ format: "string", body: "b" });
+			await writer.write({ body: "a" });
+			await writer.write({ body: "b" });
 			// Second batch: 3 records
-			await writer.write({ format: "string", body: "c" });
-			await writer.write({ format: "string", body: "d" });
-			await writer.write({ format: "string", body: "e" });
+			await writer.write({ body: "c" });
+			await writer.write({ body: "d" });
+			await writer.write({ body: "e" });
 			await writer.close();
 		})();
 
@@ -440,7 +432,7 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "a" });
+			await writer.write({ body: "a" });
 			await writer.close();
 		})();
 
@@ -452,34 +444,5 @@ describe("BatchTransform", () => {
 
 		await writePromise;
 		reader.releaseLock();
-	});
-
-	it("rejects mixed format records", async () => {
-		const batcher = new BatchTransform<"string" | "bytes">({
-			lingerDuration: 10,
-		});
-
-		const writer = batcher.writable.getWriter();
-		const reader = batcher.readable.getReader();
-
-		// Write and read concurrently to avoid deadlock
-		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "a" });
-			// Try to write a bytes record - should fail
-			await writer.write({ format: "bytes", body: new Uint8Array([1, 2, 3]) });
-		})().catch((err) => err);
-
-		const readPromise = reader.read().catch((err) => err);
-
-		// Either the write or read should fail with the error
-		const [writeResult, readResult] = await Promise.all([
-			writePromise,
-			readPromise,
-		]);
-
-		// At least one should be an error
-		const error = writeResult instanceof S2Error ? writeResult : readResult;
-		expect(error).toBeInstanceOf(S2Error);
-		expect(error.message).toContain("Cannot batch bytes records with string");
 	});
 });

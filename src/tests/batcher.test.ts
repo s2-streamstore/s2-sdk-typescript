@@ -13,7 +13,7 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "x" });
+			await writer.write({ body: "x" });
 			await writer.close();
 		})();
 
@@ -38,10 +38,10 @@ describe("BatchTransform", () => {
 
 		const writePromise = (async () => {
 			// First batch: two records
-			await writer.write({ format: "string", body: "a" });
-			await writer.write({ format: "string", body: "b" });
+			await writer.write({ body: "a" });
+			await writer.write({ body: "b" });
 			// Second batch: one record
-			await writer.write({ format: "string", body: "c" });
+			await writer.write({ body: "c" });
 			await writer.close();
 		})();
 
@@ -63,35 +63,6 @@ describe("BatchTransform", () => {
 		reader.releaseLock();
 	});
 
-	it("rejects records with inconsistent format", async () => {
-		const batcher = new BatchTransform<"string" | "bytes">({
-			lingerDuration: 10,
-		});
-
-		const writer = batcher.writable.getWriter();
-		const reader = batcher.readable.getReader();
-
-		// Write and read concurrently to avoid deadlock
-		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "a" });
-			// Try to write a bytes record - should fail
-			await writer.write({ format: "bytes", body: new Uint8Array([1, 2, 3]) });
-		})().catch((err) => err);
-
-		const readPromise = reader.read().catch((err) => err);
-
-		// Either the write or read should fail with the error
-		const [writeResult, readResult] = await Promise.all([
-			writePromise,
-			readPromise,
-		]);
-
-		// At least one should be an error
-		const error = writeResult instanceof S2Error ? writeResult : readResult;
-		expect(error).toBeInstanceOf(S2Error);
-		expect(error.message).toContain("Cannot batch");
-	});
-
 	it("flushes immediately when max records reached", async () => {
 		const batcher = new BatchTransform<"string">({
 			lingerDuration: 1000, // Long linger
@@ -102,9 +73,9 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ format: "string", body: "a" });
-			await writer.write({ format: "string", body: "b" });
-			await writer.write({ format: "string", body: "c" });
+			await writer.write({ body: "a" });
+			await writer.write({ body: "b" });
+			await writer.write({ body: "c" });
 			await writer.close();
 		})();
 
@@ -133,9 +104,9 @@ describe("BatchTransform", () => {
 
 		const writePromise = (async () => {
 			// Each record is ~13 bytes (8 overhead + 5 body)
-			await writer.write({ format: "string", body: "hello" });
-			await writer.write({ format: "string", body: "world" });
-			await writer.write({ format: "string", body: "test!" });
+			await writer.write({ body: "hello" });
+			await writer.write({ body: "world" });
+			await writer.write({ body: "test!" });
 			await writer.close();
 		})();
 

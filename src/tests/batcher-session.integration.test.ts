@@ -23,7 +23,7 @@ describe("BatchTransform + AppendSession integration", () => {
 
 	it("linger-driven batching yields single session submission", async () => {
 		const stream = makeStream();
-		const session = await stream.appendSession("string");
+		const session = await stream.appendSession();
 		const appendSpy = vi.spyOn(stream, "append").mockResolvedValue(makeAck(1));
 
 		const batcher = new BatchTransform<"string">({
@@ -35,8 +35,8 @@ describe("BatchTransform + AppendSession integration", () => {
 		const pipePromise = batcher.readable.pipeTo(session);
 
 		const writer = batcher.writable.getWriter();
-		await writer.write({ format: "string", body: "a" });
-		await writer.write({ format: "string", body: "b" });
+		await writer.write({ body: "a" });
+		await writer.write({ body: "b" });
 		await writer.close();
 
 		// Wait for linger to flush and pipe to complete
@@ -49,7 +49,7 @@ describe("BatchTransform + AppendSession integration", () => {
 
 	it("batch overflow increments match_seq_num across multiple flushes", async () => {
 		const stream = makeStream();
-		const session = await stream.appendSession("string");
+		const session = await stream.appendSession();
 		const appendSpy = vi.spyOn(stream, "append");
 		appendSpy.mockResolvedValueOnce(makeAck(1));
 		appendSpy.mockResolvedValueOnce(makeAck(2));
@@ -64,9 +64,9 @@ describe("BatchTransform + AppendSession integration", () => {
 		const pipePromise = batcher.readable.pipeTo(session);
 
 		const writer = batcher.writable.getWriter();
-		await writer.write({ format: "string", body: "1" });
-		await writer.write({ format: "string", body: "2" });
-		await writer.write({ format: "string", body: "3" });
+		await writer.write({ body: "1" });
+		await writer.write({ body: "2" });
+		await writer.write({ body: "3" });
 		await writer.close();
 
 		await pipePromise;
@@ -78,7 +78,7 @@ describe("BatchTransform + AppendSession integration", () => {
 
 	it("batches are acknowledged via session.acks()", async () => {
 		const stream = makeStream();
-		const session = await stream.appendSession("string");
+		const session = await stream.appendSession();
 		vi.spyOn(stream, "append").mockResolvedValue(makeAck(123));
 
 		const batcher = new BatchTransform<"string">({
@@ -98,7 +98,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		const pipePromise = batcher.readable.pipeTo(session);
 
 		const writer = batcher.writable.getWriter();
-		await writer.write({ format: "string", body: "x" });
+		await writer.write({ body: "x" });
 		await writer.close();
 
 		// Wait for pipe to complete (which closes the session)
