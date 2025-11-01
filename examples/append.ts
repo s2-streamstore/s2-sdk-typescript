@@ -1,4 +1,4 @@
-import { AppendRecord, S2 } from "../src/index.js";
+import { AppendRecord, BatchTransform, S2 } from "../src/index.js";
 
 const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -13,72 +13,49 @@ const streams = await basin.streams.list();
 if (streams.streams[0]) {
 	const stream = basin.stream(streams.streams[0].name);
 	// Create an append session
-	const session = await stream.appendSession();
+	const session = await stream.appendSession("string");
 
-	// Create a batcher with options
-	const batcher = session.makeBatcher({
-		lingerDuration: 20, // 20ms
-		maxBatchSize: 10,
-	});
-
-	// Submit individual records to the batcher
-	// These will be batched and sent automatically
-	// Now returns promises that resolve when acks are received
-	const promise1 = batcher.submit(AppendRecord.make("record 1"));
-	const promise2 = batcher.submit(AppendRecord.make("record 2"));
-	const promise3 = batcher.submit([
-		AppendRecord.make("record 3"),
-		AppendRecord.make("record 4"),
-	]);
-
-	// You can also submit directly to the session (bypasses batching)
-	const urgentPromise = session.submit(AppendRecord.make("urgent record"));
-
-	// The batcher will continue batching
-	const promise4 = batcher.submit(AppendRecord.make("record 5"));
-
-	// Wait for all acks to come back
-	const allAcks = await Promise.all([
-		promise1,
-		promise2,
-		promise3,
-		urgentPromise,
-		promise4,
-	]);
-	console.log("All records acknowledged:", allAcks);
-
-	// Flush and close the batcher
-	batcher.flush();
-	await batcher.close();
+	// You can submit directly to the session and get acknowledgement promises
+	const ack1 = await session.submit([AppendRecord.make.string("record 1")]);
+	const ack2 = await session.submit([AppendRecord.make.string("record 2")]);
+	console.log("Direct submits acknowledged:", ack1, ack2);
 
 	// Close the session (waits for all appends to complete)
 	await session.close();
 
-	// You can also use the acks stream to track acknowledgements
-	const session2 = await stream.appendSession();
-	const acks = session2.acks();
+	// Example: Using BatchTransform with streaming pipeline
+	const session2 = await stream.appendSession("string");
 
-	// Read acks in parallel with submitting
-	(async () => {
-		for await (const ack of acks) {
+	// Create a batcher that will batch records
+	const batcher = new BatchTransform<"string">({
+		lingerDuration: 20,
+		maxBatchRecords: 10,
+	});
+
+	// Pipe batches directly to the session
+	const pipePromise = batcher.readable.pipeTo(session2);
+
+	// Collect acks in the background
+	const acksPromise = (async () => {
+		const collectedAcks = [];
+		for await (const ack of session2.acks()) {
 			console.log("Received ack:", ack);
+			collectedAcks.push(ack);
 		}
+		return collectedAcks;
 	})();
 
-	const ack = await session2.submit([{ body: "test" }]);
-	console.log("Single record ack:", ack);
+	// Write records to the batcher
+	const writer = batcher.writable.getWriter();
+	await writer.write(AppendRecord.make.string("batched record 1"));
+	await writer.write(AppendRecord.make.string("batched record 2"));
+	await writer.write(AppendRecord.make.string("batched record 3"));
+	await writer.close();
 
-	await session2.close();
+	// Wait for pipeline to complete
+	await pipePromise;
 
-	// Example: Error handling with promises
-	const session3 = await stream.appendSession();
-	try {
-		const errorPromise = session3.submit([{ body: "will fail" }]);
-		// If there's an error (e.g., network issue, validation error),
-		// the promise will reject
-		await errorPromise;
-	} catch (error) {
-		console.error("Append failed:", error);
-	}
-	await session3.close();
+	// Get all the acks
+	const allAcks = await acksPromise;
+	console.log("All batched records acknowledged:", allAcks);
 }

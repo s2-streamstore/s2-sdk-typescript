@@ -1,216 +1,155 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppendAck } from "../generated/index.js";
-import type { AppendRecord } from "../stream.js";
-import { S2Stream } from "../stream.js";
+import { describe, expect, it } from "vitest";
+import { BatchTransform } from "../batch-transform.js";
+import { S2Error } from "../error.js";
 
-const fakeClient: any = {};
-const makeStream = () => new S2Stream("test-stream", fakeClient);
-const makeAck = (n: number): AppendAck => ({
-	start: { seq_num: n - 1, timestamp: 0 },
-	end: { seq_num: n, timestamp: 0 },
-	tail: { seq_num: n, timestamp: 0 },
-});
-
-describe("Batcher", () => {
-	beforeEach(() => {
-		vi.useFakeTimers();
-	});
-
-	afterEach(() => {
-		vi.useRealTimers();
-		vi.restoreAllMocks();
-	});
-
-	it("batches submits within linger window into single session.submit", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		const submitSpy = vi.spyOn(session, "submit").mockResolvedValue(makeAck(1));
-
-		const batcher = session.makeBatcher({
-			lingerDuration: 20,
-			maxBatchSize: 10,
-		});
-
-		const p1 = batcher.submit({ body: "a" });
-		const p2 = batcher.submit({ body: "b" });
-
-		// nothing flushed yet
-		expect(submitSpy).toHaveBeenCalledTimes(0);
-
-		await vi.advanceTimersByTimeAsync(20);
-
-		// now one flush
-		await Promise.all([p1, p2]);
-		expect(submitSpy).toHaveBeenCalledTimes(1);
-		const firstCall = submitSpy.mock.calls[0] as unknown[];
-		const recordsArg = firstCall?.[0] as AppendRecord[];
-		expect(recordsArg).toHaveLength(2);
-	});
-
-	it("manual flush cancels timer and sends immediately", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		const submitSpy = vi
-			.spyOn(session, "submit")
-			.mockResolvedValue(makeAck(99));
-
-		const batcher = session.makeBatcher({
+describe("BatchTransform", () => {
+	it("close() flushes remaining records", async () => {
+		const batcher = new BatchTransform<"string">({
 			lingerDuration: 1000,
-			maxBatchSize: 10,
-		});
-		const p = batcher.submit({ body: "x" });
-		batcher.flush();
-
-		await p;
-		expect(submitSpy).toHaveBeenCalledTimes(1);
-	});
-
-	it("close() flushes remaining and prevents further submit", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		vi.spyOn(session, "submit").mockResolvedValue(makeAck(1));
-		const batcher = session.makeBatcher({
-			lingerDuration: 1000,
-			maxBatchSize: 10,
+			maxBatchRecords: 10,
 		});
 
-		const p = batcher.submit({ body: "x" });
-		await batcher.close();
-		await p;
+		const writer = batcher.writable.getWriter();
+		const reader = batcher.readable.getReader();
 
-		await expect(batcher.submit({ body: "y" })).rejects.toMatchObject({
-			message: expect.stringContaining("Batcher is closed"),
-		});
-	});
+		const writePromise = (async () => {
+			await writer.write({ format: "string", body: "x" });
+			await writer.close();
+		})();
 
-	it("abort rejects pending with S2Error, clears batch", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		vi.spyOn(session, "submit").mockResolvedValue(makeAck(1));
-		const batcher = session.makeBatcher({
-			lingerDuration: 1000,
-			maxBatchSize: 10,
-		});
+		const result = await reader.read();
+		expect(result.done).toBe(false);
+		expect(result.value?.records).toHaveLength(1);
 
-		const p = batcher.submit({ body: "x" });
-		const writer = batcher.getWriter?.() ?? batcher;
-		await writer.abort?.("stop");
-
-		await expect(p).rejects.toMatchObject({
-			message: expect.stringContaining("Batcher was aborted: stop"),
-		});
+		await writePromise;
+		reader.releaseLock();
 	});
 
 	it("propagates fencing_token and auto-increments match_seq_num across batches", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		const submitSpy = vi.spyOn(session, "submit");
-		submitSpy.mockResolvedValueOnce(makeAck(1));
-		submitSpy.mockResolvedValueOnce(makeAck(2));
-
-		const batcher = session.makeBatcher({
+		const batcher = new BatchTransform<"string">({
 			lingerDuration: 0,
-			maxBatchSize: 2,
+			maxBatchRecords: 2,
 			fencing_token: "ft",
 			match_seq_num: 10,
 		});
 
-		// First batch: two records
-		const p1 = batcher.submit([{ body: "a" }, { body: "b" }]);
-		batcher.flush();
-		await p1;
-		// Second batch: one record
-		const p2 = batcher.submit([{ body: "c" }]);
-		batcher.flush();
-		await p2;
+		const writer = batcher.writable.getWriter();
+		const reader = batcher.readable.getReader();
 
-		expect(submitSpy).toHaveBeenCalledTimes(2);
-		const c0 = submitSpy.mock.calls[0] as unknown[];
-		const c1 = submitSpy.mock.calls[1] as unknown[];
-		expect(c0?.[1]).toMatchObject({
-			fencing_token: "ft",
-			match_seq_num: 10,
-		});
-		expect(c1?.[1]).toMatchObject({
-			fencing_token: "ft",
-			match_seq_num: 12,
-		});
+		const writePromise = (async () => {
+			// First batch: two records
+			await writer.write({ format: "string", body: "a" });
+			await writer.write({ format: "string", body: "b" });
+			// Second batch: one record
+			await writer.write({ format: "string", body: "c" });
+			await writer.close();
+		})();
+
+		// First batch should have match_seq_num: 10 (2 records)
+		const result1 = await reader.read();
+		expect(result1.done).toBe(false);
+		expect(result1.value?.records).toHaveLength(2);
+		expect(result1.value?.fencing_token).toBe("ft");
+		expect(result1.value?.match_seq_num).toBe(10);
+
+		// Second batch should have match_seq_num: 12 (incremented by 2)
+		const result2 = await reader.read();
+		expect(result2.done).toBe(false);
+		expect(result2.value?.records).toHaveLength(1);
+		expect(result2.value?.fencing_token).toBe("ft");
+		expect(result2.value?.match_seq_num).toBe(12);
+
+		await writePromise;
+		reader.releaseLock();
 	});
 
-	it("array submit is atomic: if it won't fit, flush current then enqueue whole array", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		const submitSpy = vi.spyOn(session, "submit").mockResolvedValue(makeAck(1));
-
-		const batcher = session.makeBatcher({
-			lingerDuration: 0,
-			maxBatchSize: 3,
+	it("rejects records with inconsistent format", async () => {
+		const batcher = new BatchTransform<"string" | "bytes">({
+			lingerDuration: 10,
 		});
 
-		// Fill current batch with two singles (no auto flush because linger=0)
-		batcher.submit({ body: "a" });
-		batcher.submit({ body: "b" });
+		const writer = batcher.writable.getWriter();
+		const reader = batcher.readable.getReader();
 
-		// Now submit an array of 2 (atomic). Since 2+2>3, it flushes current 2,
-		// then enqueues both array records into the next batch
-		const p = batcher.submit([{ body: "c" }, { body: "d" }]);
+		// Write and read concurrently to avoid deadlock
+		const writePromise = (async () => {
+			await writer.write({ format: "string", body: "a" });
+			// Try to write a bytes record - should fail
+			await writer.write({ format: "bytes", body: new Uint8Array([1, 2, 3]) });
+		})().catch((err) => err);
 
-		// First flush happened immediately for the two singles
-		expect(submitSpy).toHaveBeenCalledTimes(1);
-		expect(
-			(submitSpy.mock.calls[0] as unknown[])?.[0] as AppendRecord[],
-		).toHaveLength(2);
+		const readPromise = reader.read().catch((err) => err);
 
-		// Explicitly flush the array batch because linger=0
-		batcher.flush();
-		await p;
-		expect(submitSpy).toHaveBeenCalledTimes(2);
-		expect(
-			(submitSpy.mock.calls[1] as unknown[])?.[0] as AppendRecord[],
-		).toHaveLength(2);
+		// Either the write or read should fail with the error
+		const [writeResult, readResult] = await Promise.all([
+			writePromise,
+			readPromise,
+		]);
+
+		// At least one should be an error
+		const error = writeResult instanceof S2Error ? writeResult : readResult;
+		expect(error).toBeInstanceOf(S2Error);
+		expect(error.message).toContain("Cannot batch");
 	});
 
-	it("array submit never splits across batches and resolves with single batch ack", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		const submitSpy = vi.spyOn(session, "submit");
+	it("flushes immediately when max records reached", async () => {
+		const batcher = new BatchTransform<"string">({
+			lingerDuration: 1000, // Long linger
+			maxBatchRecords: 2,
+		});
 
-		// Two submits will occur: first flush of existing single; second flush of the array
-		submitSpy.mockResolvedValueOnce(makeAck(1));
-		submitSpy.mockResolvedValueOnce(makeAck(2));
-		const batcher = session.makeBatcher({ lingerDuration: 0, maxBatchSize: 2 });
+		const writer = batcher.writable.getWriter();
+		const reader = batcher.readable.getReader();
 
-		// Fill current batch to 1
-		batcher.submit({ body: "x" });
-		// Submit 2-record array: should flush current (1), then submit both together (2)
-		const promise = batcher.submit([{ body: "a" }, { body: "b" }]);
+		const writePromise = (async () => {
+			await writer.write({ format: "string", body: "a" });
+			await writer.write({ format: "string", body: "b" });
+			await writer.write({ format: "string", body: "c" });
+			await writer.close();
+		})();
 
-		expect(submitSpy).toHaveBeenCalledTimes(1);
-		expect(
-			(submitSpy.mock.calls[0] as unknown[])?.[0] as AppendRecord[],
-		).toHaveLength(1);
+		// First batch should flush immediately with 2 records
+		const result1 = await reader.read();
+		expect(result1.done).toBe(false);
+		expect(result1.value?.records).toHaveLength(2);
 
-		batcher.flush();
-		await promise;
-		expect(submitSpy).toHaveBeenCalledTimes(2);
-		expect(
-			(submitSpy.mock.calls[1] as unknown[])?.[0] as AppendRecord[],
-		).toHaveLength(2);
+		// Second batch should have 1 record (flushed on close)
+		const result2 = await reader.read();
+		expect(result2.done).toBe(false);
+		expect(result2.value?.records).toHaveLength(1);
+
+		await writePromise;
+		reader.releaseLock();
 	});
 
-	it("array submit rejects if its single batch fails", async () => {
-		const stream = makeStream();
-		const session = await stream.appendSession();
-		const submitSpy = vi.spyOn(session, "submit");
+	it("flushes when max bytes reached", async () => {
+		const batcher = new BatchTransform<"string">({
+			lingerDuration: 1000,
+			maxBatchBytes: 30, // Small batch size
+		});
 
-		submitSpy.mockRejectedValueOnce(new Error("batch failed"));
+		const writer = batcher.writable.getWriter();
+		const reader = batcher.readable.getReader();
 
-		const batcher = session.makeBatcher({ lingerDuration: 0, maxBatchSize: 2 });
-		const promise = batcher.submit([{ body: "a" }, { body: "b" }]);
-		// suppress unhandled rejection warning
-		promise.catch(() => {});
+		const writePromise = (async () => {
+			// Each record is ~13 bytes (8 overhead + 5 body)
+			await writer.write({ format: "string", body: "hello" });
+			await writer.write({ format: "string", body: "world" });
+			await writer.write({ format: "string", body: "test!" });
+			await writer.close();
+		})();
 
-		batcher.flush();
-		await expect(promise).rejects.toThrow("batch failed");
+		// Should get first batch with 2 records
+		const result1 = await reader.read();
+		expect(result1.done).toBe(false);
+		expect(result1.value?.records).toHaveLength(2);
+
+		// Third record starts new batch
+		const result2 = await reader.read();
+		expect(result2.done).toBe(false);
+		expect(result2.value?.records).toHaveLength(1);
+
+		await writePromise;
+		reader.releaseLock();
 	});
 });

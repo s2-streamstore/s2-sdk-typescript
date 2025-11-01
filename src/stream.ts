@@ -20,6 +20,7 @@ import {
 } from "./generated/index.js";
 import { decodeFromBase64, encodeToBase64 } from "./lib/base64.js";
 import { EventStream } from "./lib/event-stream.js";
+import { meteredSizeBytes } from "./utils.js";
 
 export class S2Stream {
 	private readonly client: Client;
@@ -121,9 +122,16 @@ export class S2Stream {
 	/**
 	 * Append one or more records to the stream.
 	 *
-	 * - Automatically base64-encodes when any body or header is a `Uint8Array`.
+	 * - Automatically base64-encodes when format is "bytes".
 	 * - Supports conditional appends via `fencing_token` and `match_seq_num`.
 	 * - Returns the acknowledged range and the stream tail after the append.
+	 *
+	 * All records in a single append call must use the same format (either all string or all bytes).
+	 * For high-throughput sequential appends, use `appendSession()` instead.
+	 *
+	 * @param records The record(s) to append
+	 * @param args Optional append arguments (fencing_token, match_seq_num)
+	 * @param options Optional request options
 	 */
 	public async append(
 		records: AppendRecord | AppendRecord[],
@@ -131,53 +139,70 @@ export class S2Stream {
 		options?: S2RequestOptions,
 	): Promise<AppendAck> {
 		const recordsArray = Array.isArray(records) ? records : [records];
-		const normalizeHeaders = (
-			headers: AppendRecord["headers"],
-		): [string | Uint8Array, string | Uint8Array][] | undefined => {
-			if (headers === undefined) {
-				return undefined;
-			} else if (Array.isArray(headers)) {
-				return headers;
-			} else {
-				return Object.entries(headers).map(([key, value]) => [key, value]);
+
+		if (recordsArray.length === 0) {
+			throw new S2Error({ message: "Cannot append empty array of records" });
+		}
+
+		// Validate format consistency and calculate total size in a single pass
+		const format = recordsArray[0]!.format;
+		let batchMeteredSize = 0;
+
+		for (const record of recordsArray) {
+			if (record.format !== format) {
+				throw new S2Error({
+					message:
+						"All records in a batch must have the same format (either all 'string' or all 'bytes')",
+				});
 			}
-		};
+			batchMeteredSize += meteredSizeBytes(record);
+		}
 
-		const recordsWithNormalizedHeaders = recordsArray.map((record) => ({
-			...record,
-			headers: normalizeHeaders(record.headers),
-		}));
+		if (batchMeteredSize > 1024 * 1024) {
+			throw new S2Error({
+				message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
+			});
+		}
+		if (recordsArray.length > 1000) {
+			throw new S2Error({
+				message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
+			});
+		}
 
-		const hasBytes =
-			recordsWithNormalizedHeaders.some(
-				(record) => record.body instanceof Uint8Array,
-			) ||
-			recordsWithNormalizedHeaders.some((record) =>
-				record.headers?.some(
-					(header) =>
-						header[0] instanceof Uint8Array || header[1] instanceof Uint8Array,
-				),
-			);
+		let encodedRecords: GeneratedAppendRecord[];
 
-		const encodedRecords = recordsWithNormalizedHeaders.map((record) => ({
-			...record,
-			body:
-				record.body instanceof Uint8Array
-					? encodeToBase64(record.body)
-					: hasBytes && record.body
-						? encodeToBase64(new TextEncoder().encode(record.body))
-						: record.body,
-			headers: record.headers?.map(
-				(header) =>
-					header.map((h) =>
-						h instanceof Uint8Array
-							? encodeToBase64(h)
-							: hasBytes
-								? encodeToBase64(new TextEncoder().encode(h))
-								: h,
-					) as [string, string],
-			),
-		}));
+		if (format === "bytes") {
+			const bytesRecords = recordsArray as BytesAppendRecord[];
+
+			encodedRecords = bytesRecords.map((record) => ({
+				body: record.body ? encodeToBase64(record.body) : undefined,
+				headers: record.headers?.map((header) =>
+					header.map((h) => encodeToBase64(h)),
+				) as [string, string][] | undefined,
+				timestamp: record.timestamp,
+			}));
+		} else {
+			const stringRecords = recordsArray as StringAppendRecord[];
+
+			// Normalize headers to array format
+			const normalizeHeaders = (
+				headers: StringAppendRecord["headers"],
+			): [string, string][] | undefined => {
+				if (headers === undefined) {
+					return undefined;
+				} else if (Array.isArray(headers)) {
+					return headers;
+				} else {
+					return Object.entries(headers);
+				}
+			};
+
+			encodedRecords = stringRecords.map((record) => ({
+				body: record.body,
+				headers: normalizeHeaders(record.headers),
+				timestamp: record.timestamp,
+			}));
+		}
 
 		const response = await append({
 			client: this.client,
@@ -185,11 +210,12 @@ export class S2Stream {
 				stream: this.name,
 			},
 			body: {
-				...args,
-				records: encodedRecords,
+				fencing_token: args?.fencing_token,
+				match_seq_num: args?.match_seq_num,
+				records: encodedRecords as GeneratedAppendRecord[],
 			},
 			headers: {
-				...(hasBytes ? { "s2-format": "base64" } : {}),
+				...(format === "bytes" ? { "s2-format": "base64" } : {}),
 			},
 			...options,
 		});
@@ -240,14 +266,24 @@ export class S2Stream {
 		return await ReadSession.create(this.client, this.name, args, options);
 	}
 	/**
-	 * Create an append session that guaranteeds ordering of submissions.
+	 * Create an append session that guarantees ordering of submissions.
 	 *
 	 * Use this to coordinate high-throughput, sequential appends with backpressure.
+	 * Records can be either string or bytes format - the format is specified in each record.
+	 *
+	 * @param options Optional request options
 	 */
-	public async appendSession(
-		options?: S2RequestOptions,
-	): Promise<AppendSession> {
-		return await AppendSession.create(this, options);
+	public async appendSession<F extends "string" | "bytes">(
+		format: F,
+		sessionOptions?: AppendSessionOptions,
+		requestOptions?: S2RequestOptions,
+	): Promise<AppendSession<F>> {
+		return await AppendSession.create(
+			this,
+			format,
+			sessionOptions,
+			requestOptions,
+		);
 	}
 }
 
@@ -272,18 +308,38 @@ export type ReadArgs<Format extends "string" | "bytes" = "string"> =
 		as?: Format;
 	};
 
-export type AppendRecord = Omit<GeneratedAppendRecord, "body" | "headers"> & {
-	body?: string | Uint8Array;
-	headers?:
-		| Array<[string | Uint8Array, string | Uint8Array]>
-		| Record<string, string | Uint8Array>;
+export type StringAppendRecord = Omit<
+	GeneratedAppendRecord,
+	"body" | "headers"
+> & {
+	format: "string";
+	body?: string;
+	headers?: Array<[string, string]> | Record<string, string>;
 };
 
-export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
-	records: Array<AppendRecord>;
+export type BytesAppendRecord = Omit<
+	GeneratedAppendRecord,
+	"body" | "headers"
+> & {
+	format: "bytes";
+	body?: Uint8Array;
+	headers?: Array<[Uint8Array, Uint8Array]>;
 };
 
-export class ReadSession<
+
+export type AppendRecord = StringAppendRecord | BytesAppendRecord;
+
+export type StringAppendArgs = Omit<GeneratedAppendInput, "records"> & {
+	records: Array<StringAppendRecord>;
+};
+
+export type BytesAppendArgs = Omit<GeneratedAppendInput, "records"> & {
+	records: Array<BytesAppendRecord>;
+};
+
+export type AppendArgs = StringAppendArgs | BytesAppendArgs;
+
+class ReadSession<
 	Format extends "string" | "bytes" = "string",
 > extends EventStream<SequencedRecord<Format>> {
 	static async create<Format extends "string" | "bytes" = "string">(
@@ -418,216 +474,37 @@ class AcksStream extends ReadableStream<AppendAck> implements AsyncDisposable {
 	}
 }
 
-interface BatcherArgs {
-	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
-	lingerDuration?: number;
-	/** Maximum number of records in a batch (default: 1000) */
-	maxBatchSize?: number;
-	/** Optional fencing token to enforce (remains static across batches) */
-	fencing_token?: string;
-	/** Optional sequence number to match for first batch (auto-increments for subsequent batches) */
-	match_seq_num?: number;
-}
+/** Helper type to get the correct AppendRecord type based on format */
+type RecordForFormat<F extends "string" | "bytes"> = F extends "string"
+	? StringAppendRecord
+	: BytesAppendRecord;
 
-/**
- * Batches individual records and submits them to an AppendSession.
- * Handles linger duration, batch size limits, and auto-incrementing match_seq_num.
- */
-class Batcher
-	extends WritableStream<AppendRecord | AppendRecord[]>
-	implements AsyncDisposable
-{
-	private session: AppendSession;
-	private currentBatch: AppendRecord[] = [];
-	private currentBatchResolvers: Array<{
-		resolve: (ack: AppendAck) => void;
-		reject: (error: any) => void;
-	}> = [];
-	private lingerTimer: ReturnType<typeof setTimeout> | null = null;
-	private closed = false;
-	private readonly maxBatchSize: number;
-	private readonly lingerDuration: number;
-	private readonly fencing_token?: string;
-	private next_match_seq_num?: number;
+/** Helper type to get the correct AppendArgs type based on format */
+type AppendArgsForFormat<F extends "string" | "bytes"> = F extends "string"
+	? StringAppendArgs
+	: BytesAppendArgs;
 
-	constructor(session: AppendSession, args?: BatcherArgs) {
-		let writableController: WritableStreamDefaultController;
-
-		super({
-			start: (controller) => {
-				writableController = controller;
-			},
-			write: (chunk) => {
-				const records = Array.isArray(chunk) ? chunk : [chunk];
-				this.submit(records);
-			},
-			close: () => {
-				this.closed = true;
-				this.flush();
-				this.cleanup();
-			},
-			abort: (reason) => {
-				this.closed = true;
-
-				// Reject all pending promises in the current batch
-				const error = new S2Error({
-					message: `Batcher was aborted: ${reason}`,
-				});
-				for (const resolver of this.currentBatchResolvers) {
-					resolver.reject(error);
-				}
-
-				this.currentBatch = [];
-				this.currentBatchResolvers = [];
-				this.cleanup();
-			},
-		});
-
-		this.session = session;
-		this.maxBatchSize = args?.maxBatchSize ?? 1000;
-		this.lingerDuration = args?.lingerDuration ?? 5;
-		this.fencing_token = args?.fencing_token;
-		this.next_match_seq_num = args?.match_seq_num;
-	}
-
-	async [Symbol.asyncDispose]() {
-		await this.close();
-	}
-
-	/**
-	 * Submit one or more records to be batched.
-	 * For array submits, the entire array is treated as an atomic unit and will never be split across batches.
-	 * If it doesn't fit in the current batch, the current batch is flushed and the array is queued in the next batch.
-	 * Returns a promise that resolves when the batch containing these records is acknowledged.
-	 */
-	submit(records: AppendRecord | AppendRecord[]): Promise<AppendAck> {
-		if (this.closed) {
-			return Promise.reject(new S2Error({ message: "Batcher is closed" }));
-		}
-
-		return new Promise((resolve, reject) => {
-			const recordsArray = Array.isArray(records) ? records : [records];
-			const isArraySubmit = Array.isArray(records) && records.length > 1;
-
-			// Start linger timer on first record added to an empty batch
-			if (this.currentBatch.length === 0 && this.lingerDuration > 0) {
-				this.startLingerTimer();
-			}
-
-			if (isArraySubmit) {
-				// Treat the entire array as atomic: if it doesn't fit, flush current batch first
-				if (
-					this.currentBatch.length > 0 &&
-					this.currentBatch.length + recordsArray.length > this.maxBatchSize
-				) {
-					this.flush();
-					// After flush, if linger is enabled, restart the timer for the new batch
-					if (this.lingerDuration > 0) {
-						this.startLingerTimer();
-					}
-				}
-
-				// Add the entire array (even if it exceeds maxBatchSize) as a single batch unit
-				this.currentBatch.push(...recordsArray);
-				this.currentBatchResolvers.push({ resolve, reject });
-				// Do not auto-flush here; allow linger timer or explicit flush to send the batch
-			} else {
-				// Single record submit — normal behavior
-				if (this.currentBatch.length >= this.maxBatchSize) {
-					this.flush();
-					if (this.lingerDuration > 0) {
-						this.startLingerTimer();
-					}
-				}
-				this.currentBatch.push(recordsArray[0]!);
-				this.currentBatchResolvers.push({ resolve, reject });
-				if (this.currentBatch.length >= this.maxBatchSize) {
-					this.flush();
-				}
-			}
-		});
-	}
-
-	/**
-	 * Flush the current batch to the session.
-	 */
-	flush(): void {
-		this.cancelLingerTimer();
-
-		if (this.currentBatch.length === 0) {
-			return;
-		}
-
-		const args: AppendArgs = {
-			records: this.currentBatch,
-			fencing_token: this.fencing_token,
-			match_seq_num: this.next_match_seq_num,
-		};
-
-		// Auto-increment match_seq_num for next batch
-		if (this.next_match_seq_num !== undefined) {
-			this.next_match_seq_num += this.currentBatch.length;
-		}
-
-		// Capture resolvers for this batch
-		const batchResolvers = this.currentBatchResolvers;
-		this.currentBatchResolvers = [];
-		this.currentBatch = [];
-
-		// Submit to session and handle promise
-		const promise = this.session.submit(args.records, {
-			fencing_token: args.fencing_token,
-			match_seq_num: args.match_seq_num,
-		});
-
-		// Resolve/reject all resolvers for this batch when the ack comes back
-		promise.then(
-			(ack) => {
-				for (const resolver of batchResolvers) {
-					resolver.resolve(ack);
-				}
-			},
-			(error) => {
-				for (const resolver of batchResolvers) {
-					resolver.reject(error);
-				}
-			},
-		);
-	}
-
-	private startLingerTimer(): void {
-		this.cancelLingerTimer();
-
-		this.lingerTimer = setTimeout(() => {
-			this.lingerTimer = null;
-			if (!this.closed && this.currentBatch.length > 0) {
-				this.flush();
-			}
-		}, this.lingerDuration);
-	}
-
-	private cancelLingerTimer(): void {
-		if (this.lingerTimer) {
-			clearTimeout(this.lingerTimer);
-			this.lingerTimer = null;
-		}
-	}
-
-	private cleanup(): void {
-		this.cancelLingerTimer();
-	}
+interface AppendSessionOptions {
+	/** Maximum bytes to queue before applying backpressure (default: 10 MiB) */
+	maxQueuedBytes?: number;
 }
 
 /**
  * Session for appending records to a stream.
  * Queues append requests and ensures only one is in-flight at a time.
  */
-class AppendSession
-	extends WritableStream<AppendArgs>
+class AppendSession<F extends "string" | "bytes">
+	extends WritableStream<AppendArgsForFormat<F>>
 	implements AsyncDisposable
 {
+	readonly format: F;
 	private _lastSeenPosition: AppendAck | undefined = undefined;
-	private queue: AppendArgs[] = [];
+	private queue: Array<{
+		records: RecordForFormat<F>[];
+		fencing_token?: string;
+		match_seq_num?: number;
+		meteredSize: number;
+	}> = [];
 	private pendingResolvers: Array<{
 		resolve: (ack: AppendAck) => void;
 		reject: (error: any) => void;
@@ -641,23 +518,57 @@ class AppendSession
 	private _acksStream: AcksStream | undefined;
 	private closed = false;
 	private processingPromise: Promise<void> | null = null;
+	private queuedBytes = 0;
+	private readonly maxQueuedBytes: number;
+	private waitingForCapacity: Array<() => void> = [];
 
-	static async create(stream: S2Stream, options?: S2RequestOptions) {
-		return new AppendSession(stream, options);
+	static async create<F extends "string" | "bytes">(
+		stream: S2Stream,
+		format: F,
+		sessionOptions?: AppendSessionOptions,
+		requestOptions?: S2RequestOptions,
+	): Promise<AppendSession<F>> {
+		return new AppendSession(stream, format, sessionOptions, requestOptions);
 	}
 
-	private constructor(stream: S2Stream, options?: S2RequestOptions) {
+	private constructor(
+		stream: S2Stream,
+		format: F,
+		sessionOptions?: AppendSessionOptions,
+		requestOptions?: S2RequestOptions,
+	) {
 		let writableController: WritableStreamDefaultController;
 
 		super({
 			start: (controller) => {
 				writableController = controller;
 			},
-			write: (chunk) => {
-				this.submit(chunk.records, {
-					fencing_token: chunk.fencing_token,
-					match_seq_num: chunk.match_seq_num,
-				});
+			write: async (chunk) => {
+				// Calculate batch size
+				let batchMeteredSize = 0;
+				for (const record of chunk.records) {
+					batchMeteredSize += meteredSizeBytes(record as AppendRecord);
+				}
+
+				// Wait for capacity if needed
+				while (
+					this.queuedBytes + batchMeteredSize > this.maxQueuedBytes &&
+					!this.closed
+				) {
+					await new Promise<void>((resolve) => {
+						this.waitingForCapacity.push(resolve);
+					});
+				}
+
+				// Submit the batch
+				this.submit(
+					chunk.records as RecordForFormat<F>[],
+					{
+						fencing_token: chunk.fencing_token ?? undefined,
+						match_seq_num: chunk.match_seq_num ?? undefined,
+					},
+					batchMeteredSize,
+				);
 			},
 			close: async () => {
 				this.closed = true;
@@ -666,6 +577,7 @@ class AppendSession
 			abort: async (reason) => {
 				this.closed = true;
 				this.queue = [];
+				this.queuedBytes = 0;
 
 				// Reject all pending promises
 				const error = new S2Error({
@@ -675,21 +587,22 @@ class AppendSession
 					resolver.reject(error);
 				}
 				this.pendingResolvers = [];
+
+				// Reject all waiting for capacity
+				for (const resolver of this.waitingForCapacity) {
+					resolver();
+				}
+				this.waitingForCapacity = [];
 			},
 		});
-		this.options = options;
+		this.format = format;
+		this.options = requestOptions;
 		this.stream = stream;
+		this.maxQueuedBytes = sessionOptions?.maxQueuedBytes ?? 10 * 1024 * 1024; // 10 MiB default
 	}
 
 	async [Symbol.asyncDispose]() {
 		await this.close();
-	}
-
-	/**
-	 * Create a batcher that batches individual records and submits them to this session.
-	 */
-	makeBatcher(args?: BatcherArgs): Batcher {
-		return new Batcher(this, args);
 	}
 
 	/**
@@ -710,8 +623,9 @@ class AppendSession
 	 * Returns a promise that resolves when the append is acknowledged or rejects on error.
 	 */
 	submit(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records">,
+		records: RecordForFormat<F> | RecordForFormat<F>[],
+		args?: { fencing_token?: string; match_seq_num?: number },
+		precalculatedSize?: number,
 	): Promise<AppendAck> {
 		if (this.closed) {
 			return Promise.reject(
@@ -719,11 +633,49 @@ class AppendSession
 			);
 		}
 
+		const recordsArray = Array.isArray(records) ? records : [records];
+
+		// Validate batch size limits
+		if (recordsArray.length > 1000) {
+			return Promise.reject(
+				new S2Error({
+					message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
+				}),
+			);
+		}
+
+		// Validate metered size (use precalculated if provided)
+		let batchMeteredSize = precalculatedSize ?? 0;
+		if (batchMeteredSize === 0) {
+			const sessionFormat = this.format;
+			for (const record of recordsArray) {
+				if (record.format !== sessionFormat) {
+					return Promise.reject(
+						new S2Error({
+							message: `Cannot submit ${record.format} records to a ${sessionFormat} format session`,
+						}),
+					);
+				}
+				batchMeteredSize += meteredSizeBytes(record);
+			}
+		}
+
+		if (batchMeteredSize > 1024 * 1024) {
+			return Promise.reject(
+				new S2Error({
+					message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
+				}),
+			);
+		}
+
 		return new Promise((resolve, reject) => {
 			this.queue.push({
-				records: Array.isArray(records) ? records : [records],
-				...args,
+				records: recordsArray,
+				fencing_token: args?.fencing_token,
+				match_seq_num: args?.match_seq_num,
+				meteredSize: batchMeteredSize,
 			});
+			this.queuedBytes += batchMeteredSize;
 			this.pendingResolvers.push({ resolve, reject });
 
 			// Start processing if not already running
@@ -760,6 +712,15 @@ class AppendSession
 
 				// Resolve the promise for this request
 				resolver.resolve(ack);
+
+				// Release capacity and wake up waiting writers
+				this.queuedBytes -= args.meteredSize;
+				while (this.waitingForCapacity.length > 0) {
+					const waiter = this.waitingForCapacity.shift()!;
+					waiter();
+					// Only wake one at a time - let them check capacity again
+					break;
+				}
 			} catch (error) {
 				this.inFlight = false;
 				this.processingPromise = null;
@@ -773,8 +734,15 @@ class AppendSession
 				}
 				this.pendingResolvers = [];
 
-				// Clear the queue
+				// Clear the queue and reset queued bytes
 				this.queue = [];
+				this.queuedBytes = 0;
+
+				// Wake up all waiting writers (they'll see the closed state or retry)
+				for (const waiter of this.waitingForCapacity) {
+					waiter();
+				}
+				this.waitingForCapacity = [];
 
 				// Do not rethrow here to avoid unhandled rejection; callers already received rejection
 			}
