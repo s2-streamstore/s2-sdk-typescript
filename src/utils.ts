@@ -30,49 +30,23 @@ function appendRecordMake(
 function appendRecordCommand(
 	command: string,
 	body?: string,
-	additionalHeaders?: AppendHeaders<"string">,
 	timestamp?: number,
 ): AppendRecord;
 function appendRecordCommand(
 	command: Uint8Array,
 	body?: Uint8Array,
-	additionalHeaders?: AppendHeaders<"bytes">,
 	timestamp?: number,
 ): AppendRecord;
 function appendRecordCommand(
 	command: string | Uint8Array,
 	body?: string | Uint8Array,
-	additionalHeaders?: AppendHeaders<"string"> | AppendHeaders<"bytes">,
 	timestamp?: number,
 ): AppendRecord {
-	// Command records always have a header with empty key and command as value
-	// Additional headers can be merged in if provided
 	const headers = (() => {
 		if (typeof command === "string") {
-			// String format
-			if (additionalHeaders) {
-				if (Array.isArray(additionalHeaders)) {
-					return [["", command], ...additionalHeaders];
-				} else {
-					return {
-						"": command,
-						...additionalHeaders,
-					};
-				}
-			} else {
-				// No additional headers, just return command header in array format
-				return [["", command]];
-			}
-		} else {
-			// Bytes format - always use array format
-			const commandHeader: [Uint8Array, Uint8Array] = [
-				new TextEncoder().encode(""),
-				command,
-			];
-			return additionalHeaders
-				? [commandHeader, ...(additionalHeaders as AppendHeaders<"bytes">)]
-				: [commandHeader];
+			return [["", command]];
 		}
+		return [new TextEncoder().encode(""), command];
 	})();
 	// safety: we know the types are correct because of the overloads
 	return AppendRecord.make(body as any, headers as any, timestamp);
@@ -91,23 +65,10 @@ export const AppendRecord = {
 	// overloads for only string or only bytes
 	make: appendRecordMake,
 	command: appendRecordCommand,
-	fence: (
-		fencing_token: string,
-		additionalHeaders?: AppendHeaders<"string">,
-		timestamp?: number,
-	): AppendRecord => {
-		return AppendRecord.command(
-			"fence",
-			fencing_token,
-			additionalHeaders,
-			timestamp,
-		);
+	fence: (fencing_token: string, timestamp?: number): AppendRecord => {
+		return AppendRecord.command("fence", fencing_token, timestamp);
 	},
-	trim: (
-		seqNum: number | bigint,
-		headers?: AppendHeaders<"bytes">,
-		timestamp?: number,
-	): AppendRecord => {
+	trim: (seqNum: number | bigint, timestamp?: number): AppendRecord => {
 		// Encode sequence number as 8 big-endian bytes
 		const buffer = new Uint8Array(8);
 		const view = new DataView(buffer.buffer);
@@ -115,7 +76,6 @@ export const AppendRecord = {
 		return AppendRecord.command(
 			new TextEncoder().encode("trim"),
 			buffer,
-			headers,
 			timestamp,
 		);
 	},
