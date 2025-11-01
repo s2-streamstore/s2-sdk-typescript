@@ -3,7 +3,7 @@ import { AppendRecord, meteredSizeBytes } from "../utils.js";
 
 describe("meteredSizeBytes", () => {
 	it("calculates size for string format records", () => {
-		const record = AppendRecord.make.string("hello", {
+		const record = AppendRecord.make("hello", {
 			foo: "bar",
 			baz: "qux",
 		});
@@ -18,7 +18,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for string format with UTF-8 characters", () => {
-		const record = AppendRecord.make.string("hello 世界", {
+		const record = AppendRecord.make("hello 世界", {
 			emoji: "🚀",
 		});
 
@@ -32,7 +32,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for bytes format records", () => {
-		const record = AppendRecord.make.bytes(new Uint8Array([1, 2, 3, 4, 5]), [
+		const record = AppendRecord.make(new Uint8Array([1, 2, 3, 4, 5]), [
 			[new Uint8Array([10, 20]), new Uint8Array([30, 40, 50])],
 		]);
 
@@ -46,7 +46,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for record with no body", () => {
-		const record = AppendRecord.make.string(undefined, {
+		const record = AppendRecord.make(undefined, {
 			foo: "bar",
 		});
 
@@ -60,7 +60,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for record with no headers", () => {
-		const record = AppendRecord.make.string("hello");
+		const record = AppendRecord.make("hello");
 
 		const size = meteredSizeBytes(record);
 
@@ -72,7 +72,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for empty record", () => {
-		const record = AppendRecord.make.string();
+		const record = AppendRecord.make();
 
 		const size = meteredSizeBytes(record);
 
@@ -84,7 +84,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for command records", () => {
-		const fenceRecord = AppendRecord.fence.string("my-token");
+		const fenceRecord = AppendRecord.fence("my-token");
 		const size = meteredSizeBytes(fenceRecord);
 
 		// body: "my-token" = 8 bytes

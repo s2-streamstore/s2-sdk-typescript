@@ -1,11 +1,7 @@
 import type {
+	AppendHeaders,
 	AppendRecord as AppendRecordType,
-	BytesAppendRecord,
-	StringAppendRecord,
 } from "./stream.js";
-
-type StringHeaders = Record<string, string> | Array<[string, string]>;
-type BytesHeaders = Array<[Uint8Array, Uint8Array]>;
 
 export type AppendRecord = AppendRecordType;
 
@@ -19,82 +15,56 @@ export type AppendRecord = AppendRecordType;
  * - `trim` is a command record that encodes a sequence number for trimming
  */
 export const AppendRecord = {
-	make: {
-		string: (
-			body?: string,
-			headers?: StringHeaders,
-			timestamp?: number,
-		): StringAppendRecord => {
-			return {
-				format: "string",
-				body,
-				headers,
-				timestamp,
-			};
-		},
-		bytes: (
-			body?: Uint8Array,
-			headers?: BytesHeaders,
-			timestamp?: number,
-		): BytesAppendRecord => {
-			return {
-				format: "bytes",
-				body,
-				headers,
-				timestamp,
-			};
-		},
+	// overloads for only string or only bytes
+	make: <Format extends "string" | "bytes">(
+		body?: Format extends "string" ? string : Uint8Array,
+		headers?: AppendHeaders<Format>,
+		timestamp?: number,
+	): AppendRecord => {
+		return {
+			body,
+			headers,
+			timestamp,
+		} as AppendRecord;
 	},
-	command: {
-		string: (
-			/** Command name (e.g. "fence" or "trim"). */
-			command: string,
-			body?: string,
-			timestamp?: number,
-		): StringAppendRecord => {
-			const headers: Array<[string, string]> = [["", command]];
-			return {
-				format: "string",
-				body,
-				headers,
-				timestamp,
-			};
-		},
-		bytes: (
-			/** Command name (e.g. "fence" or "trim"). */
-			command: string,
-			body?: Uint8Array,
-			timestamp?: number,
-		): BytesAppendRecord => {
-			const headers: BytesHeaders = [
-				[new Uint8Array(), new TextEncoder().encode(command)],
-			];
-			return {
-				format: "bytes",
-				body,
-				headers,
-				timestamp,
-			};
-		},
+	command: <Format extends "string" | "bytes">(
+		/** Command name (e.g. "fence" or "trim"). */
+		command: string,
+		body?: Format extends "string" ? string : Uint8Array,
+		additionalHeaders?: AppendHeaders<Format>,
+		timestamp?: number,
+	): AppendRecord => {
+		const format = typeof body === "string" ? "string" : "bytes";
+		// todo: handle additional headers
+		const headers = (
+			format === "string"
+				? [["", command]]
+				: [[new TextEncoder().encode(""), new TextEncoder().encode(command)]]
+		) as AppendHeaders<Format>;
+		return AppendRecord.make(body, headers, timestamp);
 	},
-	fence: {
-		string: (fencing_token: string, timestamp?: number): StringAppendRecord => {
-			return AppendRecord.command.string("fence", fencing_token, timestamp);
-		},
-		bytes: (fencing_token: string, timestamp?: number): BytesAppendRecord => {
-			return AppendRecord.command.bytes(
-				"fence",
-				new TextEncoder().encode(fencing_token),
-				timestamp,
-			);
-		},
+	fence: (
+		fencing_token: string,
+		additionalHeaders?: AppendHeaders<"string">,
+		timestamp?: number,
+	): AppendRecord => {
+		return AppendRecord.command(
+			"fence",
+			fencing_token,
+			additionalHeaders,
+			timestamp,
+		);
 	},
-	trim: (seqNum: number | bigint, timestamp?: number): BytesAppendRecord => {
+	trim: (
+		seqNum: number | bigint,
+		headers?: AppendHeaders<"bytes">,
+		timestamp?: number,
+	): AppendRecord => {
 		// Encode sequence number as 8 big-endian bytes
 		const buffer = new Uint8Array(8);
 		const view = new DataView(buffer.buffer);
 		view.setBigUint64(0, BigInt(seqNum), false); // false = big-endian
-		return AppendRecord.command.bytes("trim", buffer, timestamp);
+		return AppendRecord.command("trim", buffer, headers, timestamp);
 	},
 } as const;
 
@@ -144,42 +114,66 @@ export function utf8ByteLength(str: string): number {
  * Calculate the metered size in bytes of an AppendRecord.
  * This includes the body and headers, but not metadata like timestamp.
  *
+ * This function calculates how many bytes the record will occupy
+ * after being received and deserialized as raw bytes on the S2 side.
+ * For strings, it calculates UTF-8 byte length. For Uint8Array, it uses
+ * the array length directly (same value as would be used when encoding
+ * to base64 for transmission).
+ *
  * @param record The record to measure
  * @returns The size in bytes
  */
-export function meteredSizeBytes(record: AppendRecordType): number {
-	if (record.format === "string") {
-		const numHeaders = record.headers
-			? Array.isArray(record.headers)
-				? record.headers.length
-				: Object.keys(record.headers).length
-			: 0;
-		const headers = (() => {
-			if (record.headers) {
-				if (Array.isArray(record.headers)) {
-					return record.headers
-						.map(([k, v]) => utf8ByteLength(k) + utf8ByteLength(v))
-						.reduce((a, b) => a + b, 0);
-				} else {
-					return Object.entries(record.headers)
-						.map(([k, v]) => utf8ByteLength(k) + utf8ByteLength(v))
-						.reduce((a, b) => a + b, 0);
-				}
-			} else {
-				return 0;
-			}
-		})();
-		const body = record.body ? utf8ByteLength(record.body) : 0;
+export function meteredSizeBytes(record: AppendRecord): number {
+	// Calculate header size based on actual data types
+	let numHeaders = 0;
+	let headersSize = 0;
 
-		return 8 + 2 * numHeaders + headers + body;
-	} else {
-		const numHeaders = record.headers?.length ?? 0;
-		const headers =
-			record.headers
-				?.map(([k, v]) => k.length + v.length)
-				.reduce((a, b) => a + b, 0) ?? 0;
-		const body = record.body?.length ?? 0;
-
-		return 8 + 2 * numHeaders + headers + body;
+	if (record.headers) {
+		if (Array.isArray(record.headers)) {
+			numHeaders = record.headers.length;
+			headersSize = record.headers.reduce((sum, [k, v]) => {
+				// Infer format from key type: string = UTF-8 bytes, Uint8Array = byte length
+				const keySize = typeof k === "string" ? utf8ByteLength(k) : k.length;
+				const valueSize = typeof v === "string" ? utf8ByteLength(v) : v.length;
+				return sum + keySize + valueSize;
+			}, 0);
+		} else {
+			// Record<string, string> format (only for string format)
+			const entries = Object.entries(record.headers);
+			numHeaders = entries.length;
+			headersSize = entries.reduce((sum, [k, v]) => {
+				return sum + utf8ByteLength(k) + utf8ByteLength(v);
+			}, 0);
+		}
 	}
+
+	// Calculate body size based on actual data type
+	const bodySize = record.body
+		? typeof record.body === "string"
+			? utf8ByteLength(record.body)
+			: record.body.length
+		: 0;
+
+	return 8 + 2 * numHeaders + headersSize + bodySize;
+}
+
+export function computeAppendRecordFormat(
+	record: AppendRecord,
+): "string" | "bytes" {
+	let result: "string" | "bytes" = "string";
+
+	if (record.body && typeof record.body !== "string") {
+		result = "bytes";
+	}
+	if (
+		record.headers &&
+		Array.isArray(record.headers) &&
+		record.headers.some(
+			([k, v]) => typeof k !== "string" || typeof v !== "string",
+		)
+	) {
+		result = "bytes";
+	}
+
+	return result;
 }

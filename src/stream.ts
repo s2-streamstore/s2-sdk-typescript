@@ -20,7 +20,7 @@ import {
 } from "./generated/index.js";
 import { decodeFromBase64, encodeToBase64 } from "./lib/base64.js";
 import { EventStream } from "./lib/event-stream.js";
-import { meteredSizeBytes } from "./utils.js";
+import { computeAppendRecordFormat, meteredSizeBytes } from "./utils.js";
 
 export class S2Stream {
 	private readonly client: Client;
@@ -115,7 +115,15 @@ export class S2Stream {
 			};
 			return res as ReadBatch<Format>;
 		} else {
-			const res: ReadBatch<"string"> = response.data;
+			const res: ReadBatch<"string"> = {
+				...response.data,
+				records: response.data.records.map((record) => ({
+					...record,
+					headers: record.headers
+						? Object.fromEntries(record.headers)
+						: undefined,
+				})),
+			};
 			return res as ReadBatch<Format>;
 		}
 	}
@@ -144,17 +152,9 @@ export class S2Stream {
 			throw new S2Error({ message: "Cannot append empty array of records" });
 		}
 
-		// Validate format consistency and calculate total size in a single pass
-		const format = recordsArray[0]!.format;
 		let batchMeteredSize = 0;
 
 		for (const record of recordsArray) {
-			if (record.format !== format) {
-				throw new S2Error({
-					message:
-						"All records in a batch must have the same format (either all 'string' or all 'bytes')",
-				});
-			}
 			batchMeteredSize += meteredSizeBytes(record);
 		}
 
@@ -169,39 +169,48 @@ export class S2Stream {
 			});
 		}
 
-		let encodedRecords: GeneratedAppendRecord[];
+		let encodedRecords: GeneratedAppendRecord[] = [];
+		let hasAnyBytesRecords = false;
 
-		if (format === "bytes") {
-			const bytesRecords = recordsArray as BytesAppendRecord[];
+		for (const record of recordsArray) {
+			const format = computeAppendRecordFormat(record);
+			if (format === "bytes") {
+				const formattedRecord = record as AppendRecordForFormat<"bytes">;
+				const encodedRecord = {
+					...formattedRecord,
+					body: formattedRecord.body
+						? encodeToBase64(formattedRecord.body)
+						: undefined,
+					headers: formattedRecord.headers?.map((header) =>
+						header.map((h) => encodeToBase64(h)),
+					) as [string, string][] | undefined,
+				};
 
-			encodedRecords = bytesRecords.map((record) => ({
-				body: record.body ? encodeToBase64(record.body) : undefined,
-				headers: record.headers?.map((header) =>
-					header.map((h) => encodeToBase64(h)),
-				) as [string, string][] | undefined,
-				timestamp: record.timestamp,
-			}));
-		} else {
-			const stringRecords = recordsArray as StringAppendRecord[];
+				encodedRecords.push(encodedRecord);
+			} else {
+				// Normalize headers to array format
+				const normalizeHeaders = (
+					headers: AppendHeaders<"string">,
+				): [string, string][] | undefined => {
+					if (headers === undefined) {
+						return undefined;
+					} else if (Array.isArray(headers)) {
+						return headers;
+					} else {
+						return Object.entries(headers);
+					}
+				};
 
-			// Normalize headers to array format
-			const normalizeHeaders = (
-				headers: StringAppendRecord["headers"],
-			): [string, string][] | undefined => {
-				if (headers === undefined) {
-					return undefined;
-				} else if (Array.isArray(headers)) {
-					return headers;
-				} else {
-					return Object.entries(headers);
-				}
-			};
+				const formattedRecord = record as AppendRecordForFormat<"string">;
+				const encodedRecord = {
+					...formattedRecord,
+					headers: formattedRecord.headers
+						? normalizeHeaders(formattedRecord.headers)
+						: undefined,
+				};
 
-			encodedRecords = stringRecords.map((record) => ({
-				body: record.body,
-				headers: normalizeHeaders(record.headers),
-				timestamp: record.timestamp,
-			}));
+				encodedRecords.push(encodedRecord);
+			}
 		}
 
 		const response = await append({
@@ -212,10 +221,10 @@ export class S2Stream {
 			body: {
 				fencing_token: args?.fencing_token,
 				match_seq_num: args?.match_seq_num,
-				records: encodedRecords as GeneratedAppendRecord[],
+				records: encodedRecords,
 			},
 			headers: {
-				...(format === "bytes" ? { "s2-format": "base64" } : {}),
+				...(hasAnyBytesRecords ? { "s2-format": "base64" } : {}),
 			},
 			...options,
 		});
@@ -273,74 +282,62 @@ export class S2Stream {
 	 *
 	 * @param options Optional request options
 	 */
-	public async appendSession<F extends "string" | "bytes">(
-		format: F,
+	public async appendSession(
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
-	): Promise<AppendSession<F>> {
-		return await AppendSession.create(
-			this,
-			format,
-			sessionOptions,
-			requestOptions,
-		);
+	): Promise<AppendSession> {
+		return await AppendSession.create(this, sessionOptions, requestOptions);
 	}
 }
 
-export type Header<Format extends "string" | "bytes" = "string"> =
-	Format extends "string" ? [string, string] : [Uint8Array, Uint8Array];
+export type ReadHeaders<Format extends "string" | "bytes" = "string"> =
+	Format extends "string"
+		? Record<string, string>
+		: Array<[Uint8Array, Uint8Array]>;
 
 export type ReadBatch<Format extends "string" | "bytes" = "string"> = Omit<
 	GeneratedReadBatch,
 	"records"
 > & {
-	records?: Array<SequencedRecord<Format>>;
+	records?: Array<ReadRecord<Format>>;
 };
 
-export type SequencedRecord<Format extends "string" | "bytes" = "string"> =
-	Omit<GeneratedSequencedRecord, "body" | "headers"> & {
-		body?: Format extends "string" ? string : Uint8Array;
-		headers?: Array<Header<Format>>;
-	};
+export type ReadRecord<Format extends "string" | "bytes" = "string"> = Omit<
+	GeneratedSequencedRecord,
+	"body" | "headers"
+> & {
+	body?: Format extends "string" ? string : Uint8Array;
+	headers?: ReadHeaders<Format>;
+};
 
 export type ReadArgs<Format extends "string" | "bytes" = "string"> =
 	ReadData["query"] & {
 		as?: Format;
 	};
 
-export type StringAppendRecord = Omit<
-	GeneratedAppendRecord,
-	"body" | "headers"
-> & {
-	format: "string";
-	body?: string;
-	headers?: Array<[string, string]> | Record<string, string>;
+export type AppendHeaders<Format extends "string" | "bytes" = "string"> =
+	Format extends "string"
+		? Array<[string, string]> | Record<string, string>
+		: Array<[Uint8Array, Uint8Array]>;
+
+export type AppendRecordForFormat<
+	Format extends "string" | "bytes" = "string",
+> = Omit<GeneratedAppendRecord, "body" | "headers"> & {
+	body?: Format extends "string" ? string : Uint8Array;
+	headers?: AppendHeaders<Format>;
 };
 
-export type BytesAppendRecord = Omit<
-	GeneratedAppendRecord,
-	"body" | "headers"
-> & {
-	format: "bytes";
-	body?: Uint8Array;
-	headers?: Array<[Uint8Array, Uint8Array]>;
+export type AppendRecord =
+	| AppendRecordForFormat<"string">
+	| AppendRecordForFormat<"bytes">;
+
+export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
+	records: Array<AppendRecord>;
 };
-
-export type AppendRecord = StringAppendRecord | BytesAppendRecord;
-
-export type StringAppendArgs = Omit<GeneratedAppendInput, "records"> & {
-	records: Array<StringAppendRecord>;
-};
-
-export type BytesAppendArgs = Omit<GeneratedAppendInput, "records"> & {
-	records: Array<BytesAppendRecord>;
-};
-
-export type AppendArgs = StringAppendArgs | BytesAppendArgs;
 
 export class ReadSession<
 	Format extends "string" | "bytes" = "string",
-> extends EventStream<SequencedRecord<Format>> {
+> extends EventStream<ReadRecord<Format>> {
 	static async create<Format extends "string" | "bytes" = "string">(
 		client: Client,
 		name: string,
@@ -389,22 +386,32 @@ export class ReadSession<
 		super(stream, (msg) => {
 			// Parse SSE events according to the S2 protocol
 			if (msg.event === "batch" && msg.data) {
-				const batch: ReadBatch<Format> = JSON.parse(msg.data);
-				// If format is bytes, decode base64 to Uint8Array
-				if (format === "bytes") {
-					for (const record of batch.records ?? []) {
-						if (record.body && typeof record.body === "string") {
-							(record as any).body = decodeFromBase64(record.body);
-						}
-						if (record.headers) {
-							(record as any).headers = record.headers.map((header) =>
-								header.map((h) =>
-									typeof h === "string" ? decodeFromBase64(h) : h,
-								),
-							);
-						}
+				const rawBatch: GeneratedReadBatch = JSON.parse(msg.data);
+				const batch = (() => {
+					// If format is bytes, decode base64 to Uint8Array
+					if (format === "bytes") {
+						return {
+							...rawBatch,
+							records: rawBatch.records.map((record) => ({
+								...record,
+								body: record.body ? decodeFromBase64(record.body) : undefined,
+								headers: record.headers?.map((header) =>
+									header.map((h) => decodeFromBase64(h)),
+								) as [Uint8Array, Uint8Array][],
+							})),
+						} satisfies ReadBatch<"bytes">;
+					} else {
+						return {
+							...rawBatch,
+							records: rawBatch.records.map((record) => ({
+								...record,
+								headers: record.headers
+									? Object.fromEntries(record.headers)
+									: undefined,
+							})),
+						} satisfies ReadBatch<"string">;
 					}
-				}
+				})() as ReadBatch<Format>;
 				if (batch.tail) {
 					this._streamPosition = batch.tail;
 				}
@@ -473,16 +480,6 @@ class AcksStream extends ReadableStream<AppendAck> implements AsyncDisposable {
 	}
 }
 
-/** Helper type to get the correct AppendRecord type based on format */
-type RecordForFormat<F extends "string" | "bytes"> = F extends "string"
-	? StringAppendRecord
-	: BytesAppendRecord;
-
-/** Helper type to get the correct AppendArgs type based on format */
-type AppendArgsForFormat<F extends "string" | "bytes"> = F extends "string"
-	? StringAppendArgs
-	: BytesAppendArgs;
-
 interface AppendSessionOptions {
 	/** Maximum bytes to queue before applying backpressure (default: 10 MiB) */
 	maxQueuedBytes?: number;
@@ -492,14 +489,13 @@ interface AppendSessionOptions {
  * Session for appending records to a stream.
  * Queues append requests and ensures only one is in-flight at a time.
  */
-class AppendSession<F extends "string" | "bytes">
-	extends WritableStream<AppendArgsForFormat<F>>
+class AppendSession
+	extends WritableStream<AppendArgs>
 	implements AsyncDisposable
 {
-	readonly format: F;
 	private _lastSeenPosition: AppendAck | undefined = undefined;
 	private queue: Array<{
-		records: RecordForFormat<F>[];
+		records: AppendRecord[];
 		fencing_token?: string;
 		match_seq_num?: number;
 		meteredSize: number;
@@ -521,18 +517,16 @@ class AppendSession<F extends "string" | "bytes">
 	private readonly maxQueuedBytes: number;
 	private waitingForCapacity: Array<() => void> = [];
 
-	static async create<F extends "string" | "bytes">(
+	static async create(
 		stream: S2Stream,
-		format: F,
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
-	): Promise<AppendSession<F>> {
-		return new AppendSession(stream, format, sessionOptions, requestOptions);
+	): Promise<AppendSession> {
+		return new AppendSession(stream, sessionOptions, requestOptions);
 	}
 
 	private constructor(
 		stream: S2Stream,
-		format: F,
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	) {
@@ -561,7 +555,7 @@ class AppendSession<F extends "string" | "bytes">
 
 				// Submit the batch
 				this.submit(
-					chunk.records as RecordForFormat<F>[],
+					chunk.records,
 					{
 						fencing_token: chunk.fencing_token ?? undefined,
 						match_seq_num: chunk.match_seq_num ?? undefined,
@@ -594,7 +588,6 @@ class AppendSession<F extends "string" | "bytes">
 				this.waitingForCapacity = [];
 			},
 		});
-		this.format = format;
 		this.options = requestOptions;
 		this.stream = stream;
 		this.maxQueuedBytes = sessionOptions?.maxQueuedBytes ?? 10 * 1024 * 1024; // 10 MiB default
@@ -622,7 +615,7 @@ class AppendSession<F extends "string" | "bytes">
 	 * Returns a promise that resolves when the append is acknowledged or rejects on error.
 	 */
 	submit(
-		records: RecordForFormat<F> | RecordForFormat<F>[],
+		records: AppendRecord | AppendRecord[],
 		args?: { fencing_token?: string; match_seq_num?: number },
 		precalculatedSize?: number,
 	): Promise<AppendAck> {
@@ -646,15 +639,7 @@ class AppendSession<F extends "string" | "bytes">
 		// Validate metered size (use precalculated if provided)
 		let batchMeteredSize = precalculatedSize ?? 0;
 		if (batchMeteredSize === 0) {
-			const sessionFormat = this.format;
 			for (const record of recordsArray) {
-				if (record.format !== sessionFormat) {
-					return Promise.reject(
-						new S2Error({
-							message: `Cannot submit ${record.format} records to a ${sessionFormat} format session`,
-						}),
-					);
-				}
 				batchMeteredSize += meteredSizeBytes(record);
 			}
 		}
