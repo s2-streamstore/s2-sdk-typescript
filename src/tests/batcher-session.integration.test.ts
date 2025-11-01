@@ -26,7 +26,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		const session = await stream.appendSession();
 		const appendSpy = vi.spyOn(stream, "append").mockResolvedValue(makeAck(1));
 
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10,
 			maxBatchRecords: 100,
 		});
@@ -54,7 +54,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		appendSpy.mockResolvedValueOnce(makeAck(1));
 		appendSpy.mockResolvedValueOnce(makeAck(2));
 
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 0,
 			maxBatchRecords: 2,
 			match_seq_num: 5,
@@ -81,7 +81,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		const session = await stream.appendSession();
 		vi.spyOn(stream, "append").mockResolvedValue(makeAck(123));
 
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 0,
 			maxBatchRecords: 10,
 		});

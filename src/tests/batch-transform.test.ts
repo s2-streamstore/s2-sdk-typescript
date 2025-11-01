@@ -4,7 +4,7 @@ import { S2Error } from "../error.js";
 
 describe("BatchTransform", () => {
 	it("batches records based on linger duration", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 50,
 			maxBatchRecords: 100,
 		});
@@ -33,7 +33,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("flushes immediately when max records reached", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 1000, // Long linger, should flush before this
 			maxBatchRecords: 2,
 		});
@@ -63,7 +63,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("flushes when max bytes reached", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 1000,
 			maxBatchBytes: 30, // Small batch size
 		});
@@ -96,7 +96,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("flushes remaining records on close", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10000, // Very long linger
 			maxBatchRecords: 100,
 		});
@@ -125,7 +125,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("works with bytes format", async () => {
-		const batcher = new BatchTransform<"bytes">({
+		const batcher = new BatchTransform({
 			lingerDuration: 50,
 		});
 
@@ -146,7 +146,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("can be used with pipeTo", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10,
 		});
 
@@ -180,7 +180,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("handles rapid writes with linger", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 20,
 			maxBatchRecords: 10,
 		});
@@ -206,13 +206,13 @@ describe("BatchTransform", () => {
 
 	it("respects maximum limits (capped at 1000 records, 1 MiB)", () => {
 		// Should cap maxBatchRecords at 1000
-		const batcher1 = new BatchTransform<"string">({
+		const batcher1 = new BatchTransform({
 			maxBatchRecords: 5000, // Will be capped to 1000
 		});
 		// We can't directly access private fields, but we can verify behavior
 
 		// Should cap maxBatchBytes at 1 MiB
-		const batcher2 = new BatchTransform<"string">({
+		const batcher2 = new BatchTransform({
 			maxBatchBytes: 10 * 1024 * 1024, // Will be capped to 1 MiB
 		});
 
@@ -222,7 +222,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("handles empty batches gracefully", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10,
 		});
 
@@ -240,7 +240,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("cancels linger timer when batch is flushed early", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 1000, // Long linger
 			maxBatchRecords: 2,
 		});
@@ -273,7 +273,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("works in a for-await loop", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10,
 		});
 
@@ -303,7 +303,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("rejects individual records that exceed max batch bytes", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			maxBatchBytes: 30, // Small limit
 		});
 
@@ -330,7 +330,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("rejects oversized bytes records", async () => {
-		const batcher = new BatchTransform<"bytes">({
+		const batcher = new BatchTransform({
 			maxBatchBytes: 20,
 		});
 
@@ -357,7 +357,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("includes fencing_token in batch output", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10,
 			fencing_token: "my-fence-token",
 		});
@@ -381,7 +381,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("auto-increments match_seq_num across batches", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10,
 			maxBatchRecords: 2,
 			match_seq_num: 0, // Start at 0
@@ -424,7 +424,7 @@ describe("BatchTransform", () => {
 	});
 
 	it("works without fencing_token or match_seq_num", async () => {
-		const batcher = new BatchTransform<"string">({
+		const batcher = new BatchTransform({
 			lingerDuration: 10,
 		});
 

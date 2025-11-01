@@ -1,15 +1,6 @@
 import { S2Error } from "./error.js";
-import type {
-	AppendRecord as AppendRecordType,
-	BytesAppendRecord,
-	StringAppendRecord,
-} from "./stream.js";
-import { meteredSizeBytes } from "./utils.js";
-
-/** Helper type to get the correct AppendRecord type based on format */
-type RecordForFormat<F extends "string" | "bytes"> = F extends "string"
-	? StringAppendRecord
-	: BytesAppendRecord;
+import type { AppendRecord as AppendRecordType } from "./stream.js";
+import { AppendRecord, meteredSizeBytes } from "./utils.js";
 
 export interface BatchTransformArgs {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
@@ -25,8 +16,8 @@ export interface BatchTransformArgs {
 }
 
 /** Batch output type with optional fencing token and match_seq_num */
-export type BatchOutput<F extends "string" | "bytes"> = {
-	records: RecordForFormat<F>[];
+export type BatchOutput = {
+	records: AppendRecord[];
 	fencing_token?: string;
 	match_seq_num?: number;
 };
@@ -59,23 +50,20 @@ export type BatchOutput<F extends "string" | "bytes"> = {
  * }
  * ```
  */
-export class BatchTransform<
-	F extends "string" | "bytes",
-> extends TransformStream<RecordForFormat<F>, BatchOutput<F>> {
-	private currentBatch: RecordForFormat<F>[] = [];
+export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
+	private currentBatch: AppendRecord[] = [];
 	private currentBatchSize: number = 0;
 	private lingerTimer: ReturnType<typeof setTimeout> | null = null;
-	private controller: TransformStreamDefaultController<BatchOutput<F>> | null =
+	private controller: TransformStreamDefaultController<BatchOutput> | null =
 		null;
 	private readonly maxBatchRecords: number;
 	private readonly maxBatchBytes: number;
 	private readonly lingerDuration: number;
 	private readonly fencing_token?: string;
 	private next_match_seq_num?: number;
-	private expectedFormat?: "string" | "bytes";
 
 	constructor(args?: BatchTransformArgs) {
-		let controller: TransformStreamDefaultController<BatchOutput<F>>;
+		let controller: TransformStreamDefaultController<BatchOutput>;
 
 		super({
 			start: (c) => {
@@ -104,16 +92,7 @@ export class BatchTransform<
 		this.next_match_seq_num = args?.match_seq_num;
 	}
 
-	private handleRecord(record: RecordForFormat<F>): void {
-		// Validate format consistency
-		if (!this.expectedFormat) {
-			this.expectedFormat = record.format;
-		} else if (record.format !== this.expectedFormat) {
-			throw new S2Error({
-				message: `Cannot batch ${record.format} records with ${this.expectedFormat} records. All records must have the same format.`,
-			});
-		}
-
+	private handleRecord(record: AppendRecord): void {
 		const recordSize = meteredSizeBytes(record as AppendRecordType);
 
 		// Reject individual records that exceed the max batch size
@@ -170,7 +149,7 @@ export class BatchTransform<
 
 		// Emit the batch downstream with optional fencing token and match_seq_num
 		if (this.controller) {
-			const batch: BatchOutput<F> = {
+			const batch: BatchOutput = {
 				records: [...this.currentBatch],
 			};
 			if (this.fencing_token !== undefined) {

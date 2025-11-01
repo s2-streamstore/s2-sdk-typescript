@@ -13,21 +13,21 @@ const streams = await basin.streams.list();
 if (streams.streams[0]) {
 	const stream = basin.stream(streams.streams[0].name);
 	// Create an append session
-	const session = await stream.appendSession("string");
+	const session = await stream.appendSession();
 
 	// You can submit directly to the session and get acknowledgement promises
-	const ack1 = await session.submit([AppendRecord.make.string("record 1")]);
-	const ack2 = await session.submit([AppendRecord.make.string("record 2")]);
+	const ack1 = await session.submit([AppendRecord.make("record 1")]);
+	const ack2 = await session.submit([AppendRecord.make("record 2")]);
 	console.log("Direct submits acknowledged:", ack1, ack2);
 
 	// Close the session (waits for all appends to complete)
 	await session.close();
 
 	// Example: Using BatchTransform with streaming pipeline
-	const session2 = await stream.appendSession("string");
+	const session2 = await stream.appendSession();
 
 	// Create a batcher that will batch records
-	const batcher = new BatchTransform<"string">({
+	const batcher = new BatchTransform({
 		lingerDuration: 20,
 		maxBatchRecords: 10,
 	});
@@ -47,9 +47,9 @@ if (streams.streams[0]) {
 
 	// Write records to the batcher
 	const writer = batcher.writable.getWriter();
-	await writer.write(AppendRecord.make.string("batched record 1"));
-	await writer.write(AppendRecord.make.string("batched record 2"));
-	await writer.write(AppendRecord.make.string("batched record 3"));
+	await writer.write(AppendRecord.make("batched record 1"));
+	await writer.write(AppendRecord.make("batched record 2"));
+	await writer.write(AppendRecord.make("batched record 3"));
 	await writer.close();
 
 	// Wait for pipeline to complete

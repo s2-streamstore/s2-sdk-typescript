@@ -40,18 +40,17 @@ if (streams.streams[0]) {
 		bytesRead.records?.[0]?.headers,
 	);
 
-	stream.append(AppendRecord.make.bytes(new Uint8Array([1, 2])));
+	stream.append(AppendRecord.make(new Uint8Array([1, 2])));
 
 	// String format appends
 	const stringAppend = await stream.append([
-		AppendRecord.make.string("Hello, world!", {
+		AppendRecord.make("Hello, world!", {
 			foo: "bar",
 		}),
-		AppendRecord.fence.string("my-fence"),
-		AppendRecord.command.string("foo"),
+		AppendRecord.fence("my-fence"),
+		AppendRecord.command("foo"),
 		// still can just make by hand:
 		{
-			format: "string",
 			body: "hello, world!",
 			headers: [["foo", "bar"]],
 			timestamp: new Date().getTime(),
@@ -61,10 +60,13 @@ if (streams.streams[0]) {
 
 	// Bytes format appends
 	const bytesAppend = await stream.append([
-		AppendRecord.make.bytes(new Uint8Array([1, 2, 3]), [
+		AppendRecord.make(new Uint8Array([1, 2, 3]), [
 			[new TextEncoder().encode("foo"), new TextEncoder().encode("bar")],
 		]),
-		AppendRecord.fence.bytes("my-fence"),
+		AppendRecord.command(
+			new TextEncoder().encode("fence"),
+			new TextEncoder().encode("my-fence"),
+		),
 		AppendRecord.trim(0),
 	]);
 	console.log("bytes append", bytesAppend);
