@@ -493,8 +493,7 @@ interface AppendSessionOptions {
  * Queues append requests and ensures only one is in-flight at a time.
  */
 class AppendSession
-	extends WritableStream<AppendArgs>
-	implements AsyncDisposable
+	implements ReadableWritablePair<AppendAck, AppendArgs>, AsyncDisposable
 {
 	private _lastSeenPosition: AppendAck | undefined = undefined;
 	private queue: Array<{
@@ -513,12 +512,16 @@ class AppendSession
 	private acksController:
 		| ReadableStreamDefaultController<AppendAck>
 		| undefined;
-	private _acksStream: AcksStream | undefined;
+	private _readable: AcksStream;
+	private _writable: WritableStream<AppendArgs>;
 	private closed = false;
 	private processingPromise: Promise<void> | null = null;
 	private queuedBytes = 0;
 	private readonly maxQueuedBytes: number;
 	private waitingForCapacity: Array<() => void> = [];
+
+	public readonly readable: ReadableStream<AppendAck>;
+	public readonly writable: WritableStream<AppendArgs>;
 
 	static async create(
 		stream: S2Stream,
@@ -533,9 +536,19 @@ class AppendSession
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	) {
-		let writableController: WritableStreamDefaultController;
+		this.options = requestOptions;
+		this.stream = stream;
+		this.maxQueuedBytes = sessionOptions?.maxQueuedBytes ?? 10 * 1024 * 1024; // 10 MiB default
 
-		super({
+		// Create the readable stream for acks
+		this._readable = new AcksStream((controller) => {
+			this.acksController = controller;
+		});
+		this.readable = this._readable;
+
+		// Create the writable stream
+		let writableController: WritableStreamDefaultController;
+		this._writable = new WritableStream<AppendArgs>({
 			start: (controller) => {
 				writableController = controller;
 			},
@@ -591,9 +604,7 @@ class AppendSession
 				this.waitingForCapacity = [];
 			},
 		});
-		this.options = requestOptions;
-		this.stream = stream;
-		this.maxQueuedBytes = sessionOptions?.maxQueuedBytes ?? 10 * 1024 * 1024; // 10 MiB default
+		this.writable = this._writable;
 	}
 
 	async [Symbol.asyncDispose]() {
@@ -604,12 +615,15 @@ class AppendSession
 	 * Get a stream of acknowledgements for appends.
 	 */
 	acks(): AcksStream {
-		if (!this._acksStream) {
-			this._acksStream = new AcksStream((controller) => {
-				this.acksController = controller;
-			});
-		}
-		return this._acksStream;
+		return this._readable;
+	}
+
+	/**
+	 * Close the append session.
+	 * Waits for all pending appends to complete before resolving.
+	 */
+	async close(): Promise<void> {
+		await this.writable.close();
 	}
 
 	/**

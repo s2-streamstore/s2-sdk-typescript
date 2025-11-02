@@ -37,8 +37,8 @@ export type BatchOutput = {
  *   match_seq_num: 0  // Optional: auto-increments per batch
  * });
  *
- * // Pipe through the batcher directly to a session
- * readable.pipeThrough(batcher).pipeTo(session);
+ * // Pipe through the batcher and session to get acks
+ * readable.pipeThrough(batcher).pipeThrough(session).pipeTo(writable);
  *
  * // Or use manually
  * const writer = batcher.writable.getWriter();

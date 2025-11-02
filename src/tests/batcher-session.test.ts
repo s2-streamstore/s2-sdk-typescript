@@ -32,7 +32,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		});
 
 		// Pipe batcher output to session
-		const pipePromise = batcher.readable.pipeTo(session);
+		const pipePromise = batcher.readable.pipeTo(session.writable);
 
 		const writer = batcher.writable.getWriter();
 		await writer.write({ body: "a" });
@@ -61,7 +61,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		});
 
 		// Pipe batcher output to session
-		const pipePromise = batcher.readable.pipeTo(session);
+		const pipePromise = batcher.readable.pipeTo(session.writable);
 
 		const writer = batcher.writable.getWriter();
 		await writer.write({ body: "1" });
@@ -95,7 +95,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		})();
 
 		// Pipe batcher output to session (this will close the session when done)
-		const pipePromise = batcher.readable.pipeTo(session);
+		const pipePromise = batcher.readable.pipeTo(session.writable);
 
 		const writer = batcher.writable.getWriter();
 		await writer.write({ body: "x" });

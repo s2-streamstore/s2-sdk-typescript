@@ -166,8 +166,8 @@ describe("AppendSession", () => {
 		appendSpy.mockResolvedValueOnce(makeAck(2));
 		appendSpy.mockResolvedValueOnce(makeAck(3));
 
-		// Use the WritableStream interface (session IS a WritableStream)
-		const writer = session.getWriter();
+		// Use the WritableStream interface (session is a ReadableWritablePair)
+		const writer = session.writable.getWriter();
 
 		// Submit first batch (50 bytes) - should succeed immediately
 		const largeBody = "x".repeat(42); // ~50 bytes with overhead

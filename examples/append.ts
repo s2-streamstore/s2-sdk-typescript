@@ -33,9 +33,9 @@ if (streams.streams[0]) {
 	});
 
 	// Pipe batches directly to the session
-	const pipePromise = batcher.readable.pipeTo(session2);
+	const pipePromise = batcher.readable.pipeTo(session2.writable);
 
-	// Collect acks in the background
+	// Collect acks in the background using pipeThrough
 	const acksPromise = (async () => {
 		const collectedAcks = [];
 		for await (const ack of session2.acks()) {
