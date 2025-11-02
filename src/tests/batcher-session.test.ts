@@ -10,6 +10,7 @@ const makeStream = () =>
 	new S2Stream("test-stream", fakeClient, {
 		baseUrl: "https://test.b.aws.s2.dev",
 		accessToken: Redacted.make("test-access-token"),
+		forceTransport: "fetch",
 	});
 const makeAck = (n: number): AppendAck => ({
 	start: { seq_num: n - 1, timestamp: 0 },
