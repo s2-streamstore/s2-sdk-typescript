@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppendRecord, S2 } from "../index.js";
+import type { SessionTransports } from "../lib/stream/types.js";
+
+const transports: SessionTransports[] = ["fetch", "s2s"];
 
 describe("AppendSession Integration Tests", () => {
 	let s2: S2;
@@ -49,197 +52,226 @@ describe("AppendSession Integration Tests", () => {
 		}
 	});
 
-	it("should append records sequentially using appendSession", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
+	it.each(transports)(
+		"should append records sequentially using appendSession (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
 
-		const session = await stream.appendSession();
+			const session = await stream.appendSession();
 
-		// Submit multiple records sequentially
-		const records = [
-			AppendRecord.make("test-record-1"),
-			AppendRecord.make("test-record-2"),
-			AppendRecord.make("test-record-3"),
-		];
+			// Submit multiple records sequentially
+			const records = [
+				AppendRecord.make("test-record-1"),
+				AppendRecord.make("test-record-2"),
+				AppendRecord.make("test-record-3"),
+			];
 
-		const ack1 = await session.submit([records[0]!]);
-		const ack2 = await session.submit([records[1]!]);
-		const ack3 = await session.submit([records[2]!]);
+			const ack1 = await session.submit([records[0]!]);
+			const ack2 = await session.submit([records[1]!]);
+			const ack3 = await session.submit([records[2]!]);
 
-		// Verify acks are sequential
-		expect(ack1.end.seq_num).toBeGreaterThan(0);
-		expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
-		expect(ack3.end.seq_num).toBe(ack2.end.seq_num + 1);
+			// Verify acks are sequential
+			expect(ack1.end.seq_num).toBeGreaterThan(0);
+			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
+			expect(ack3.end.seq_num).toBe(ack2.end.seq_num + 1);
 
-		// Verify timestamps are present
-		expect(ack1.end.timestamp).toBeGreaterThan(0);
-		expect(ack2.end.timestamp).toBeGreaterThanOrEqual(ack1.end.timestamp);
-		expect(ack3.end.timestamp).toBeGreaterThanOrEqual(ack2.end.timestamp);
+			// Verify timestamps are present
+			expect(ack1.end.timestamp).toBeGreaterThan(0);
+			expect(ack2.end.timestamp).toBeGreaterThanOrEqual(ack1.end.timestamp);
+			expect(ack3.end.timestamp).toBeGreaterThanOrEqual(ack2.end.timestamp);
 
-		await session.close();
-	});
+			await session.close();
+		},
+	);
 
-	it("should handle multiple records in a single submit", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
+	it.each(transports)(
+		"should handle multiple records in a single submit (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
 
-		const session = await stream.appendSession();
+			const session = await stream.appendSession();
 
-		const records = [
-			AppendRecord.make("batch-1"),
-			AppendRecord.make("batch-2"),
-			AppendRecord.make("batch-3"),
-		];
+			const records = [
+				AppendRecord.make("batch-1"),
+				AppendRecord.make("batch-2"),
+				AppendRecord.make("batch-3"),
+			];
 
-		const ack = await session.submit(records);
+			const ack = await session.submit(records);
 
-		// Verify all records were appended
-		expect(ack.end.seq_num - ack.start.seq_num).toBe(3);
-		expect(ack.end.seq_num).toBeGreaterThan(0);
+			// Verify all records were appended
+			expect(ack.end.seq_num - ack.start.seq_num).toBe(3);
+			expect(ack.end.seq_num).toBeGreaterThan(0);
 
-		await session.close();
-	});
+			await session.close();
+		},
+	);
 
-	it("should emit acks via acks() stream", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
+	it.each(transports)(
+		"should emit acks via acks() stream (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
 
-		const session = await stream.appendSession();
+			const session = await stream.appendSession();
 
-		// Collect acks in background
-		const collectedAcks: Array<{ seq_num: number }> = [];
-		const acksPromise = (async () => {
-			for await (const ack of session.acks()) {
-				collectedAcks.push({ seq_num: ack.end.seq_num });
-				// Collect all acks until stream closes
+			// Collect acks in background
+			const collectedAcks: Array<{ seq_num: number }> = [];
+			const acksPromise = (async () => {
+				for await (const ack of session.acks()) {
+					collectedAcks.push({ seq_num: ack.end.seq_num });
+					// Collect all acks until stream closes
+				}
+			})();
+
+			// Submit records
+			await session.submit([AppendRecord.make("ack-test-1")]);
+			await session.submit([AppendRecord.make("ack-test-2")]);
+			await session.submit([AppendRecord.make("ack-test-3")]);
+
+			// Close session to close acks stream
+			await session.close();
+			await acksPromise;
+
+			// Verify we received all acks
+			expect(collectedAcks.length).toBeGreaterThanOrEqual(3);
+			expect(collectedAcks[0]?.seq_num).toBeGreaterThan(0);
+		},
+	);
+
+	it.each(transports)(
+		"should update lastSeenPosition after successful append (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			// Initially, lastSeenPosition should be undefined
+			expect(session.lastAckedPosition()).toBeUndefined();
+
+			// Submit a record
+			const ack = await session.submit([AppendRecord.make("position-test")]);
+
+			// Verify lastSeenPosition is updated
+			expect(session.lastAckedPosition()).toBeDefined();
+			expect(session.lastAckedPosition()?.end.seq_num).toBe(ack.end.seq_num);
+			expect(session.lastAckedPosition()?.end.timestamp).toBe(
+				ack.end.timestamp,
+			);
+
+			await session.close();
+		},
+	);
+
+	it.each(transports)(
+		"should support appending records with headers (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const record = AppendRecord.make("header-test", {
+				"custom-header": "custom-value",
+				"another-header": "another-value",
+			});
+
+			const ack = await session.submit([record]);
+
+			expect(ack.end.seq_num).toBeGreaterThan(0);
+
+			await session.close();
+		},
+	);
+
+	it.each(transports)(
+		"should support appending bytes records (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const body = new TextEncoder().encode("bytes-record-test");
+			const record = AppendRecord.make(body);
+
+			const ack = await session.submit([record]);
+
+			expect(ack.end.seq_num).toBeGreaterThan(0);
+
+			await session.close();
+		},
+	);
+
+	it.each(transports)(
+		"should handle concurrent submits with proper ordering (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			// Submit multiple records concurrently
+			const promises = [
+				session.submit([AppendRecord.make("concurrent-1")]),
+				session.submit([AppendRecord.make("concurrent-2")]),
+				session.submit([AppendRecord.make("concurrent-3")]),
+				session.submit([AppendRecord.make("concurrent-4")]),
+				session.submit([AppendRecord.make("concurrent-5")]),
+			];
+
+			const acks = await Promise.all(promises);
+
+			// Verify all acks are sequential (session should serialize them)
+			for (let i = 1; i < acks.length; i++) {
+				expect(acks[i]?.end.seq_num).toBe((acks[i - 1]?.end.seq_num ?? 0) + 1);
 			}
-		})();
 
-		// Submit records
-		await session.submit([AppendRecord.make("ack-test-1")]);
-		await session.submit([AppendRecord.make("ack-test-2")]);
-		await session.submit([AppendRecord.make("ack-test-3")]);
+			await session.close();
+		},
+	);
 
-		// Close session to close acks stream
-		await session.close();
-		await acksPromise;
+	it.each(transports)(
+		"should reject submit after close() (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
 
-		// Verify we received all acks
-		expect(collectedAcks.length).toBeGreaterThanOrEqual(3);
-		expect(collectedAcks[0]?.seq_num).toBeGreaterThan(0);
-	});
+			const session = await stream.appendSession();
 
-	it("should update lastSeenPosition after successful append", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
+			await session.close();
 
-		const session = await stream.appendSession();
+			// Submit after close should reject
+			await expect(
+				session.submit([AppendRecord.make("after-close")]),
+			).rejects.toThrow();
+		},
+	);
 
-		// Initially, lastSeenPosition should be undefined
-		expect(session.lastAckedPosition()).toBeUndefined();
+	it.each(transports)(
+		"should wait for drain on close() (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
 
-		// Submit a record
-		const ack = await session.submit([AppendRecord.make("position-test")]);
+			const session = await stream.appendSession();
 
-		// Verify lastSeenPosition is updated
-		expect(session.lastAckedPosition()).toBeDefined();
-		expect(session.lastAckedPosition()?.end.seq_num).toBe(ack.end.seq_num);
-		expect(session.lastAckedPosition()?.end.timestamp).toBe(ack.end.timestamp);
+			// Submit records
+			const p1 = session.submit([AppendRecord.make("drain-1")]);
+			const p2 = session.submit([AppendRecord.make("drain-2")]);
 
-		await session.close();
-	});
+			// Close should wait for all appends to complete
+			await session.close();
 
-	it("should support appending records with headers", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
+			// Both promises should be resolved
+			const ack1 = await p1;
+			const ack2 = await p2;
 
-		const session = await stream.appendSession();
-
-		const record = AppendRecord.make("header-test", {
-			"custom-header": "custom-value",
-			"another-header": "another-value",
-		});
-
-		const ack = await session.submit([record]);
-
-		expect(ack.end.seq_num).toBeGreaterThan(0);
-
-		await session.close();
-	});
-
-	it("should support appending bytes records", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
-
-		const session = await stream.appendSession();
-
-		const body = new TextEncoder().encode("bytes-record-test");
-		const record = AppendRecord.make(body);
-
-		const ack = await session.submit([record]);
-
-		expect(ack.end.seq_num).toBeGreaterThan(0);
-
-		await session.close();
-	});
-
-	it("should handle concurrent submits with proper ordering", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
-
-		const session = await stream.appendSession();
-
-		// Submit multiple records concurrently
-		const promises = [
-			session.submit([AppendRecord.make("concurrent-1")]),
-			session.submit([AppendRecord.make("concurrent-2")]),
-			session.submit([AppendRecord.make("concurrent-3")]),
-			session.submit([AppendRecord.make("concurrent-4")]),
-			session.submit([AppendRecord.make("concurrent-5")]),
-		];
-
-		const acks = await Promise.all(promises);
-
-		// Verify all acks are sequential (session should serialize them)
-		for (let i = 1; i < acks.length; i++) {
-			expect(acks[i]?.end.seq_num).toBe((acks[i - 1]?.end.seq_num ?? 0) + 1);
-		}
-
-		await session.close();
-	});
-
-	it("should reject submit after close()", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
-
-		const session = await stream.appendSession();
-
-		await session.close();
-
-		// Submit after close should reject
-		await expect(
-			session.submit([AppendRecord.make("after-close")]),
-		).rejects.toThrow();
-	});
-
-	it("should wait for drain on close()", async () => {
-		const basin = s2.basin(basinName);
-		const stream = basin.stream(streamName);
-
-		const session = await stream.appendSession();
-
-		// Submit records
-		const p1 = session.submit([AppendRecord.make("drain-1")]);
-		const p2 = session.submit([AppendRecord.make("drain-2")]);
-
-		// Close should wait for all appends to complete
-		await session.close();
-
-		// Both promises should be resolved
-		const ack1 = await p1;
-		const ack2 = await p2;
-
-		expect(ack1.end.seq_num).toBeGreaterThan(0);
-		expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
-	});
+			expect(ack1.end.seq_num).toBeGreaterThan(0);
+			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
+		},
+	);
 });

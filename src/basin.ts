@@ -47,10 +47,10 @@ export class S2Basin {
 	 * Create a stream-scoped helper bound to `this` basin.
 	 * @param name Stream name
 	 */
-	public stream(name: string, options: StreamOptions) {
+	public stream(name: string, options?: StreamOptions) {
 		return new S2Stream(name, this.client, {
 			...this.transportConfig,
-			forceTransport: options.forceTransport,
+			forceTransport: options?.forceTransport,
 		});
 	}
 }
