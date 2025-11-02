@@ -1,5 +1,13 @@
 # @s2-dev/streamstore
 
+## 0.17.0
+
+### Minor Changes
+
+- a7c3269: add s2s transport for node
+- e0f2615: make AppendSession a ReadableWriteablePair
+- 460f6bf: move to transport agnostic session model
+
 ## 0.16.12
 
 ### Patch Changes
