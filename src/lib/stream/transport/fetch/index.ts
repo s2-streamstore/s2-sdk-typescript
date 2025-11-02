@@ -75,7 +75,8 @@ export class FetchReadSession<
 		return new FetchReadSession(response.response.body, format);
 	}
 
-	private _lastReadPosition: StreamPosition | undefined = undefined;
+	private _nextReadPosition: StreamPosition | undefined = undefined;
+	private _lastKnownTail: StreamPosition | undefined = undefined;
 
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
 		super(stream, (msg) => {
@@ -107,10 +108,25 @@ export class FetchReadSession<
 						} satisfies ReadBatch<"string">;
 					}
 				})() as ReadBatch<Format>;
+
+				// Update lastKnownTail from tail field
 				if (batch.tail) {
-					this._lastReadPosition = batch.tail;
+					this._lastKnownTail = batch.tail;
 				}
-				return { done: false, batch: true, value: batch.records ?? [] };
+
+				// Update nextReadPosition based on last record in batch
+				const records = batch.records ?? [];
+				if (records.length > 0) {
+					const lastRecord = records[records.length - 1];
+					if (lastRecord?.seq_num !== undefined && lastRecord?.timestamp !== undefined) {
+						this._nextReadPosition = {
+							seq_num: lastRecord.seq_num + 1,
+							timestamp: lastRecord.timestamp,
+						};
+					}
+				}
+
+				return { done: false, batch: true, value: records };
 			}
 			if (msg.event === "error") {
 				// Handle error events
@@ -122,8 +138,12 @@ export class FetchReadSession<
 		});
 	}
 
-	public lastReadPosition() {
-		return this._lastReadPosition;
+	public nextReadPosition() {
+		return this._nextReadPosition;
+	}
+
+	public lastKnownTail() {
+		return this._lastKnownTail;
 	}
 }
 

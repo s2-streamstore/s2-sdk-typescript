@@ -78,7 +78,8 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadRecord<Format>>,
 		AsyncIterable<ReadRecord<Format>>,
 		AsyncDisposable {
-	lastReadPosition(): StreamPosition | undefined;
+	nextReadPosition(): StreamPosition | undefined;
+	lastKnownTail(): StreamPosition | undefined;
 }
 
 export interface AppendSessionOptions {

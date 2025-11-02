@@ -144,7 +144,8 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	implements ReadSession<Format>
 {
 	private http2Stream?: http2.ClientHttp2Stream;
-	private _lastReadPosition?: StreamPosition;
+	private _nextReadPosition?: StreamPosition;
+	private _lastKnownTail?: StreamPosition;
 	private parser = new S2SFrameParser();
 
 	static async create<Format extends "string" | "bytes" = "string">(
@@ -178,7 +179,8 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		const parser = new S2SFrameParser();
 		const textDecoder = new TextDecoder();
 		let http2Stream: http2.ClientHttp2Stream | undefined;
-		let lastReadPosition: StreamPosition | undefined;
+		let nextReadPosition: StreamPosition | undefined;
+		let lastKnownTail: StreamPosition | undefined;
 
 		super({
 			start: async (controller) => {
@@ -279,21 +281,33 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 								try {
 									const protoBatch = ProtoReadBatch.fromBinary(frame.body);
 
-									// Update position from tail
+									// Update lastKnownTail from tail field
 									if (protoBatch.tail) {
-										lastReadPosition = convertStreamPosition(protoBatch.tail);
-										// Assign to instance property
-										this._lastReadPosition = lastReadPosition;
+										lastKnownTail = convertStreamPosition(protoBatch.tail);
+										this._lastKnownTail = lastKnownTail;
 									}
 
-									// Enqueue each record
-									for (const record of protoBatch.records) {
+									// Enqueue each record and track the last one
+									const records = protoBatch.records;
+									for (const record of records) {
 										const converted = this.convertRecord(
 											record,
 											as ?? ("string" as Format),
 											textDecoder,
 										);
 										controller.enqueue(converted);
+									}
+
+									// Update nextReadPosition based on last record in batch
+									if (records.length > 0) {
+										const lastRecord = records[records.length - 1];
+										if (lastRecord?.seqNum !== undefined && lastRecord?.timestamp !== undefined) {
+											nextReadPosition = {
+												seq_num: Number(lastRecord.seqNum) + 1,
+												timestamp: Number(lastRecord.timestamp),
+											};
+											this._nextReadPosition = nextReadPosition;
+										}
 									}
 								} catch (err) {
 									safeError(
@@ -408,8 +422,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		};
 	}
 
-	lastReadPosition(): StreamPosition | undefined {
-		return this._lastReadPosition;
+	nextReadPosition(): StreamPosition | undefined {
+		return this._nextReadPosition;
+	}
+
+	lastKnownTail(): StreamPosition | undefined {
+		return this._lastKnownTail;
 	}
 }
 

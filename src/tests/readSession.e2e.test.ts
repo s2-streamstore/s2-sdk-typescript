@@ -84,37 +84,56 @@ describe("ReadSession Integration Tests", () => {
 	);
 
 	it.each(transports)(
-		"should update streamPosition during read (%s)",
+		"should update nextReadPosition and lastKnownTail during read (%s)",
 		async (transport) => {
 			const basin = s2.basin(basinName);
 			const stream = basin.stream(streamName, { forceTransport: transport });
 
-			// Use tail_offset to read from a known valid position
 			const session = await stream.readSession({
 				seq_num: 0,
 				count: 2,
 			});
 
-			// Initially streamPosition should be undefined
-			expect(session.lastReadPosition()).toBeUndefined();
+			// Initially both positions should be undefined
+			expect(session.nextReadPosition()).toBeUndefined();
+			expect(session.lastKnownTail()).toBeUndefined();
 
 			const records: Array<{ seq_num: number }> = [];
 			for await (const record of session) {
 				records.push({ seq_num: record.seq_num });
-				// streamPosition should be updated after reading
-				if (session.lastReadPosition()) {
-					expect(session.lastReadPosition()?.seq_num).toBeGreaterThanOrEqual(
+
+				// After reading records, both positions should be updated
+				if (session.nextReadPosition()) {
+					// nextReadPosition should be one more than the last record read
+					expect(session.nextReadPosition()?.seq_num).toBeGreaterThan(
 						record.seq_num,
 					);
 				}
+
+				if (session.lastKnownTail()) {
+					// lastKnownTail should be >= the current record
+					expect(session.lastKnownTail()?.seq_num).toBeGreaterThanOrEqual(
+						record.seq_num,
+					);
+				}
+
 				if (records.length >= 2) {
 					break;
 				}
 			}
 
-			// After reading, streamPosition should be set
-			expect(session.lastReadPosition()).toBeDefined();
-			expect(session.lastReadPosition()?.seq_num).toBeGreaterThan(0);
+			// After reading, both positions should be set
+			expect(session.nextReadPosition()).toBeDefined();
+			expect(session.lastKnownTail()).toBeDefined();
+
+			// nextReadPosition should be one more than the last record
+			const lastRecordSeqNum = records[records.length - 1]?.seq_num;
+			expect(session.nextReadPosition()?.seq_num).toBe(lastRecordSeqNum + 1);
+
+			// lastKnownTail should be >= nextReadPosition (or equal when caught up)
+			expect(session.lastKnownTail()?.seq_num).toBeGreaterThanOrEqual(
+				session.nextReadPosition()?.seq_num ?? 0,
+			);
 		},
 	);
 
