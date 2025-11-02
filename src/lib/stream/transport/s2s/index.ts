@@ -34,6 +34,9 @@ import { S2SFrameParser } from "./framing.js";
 export class S2STransport implements SessionTransport {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
+	private connection?: http2.ClientHttp2Session;
+	private connectionPromise?: Promise<http2.ClientHttp2Session>;
+
 	constructor(config: TransportConfig) {
 		this.client = createClient(
 			createConfig({
@@ -68,7 +71,65 @@ export class S2STransport implements SessionTransport {
 			stream,
 			args,
 			options,
+			() => this.getConnection(),
 		);
+	}
+
+	/**
+	 * Get or create HTTP/2 connection (one per transport)
+	 */
+	private async getConnection(): Promise<http2.ClientHttp2Session> {
+		if (
+			this.connection &&
+			!this.connection.closed &&
+			!this.connection.destroyed
+		) {
+			return this.connection;
+		}
+
+		// If connection is in progress, wait for it
+		if (this.connectionPromise) {
+			return this.connectionPromise;
+		}
+
+		// Create new connection
+		this.connectionPromise = this.createConnection();
+
+		try {
+			this.connection = await this.connectionPromise;
+			return this.connection;
+		} finally {
+			this.connectionPromise = undefined;
+		}
+	}
+
+	private async createConnection(): Promise<http2.ClientHttp2Session> {
+		const url = new URL(this.transportConfig.baseUrl);
+		const client = http2.connect(url.origin, {
+			// Use HTTPS settings
+			...(url.protocol === "https:"
+				? {
+						// TLS options can go here if needed
+					}
+				: {}),
+		});
+
+		return new Promise((resolve, reject) => {
+			client.once("connect", () => {
+				resolve(client);
+			});
+
+			client.once("error", (err) => {
+				reject(err);
+			});
+
+			// Handle connection close
+			client.once("close", () => {
+				if (this.connection === client) {
+					this.connection = undefined;
+				}
+			});
+		});
 	}
 }
 
@@ -85,40 +146,27 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		bearerToken: Redacted.Redacted,
 		streamName: string,
 		args: ReadArgs<Format> | undefined,
-		options?: S2RequestOptions,
+		options: S2RequestOptions | undefined,
+		getConnection: () => Promise<http2.ClientHttp2Session>,
 	): Promise<S2SReadSession<Format>> {
 		const url = new URL(baseUrl);
-		const connection = await new Promise<http2.ClientHttp2Session>(
-			(resolve, reject) => {
-				const client = http2.connect(url.origin, {
-					// Use HTTPS settings
-					...(url.protocol === "https:"
-						? {
-								// TLS options can go here if needed
-							}
-						: {}),
-				});
-				client.once("connect", () => {
-					resolve(client);
-				});
-
-				client.once("error", (err) => {
-					reject(err);
-				});
-			},
+		return new S2SReadSession(
+			streamName,
+			args,
+			bearerToken,
+			url,
+			options,
+			getConnection,
 		);
-		options?.signal?.addEventListener("abort", () => {
-			connection.close();
-		});
-		return new S2SReadSession(streamName, args, connection, bearerToken, url);
 	}
 
 	private constructor(
 		private streamName: string,
 		private args: ReadArgs<Format> | undefined,
-		private connection: http2.ClientHttp2Session,
 		private authToken: Redacted.Redacted,
 		private url: URL,
+		private options: S2RequestOptions | undefined,
+		private getConnection: () => Promise<http2.ClientHttp2Session>,
 	) {
 		// Initialize parser and textDecoder before super() call
 		const parser = new S2SFrameParser();
@@ -147,6 +195,8 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				};
 
 				try {
+					const connection = await getConnection();
+
 					// Build query string
 					const queryParams = new URLSearchParams();
 					const { as, ...readParams } = args ?? {};
@@ -170,7 +220,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const queryString = queryParams.toString();
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
-					http2Stream = connection.request({
+					const stream = connection.request({
 						":method": "GET",
 						":path": path,
 						":scheme": url.protocol.slice(0, -1),
@@ -180,7 +230,15 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						"content-type": "s2s/proto",
 					});
 
-					http2Stream.on("data", (chunk: Buffer) => {
+					http2Stream = stream;
+
+					options?.signal?.addEventListener("abort", () => {
+						if (!stream.closed) {
+							stream.close();
+						}
+					});
+
+					stream.on("data", (chunk: Buffer) => {
 						// Buffer already extends Uint8Array in Node.js, no need to convert
 						parser.push(chunk);
 
@@ -209,7 +267,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 								} else {
 									safeClose();
 								}
-								http2Stream?.close();
+								stream.close();
 							} else {
 								// Parse ReadBatch
 								try {
@@ -244,11 +302,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						}
 					});
 
-					http2Stream.on("error", (err) => {
+					stream.on("error", (err) => {
 						safeError(err);
 					});
 
-					http2Stream.on("close", () => {
+					stream.on("close", () => {
 						safeClose();
 					});
 				} catch (err) {
