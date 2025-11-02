@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { SessionTransports } from "../lib/stream/types.js";
 import { AppendRecord, S2 } from "../index.js";
+import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
 
