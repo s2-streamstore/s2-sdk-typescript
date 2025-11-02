@@ -5,7 +5,7 @@
  * This file should only be imported in Node.js environments
  */
 
-import http2 from "node:http2";
+import * as http2 from "node:http2";
 import type { S2RequestOptions } from "../../../../common.js";
 import {
 	type Client,
