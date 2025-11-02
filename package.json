@@ -20,7 +20,7 @@
     "version-with-docs": "changeset version && bun run docs && git add docs",
     "release": "changeset publish",
     "gen:openapi": "openapi-ts",
-    "gen:proto": "mkdir -p ./src/generated/proto && protoc --ts_out src/generated/proto --ts_opt generate_dependencies --proto_path s2-protos s2-protos/s2/v1/s2.proto && bun scripts/postproto.ts",
+    "gen:proto": "protoc --ts_out src/generated/proto --ts_opt ts_nocheck --proto_path s2-protos s2-protos/s2/v1/s2.proto && mv src/generated/proto/s2/v1/s2.ts src/generated/proto/s2.ts",
     "docs": "typedoc"
   },
   "main": "./dist/cjs/index.js",

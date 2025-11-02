@@ -18,7 +18,7 @@ import {
 	AppendInput as ProtoAppendInput,
 	ReadBatch as ProtoReadBatch,
 	type StreamPosition as ProtoStreamPosition,
-} from "../../../../generated/proto/s2/v1/s2.js";
+} from "../../../../generated/proto/s2.js";
 import { S2Error } from "../../../../index.js";
 import { meteredSizeBytes } from "../../../../utils.js";
 import * as Redacted from "../../../redacted.js";
@@ -33,7 +33,6 @@ import type {
 	SessionTransport,
 	TransportConfig,
 } from "../../types.js";
-import { FetchAppendSession } from "../fetch/index.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
 
 export class S2STransport implements SessionTransport {
