@@ -56,4 +56,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run test
+        env:
+          S2_ACCESS_TOKEN: ${{ secrets.S2_ACCESS_TOKEN }}
+          S2_BASIN: ${{ secrets.S2_BASIN }}
         run: bun run test
