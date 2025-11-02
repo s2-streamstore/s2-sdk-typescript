@@ -99,7 +99,10 @@ export interface SessionTransport {
 	): Promise<ReadSession<Format>>;
 }
 
+export type SessionTransports = "fetch" | "s2s";
+
 export interface TransportConfig {
 	baseUrl: string;
 	accessToken: Redacted.Redacted;
+	forceTransport?: SessionTransports;
 }

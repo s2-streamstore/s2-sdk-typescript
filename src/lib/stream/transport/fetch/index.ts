@@ -179,7 +179,7 @@ class AcksStream extends ReadableStream<AppendAck> implements AsyncDisposable {
  * Session for appending records to a stream.
  * Queues append requests and ensures only one is in-flight at a time.
  */
-class FetchAppendSession
+export class FetchAppendSession
 	implements ReadableWritablePair<AppendAck, AppendArgs>, AsyncDisposable
 {
 	private _lastAckedPosition: AppendAck | undefined = undefined;

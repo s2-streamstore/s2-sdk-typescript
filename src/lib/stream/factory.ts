@@ -4,7 +4,6 @@
 
 import { supportsHttp2 } from "./runtime.js";
 import { FetchTransport } from "./transport/fetch/index.js";
-// import { S2STransport } from "./transport/s2s.js";
 import type { SessionTransport, TransportConfig } from "./types.js";
 
 /**
@@ -18,19 +17,20 @@ import type { SessionTransport, TransportConfig } from "./types.js";
  */
 export async function createSessionTransport(
 	config: TransportConfig,
-	options?: { preferHttp2?: boolean },
 ): Promise<SessionTransport> {
 	// Check if user explicitly disabled HTTP/2
-	if (options?.preferHttp2 === false) {
+	if (config?.forceTransport === "fetch") {
 		return new FetchTransport(config);
+	} else if (config?.forceTransport === "s2s") {
+		const { S2STransport } = await import("./transport/s2s/index.js");
+		return new S2STransport(config);
 	}
 
 	// Check if HTTP/2 is available
 	if (supportsHttp2()) {
 		// Dynamic import for Node.js-specific transport
-		// const { S2STransport } = await import("./transport/s2s.js");
-		// return new S2STransport(config);
-		return new FetchTransport(config);
+		const { S2STransport } = await import("./transport/s2s/index.js");
+		return new S2STransport(config);
 	}
 
 	// Fallback to fetch
