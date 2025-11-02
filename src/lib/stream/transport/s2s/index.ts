@@ -28,7 +28,7 @@ import type {
 	SessionTransport,
 	TransportConfig,
 } from "../../types.js";
-import { FetchAppendSession, FetchReadSession } from "../fetch/index.js";
+import { FetchAppendSession } from "../fetch/index.js";
 import { S2SFrameParser } from "./framing.js";
 
 export class S2STransport implements SessionTransport {
@@ -62,7 +62,13 @@ export class S2STransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
-		return FetchReadSession.create(this.client, stream, args, options);
+		return S2SReadSession.create(
+			this.transportConfig.baseUrl,
+			this.transportConfig.accessToken,
+			stream,
+			args,
+			options,
+		);
 	}
 }
 
@@ -79,6 +85,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		bearerToken: Redacted.Redacted,
 		streamName: string,
 		args: ReadArgs<Format> | undefined,
+		options?: S2RequestOptions,
 	): Promise<S2SReadSession<Format>> {
 		const url = new URL(baseUrl);
 		const connection = await new Promise<http2.ClientHttp2Session>(
@@ -100,6 +107,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				});
 			},
 		);
+		options?.signal?.addEventListener("abort", () => {
+			connection.close();
+		});
 		return new S2SReadSession(streamName, args, connection, bearerToken, url);
 	}
 
@@ -110,11 +120,31 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private authToken: Redacted.Redacted,
 		private url: URL,
 	) {
-		let recordsController: ReadableStreamDefaultController<ReadRecord<Format>>;
+		// Initialize parser and textDecoder before super() call
+		const parser = new S2SFrameParser();
+		const textDecoder = new TextDecoder();
+		let http2Stream: http2.ClientHttp2Stream | undefined;
+		let lastReadPosition: StreamPosition | undefined;
 
 		super({
 			start: async (controller) => {
-				recordsController = controller;
+				let controllerClosed = false;
+				const safeClose = () => {
+					if (!controllerClosed) {
+						controllerClosed = true;
+						try {
+							controller.close();
+						} catch {
+							// Controller may already be closed, ignore
+						}
+					}
+				};
+				const safeError = (err: unknown) => {
+					if (!controllerClosed) {
+						controllerClosed = true;
+						controller.error(err);
+					}
+				};
 
 				try {
 					// Build query string
@@ -140,27 +170,28 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const queryString = queryParams.toString();
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
-					this.http2Stream = connection.request({
+					http2Stream = connection.request({
 						":method": "GET",
 						":path": path,
 						":scheme": url.protocol.slice(0, -1),
 						":authority": url.host,
-						authorization: `Bearer ${Redacted.value(this.authToken)}`,
+						authorization: `Bearer ${Redacted.value(authToken)}`,
 						accept: "application/protobuf",
 						"content-type": "s2s/proto",
 					});
 
-					this.http2Stream.on("data", (chunk: Buffer) => {
-						this.parser.push(new Uint8Array(chunk));
+					http2Stream.on("data", (chunk: Buffer) => {
+						// Buffer already extends Uint8Array in Node.js, no need to convert
+						parser.push(chunk);
 
-						let frame = this.parser.parseFrame();
+						let frame = parser.parseFrame();
 						while (frame) {
 							if (frame.terminal) {
 								if (frame.statusCode && frame.statusCode >= 400) {
-									const errorText = new TextDecoder().decode(frame.body);
+									const errorText = textDecoder.decode(frame.body);
 									try {
 										const errorJson = JSON.parse(errorText);
-										controller.error(
+										safeError(
 											new S2Error({
 												message: errorJson.message ?? "Unknown error",
 												code: errorJson.code,
@@ -168,16 +199,17 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											}),
 										);
 									} catch {
-										controller.error(
+										safeError(
 											new S2Error({
 												message: errorText || "Unknown error",
 												status: frame.statusCode,
 											}),
 										);
 									}
+								} else {
+									safeClose();
 								}
-								controller.close();
-								this.http2Stream?.close();
+								http2Stream?.close();
 							} else {
 								// Parse ReadBatch
 								try {
@@ -185,9 +217,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 									// Update position from tail
 									if (protoBatch.tail) {
-										this._lastReadPosition = convertStreamPosition(
-											protoBatch.tail,
-										);
+										lastReadPosition = convertStreamPosition(protoBatch.tail);
+										// Assign to instance property
+										this._lastReadPosition = lastReadPosition;
 									}
 
 									// Enqueue each record
@@ -195,11 +227,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										const converted = this.convertRecord(
 											record,
 											as ?? ("string" as Format),
+											textDecoder,
 										);
 										controller.enqueue(converted);
 									}
 								} catch (err) {
-									controller.error(
+									safeError(
 										new S2Error({
 											message: `Failed to parse ReadBatch: ${err}`,
 										}),
@@ -207,27 +240,31 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 								}
 							}
 
-							frame = this.parser.parseFrame();
+							frame = parser.parseFrame();
 						}
 					});
 
-					this.http2Stream.on("error", (err) => {
-						controller.error(err);
+					http2Stream.on("error", (err) => {
+						safeError(err);
 					});
 
-					this.http2Stream.on("close", () => {
-						controller.close();
+					http2Stream.on("close", () => {
+						safeClose();
 					});
 				} catch (err) {
-					controller.error(err);
+					safeError(err);
 				}
 			},
 			cancel: async () => {
-				if (this.http2Stream && !this.http2Stream.closed) {
-					this.http2Stream.close();
+				if (http2Stream && !http2Stream.closed) {
+					http2Stream.close();
 				}
 			},
 		});
+
+		// Assign parser to instance property after super() completes
+		this.parser = parser;
+		this.http2Stream = http2Stream;
 	}
 
 	/**
@@ -241,6 +278,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			body?: Uint8Array;
 		},
 		format: Format,
+		textDecoder: TextDecoder,
 	): ReadRecord<Format> {
 		if (format === "bytes") {
 			return {
@@ -263,11 +301,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				headers: record.headers?.map(
 					(h) =>
 						[
-							h.name ? new TextDecoder().decode(h.name) : "",
-							h.value ? new TextDecoder().decode(h.value) : "",
+							h.name ? textDecoder.decode(h.name) : "",
+							h.value ? textDecoder.decode(h.value) : "",
 						] as [string, string],
 				),
-				body: record.body ? new TextDecoder().decode(record.body) : undefined,
+				body: record.body ? textDecoder.decode(record.body) : undefined,
 			} as ReadRecord<Format>;
 		}
 	}
