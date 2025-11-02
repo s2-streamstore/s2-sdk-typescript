@@ -88,14 +88,14 @@ describe("ReadSession Integration Tests", () => {
 		});
 
 		// Initially streamPosition should be undefined
-		expect(session.streamPosition).toBeUndefined();
+		expect(session.lastReadPosition()).toBeUndefined();
 
 		const records: Array<{ seq_num: number }> = [];
 		for await (const record of session) {
 			records.push({ seq_num: record.seq_num });
 			// streamPosition should be updated after reading
-			if (session.streamPosition) {
-				expect(session.streamPosition.seq_num).toBeGreaterThanOrEqual(
+			if (session.lastReadPosition()) {
+				expect(session.lastReadPosition()?.seq_num).toBeGreaterThanOrEqual(
 					record.seq_num,
 				);
 			}
@@ -105,8 +105,8 @@ describe("ReadSession Integration Tests", () => {
 		}
 
 		// After reading, streamPosition should be set
-		expect(session.streamPosition).toBeDefined();
-		expect(session.streamPosition?.seq_num).toBeGreaterThan(0);
+		expect(session.lastReadPosition()).toBeDefined();
+		expect(session.lastReadPosition()?.seq_num).toBeGreaterThan(0);
 	});
 
 	it("should read records as bytes format", async () => {

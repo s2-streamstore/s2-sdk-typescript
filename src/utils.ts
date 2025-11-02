@@ -1,7 +1,7 @@
 import type {
 	AppendHeaders,
 	AppendRecord as AppendRecordType,
-} from "./stream.js";
+} from "./lib/stream/types.js";
 
 export type AppendRecord = AppendRecordType;
 

@@ -136,15 +136,15 @@ describe("AppendSession Integration Tests", () => {
 		const session = await stream.appendSession();
 
 		// Initially, lastSeenPosition should be undefined
-		expect(session.lastSeenPosition).toBeUndefined();
+		expect(session.lastAckedPosition()).toBeUndefined();
 
 		// Submit a record
 		const ack = await session.submit([AppendRecord.make("position-test")]);
 
 		// Verify lastSeenPosition is updated
-		expect(session.lastSeenPosition).toBeDefined();
-		expect(session.lastSeenPosition?.end.seq_num).toBe(ack.end.seq_num);
-		expect(session.lastSeenPosition?.end.timestamp).toBe(ack.end.timestamp);
+		expect(session.lastAckedPosition()).toBeDefined();
+		expect(session.lastAckedPosition()?.end.seq_num).toBe(ack.end.seq_num);
+		expect(session.lastAckedPosition()?.end.timestamp).toBe(ack.end.timestamp);
 
 		await session.close();
 	});

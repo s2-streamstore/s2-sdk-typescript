@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppendAck } from "../generated/index.js";
-import type { AppendRecord } from "../stream.js";
+import * as Redacted from "../lib/redacted.js";
+import * as SharedTransport from "../lib/stream/transport/fetch/shared.js";
 import { S2Stream } from "../stream.js";
 
 // Minimal Client shape to satisfy S2Stream constructor; we won't use it directly
 const fakeClient: any = {};
 
-const makeStream = () => new S2Stream("test-stream", fakeClient);
+const makeStream = () =>
+	new S2Stream("test-stream", fakeClient, {
+		baseUrl: "https://test.b.aws.s2.dev",
+		accessToken: Redacted.make("test-access-token"),
+	});
 
 const makeAck = (n: number): AppendAck => ({
 	start: { seq_num: n - 1, timestamp: 0 },
@@ -15,8 +20,12 @@ const makeAck = (n: number): AppendAck => ({
 });
 
 describe("AppendSession", () => {
+	let streamAppendSpy: any;
+
 	beforeEach(() => {
 		vi.useFakeTimers();
+		// Mock streamAppend which is what appendSession() actually uses
+		streamAppendSpy = vi.spyOn(SharedTransport, "streamAppend");
 	});
 
 	afterEach(() => {
@@ -26,22 +35,21 @@ describe("AppendSession", () => {
 
 	it("serializes submit calls and emits acks in order", async () => {
 		const stream = makeStream();
-		const appendSpy = vi.spyOn(stream, "append");
 
 		// ensure only one in flight at a time by controlling resolution of spy
 		let firstResolved = false;
-		appendSpy.mockImplementationOnce(async (..._args: any[]) => {
+		streamAppendSpy.mockImplementationOnce(async (..._args: any[]) => {
 			await vi.advanceTimersByTimeAsync(10);
 			firstResolved = true;
 			return makeAck(1);
 		});
-		appendSpy.mockImplementationOnce(async (..._args: any[]) => {
+		streamAppendSpy.mockImplementationOnce(async (..._args: any[]) => {
 			expect(firstResolved).toBe(true);
 			await vi.advanceTimersByTimeAsync(5);
 			return makeAck(2);
 		});
 		// default fallback
-		appendSpy.mockResolvedValue(makeAck(999));
+		streamAppendSpy.mockResolvedValue(makeAck(999));
 
 		const session = await stream.appendSession();
 
@@ -51,15 +59,14 @@ describe("AppendSession", () => {
 		const ack1 = await p1;
 		const ack2 = await p2;
 
-		expect(appendSpy).toHaveBeenCalledTimes(2);
+		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
 		expect(ack1.end.seq_num).toBe(1);
 		expect(ack2.end.seq_num).toBe(2);
 	});
 
 	it("acks() stream receives emitted acks and closes on session.close()", async () => {
 		const stream = makeStream();
-		const appendSpy = vi
-			.spyOn(stream, "append")
+		streamAppendSpy
 			.mockResolvedValueOnce(makeAck(1))
 			.mockResolvedValueOnce(makeAck(2));
 
@@ -79,16 +86,15 @@ describe("AppendSession", () => {
 		await session.close();
 		await consumer;
 
-		expect(appendSpy).toHaveBeenCalledTimes(2);
+		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
 		expect(received.map((a) => a.end.seq_num)).toEqual([1, 2]);
 	});
 
 	it("close() waits for drain before resolving", async () => {
 		const stream = makeStream();
-		const appendSpy = vi.spyOn(stream, "append");
 
-		appendSpy.mockResolvedValueOnce(makeAck(1));
-		appendSpy.mockResolvedValueOnce(makeAck(2));
+		streamAppendSpy.mockResolvedValueOnce(makeAck(1));
+		streamAppendSpy.mockResolvedValueOnce(makeAck(2));
 
 		const session = await stream.appendSession();
 
@@ -100,12 +106,12 @@ describe("AppendSession", () => {
 
 		await expect(p1).resolves.toBeTruthy();
 		await expect(p2).resolves.toBeTruthy();
-		expect(appendSpy).toHaveBeenCalledTimes(2);
+		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
 	});
 
 	it("submit after close() rejects", async () => {
 		const stream = makeStream();
-		vi.spyOn(stream, "append").mockResolvedValue(makeAck(1));
+		streamAppendSpy.mockResolvedValue(makeAck(1));
 		const session = await stream.appendSession();
 
 		await session.close();
@@ -117,9 +123,8 @@ describe("AppendSession", () => {
 
 	it("error during processing rejects current and queued, clears queue", async () => {
 		const stream = makeStream();
-		const appendSpy = vi.spyOn(stream, "append");
 
-		appendSpy.mockRejectedValueOnce(new Error("boom"));
+		streamAppendSpy.mockRejectedValueOnce(new Error("boom"));
 
 		const session = await stream.appendSession();
 
@@ -133,23 +138,22 @@ describe("AppendSession", () => {
 		await expect(p2).rejects.toBeTruthy();
 
 		// After error, queue should be empty; new submit should restart processing
-		appendSpy.mockResolvedValueOnce(makeAck(3));
+		streamAppendSpy.mockResolvedValueOnce(makeAck(3));
 		const p3 = session.submit([{ body: "c" }]);
 		await expect(p3).resolves.toBeTruthy();
-		expect(appendSpy).toHaveBeenCalledTimes(2); // 1 throw + 1 success
+		expect(streamAppendSpy).toHaveBeenCalledTimes(2); // 1 throw + 1 success
 	});
 
 	it("updates lastSeenPosition after successful append", async () => {
 		const stream = makeStream();
-		vi.spyOn(stream, "append").mockResolvedValue(makeAck(42));
+		streamAppendSpy.mockResolvedValue(makeAck(42));
 		const session = await stream.appendSession();
 		await session.submit([{ body: "z" }]);
-		expect(session.lastSeenPosition?.end.seq_num).toBe(42);
+		expect(session.lastAckedPosition()?.end.seq_num).toBe(42);
 	});
 
 	it("applies backpressure when queue exceeds maxQueuedBytes", async () => {
 		const stream = makeStream();
-		const appendSpy = vi.spyOn(stream, "append");
 
 		// Create a session with very small max queued bytes (100 bytes)
 		const session = await stream.appendSession({
@@ -162,9 +166,9 @@ describe("AppendSession", () => {
 			resolveFirst = () => resolve(makeAck(1));
 		});
 
-		appendSpy.mockReturnValueOnce(firstPromise);
-		appendSpy.mockResolvedValueOnce(makeAck(2));
-		appendSpy.mockResolvedValueOnce(makeAck(3));
+		streamAppendSpy.mockReturnValueOnce(firstPromise);
+		streamAppendSpy.mockResolvedValueOnce(makeAck(2));
+		streamAppendSpy.mockResolvedValueOnce(makeAck(3));
 
 		// Use the WritableStream interface (session is a ReadableWritablePair)
 		const writer = session.writable.getWriter();
@@ -203,7 +207,7 @@ describe("AppendSession", () => {
 		await p3;
 
 		expect(thirdWriteStarted).toBe(true);
-		expect(appendSpy).toHaveBeenCalledTimes(3);
+		expect(streamAppendSpy).toHaveBeenCalledTimes(3);
 
 		await writer.close();
 	});

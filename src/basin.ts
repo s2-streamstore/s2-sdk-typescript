@@ -1,13 +1,13 @@
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
+import type { TransportConfig } from "./lib/stream/types.js";
 import { S2Stream } from "./stream.js";
 import { S2Streams } from "./streams.js";
 
 export class S2Basin {
 	private readonly client: Client;
-	private readonly accessToken: Redacted.Redacted;
-
+	private readonly transportConfig: TransportConfig;
 	public readonly name: string;
 	public readonly streams: S2Streams;
 
@@ -29,11 +29,14 @@ export class S2Basin {
 		},
 	) {
 		this.name = name;
-		this.accessToken = options.accessToken;
+		this.transportConfig = {
+			baseUrl: options.baseUrl,
+			accessToken: options.accessToken,
+		};
 		this.client = createClient(
 			createConfig({
 				baseUrl: options.baseUrl,
-				auth: () => Redacted.value(this.accessToken),
+				auth: () => Redacted.value(this.transportConfig.accessToken),
 				headers: options.includeBasinHeader ? { "s2-basin": name } : {},
 			}),
 		);
@@ -45,6 +48,6 @@ export class S2Basin {
 	 * @param name Stream name
 	 */
 	public stream(name: string) {
-		return new S2Stream(name, this.client);
+		return new S2Stream(name, this.client, this.transportConfig);
 	}
 }
