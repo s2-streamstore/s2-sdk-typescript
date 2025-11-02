@@ -1,7 +1,7 @@
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
-import type { TransportConfig } from "./lib/stream/types.js";
+import type { SessionTransports, TransportConfig } from "./lib/stream/types.js";
 import { S2Stream } from "./stream.js";
 import { S2Streams } from "./streams.js";
 
@@ -47,7 +47,14 @@ export class S2Basin {
 	 * Create a stream-scoped helper bound to `this` basin.
 	 * @param name Stream name
 	 */
-	public stream(name: string) {
-		return new S2Stream(name, this.client, this.transportConfig);
+	public stream(name: string, options: StreamOptions) {
+		return new S2Stream(name, this.client, {
+			...this.transportConfig,
+			forceTransport: options.forceTransport,
+		});
 	}
+}
+
+export interface StreamOptions {
+	forceTransport?: SessionTransports;
 }
