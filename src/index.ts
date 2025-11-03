@@ -13,6 +13,12 @@ export type {
 } from "./basins.js";
 export type { BatchOutput, BatchTransformArgs } from "./batch-transform.js";
 export { BatchTransform } from "./batch-transform.js";
+export type {
+	AppendRetryPolicy,
+	RetryConfig,
+	S2ClientOptions,
+	S2RequestOptions,
+} from "./common.js";
 export {
 	FencingTokenMismatchError,
 	RangeNotSatisfiableError,

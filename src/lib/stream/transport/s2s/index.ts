@@ -83,6 +83,7 @@ export class S2STransport implements SessionTransport {
 			createConfig({
 				baseUrl: config.baseUrl,
 				auth: () => Redacted.value(config.accessToken),
+				headers: config.basinName ? { "s2-basin": config.basinName } : {},
 			}),
 		);
 		this.transportConfig = config;
@@ -98,6 +99,7 @@ export class S2STransport implements SessionTransport {
 			this.transportConfig.accessToken,
 			stream,
 			() => this.getConnection(),
+			this.transportConfig.basinName,
 			sessionOptions,
 			requestOptions,
 		);
@@ -115,6 +117,7 @@ export class S2STransport implements SessionTransport {
 			args,
 			options,
 			() => this.getConnection(),
+			this.transportConfig.basinName,
 		);
 	}
 
@@ -195,6 +198,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		args: ReadArgs<Format> | undefined,
 		options: S2RequestOptions | undefined,
 		getConnection: () => Promise<http2.ClientHttp2Session>,
+		basinName?: string,
 	): Promise<S2SReadSession<Format>> {
 		const url = new URL(baseUrl);
 		return new S2SReadSession(
@@ -204,6 +208,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			url,
 			options,
 			getConnection,
+			basinName,
 		);
 	}
 
@@ -214,6 +219,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private url: URL,
 		private options: S2RequestOptions | undefined,
 		private getConnection: () => Promise<http2.ClientHttp2Session>,
+		private basinName?: string,
 	) {
 		// Initialize parser and textDecoder before super() call
 		const parser = new S2SFrameParser();
@@ -224,6 +230,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		super({
 			start: async (controller) => {
 				let controllerClosed = false;
+				let responseCode: number | undefined;
 				const safeClose = () => {
 					if (!controllerClosed) {
 						controllerClosed = true;
@@ -275,6 +282,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						authorization: `Bearer ${Redacted.value(authToken)}`,
 						accept: "application/protobuf",
 						"content-type": "s2s/proto",
+						...(basinName ? { "s2-basin": basinName } : {}),
 					});
 
 					http2Stream = stream;
@@ -285,7 +293,31 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						}
 					});
 
+					stream.on("response", (headers) => {
+						responseCode = headers[":status"] ?? 500;
+					});
+
 					stream.on("data", (chunk: Buffer) => {
+						if ((responseCode ?? 500) >= 400) {
+							const errorText = textDecoder.decode(chunk);
+							try {
+								const errorJson = JSON.parse(errorText);
+								safeError(
+									new S2Error({
+										message: errorJson.message ?? "Unknown error",
+										code: errorJson.code,
+										status: responseCode,
+									}),
+								);
+							} catch {
+								safeError(
+									new S2Error({
+										message: errorText || "Unknown error",
+										status: responseCode,
+									}),
+								);
+							}
+						}
 						// Buffer already extends Uint8Array in Node.js, no need to convert
 						parser.push(chunk);
 
@@ -540,6 +572,7 @@ class S2SAppendSession
 		bearerToken: Redacted.Redacted,
 		streamName: string,
 		getConnection: () => Promise<http2.ClientHttp2Session>,
+		basinName: string | undefined,
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<S2SAppendSession> {
@@ -548,6 +581,7 @@ class S2SAppendSession
 			bearerToken,
 			streamName,
 			getConnection,
+			basinName,
 			sessionOptions,
 			requestOptions,
 		);
@@ -558,6 +592,7 @@ class S2SAppendSession
 		private authToken: Redacted.Redacted,
 		private streamName: string,
 		private getConnection: () => Promise<http2.ClientHttp2Session>,
+		private basinName?: string,
 		sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
 	) {
@@ -666,6 +701,7 @@ class S2SAppendSession
 			authorization: `Bearer ${Redacted.value(this.authToken)}`,
 			"content-type": "s2s/proto",
 			accept: "application/protobuf",
+			...(this.basinName ? { "s2-basin": this.basinName } : {}),
 		});
 
 		this.http2Stream = stream;
