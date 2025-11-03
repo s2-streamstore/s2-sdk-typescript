@@ -1,4 +1,37 @@
 /**
+ * Policy for retrying append operations.
+ *
+ * - `all`: Retry all append operations, including those that may have side effects
+ * - `noSideEffects`: Only retry append operations that are guaranteed to have no side effects
+ */
+export type AppendRetryPolicy = "all" | "noSideEffects";
+
+/**
+ * Retry configuration for handling transient failures.
+ */
+export type RetryConfig = {
+	/**
+	 * Maximum number of retry attempts.
+	 * Set to 0 to disable retries.
+	 * @default 3
+	 */
+	maxAttempts?: number;
+
+	/**
+	 * Base delay in milliseconds between retry attempts.
+	 * Uses exponential backoff: delay = retryBackoffDurationMs * (2 ^ attempt)
+	 * @default 100
+	 */
+	retryBackoffDurationMs?: number;
+
+	/**
+	 * Policy for retrying append operations.
+	 * @default "noSideEffects"
+	 */
+	appendRetryPolicy?: AppendRetryPolicy;
+};
+
+/**
  * Configuration for constructing the top-level `S2` client.
  *
  * - The client authenticates using a Bearer access token on every request.
@@ -19,6 +52,12 @@ export type S2ClientOptions = {
 	 * Defaults to `https://{basin}.b.aws.s2.dev`.
 	 */
 	makeBasinBaseUrl?: (basin: string) => string;
+	/**
+	 * Retry configuration for handling transient failures.
+	 * Applies to management operations (basins, streams, tokens) and stream operations (read, append).
+	 * @default { maxAttempts: 3, retryBackoffDurationMs: 100 }
+	 */
+	retry?: RetryConfig;
 };
 
 /**

@@ -11,23 +11,17 @@ describe("AppendSession Integration Tests", () => {
 
 	beforeAll(() => {
 		const token = process.env.S2_ACCESS_TOKEN;
-		if (!token) {
+		const basin = process.env.S2_BASIN;
+		if (!token || !basin) {
 			throw new Error(
-				"S2_ACCESS_TOKEN environment variable is required for integration tests",
+				"S2_ACCESS_TOKEN and S2_BASIN environment variables are required for e2e tests",
 			);
 		}
 		s2 = new S2({ accessToken: token });
+		basinName = basin;
 	});
 
 	beforeAll(async () => {
-		// Get or use an existing basin
-		const basins = await s2.basins.list();
-		if (!basins.basins || basins.basins.length === 0) {
-			throw new Error("No basins found. Please create a basin first.");
-		}
-		basinName = basins.basins[0]!.name;
-		expect(basinName).toBeTruthy();
-
 		// Use a unique stream name for each test run
 		const timestamp = Date.now();
 		streamName = `integration-test-append-${timestamp}`;

@@ -105,4 +105,8 @@ export interface TransportConfig {
 	baseUrl: string;
 	accessToken: Redacted.Redacted;
 	forceTransport?: SessionTransports;
+	/**
+	 * Basin name to include in s2-basin header when using account endpoint
+	 */
+	basinName?: string;
 }

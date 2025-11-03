@@ -939,6 +939,12 @@ export type ListStreamsResponse2 = ListStreamsResponses[keyof ListStreamsRespons
 
 export type CreateStreamData = {
     body: CreateStreamRequest;
+    headers?: {
+        /**
+         * Client-specified request token for idempotent retries.
+         */
+        's2-request-token'?: string;
+    };
     path?: never;
     query?: never;
     url: '/streams';
