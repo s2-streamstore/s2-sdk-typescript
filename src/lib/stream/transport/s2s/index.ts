@@ -118,10 +118,21 @@ export class S2STransport implements SessionTransport {
 						// TLS options can go here if needed
 					}
 				: {}),
+			// HTTP/2 settings for high-throughput streaming
+			settings: {
+				// Increase initial window size from default 64KB to 10MB
+				// This allows more data to be in-flight before flow control blocks
+				initialWindowSize: 10 * 1024 * 1024, // 10 MB
+				// Allow more concurrent streams
+				maxConcurrentStreams: 100,
+			},
 		});
 
 		return new Promise((resolve, reject) => {
 			client.once("connect", () => {
+				// Increase connection-level flow control window to 10MB
+				// This is separate from per-stream window and prevents connection-level blocking
+				client.setLocalWindowSize(10 * 1024 * 1024);
 				resolve(client);
 			});
 
