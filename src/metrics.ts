@@ -1,5 +1,5 @@
-import type { DataToObject, S2RequestOptions } from "./common.js";
-import { S2Error } from "./error.js";
+import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
+import { S2Error, withS2Error } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	type AccountMetricsData,
@@ -9,6 +9,7 @@ import {
 	type StreamMetricsData,
 	streamMetrics,
 } from "./generated/index.js";
+import { withRetries } from "./lib/retry.js";
 
 export interface AccountMetricsArgs extends DataToObject<AccountMetricsData> {}
 export interface BasinMetricsArgs extends DataToObject<BasinMetricsData> {}
@@ -16,9 +17,11 @@ export interface StreamMetricsArgs extends DataToObject<StreamMetricsData> {}
 
 export class S2Metrics {
 	readonly client: Client;
+	private readonly retryConfig?: RetryConfig;
 
-	constructor(client: Client) {
+	constructor(client: Client, retryConfig?: RetryConfig) {
 		this.client = client;
+		this.retryConfig = retryConfig;
 	}
 
 	/**
@@ -30,19 +33,16 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async account(args: AccountMetricsArgs, options?: S2RequestOptions) {
-		const response = await accountMetrics({
-			client: this.client,
-			query: args,
-			...options,
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				accountMetrics({
+					client: this.client,
+					query: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
 
 		return response.data;
 	}
@@ -57,20 +57,17 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async basin(args: BasinMetricsArgs, options?: S2RequestOptions) {
-		const response = await basinMetrics({
-			client: this.client,
-			path: args,
-			query: args,
-			...options,
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				basinMetrics({
+					client: this.client,
+					path: args,
+					query: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
 
 		return response.data;
 	}
@@ -86,20 +83,17 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async stream(args: StreamMetricsArgs, options?: S2RequestOptions) {
-		const response = await streamMetrics({
-			client: this.client,
-			path: args,
-			query: args,
-			...options,
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				streamMetrics({
+					client: this.client,
+					path: args,
+					query: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
 
 		return response.data;
 	}

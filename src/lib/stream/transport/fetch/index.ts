@@ -38,6 +38,7 @@ export class FetchReadSession<
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	) {
+		console.log("FetchReadSession.create", name, args);
 		const { as, ...queryParams } = args ?? {};
 		const response = await read({
 			client,
@@ -45,6 +46,8 @@ export class FetchReadSession<
 				stream: name,
 			},
 			headers: {
+				// Note: These headers are merged with defaults via mergeHeaders().
+				// Authorization is added afterward via setAuthParams(), so it's preserved.
 				accept: "text/event-stream",
 				...(as === "bytes" ? { "s2-format": "base64" } : {}),
 			},
@@ -490,6 +493,7 @@ export class FetchTransport implements SessionTransport {
 			createConfig({
 				baseUrl: config.baseUrl,
 				auth: () => Redacted.value(config.accessToken),
+				headers: config.basinName ? { "s2-basin": config.basinName } : {},
 			}),
 		);
 		this.transportConfig = config;

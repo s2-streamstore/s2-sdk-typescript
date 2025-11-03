@@ -1,18 +1,23 @@
-import type { DataToObject, S2RequestOptions } from "./common.js";
-import { S2Error } from "./error.js";
+import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
+import { S2Error, withS2Error } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
+	type BasinConfig,
 	type CreateBasinData,
+	type CreateBasinResponse,
 	createBasin,
 	type DeleteBasinData,
 	deleteBasin,
 	type GetBasinConfigData,
 	getBasinConfig,
 	type ListBasinsData,
+	type ListBasinsResponse,
 	listBasins,
 	type ReconfigureBasinData,
+	type ReconfigureBasinResponse,
 	reconfigureBasin,
 } from "./generated/index.js";
+import { withRetries } from "./lib/retry.js";
 
 export interface ListBasinsArgs extends DataToObject<ListBasinsData> {}
 export interface CreateBasinArgs extends DataToObject<CreateBasinData> {}
@@ -23,9 +28,11 @@ export interface ReconfigureBasinArgs
 
 export class S2Basins {
 	private readonly client: Client;
+	private readonly retryConfig: RetryConfig;
 
-	constructor(client: Client) {
+	constructor(client: Client, retryConfig: RetryConfig) {
 		this.client = client;
+		this.retryConfig = retryConfig;
 	}
 
 	/**
@@ -35,20 +42,20 @@ export class S2Basins {
 	 * @param args.start_after Name to start after (for pagination)
 	 * @param args.limit Max results (up to 1000)
 	 */
-	public async list(args?: ListBasinsArgs, options?: S2RequestOptions) {
-		const response = await listBasins({
-			client: this.client,
-			query: args,
-			...options,
+	public async list(
+		args?: ListBasinsArgs,
+		options?: S2RequestOptions,
+	): Promise<ListBasinsResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				listBasins({
+					client: this.client,
+					query: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
 
 		return response.data;
 	}
@@ -60,20 +67,20 @@ export class S2Basins {
 	 * @param args.config Optional basin configuration (e.g. default stream config)
 	 * @param args.scope Basin scope
 	 */
-	public async create(args: CreateBasinArgs, options?: S2RequestOptions) {
-		const response = await createBasin({
-			client: this.client,
-			body: args,
-			...options,
+	public async create(
+		args: CreateBasinArgs,
+		options?: S2RequestOptions,
+	): Promise<CreateBasinResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				createBasin({
+					client: this.client,
+					body: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
 
 		return response.data;
 	}
@@ -83,20 +90,20 @@ export class S2Basins {
 	 *
 	 * @param args.basin Basin name
 	 */
-	public async getConfig(args: GetBasinConfigArgs, options?: S2RequestOptions) {
-		const response = await getBasinConfig({
-			client: this.client,
-			path: args,
-			...options,
+	public async getConfig(
+		args: GetBasinConfigArgs,
+		options?: S2RequestOptions,
+	): Promise<BasinConfig> {
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				getBasinConfig({
+					client: this.client,
+					path: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
 
 		return response.data;
 	}
@@ -106,22 +113,20 @@ export class S2Basins {
 	 *
 	 * @param args.basin Basin name
 	 */
-	public async delete(args: DeleteBasinArgs, options?: S2RequestOptions) {
-		const response = await deleteBasin({
-			client: this.client,
-			path: args,
-			...options,
+	public async delete(
+		args: DeleteBasinArgs,
+		options?: S2RequestOptions,
+	): Promise<void> {
+		await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				deleteBasin({
+					client: this.client,
+					path: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
-
-		return response.data;
 	}
 
 	/**
@@ -133,21 +138,18 @@ export class S2Basins {
 	public async reconfigure(
 		args: ReconfigureBasinArgs,
 		options?: S2RequestOptions,
-	) {
-		const response = await reconfigureBasin({
-			client: this.client,
-			path: args,
-			body: args,
-			...options,
+	): Promise<ReconfigureBasinResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2Error(async () =>
+				reconfigureBasin({
+					client: this.client,
+					path: args,
+					body: args,
+					...options,
+					throwOnError: true,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
 
 		return response.data;
 	}

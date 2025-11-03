@@ -1,3 +1,71 @@
+function isConnectionError(error: unknown): boolean {
+	if (!(error instanceof Error)) {
+		return false;
+	}
+
+	if (error.message.includes("fetch failed")) {
+		return true;
+	}
+
+	const cause = (error as any).cause;
+	if (cause && typeof cause === "object") {
+		const code = cause.code;
+
+		// Common connection error codes from Node.js net module
+		const connectionErrorCodes = [
+			"ECONNREFUSED", // Connection refused
+			"ENOTFOUND", // DNS lookup failed
+			"ETIMEDOUT", // Connection timeout
+			"ENETUNREACH", // Network unreachable
+			"EHOSTUNREACH", // Host unreachable
+			"ECONNRESET", // Connection reset by peer
+			"EPIPE", // Broken pipe
+		];
+
+		if (connectionErrorCodes.includes(code)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
+	try {
+		return await fn();
+	} catch (error) {
+		// Already S2Error? Rethrow
+		if (error instanceof S2Error) {
+			throw error;
+		}
+
+		// Connection error?
+		if (isConnectionError(error)) {
+			const cause = (error as any).cause;
+			const code = cause?.code || "NETWORK_ERROR";
+			throw new S2Error({
+				message: `Connection failed: ${code}`,
+				// Could add a specific status or property for connection errors
+				status: 500, // or 0, or a constant
+			});
+		}
+
+		// Abort error?
+		if (error instanceof Error && error.name === "AbortError") {
+			throw new S2Error({
+				message: "Request cancelled",
+				status: undefined,
+			});
+		}
+
+		// Other unknown errors
+		throw new S2Error({
+			message: error instanceof Error ? error.message : "Unknown error",
+			status: 0,
+		});
+	}
+}
+
 /**
  * Rich error type used by the SDK to surface HTTP and protocol errors.
  *

@@ -1,3 +1,4 @@
+import type { RetryConfig } from "./common.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
@@ -8,6 +9,7 @@ import { S2Streams } from "./streams.js";
 export class S2Basin {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
+	private readonly retryConfig?: RetryConfig;
 	public readonly name: string;
 	public readonly streams: S2Streams;
 
@@ -19,6 +21,7 @@ export class S2Basin {
 	 * @param accessToken Redacted access token from the parent `S2` client
 	 * @param baseUrl Base URL for the basin (e.g. `https://my-basin.b.aws.s2.dev/v1`)
 	 * @param includeBasinHeader Include the `S2-Basin` header with the request
+	 * @param retryConfig Retry configuration inherited from parent S2 client
 	 */
 	constructor(
 		name: string,
@@ -26,12 +29,15 @@ export class S2Basin {
 			accessToken: Redacted.Redacted;
 			baseUrl: string;
 			includeBasinHeader: boolean;
+			retryConfig?: RetryConfig;
 		},
 	) {
 		this.name = name;
+		this.retryConfig = options.retryConfig;
 		this.transportConfig = {
 			baseUrl: options.baseUrl,
 			accessToken: options.accessToken,
+			basinName: options.includeBasinHeader ? name : undefined,
 		};
 		this.client = createClient(
 			createConfig({
@@ -40,7 +46,8 @@ export class S2Basin {
 				headers: options.includeBasinHeader ? { "s2-basin": name } : {},
 			}),
 		);
-		this.streams = new S2Streams(this.client);
+
+		this.streams = new S2Streams(this.client, this.retryConfig);
 	}
 
 	/**
@@ -48,10 +55,15 @@ export class S2Basin {
 	 * @param name Stream name
 	 */
 	public stream(name: string, options?: StreamOptions) {
-		return new S2Stream(name, this.client, {
-			...this.transportConfig,
-			forceTransport: options?.forceTransport,
-		});
+		return new S2Stream(
+			name,
+			this.client,
+			{
+				...this.transportConfig,
+				forceTransport: options?.forceTransport,
+			},
+			this.retryConfig,
+		);
 	}
 }
 
