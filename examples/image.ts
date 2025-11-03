@@ -33,7 +33,13 @@ const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,
 });
 
-const basin = s2.basin("demo-10202025");
+const basinName = process.env.S2_BASIN;
+if (!basinName) {
+	console.error("S2_BASIN environment variable is not set");
+	process.exit(1);
+}
+
+const basin = s2.basin(process.env.S2_BASIN!);
 const stream = basin.stream("image");
 
 const startAt = await stream.checkTail();
