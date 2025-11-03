@@ -5,7 +5,7 @@ import { S2Error } from "../error.js";
 describe("BatchTransform", () => {
 	it("close() flushes remaining records", async () => {
 		const batcher = new BatchTransform({
-			lingerDuration: 1000,
+			lingerDurationMillis: 1000,
 			maxBatchRecords: 10,
 		});
 
@@ -27,7 +27,7 @@ describe("BatchTransform", () => {
 
 	it("propagates fencing_token and auto-increments match_seq_num across batches", async () => {
 		const batcher = new BatchTransform({
-			lingerDuration: 0,
+			lingerDurationMillis: 0,
 			maxBatchRecords: 2,
 			fencing_token: "ft",
 			match_seq_num: 10,
@@ -65,7 +65,7 @@ describe("BatchTransform", () => {
 
 	it("flushes immediately when max records reached", async () => {
 		const batcher = new BatchTransform({
-			lingerDuration: 1000, // Long linger
+			lingerDurationMillis: 1000, // Long linger
 			maxBatchRecords: 2,
 		});
 
@@ -95,7 +95,7 @@ describe("BatchTransform", () => {
 
 	it("flushes when max bytes reached", async () => {
 		const batcher = new BatchTransform({
-			lingerDuration: 1000,
+			lingerDurationMillis: 1000,
 			maxBatchBytes: 30, // Small batch size
 		});
 

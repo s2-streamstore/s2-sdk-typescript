@@ -118,10 +118,14 @@ export class S2STransport implements SessionTransport {
 						// TLS options can go here if needed
 					}
 				: {}),
+			settings: {
+				initialWindowSize: 10 * 1024 * 1024, // 10 MB
+			},
 		});
 
 		return new Promise((resolve, reject) => {
 			client.once("connect", () => {
+				client.setLocalWindowSize(10 * 1024 * 1024);
 				resolve(client);
 			});
 

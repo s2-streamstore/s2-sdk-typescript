@@ -28,7 +28,7 @@ if (streams.streams[0]) {
 
 	// Create a batcher that will batch records
 	const batcher = new BatchTransform({
-		lingerDuration: 20,
+		lingerDurationMillis: 20,
 		maxBatchRecords: 10,
 	});
 

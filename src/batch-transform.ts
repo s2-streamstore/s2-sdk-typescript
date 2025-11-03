@@ -3,10 +3,10 @@ import { AppendRecord, meteredSizeBytes } from "./utils.js";
 
 export interface BatchTransformArgs {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
-	lingerDuration?: number;
+	lingerDurationMillis?: number;
 	/** Maximum number of records in a batch (default: 1000, max: 1000) */
 	maxBatchRecords?: number;
-	/** Maximum batch size in bytes (default: 1 MiB, max: 1 MiB) */
+	/** Maximum batch size in metered bytes (default: 1 MiB, max: 1 MiB) */
 	maxBatchBytes?: number;
 	/** Optional fencing token to enforce (remains static across batches) */
 	fencing_token?: string;
@@ -86,7 +86,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			args?.maxBatchBytes ?? 1024 * 1024,
 			1024 * 1024,
 		);
-		this.lingerDuration = args?.lingerDuration ?? 5;
+		this.lingerDuration = args?.lingerDurationMillis ?? 5;
 		this.fencing_token = args?.fencing_token;
 		this.next_match_seq_num = args?.match_seq_num;
 	}
