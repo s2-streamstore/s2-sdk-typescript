@@ -58,14 +58,18 @@ let append = await image
 		}),
 	)
 	// Collect records into batches.
-	.pipeThrough(new BatchTransform({ lingerDurationMillis: 50, match_seq_num: startAt.tail.seq_num }))
+	.pipeThrough(
+		new BatchTransform({
+			lingerDurationMillis: 50,
+			match_seq_num: startAt.tail.seq_num,
+		}),
+	)
 	// Write to the S2 stream.
 	.pipeTo(session.writable);
 
 console.log(
 	`image written to S2 over ${session.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num} records, starting at seqNum=${startAt.tail.seq_num}`,
 );
-
 
 let readSession = await stream.readSession({
 	seq_num: startAt.tail.seq_num,
@@ -77,7 +81,7 @@ let readSession = await stream.readSession({
 const id = Math.random().toString(36).slice(2, 10);
 // Use a larger buffer (default is 16KB, we use 512KB)
 const out = createWriteStream(`image-${id}.jpg`, {
-	highWaterMark: 512 * 1024 // 512KB buffer
+	highWaterMark: 512 * 1024, // 512KB buffer
 });
 
 await readSession
@@ -93,7 +97,7 @@ await readSession
 			async write(chunk) {
 				// Handle backpressure - wait if buffer is full
 				if (!out.write(chunk)) {
-					await new Promise<void>((resolve) => out.once('drain', resolve));
+					await new Promise<void>((resolve) => out.once("drain", resolve));
 				}
 			},
 			// Don't close here - we'll close manually after to ensure flush
