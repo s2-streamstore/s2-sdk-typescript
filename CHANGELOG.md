@@ -1,3 +1,14 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## [0.17.1] - 2025-11-04
+
+### 🐛 Bug Fixes
+
+- Add protobuf runtime dep
+- dda2cb9: batch linger naming change
+
 # @s2-dev/streamstore
 
 ## 0.17.0

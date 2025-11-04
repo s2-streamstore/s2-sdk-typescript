@@ -1,6 +1,6 @@
 {
   "name": "@s2-dev/streamstore",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -44,6 +44,9 @@
     "README.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "@protobuf-ts/runtime": "^2.11.1"
+  },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
     "@biomejs/biome": "2.2.5",
