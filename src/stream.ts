@@ -1,3 +1,4 @@
+import createDebug from "debug";
 import type { RetryConfig, S2RequestOptions } from "./common.js";
 import { S2Error, withS2Error } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
@@ -19,7 +20,6 @@ import type {
 	SessionTransport,
 	TransportConfig,
 } from "./lib/stream/types.js";
-import createDebug from "debug";
 
 const debug = createDebug("s2:stream");
 
