@@ -64,6 +64,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@protobuf-ts/runtime": "^2.11.1",
     "debug": "^4.4.3"
   }
 }
