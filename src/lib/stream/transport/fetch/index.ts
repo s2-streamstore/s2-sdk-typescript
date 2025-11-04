@@ -46,8 +46,6 @@ export class FetchReadSession<
 				stream: name,
 			},
 			headers: {
-				// Note: These headers are merged with defaults via mergeHeaders().
-				// Authorization is added afterward via setAuthParams(), so it's preserved.
 				accept: "text/event-stream",
 				...(as === "bytes" ? { "s2-format": "base64" } : {}),
 			},
