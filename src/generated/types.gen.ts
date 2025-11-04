@@ -4,6 +4,8 @@ export type ClientOptions = {
     baseUrl: 'https://aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | 'https://{basin}.b.aws.s2.dev/v1' | (string & {});
 };
 
+export type AccessTokenIdStr = string;
+
 export type AccessTokenInfo = {
     /**
      * Namespace streams based on the configured stream-level scope, which must be a prefix.
@@ -19,7 +21,7 @@ export type AccessTokenInfo = {
      * Access token ID.
      * It must be unique to the account and between 1 and 96 bytes in length.
      */
-    id: string;
+    id: AccessTokenIdStr;
     /**
      * Access token scope.
      */
@@ -27,20 +29,20 @@ export type AccessTokenInfo = {
 };
 
 export type AccessTokenScope = {
-    access_tokens?: null | ResourceSet;
-    basins?: null | ResourceSet;
+    access_tokens?: null | ResourceSetAccessTokenIdStrAccessTokenIdStr;
+    basins?: null | ResourceSetBasinNameStrBasinNameStr;
     op_groups?: null | PermittedOperationGroups;
     /**
      * Operations allowed for the token.
      * A union of allowed operations and groups is used as an effective set of allowed operations.
      */
     ops?: Array<Operation> | null;
-    streams?: null | ResourceSet;
+    streams?: null | ResourceSetStreamNameStrStreamNameStr;
 };
 
 export type AccountMetricSet = 'active-basins' | 'account-ops';
 
-export type Accumulation = {
+export type AccumulationMetric = {
     /**
      * The duration of bucket for the accumulation.
      */
@@ -92,23 +94,20 @@ export type AppendConditionFailed = {
      * Fencing token did not match.
      * The expected fencing token is returned.
      */
-    fencing_token_mismatch: string;
+    fencing_token_mismatch: FencingToken;
 } | {
     /**
      * Sequence number did not match the tail of the stream.
      * The expected next sequence number is returned.
      */
-    seq_num_mismatch: number;
+    seq_num_mismatch: U64;
 };
 
 /**
  * Payload of an `append` request.
  */
 export type AppendInput = {
-    /**
-     * Enforce a fencing token, which starts out as an empty string that can be overridden by a `fence` command record.
-     */
-    fencing_token?: string | null;
+    fencing_token?: null | FencingToken;
     match_seq_num?: null | U64;
     /**
      * Batch of records to append atomically, which must contain at least one record, and no more than 1000.
@@ -148,7 +147,7 @@ export type BasinInfo = {
     /**
      * Basin name.
      */
-    name: string;
+    name: BasinNameStr;
     /**
      * Basin scope.
      */
@@ -160,6 +159,8 @@ export type BasinInfo = {
 };
 
 export type BasinMetricSet = 'storage' | 'append-ops' | 'read-ops' | 'read-throughput' | 'append-throughput' | 'basin-ops';
+
+export type BasinNameStr = string;
 
 export type BasinReconfiguration = {
     /**
@@ -183,7 +184,7 @@ export type CreateBasinRequest = {
      * It can be between 8 and 48 characters in length, and comprise lowercase letters, numbers and hyphens.
      * It cannot begin or end with a hyphen.
      */
-    basin: string;
+    basin: BasinNameStr;
     config?: null | BasinConfig;
     /**
      * Basin scope.
@@ -206,7 +207,7 @@ export type CreateStreamRequest = {
      * Stream name that is unique to the basin.
      * It can be between 1 and 512 bytes in length.
      */
-    stream: string;
+    stream: StreamNameStr;
 };
 
 export type DeleteOnEmptyConfig = {
@@ -230,7 +231,9 @@ export type ErrorInfo = {
     message: string;
 };
 
-export type Gauge = {
+export type FencingToken = string;
+
+export type GaugeMetric = {
     /**
      * Timeseries name.
      */
@@ -271,7 +274,7 @@ export type IssueAccessTokenResponse = {
     access_token: string;
 };
 
-export type Label = {
+export type LabelMetric = {
     /**
      * Label name.
      */
@@ -319,23 +322,23 @@ export type Metric = {
     /**
      * Single named value.
      */
-    scalar: Scalar;
+    scalar: ScalarMetric;
 } | {
     /**
      * Named series of `(timestamp, value)` points representing an accumulation over a specified
      * bucket.
      */
-    accumulation: Accumulation;
+    accumulation: AccumulationMetric;
 } | {
     /**
      * Named series of `(timestamp, value)` points each representing an instantaneous value.
      */
-    gauge: Gauge;
+    gauge: GaugeMetric;
 } | {
     /**
      * Set of string labels.
      */
-    label: Label;
+    label: LabelMetric;
 };
 
 export type MetricSetResponse = {
@@ -391,7 +394,35 @@ export type ReadWritePermissions = {
     write?: boolean;
 };
 
-export type ResourceSet = {
+export type ResourceSetAccessTokenIdStrAccessTokenIdStr = {
+    /**
+     * Match only the resource with this exact name.
+     * Use an empty string to match no resources.
+     */
+    exact: string;
+} | {
+    /**
+     * Match all resources that start with this prefix.
+     * Use an empty string to match all resource.
+     */
+    prefix: string;
+};
+
+export type ResourceSetBasinNameStrBasinNameStr = {
+    /**
+     * Match only the resource with this exact name.
+     * Use an empty string to match no resources.
+     */
+    exact: string;
+} | {
+    /**
+     * Match all resources that start with this prefix.
+     * Use an empty string to match all resource.
+     */
+    prefix: string;
+};
+
+export type ResourceSetStreamNameStrStreamNameStr = {
     /**
      * Match only the resource with this exact name.
      * Use an empty string to match no resources.
@@ -409,7 +440,6 @@ export type RetentionPolicy = {
     /**
      * Age in seconds for automatic trimming of records older than this threshold.
      * This must be set to a value greater than 0 seconds.
-     * (While S2 is in public preview, this is capped at 28 days. Let us know if you'd like the cap removed.)
      */
     age: number;
 } | {
@@ -421,7 +451,7 @@ export type RetentionPolicy = {
 
 export type S2Format = 'raw' | 'base64';
 
-export type Scalar = {
+export type ScalarMetric = {
     /**
      * Metric name.
      */
@@ -479,10 +509,12 @@ export type StreamInfo = {
     /**
      * Stream name.
      */
-    name: string;
+    name: StreamNameStr;
 };
 
 export type StreamMetricSet = 'storage';
+
+export type StreamNameStr = string;
 
 /**
  * Position of a record in a stream.
@@ -491,12 +523,12 @@ export type StreamPosition = {
     /**
      * Sequence number assigned by the service.
      */
-    seq_num: number;
+    seq_num: U64;
     /**
      * Timestamp, which may be client-specified or assigned by the service.
      * If it is assigned by the service, it will represent milliseconds since Unix epoch.
      */
-    timestamp: number;
+    timestamp: U64;
 };
 
 export type StreamReconfiguration = {
@@ -596,7 +628,7 @@ export type RevokeAccessTokenData = {
         /**
          * Access token ID.
          */
-        id: string;
+        id: AccessTokenIdStr;
     };
     query?: never;
     url: '/access-tokens/{id}';
@@ -649,6 +681,12 @@ export type ListBasinsResponse2 = ListBasinsResponses[keyof ListBasinsResponses]
 
 export type CreateBasinData = {
     body: CreateBasinRequest;
+    headers?: {
+        /**
+         * Client-specified request token for idempotent retries.
+         */
+        's2-request-token'?: string;
+    };
     path?: never;
     query?: never;
     url: '/basins';
@@ -675,7 +713,7 @@ export type DeleteBasinData = {
         /**
          * Basin name.
          */
-        basin: string;
+        basin: BasinNameStr;
     };
     query?: never;
     url: '/basins/{basin}';
@@ -699,7 +737,7 @@ export type GetBasinConfigData = {
         /**
          * Basin name.
          */
-        basin: string;
+        basin: BasinNameStr;
     };
     query?: never;
     url: '/basins/{basin}';
@@ -725,7 +763,7 @@ export type ReconfigureBasinData = {
         /**
          * Basin name.
          */
-        basin: string;
+        basin: BasinNameStr;
     };
     query?: never;
     url: '/basins/{basin}';
@@ -757,7 +795,7 @@ export type CreateOrReconfigureBasinData = {
         /**
          * Basin name.
          */
-        basin: string;
+        basin: BasinNameStr;
     };
     query?: never;
     url: '/basins/{basin}';
@@ -820,7 +858,7 @@ export type BasinMetricsData = {
         /**
          * Basin name.
          */
-        basin: string;
+        basin: BasinNameStr;
     };
     query: {
         /**
@@ -862,11 +900,11 @@ export type StreamMetricsData = {
         /**
          * Basin name.
          */
-        basin: string;
+        basin: BasinNameStr;
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query: {
         /**
@@ -939,6 +977,12 @@ export type ListStreamsResponse2 = ListStreamsResponses[keyof ListStreamsRespons
 
 export type CreateStreamData = {
     body: CreateStreamRequest;
+    headers?: {
+        /**
+         * Client-specified request token for idempotent retries.
+         */
+        's2-request-token'?: string;
+    };
     path?: never;
     query?: never;
     url: '/streams';
@@ -965,7 +1009,7 @@ export type DeleteStreamData = {
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query?: never;
     url: '/streams/{stream}';
@@ -989,7 +1033,7 @@ export type GetStreamConfigData = {
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query?: never;
     url: '/streams/{stream}';
@@ -1016,7 +1060,7 @@ export type ReconfigureStreamData = {
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query?: never;
     url: '/streams/{stream}';
@@ -1049,7 +1093,7 @@ export type CreateOrReconfigureStreamData = {
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query?: never;
     url: '/streams/{stream}';
@@ -1085,7 +1129,7 @@ export type ReadData = {
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query?: {
         /**
@@ -1160,7 +1204,7 @@ export type AppendData = {
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query?: never;
     url: '/streams/{stream}/records';
@@ -1188,7 +1232,7 @@ export type CheckTailData = {
         /**
          * Stream name.
          */
-        stream: string;
+        stream: StreamNameStr;
     };
     query?: never;
     url: '/streams/{stream}/records/tail';
