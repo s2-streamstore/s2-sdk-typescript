@@ -294,6 +294,8 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					});
 
 					stream.on("response", (headers) => {
+						// Cache the status.
+						// This informs whether we should attempt to parse s2s frames in the "data" handler.
 						responseCode = headers[":status"] ?? 500;
 					});
 
