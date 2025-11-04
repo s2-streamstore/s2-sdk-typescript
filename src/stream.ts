@@ -123,7 +123,7 @@ export class S2Stream {
 			},
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "noSideEffects") === "noSideEffects") {
-					return !!args?.match_seq_num;
+					return !!args?.match_seq_num || error.status === 429;
 				} else {
 					return true;
 				}

@@ -13,16 +13,18 @@ export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
 	appendRetryPolicy: "noSideEffects",
 };
 
+const RETRYABLE_STATUS_CODES = new Set([
+	408, // request_timeout
+	429, // too_many_requests
+	500, // internal_server_error
+	503, // service_unavailable
+]);
+
 /**
  * Determines if an error should be retried based on its characteristics.
  */
 export function isRetryable(error: S2Error): boolean {
-	// S2Error with retryable status code
-	const status = error.status;
-	if (status && (status >= 500 || status === 408)) {
-		return true;
-	}
-	return false;
+	return !!error.status && RETRYABLE_STATUS_CODES.has(error.status);
 }
 
 /**
