@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.2
+
+### Patch Changes
+
+- ada757f: Some changes in exported type names
+
 All notable changes to this project will be documented in this file.
 
 ## [0.17.1] - 2025-11-04
