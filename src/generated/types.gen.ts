@@ -29,15 +29,15 @@ export type AccessTokenInfo = {
 };
 
 export type AccessTokenScope = {
-    access_tokens?: null | ResourceSetAccessTokenIdStrAccessTokenIdStr;
-    basins?: null | ResourceSetBasinNameStrBasinNameStr;
+    access_tokens?: null | ResourceSet;
+    basins?: null | ResourceSet;
     op_groups?: null | PermittedOperationGroups;
     /**
      * Operations allowed for the token.
      * A union of allowed operations and groups is used as an effective set of allowed operations.
      */
     ops?: Array<Operation> | null;
-    streams?: null | ResourceSetStreamNameStrStreamNameStr;
+    streams?: null | ResourceSet;
 };
 
 export type AccountMetricSet = 'active-basins' | 'account-ops';
@@ -394,35 +394,7 @@ export type ReadWritePermissions = {
     write?: boolean;
 };
 
-export type ResourceSetAccessTokenIdStrAccessTokenIdStr = {
-    /**
-     * Match only the resource with this exact name.
-     * Use an empty string to match no resources.
-     */
-    exact: string;
-} | {
-    /**
-     * Match all resources that start with this prefix.
-     * Use an empty string to match all resource.
-     */
-    prefix: string;
-};
-
-export type ResourceSetBasinNameStrBasinNameStr = {
-    /**
-     * Match only the resource with this exact name.
-     * Use an empty string to match no resources.
-     */
-    exact: string;
-} | {
-    /**
-     * Match all resources that start with this prefix.
-     * Use an empty string to match all resource.
-     */
-    prefix: string;
-};
-
-export type ResourceSetStreamNameStrStreamNameStr = {
+export type ResourceSet = {
     /**
      * Match only the resource with this exact name.
      * Use an empty string to match no resources.
