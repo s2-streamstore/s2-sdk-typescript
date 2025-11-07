@@ -779,6 +779,7 @@ class S2SAppendSession
 				}
 
 				return {
+					timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
 					headers: headersArray?.map((h) => ({
 						name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
 						value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
@@ -864,6 +865,7 @@ class S2SAppendSession
 				}
 
 				return {
+					timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
 					headers: headersArray?.map((h) => ({
 						name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
 						value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
