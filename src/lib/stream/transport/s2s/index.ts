@@ -35,6 +35,43 @@ import type {
 } from "../../types.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
 
+export function buildProtoAppendInput(
+	records: AppendRecord[],
+	args: AppendArgs,
+): ProtoAppendInput {
+	const textEncoder = new TextEncoder();
+	return ProtoAppendInput.create({
+		records: records.map((record) => {
+			let headersArray:
+				| Array<[string, string]>
+				| Array<[Uint8Array, Uint8Array]>
+				| undefined;
+			if (record.headers) {
+				if (Array.isArray(record.headers)) {
+					headersArray = record.headers;
+				} else {
+					headersArray = Object.entries(record.headers);
+				}
+			}
+
+			return {
+				timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
+				headers: headersArray?.map((h) => ({
+					name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
+					value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
+				})),
+				body:
+					typeof record.body === "string"
+						? textEncoder.encode(record.body)
+						: record.body,
+			};
+		}),
+		fencingToken: args.fencing_token ?? undefined,
+		matchSeqNum:
+			args.match_seq_num == null ? undefined : BigInt(args.match_seq_num),
+	});
+}
+
 export class S2STransport implements SessionTransport {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
@@ -761,38 +798,7 @@ class S2SAppendSession
 		}
 
 		// Convert to protobuf AppendInput
-		const textEncoder = new TextEncoder();
-		const protoInput = ProtoAppendInput.create({
-			records: records.map((record) => {
-				// Convert headers to array of tuples if it's a Record
-				let headersArray:
-					| Array<[string, string]>
-					| Array<[Uint8Array, Uint8Array]>
-					| undefined;
-				if (record.headers) {
-					if (Array.isArray(record.headers)) {
-						headersArray = record.headers;
-					} else {
-						// Convert Record to array of tuples
-						headersArray = Object.entries(record.headers);
-					}
-				}
-
-				return {
-					timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
-					headers: headersArray?.map((h) => ({
-						name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
-						value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
-					})),
-					body:
-						typeof record.body === "string"
-							? textEncoder.encode(record.body)
-							: record.body,
-				};
-			}),
-			fencingToken: args.fencing_token ?? undefined,
-			matchSeqNum: args.match_seq_num ? BigInt(args.match_seq_num) : undefined,
-		});
+		const protoInput = buildProtoAppendInput(records, args);
 
 		const bodyBytes = ProtoAppendInput.toBinary(protoInput);
 
@@ -847,38 +853,7 @@ class S2SAppendSession
 		}
 
 		// Convert to protobuf AppendInput
-		const textEncoder = new TextEncoder();
-		const protoInput = ProtoAppendInput.create({
-			records: records.map((record) => {
-				// Convert headers to array of tuples if it's a Record
-				let headersArray:
-					| Array<[string, string]>
-					| Array<[Uint8Array, Uint8Array]>
-					| undefined;
-				if (record.headers) {
-					if (Array.isArray(record.headers)) {
-						headersArray = record.headers;
-					} else {
-						// Convert Record to array of tuples
-						headersArray = Object.entries(record.headers);
-					}
-				}
-
-				return {
-					timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
-					headers: headersArray?.map((h) => ({
-						name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
-						value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
-					})),
-					body:
-						typeof record.body === "string"
-							? textEncoder.encode(record.body)
-							: record.body,
-				};
-			}),
-			fencingToken: args.fencing_token ?? undefined,
-			matchSeqNum: args.match_seq_num ? BigInt(args.match_seq_num) : undefined,
-		});
+		const protoInput = buildProtoAppendInput(records, args);
 
 		const bodyBytes = ProtoAppendInput.toBinary(protoInput);
 
