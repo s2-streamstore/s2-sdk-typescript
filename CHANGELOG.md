@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.3
+
+### Patch Changes
+
+- 7734eea: Fix timestamps not being supplied in proto
+
 ## 0.17.2
 
 ### Patch Changes
