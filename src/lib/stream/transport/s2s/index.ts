@@ -431,12 +431,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											controller.enqueue({ ok: true, value: converted });
 
 											// Update next read position to after this record
-												if (record.seqNum !== undefined) {
-													this._nextReadPosition = {
-														seq_num: Number(record.seqNum) + 1,
-														timestamp: Number(record.timestamp ?? 0n),
-													};
-												}
+											if (record.seqNum !== undefined) {
+												this._nextReadPosition = {
+													seq_num: Number(record.seqNum) + 1,
+													timestamp: Number(record.timestamp ?? 0n),
+												};
+											}
 										}
 									} catch (err) {
 										safeError(
@@ -847,7 +847,11 @@ class S2SAppendSession {
 	 */
 	async submit(
 		records: AppendRecord | AppendRecord[],
-		args?: { fencing_token?: string; match_seq_num?: number; precalculatedSize?: number },
+		args?: {
+			fencing_token?: string;
+			match_seq_num?: number;
+			precalculatedSize?: number;
+		},
 	): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
