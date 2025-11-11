@@ -258,8 +258,15 @@ export class ReadSession<
 					}
 				}
 			},
-			cancel: async () => {
-				session?.cancel();
+			cancel: async (reason) => {
+				try {
+					await session?.cancel(reason);
+				} catch (err) {
+					// Ignore ERR_INVALID_STATE - stream may already be closed/cancelled
+					if ((err as any)?.code !== "ERR_INVALID_STATE") {
+						throw err;
+					}
+				}
 			},
 		});
 	}
@@ -283,12 +290,20 @@ export class ReadSession<
 				return { done: false, value: r.value };
 			},
 			throw: async (e) => {
-				await reader.cancel(e);
+				try {
+					await reader.cancel(e);
+				} catch (err) {
+					if ((err as any)?.code !== "ERR_INVALID_STATE") throw err;
+				}
 				reader.releaseLock();
 				return { done: true, value: undefined };
 			},
 			return: async () => {
-				await reader.cancel("done");
+				try {
+					await reader.cancel("done");
+				} catch (err) {
+					if ((err as any)?.code !== "ERR_INVALID_STATE") throw err;
+				}
 				reader.releaseLock();
 				return { done: true, value: undefined };
 			},
