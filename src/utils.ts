@@ -1,6 +1,7 @@
 import type {
 	AppendHeaders,
 	AppendRecord as AppendRecordType,
+	ReadRecord,
 } from "./lib/stream/types.js";
 
 export type AppendRecord = AppendRecordType;
@@ -136,7 +137,9 @@ export function utf8ByteLength(str: string): number {
  * @param record The record to measure
  * @returns The size in bytes
  */
-export function meteredSizeBytes(record: AppendRecord): number {
+export function meteredSizeBytes<Format extends "string" | "bytes">(
+	record: AppendRecord | ReadRecord<Format>,
+): number {
 	// Calculate header size based on actual data types
 	let numHeaders = 0;
 	let headersSize = 0;

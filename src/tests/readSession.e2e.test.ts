@@ -96,14 +96,14 @@ describe("ReadSession Integration Tests", () => {
 			});
 
 			// Initially streamPosition should be undefined
-			expect(session.lastReadPosition()).toBeUndefined();
+			expect(session.nextReadPosition()).toBeUndefined();
 
 			const records: Array<{ seq_num: number }> = [];
 			for await (const record of session) {
 				records.push({ seq_num: record.seq_num });
 				// streamPosition should be updated after reading
-				if (session.lastReadPosition()) {
-					expect(session.lastReadPosition()?.seq_num).toBeGreaterThanOrEqual(
+				if (session.nextReadPosition()) {
+					expect(session.nextReadPosition()?.seq_num).toBeGreaterThanOrEqual(
 						record.seq_num,
 					);
 				}
@@ -113,8 +113,8 @@ describe("ReadSession Integration Tests", () => {
 			}
 
 			// After reading, streamPosition should be set
-			expect(session.lastReadPosition()).toBeDefined();
-			expect(session.lastReadPosition()?.seq_num).toBeGreaterThan(0);
+			expect(session.nextReadPosition()).toBeDefined();
+			expect(session.nextReadPosition()?.seq_num).toBeGreaterThan(0);
 		},
 	);
 

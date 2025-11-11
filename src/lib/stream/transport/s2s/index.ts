@@ -6,6 +6,7 @@
  */
 
 import * as http2 from "node:http2";
+import createDebug from "debug";
 import type { S2RequestOptions } from "../../../../common.js";
 import {
 	type Client,
@@ -22,6 +23,9 @@ import {
 import { S2Error } from "../../../../index.js";
 import { meteredSizeBytes } from "../../../../utils.js";
 import * as Redacted from "../../../redacted.js";
+import type { AppendResult, CloseResult } from "../../../result.js";
+import { err, errClose, ok, okClose } from "../../../result.js";
+import { RetryAppendSession, RetryReadSession } from "../../../retry.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -29,11 +33,16 @@ import type {
 	AppendSessionOptions,
 	ReadArgs,
 	ReadRecord,
+	ReadResult,
 	ReadSession,
 	SessionTransport,
 	TransportConfig,
+	TransportReadSession,
 } from "../../types.js";
+import { FetchReadSession } from "../fetch/index.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
+
+const debug = createDebug("s2:s2s");
 
 export function buildProtoAppendInput(
 	records: AppendRecord[],
@@ -94,14 +103,20 @@ export class S2STransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
-		return S2SAppendSession.create(
-			this.transportConfig.baseUrl,
-			this.transportConfig.accessToken,
-			stream,
-			() => this.getConnection(),
-			this.transportConfig.basinName,
+		return RetryAppendSession.create(
+			(opts) => {
+				return S2SAppendSession.create(
+					this.transportConfig.baseUrl,
+					this.transportConfig.accessToken,
+					stream,
+					() => this.getConnection(),
+					this.transportConfig.basinName,
+					opts,
+					requestOptions,
+				);
+			},
 			sessionOptions,
-			requestOptions,
+			this.transportConfig.retry,
 		);
 	}
 
@@ -110,14 +125,29 @@ export class S2STransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
-		return S2SReadSession.create(
-			this.transportConfig.baseUrl,
-			this.transportConfig.accessToken,
-			stream,
+		// return S2SReadSession.create(
+		// 	this.transportConfig.baseUrl,
+		// 	this.transportConfig.accessToken,
+		// 	stream,
+		// 	args,
+		// 	options,
+		// 	() => this.getConnection(),
+		// 	this.transportConfig.basinName,
+		// );
+		return RetryReadSession.create(
+			(a) => {
+				return S2SReadSession.create(
+					this.transportConfig.baseUrl,
+					this.transportConfig.accessToken,
+					stream,
+					a,
+					options,
+					() => this.getConnection(),
+					this.transportConfig.basinName,
+				);
+			},
 			args,
-			options,
-			() => this.getConnection(),
-			this.transportConfig.basinName,
+			this.transportConfig.retry,
 		);
 	}
 
@@ -184,11 +214,13 @@ export class S2STransport implements SessionTransport {
 }
 
 class S2SReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadRecord<Format>>
-	implements ReadSession<Format>
+	extends ReadableStream<ReadResult<Format>>
+	implements TransportReadSession<Format>
 {
 	private http2Stream?: http2.ClientHttp2Stream;
 	private _lastReadPosition?: StreamPosition;
+	private _nextReadPosition?: StreamPosition;
+	private _lastObservedTail?: StreamPosition;
 	private parser = new S2SFrameParser();
 
 	static async create<Format extends "string" | "bytes" = "string">(
@@ -227,6 +259,10 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		let http2Stream: http2.ClientHttp2Stream | undefined;
 		let lastReadPosition: StreamPosition | undefined;
 
+		// Track timeout for detecting when server stops sending data
+		const TAIL_TIMEOUT_MS = 20000; // 20 seconds
+		let timeoutTimer: NodeJS.Timeout | undefined;
+
 		super({
 			start: async (controller) => {
 				let controllerClosed = false;
@@ -234,6 +270,10 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				const safeClose = () => {
 					if (!controllerClosed) {
 						controllerClosed = true;
+						if (timeoutTimer) {
+							clearTimeout(timeoutTimer);
+							timeoutTimer = undefined;
+						}
 						try {
 							controller.close();
 						} catch {
@@ -244,11 +284,40 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				const safeError = (err: unknown) => {
 					if (!controllerClosed) {
 						controllerClosed = true;
-						controller.error(err);
+						if (timeoutTimer) {
+							clearTimeout(timeoutTimer);
+							timeoutTimer = undefined;
+						}
+						// Convert error to S2Error and enqueue as error result
+						const s2Err =
+							err instanceof S2Error
+								? err
+								: new S2Error({ message: String(err), status: 500 });
+						controller.enqueue({ ok: false, error: s2Err });
+						controller.close();
 					}
 				};
 
+				// Helper to start/reset the timeout timer
+				// Resets on every tail received, fires only if no tail for 20s
+				const resetTimeoutTimer = () => {
+					if (timeoutTimer) {
+						clearTimeout(timeoutTimer);
+					}
+					timeoutTimer = setTimeout(() => {
+						const timeoutError = new S2Error({
+							message: `No tail received for ${TAIL_TIMEOUT_MS / 1000}s`,
+							status: 408, // Request Timeout
+							code: "TIMEOUT",
+						});
+						debug("tail timeout detected");
+						safeError(timeoutError);
+					}, TAIL_TIMEOUT_MS);
+				};
+
 				try {
+					// Start the timeout timer - will fire in 20s if no tail received
+					resetTimeoutTimer();
 					const connection = await getConnection();
 
 					// Build query string
@@ -299,96 +368,147 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						responseCode = headers[":status"] ?? 500;
 					});
 
-					stream.on("data", (chunk: Buffer) => {
-						if ((responseCode ?? 500) >= 400) {
-							const errorText = textDecoder.decode(chunk);
-							try {
-								const errorJson = JSON.parse(errorText);
-								safeError(
-									new S2Error({
-										message: errorJson.message ?? "Unknown error",
-										code: errorJson.code,
-										status: responseCode,
-									}),
-								);
-							} catch {
-								safeError(
-									new S2Error({
-										message: errorText || "Unknown error",
-										status: responseCode,
-									}),
-								);
-							}
-						}
-						// Buffer already extends Uint8Array in Node.js, no need to convert
-						parser.push(chunk);
-
-						let frame = parser.parseFrame();
-						while (frame) {
-							if (frame.terminal) {
-								if (frame.statusCode && frame.statusCode >= 400) {
-									const errorText = textDecoder.decode(frame.body);
-									try {
-										const errorJson = JSON.parse(errorText);
-										safeError(
-											new S2Error({
-												message: errorJson.message ?? "Unknown error",
-												code: errorJson.code,
-												status: frame.statusCode,
-											}),
-										);
-									} catch {
-										safeError(
-											new S2Error({
-												message: errorText || "Unknown error",
-												status: frame.statusCode,
-											}),
-										);
-									}
-								} else {
-									safeClose();
-								}
-								stream.close();
-							} else {
-								// Parse ReadBatch
-								try {
-									const protoBatch = ProtoReadBatch.fromBinary(frame.body);
-
-									// Update position from tail
-									if (protoBatch.tail) {
-										lastReadPosition = convertStreamPosition(protoBatch.tail);
-										// Assign to instance property
-										this._lastReadPosition = lastReadPosition;
-									}
-
-									// Enqueue each record
-									for (const record of protoBatch.records) {
-										const converted = this.convertRecord(
-											record,
-											as ?? ("string" as Format),
-											textDecoder,
-										);
-										controller.enqueue(converted);
-									}
-								} catch (err) {
-									safeError(
-										new S2Error({
-											message: `Failed to parse ReadBatch: ${err}`,
-										}),
-									);
-								}
-							}
-
-							frame = parser.parseFrame();
-						}
+					connection.on("goaway", (errorCode, lastStreamID, opaqueData) => {
+						debug("received GOAWAY from server");
 					});
 
 					stream.on("error", (err) => {
 						safeError(err);
 					});
 
+					stream.on("data", (chunk: Buffer) => {
+						try {
+							if ((responseCode ?? 500) >= 400) {
+								const errorText = textDecoder.decode(chunk);
+								try {
+									const errorJson = JSON.parse(errorText);
+									safeError(
+										new S2Error({
+											message: errorJson.message ?? "Unknown error",
+											code: errorJson.code,
+											status: responseCode,
+										}),
+									);
+								} catch {
+									safeError(
+										new S2Error({
+											message: errorText || "Unknown error",
+											status: responseCode,
+										}),
+									);
+								}
+								return;
+							}
+							// Buffer already extends Uint8Array in Node.js, no need to convert
+							parser.push(chunk);
+
+							let frame = parser.parseFrame();
+							while (frame) {
+								if (frame.terminal) {
+									if (frame.statusCode && frame.statusCode >= 400) {
+										const errorText = textDecoder.decode(frame.body);
+										try {
+											const errorJson = JSON.parse(errorText);
+											safeError(
+												new S2Error({
+													message: errorJson.message ?? "Unknown error",
+													code: errorJson.code,
+													status: frame.statusCode,
+												}),
+											);
+										} catch {
+											safeError(
+												new S2Error({
+													message: errorText || "Unknown error",
+													status: frame.statusCode,
+												}),
+											);
+										}
+									} else {
+										safeClose();
+									}
+									stream.close();
+								} else {
+									// Parse ReadBatch
+									try {
+										const protoBatch = ProtoReadBatch.fromBinary(frame.body);
+
+										resetTimeoutTimer();
+
+										// Update tail from batch
+										if (protoBatch.tail) {
+											const tail = convertStreamPosition(protoBatch.tail);
+											lastReadPosition = tail;
+											this._lastReadPosition = tail;
+											this._lastObservedTail = tail;
+											debug("received tail");
+										}
+
+										// Enqueue each record and track next position
+										for (const record of protoBatch.records) {
+											const converted = this.convertRecord(
+												record,
+												as ?? ("string" as Format),
+												textDecoder,
+											);
+											controller.enqueue({ ok: true, value: converted });
+
+											// Update next read position to after this record
+											if (record.seqNum !== undefined) {
+												this._nextReadPosition = {
+													seq_num: Number(record.seqNum) + 1,
+													timestamp: 0,
+												};
+											}
+										}
+									} catch (err) {
+										safeError(
+											new S2Error({
+												message: `Failed to parse ReadBatch: ${err}`,
+											}),
+										);
+									}
+								}
+
+								frame = parser.parseFrame();
+							}
+						} catch (error) {
+							safeError(
+								error instanceof S2Error
+									? error
+									: new S2Error({
+											message: `Failed to process read data: ${error}`,
+											status: 500,
+										}),
+							);
+						}
+					});
+
+					stream.on("end", () => {
+						if (stream.rstCode != 0) {
+							debug!("stream reset code=%d", stream.rstCode);
+							safeError(
+								new S2Error({
+									message: `Stream ended with error: ${stream.rstCode}`,
+									status: 500,
+									code: "stream reset",
+								}),
+							);
+						}
+					});
+
 					stream.on("close", () => {
-						safeClose();
+						if (parser.hasData()) {
+							safeError(
+								new S2Error({
+									message: "Stream closed with unparsed data remaining",
+									status: 500,
+									code: "STREAM_CLOSED_PREMATURELY",
+								}),
+							);
+						} else {
+							safeClose();
+						}
 					});
 				} catch (err) {
 					safeError(err);
@@ -454,7 +574,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	}
 
 	// Polyfill for older browsers / Node.js environments
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadRecord<Format>> {
+	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
 		const reader = this.getReader();
@@ -483,91 +603,34 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		};
 	}
 
-	lastReadPosition(): StreamPosition | undefined {
-		return this._lastReadPosition;
+	nextReadPosition(): StreamPosition | undefined {
+		return this._nextReadPosition;
+	}
+
+	lastObservedTail(): StreamPosition | undefined {
+		return this._lastObservedTail;
 	}
 }
 
 /**
  * AcksStream for S2S append session
  */
-class S2SAcksStream
-	extends ReadableStream<AppendAck>
-	implements AsyncDisposable
-{
-	constructor(
-		setController: (
-			controller: ReadableStreamDefaultController<AppendAck>,
-		) => void,
-	) {
-		super({
-			start: (controller) => {
-				setController(controller);
-			},
-		});
-	}
-
-	async [Symbol.asyncDispose]() {
-		await this.cancel("disposed");
-	}
-
-	// Polyfill for older browsers
-	[Symbol.asyncIterator](): AsyncIterableIterator<AppendAck> {
-		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
-		if (typeof fn === "function") return fn.call(this);
-		const reader = this.getReader();
-		return {
-			next: async () => {
-				const r = await reader.read();
-				if (r.done) {
-					reader.releaseLock();
-					return { done: true, value: undefined };
-				}
-				return { done: false, value: r.value };
-			},
-			throw: async (e) => {
-				await reader.cancel(e);
-				reader.releaseLock();
-				return { done: true, value: undefined };
-			},
-			return: async () => {
-				await reader.cancel("done");
-				reader.releaseLock();
-				return { done: true, value: undefined };
-			},
-			[Symbol.asyncIterator]() {
-				return this;
-			},
-		};
-	}
-}
+// Removed S2SAcksStream - transport sessions no longer expose streams
 
 /**
- * S2S Append Session for pipelined writes
- * Unlike fetch-based append, writes don't block on acks - only on submission
+ * "Dumb" transport session for appending records via HTTP/2.
+ * Pipelined: multiple requests can be in-flight simultaneously.
+ * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
-class S2SAppendSession
-	implements ReadableWritablePair<AppendAck, AppendArgs>, AsyncDisposable
-{
+class S2SAppendSession {
 	private http2Stream?: http2.ClientHttp2Stream;
-	private _lastAckedPosition?: AppendAck;
 	private parser = new S2SFrameParser();
-	private acksController?: ReadableStreamDefaultController<AppendAck>;
-	private _readable: S2SAcksStream;
-	private _writable: WritableStream<AppendArgs>;
 	private closed = false;
-	private queuedBytes = 0;
-	private readonly maxQueuedBytes: number;
-	private waitingForCapacity: Array<() => void> = [];
 	private pendingAcks: Array<{
-		resolve: (ack: AppendAck) => void;
-		reject: (error: any) => void;
+		resolve: (result: AppendResult) => void;
 		batchSize: number;
 	}> = [];
 	private initPromise?: Promise<void>;
-
-	public readonly readable: ReadableStream<AppendAck>;
-	public readonly writable: WritableStream<AppendArgs>;
 
 	static async create(
 		baseUrl: string,
@@ -598,95 +661,8 @@ class S2SAppendSession
 		sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
 	) {
-		this.maxQueuedBytes = sessionOptions?.maxQueuedBytes ?? 10 * 1024 * 1024; // 10 MiB default
-
-		// Create the readable stream for acks
-		this._readable = new S2SAcksStream((controller) => {
-			this.acksController = controller;
-		});
-		this.readable = this._readable;
-
-		// Create the writable stream
-		this._writable = new WritableStream<AppendArgs>({
-			start: async (controller) => {
-				this.initPromise = this.initializeStream();
-				await this.initPromise;
-			},
-			write: async (chunk) => {
-				if (this.closed) {
-					throw new S2Error({ message: "AppendSession is closed" });
-				}
-
-				const recordsArray = Array.isArray(chunk.records)
-					? chunk.records
-					: [chunk.records];
-
-				// Validate batch size limits
-				if (recordsArray.length > 1000) {
-					throw new S2Error({
-						message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
-					});
-				}
-
-				// Calculate metered size
-				let batchMeteredSize = 0;
-				for (const record of recordsArray) {
-					batchMeteredSize += meteredSizeBytes(record);
-				}
-
-				if (batchMeteredSize > 1024 * 1024) {
-					throw new S2Error({
-						message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
-					});
-				}
-
-				// Wait for capacity if needed (backpressure)
-				while (
-					this.queuedBytes + batchMeteredSize > this.maxQueuedBytes &&
-					!this.closed
-				) {
-					await new Promise<void>((resolve) => {
-						this.waitingForCapacity.push(resolve);
-					});
-				}
-
-				if (this.closed) {
-					throw new S2Error({ message: "AppendSession is closed" });
-				}
-
-				// Send the batch immediately (pipelined)
-				// Returns when frame is sent, not when ack is received
-				await this.sendBatchNonBlocking(recordsArray, chunk, batchMeteredSize);
-			},
-			close: async () => {
-				this.closed = true;
-				await this.closeStream();
-			},
-			abort: async (reason) => {
-				this.closed = true;
-				this.queuedBytes = 0;
-
-				// Reject all pending acks
-				const error = new S2Error({
-					message: `AppendSession was aborted: ${reason}`,
-				});
-				for (const pending of this.pendingAcks) {
-					pending.reject(error);
-				}
-				this.pendingAcks = [];
-
-				// Wake up all waiting for capacity
-				for (const resolver of this.waitingForCapacity) {
-					resolver();
-				}
-				this.waitingForCapacity = [];
-
-				if (this.http2Stream && !this.http2Stream.closed) {
-					this.http2Stream.close();
-				}
-			},
-		});
-		this.writable = this._writable;
+		// No stream setup - transport is "dumb"
+		// Initialization happens lazily on first submit
 	}
 
 	private async initializeStream(): Promise<void> {
@@ -715,184 +691,114 @@ class S2SAppendSession
 		});
 
 		const textDecoder = new TextDecoder();
-		let controllerClosed = false;
 
-		const safeClose = () => {
-			if (!controllerClosed && this.acksController) {
-				controllerClosed = true;
-				try {
-					this.acksController.close();
-				} catch {
-					// Controller may already be closed, ignore
-				}
-			}
-		};
+		const safeError = (error: unknown) => {
+			const s2Err =
+				error instanceof S2Error
+					? error
+					: new S2Error({ message: String(error), status: 502 });
 
-		const safeError = (err: unknown) => {
-			if (!controllerClosed && this.acksController) {
-				controllerClosed = true;
-				this.acksController.error(err);
-			}
-
-			// Reject all pending acks
+			// Resolve all pending acks with error result
 			for (const pending of this.pendingAcks) {
-				pending.reject(err);
+				pending.resolve(err(s2Err));
 			}
 			this.pendingAcks = [];
 		};
 
 		// Handle incoming data (acks)
 		stream.on("data", (chunk: Buffer) => {
-			this.parser.push(chunk);
+			try {
+				this.parser.push(chunk);
 
-			let frame = this.parser.parseFrame();
-			while (frame) {
-				if (frame.terminal) {
-					if (frame.statusCode && frame.statusCode >= 400) {
-						const errorText = textDecoder.decode(frame.body);
-						try {
-							const errorJson = JSON.parse(errorText);
-							safeError(
-								new S2Error({
-									message: errorJson.message ?? "Unknown error",
-									code: errorJson.code,
-									status: frame.statusCode,
-								}),
-							);
-						} catch {
-							safeError(
-								new S2Error({
-									message: errorText || "Unknown error",
-									status: frame.statusCode,
-								}),
-							);
-						}
-					} else {
-						safeClose();
-					}
-					stream.close();
-				} else {
-					// Parse AppendAck
-					try {
-						const protoAck = ProtoAppendAck.fromBinary(frame.body);
-
-						const ack = convertAppendAck(protoAck);
-
-						this._lastAckedPosition = ack;
-
-						// Enqueue to readable stream
-						if (this.acksController) {
-							this.acksController.enqueue(ack);
-						}
-
-						// Resolve the pending ack promise
-						const pending = this.pendingAcks.shift();
-						if (pending) {
-							pending.resolve(ack);
-
-							// Release capacity
-							this.queuedBytes -= pending.batchSize;
-
-							// Wake up one waiting writer
-							if (this.waitingForCapacity.length > 0) {
-								const waiter = this.waitingForCapacity.shift()!;
-								waiter();
+				let frame = this.parser.parseFrame();
+				while (frame) {
+					if (frame.terminal) {
+						if (frame.statusCode && frame.statusCode >= 400) {
+							const errorText = textDecoder.decode(frame.body);
+							const status = frame.statusCode ?? 500;
+							try {
+								const errorJson = JSON.parse(errorText);
+								const message = errorJson.message ?? "Unknown error";
+								const code = errorJson.code;
+								queueMicrotask(() =>
+									safeError(new S2Error({ message, code, status })),
+								);
+							} catch {
+								const message = errorText || "Unknown error";
+								queueMicrotask(() =>
+									safeError(new S2Error({ message, status })),
+								);
 							}
 						}
-					} catch (err) {
-						safeError(
-							new S2Error({
-								message: `Failed to parse AppendAck: ${err}`,
-							}),
-						);
-					}
-				}
+						stream.close();
+					} else {
+						// Parse AppendAck
+						try {
+							const protoAck = ProtoAppendAck.fromBinary(frame.body);
+							const ack = convertAppendAck(protoAck);
 
-				frame = this.parser.parseFrame();
+							// Resolve the pending ack promise (FIFO)
+							const pending = this.pendingAcks.shift();
+							if (pending) {
+								pending.resolve(ok(ack));
+							}
+						} catch (parseErr) {
+							queueMicrotask(() =>
+								safeError(
+									new S2Error({
+										message: `Failed to parse AppendAck: ${parseErr}`,
+										status: 500,
+									}),
+								),
+							);
+						}
+					}
+
+					frame = this.parser.parseFrame();
+				}
+			} catch (error) {
+				queueMicrotask(() => safeError(error));
 			}
 		});
 
-		stream.on("error", (err: Error) => {
-			safeError(err);
+		stream.on("error", (streamErr: Error) => {
+			queueMicrotask(() => safeError(streamErr));
 		});
 
 		stream.on("close", () => {
-			safeClose();
+			// Stream closed - resolve any remaining pending acks with error
+			// This can happen if the server closes the stream without sending all acks
+			if (this.pendingAcks.length > 0) {
+				queueMicrotask(() =>
+					safeError(
+						new S2Error({
+							message: "Stream closed with pending acks",
+							status: 502,
+							code: "BAD_GATEWAY",
+						}),
+					),
+				);
+			}
 		});
 	}
 
 	/**
-	 * Send a batch non-blocking (returns when frame is sent, not when ack is received)
-	 */
-	private sendBatchNonBlocking(
-		records: AppendRecord[],
-		args: AppendArgs,
-		batchMeteredSize: number,
-	): Promise<void> {
-		if (!this.http2Stream || this.http2Stream.closed) {
-			return Promise.reject(
-				new S2Error({ message: "HTTP/2 stream is not open" }),
-			);
-		}
-
-		// Convert to protobuf AppendInput
-		const protoInput = buildProtoAppendInput(records, args);
-
-		const bodyBytes = ProtoAppendInput.toBinary(protoInput);
-
-		// Frame the message
-		const frame = frameMessage({
-			terminal: false,
-			body: bodyBytes,
-		});
-
-		// This promise resolves when the frame is written (not when ack is received)
-		return new Promise<void>((resolve, reject) => {
-			// Track pending ack - will be resolved when ack arrives
-			const ackPromise = {
-				resolve: () => {},
-				reject,
-				batchSize: batchMeteredSize,
-			};
-			this.pendingAcks.push(ackPromise);
-
-			this.queuedBytes += batchMeteredSize;
-
-			// Send the frame (pipelined)
-			this.http2Stream!.write(frame, (err) => {
-				if (err) {
-					// Remove from pending acks on write error
-					const idx = this.pendingAcks.indexOf(ackPromise);
-					if (idx !== -1) {
-						this.pendingAcks.splice(idx, 1);
-						this.queuedBytes -= batchMeteredSize;
-					}
-					reject(err);
-				} else {
-					// Frame written successfully - resolve immediately (pipelined)
-					resolve();
-				}
-			});
-		});
-	}
-
-	/**
-	 * Send a batch and wait for ack (used by submit method)
+	 * Send a batch and wait for ack. Returns AppendResult (never throws).
+	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
 	private sendBatch(
 		records: AppendRecord[],
 		args: AppendArgs,
 		batchMeteredSize: number,
-	): Promise<AppendAck> {
+	): Promise<AppendResult> {
 		if (!this.http2Stream || this.http2Stream.closed) {
-			return Promise.reject(
-				new S2Error({ message: "HTTP/2 stream is not open" }),
+			return Promise.resolve(
+				err(new S2Error({ message: "HTTP/2 stream is not open", status: 502 })),
 			);
 		}
 
 		// Convert to protobuf AppendInput
 		const protoInput = buildProtoAppendInput(records, args);
-
 		const bodyBytes = ProtoAppendInput.toBinary(protoInput);
 
 		// Frame the message
@@ -901,89 +807,102 @@ class S2SAppendSession
 			body: bodyBytes,
 		});
 
-		// Track pending ack - this promise resolves when the ack is received
-		return new Promise((resolve, reject) => {
+		// Track pending ack - this promise resolves when the ack is received (FIFO)
+		return new Promise((resolve) => {
 			this.pendingAcks.push({
 				resolve,
-				reject,
 				batchSize: batchMeteredSize,
 			});
 
-			this.queuedBytes += batchMeteredSize;
-
-			// Send the frame (non-blocking - pipelined)
-			this.http2Stream!.write(frame, (err) => {
-				if (err) {
+			// Send the frame (pipelined - non-blocking)
+			this.http2Stream!.write(frame, (writeErr) => {
+				if (writeErr) {
 					// Remove from pending acks on write error
-					const idx = this.pendingAcks.findIndex((p) => p.reject === reject);
+					const idx = this.pendingAcks.findIndex((p) => p.resolve === resolve);
 					if (idx !== -1) {
 						this.pendingAcks.splice(idx, 1);
-						this.queuedBytes -= batchMeteredSize;
 					}
-					reject(err);
+					// Resolve with error result
+					const s2Err =
+						writeErr instanceof S2Error
+							? writeErr
+							: new S2Error({ message: String(writeErr), status: 502 });
+					resolve(err(s2Err));
 				}
-				// Write completed, but promise resolves when ack is received
+				// Write completed successfully - promise resolves later when ack is received
 			});
 		});
-	}
-
-	private async closeStream(): Promise<void> {
-		// Wait for all pending acks
-		while (this.pendingAcks.length > 0) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
-
-		// Close the HTTP/2 stream (client doesn't send terminal frame for clean close)
-		if (this.http2Stream && !this.http2Stream.closed) {
-			this.http2Stream.end();
-		}
-	}
-
-	async [Symbol.asyncDispose]() {
-		await this.close();
-	}
-
-	/**
-	 * Get a stream of acknowledgements for appends.
-	 */
-	acks(): S2SAcksStream {
-		return this._readable;
 	}
 
 	/**
 	 * Close the append session.
 	 * Waits for all pending appends to complete before resolving.
+	 * Never throws - returns CloseResult.
 	 */
-	async close(): Promise<void> {
-		await this.writable.close();
+	async close(): Promise<CloseResult> {
+		try {
+			this.closed = true;
+
+			// Wait for all pending acks to complete
+			while (this.pendingAcks.length > 0) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+
+			// Close the HTTP/2 stream (client doesn't send terminal frame for clean close)
+			if (this.http2Stream && !this.http2Stream.closed) {
+				this.http2Stream.end();
+			}
+
+			return okClose();
+		} catch (error) {
+			const s2Err =
+				error instanceof S2Error
+					? error
+					: new S2Error({ message: String(error), status: 500 });
+			return errClose(s2Err);
+		}
 	}
 
 	/**
 	 * Submit an append request to the session.
-	 * Returns a promise that resolves with the ack when received.
+	 * Returns AppendResult (never throws).
+	 * Pipelined: multiple submits can be in-flight; acks resolve FIFO.
 	 */
 	async submit(
 		records: AppendRecord | AppendRecord[],
 		args?: { fencing_token?: string; match_seq_num?: number },
-	): Promise<AppendAck> {
+	): Promise<AppendResult> {
+		// Validate closed state
 		if (this.closed) {
-			return Promise.reject(
-				new S2Error({ message: "AppendSession is closed" }),
+			return err(
+				new S2Error({ message: "AppendSession is closed", status: 400 }),
 			);
 		}
 
-		// Wait for initialization
-		if (this.initPromise) {
+		// Lazy initialize HTTP/2 stream on first submit
+		if (!this.initPromise) {
+			this.initPromise = this.initializeStream();
+		}
+
+		try {
 			await this.initPromise;
+		} catch (initErr) {
+			const s2Err =
+				initErr instanceof S2Error
+					? initErr
+					: new S2Error({ message: String(initErr), status: 502 });
+			return err(s2Err);
 		}
 
 		const recordsArray = Array.isArray(records) ? records : [records];
 
-		// Validate batch size limits
+		// Validate batch size limits (non-retryable 400-level error)
 		if (recordsArray.length > 1000) {
-			return Promise.reject(
+			return err(
 				new S2Error({
 					message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
+					status: 400,
+					code: "INVALID_ARGUMENT",
 				}),
 			);
 		}
@@ -995,9 +914,11 @@ class S2SAppendSession
 		}
 
 		if (batchMeteredSize > 1024 * 1024) {
-			return Promise.reject(
+			return err(
 				new S2Error({
 					message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
+					status: 400,
+					code: "INVALID_ARGUMENT",
 				}),
 			);
 		}
@@ -1011,10 +932,6 @@ class S2SAppendSession
 			},
 			batchMeteredSize,
 		);
-	}
-
-	lastAckedPosition(): AppendAck | undefined {
-		return this._lastAckedPosition;
 	}
 }
 
