@@ -15,7 +15,12 @@ import {
 	ReadBatch as ProtoReadBatch,
 	type StreamPosition as ProtoStreamPosition,
 } from "../../../../generated/proto/s2.js";
-import { S2Error } from "../../../../index.js";
+import {
+    FencingTokenMismatchError,
+    RangeNotSatisfiableError,
+    S2Error,
+    SeqNumMismatchError,
+} from "../../../../error.js";
 import { meteredSizeBytes } from "../../../../utils.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
@@ -384,31 +389,42 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 							let frame = parser.parseFrame();
 							while (frame) {
-								if (frame.terminal) {
-									if (frame.statusCode && frame.statusCode >= 400) {
-										const errorText = textDecoder.decode(frame.body);
-										try {
-											const errorJson = JSON.parse(errorText);
-											safeError(
-												new S2Error({
-													message: errorJson.message ?? "Unknown error",
-													code: errorJson.code,
-													status: frame.statusCode,
-												}),
-											);
-										} catch {
-											safeError(
-												new S2Error({
-													message: errorText || "Unknown error",
-													status: frame.statusCode,
-												}),
-											);
-										}
-									} else {
-										safeClose();
-									}
-									stream.close();
-								} else {
+                    if (frame.terminal) {
+                        if (frame.statusCode && frame.statusCode >= 400) {
+                            const errorText = textDecoder.decode(frame.body);
+                            try {
+                                const errorJson = JSON.parse(errorText);
+                                const status = frame.statusCode ?? 500;
+                                const message = errorJson.message ?? "Unknown error";
+                                const code = errorJson.code;
+
+                                // Map known read errors
+                                if (status === 416) {
+                                    safeError(
+                                        new RangeNotSatisfiableError({ status }),
+                                    );
+                                } else {
+                                    safeError(
+                                        new S2Error({
+                                            message,
+                                            code,
+                                            status,
+                                        }),
+                                    );
+                                }
+                            } catch {
+                                safeError(
+                                    new S2Error({
+                                        message: errorText || "Unknown error",
+                                        status: frame.statusCode,
+                                    }),
+                                );
+                            }
+                        } else {
+                            safeClose();
+                        }
+                        stream.close();
+                    } else {
 									// Parse ReadBatch
 									try {
 										const protoBatch = ProtoReadBatch.fromBinary(frame.body);
@@ -692,26 +708,68 @@ class S2SAppendSession {
 
 				let frame = this.parser.parseFrame();
 				while (frame) {
-					if (frame.terminal) {
-						if (frame.statusCode && frame.statusCode >= 400) {
-							const errorText = textDecoder.decode(frame.body);
-							const status = frame.statusCode ?? 500;
-							try {
-								const errorJson = JSON.parse(errorText);
-								const message = errorJson.message ?? "Unknown error";
-								const code = errorJson.code;
-								queueMicrotask(() =>
-									safeError(new S2Error({ message, code, status })),
-								);
-							} catch {
-								const message = errorText || "Unknown error";
-								queueMicrotask(() =>
-									safeError(new S2Error({ message, status })),
-								);
-							}
-						}
-						stream.close();
-					} else {
+                    if (frame.terminal) {
+                        if (frame.statusCode && frame.statusCode >= 400) {
+                            const errorText = textDecoder.decode(frame.body);
+                            const status = frame.statusCode ?? 500;
+                            try {
+                                const errorJson = JSON.parse(errorText);
+                                const message = errorJson.message ?? "Unknown error";
+                                const code = errorJson.code;
+
+                                // Map known append errors (412 Precondition Failed)
+                                if (status === 412) {
+                                    if ("seq_num_mismatch" in errorJson) {
+                                        const expected = Number(errorJson.seq_num_mismatch);
+                                        queueMicrotask(() =>
+                                            safeError(
+                                                new SeqNumMismatchError({
+                                                    message:
+                                                        "Append condition failed: sequence number mismatch",
+                                                    code: "APPEND_CONDITION_FAILED",
+                                                    status,
+                                                    expectedSeqNum: expected,
+                                                }),
+                                            ),
+                                        );
+                                    } else if (
+                                        "fencing_token_mismatch" in errorJson
+                                    ) {
+                                        const expected = String(
+                                            errorJson.fencing_token_mismatch,
+                                        );
+                                        queueMicrotask(() =>
+                                            safeError(
+                                                new FencingTokenMismatchError({
+                                                    message:
+                                                        "Append condition failed: fencing token mismatch",
+                                                    code: "APPEND_CONDITION_FAILED",
+                                                    status,
+                                                    expectedFencingToken: expected,
+                                                }),
+                                            ),
+                                        );
+                                    } else {
+                                        queueMicrotask(() =>
+                                            safeError(
+                                                new S2Error({ message, code, status }),
+                                            ),
+                                        );
+                                    }
+                                } else {
+                                    queueMicrotask(() =>
+                                        safeError(new S2Error({ message, code, status })),
+                                    );
+                                }
+                            } catch {
+                                const message = errorText || "Unknown error";
+                                queueMicrotask(() =>
+                                    safeError(new S2Error({ message, status })),
+                                );
+                            }
+                        }
+                        stream.close();
+                    } else {
 						// Parse AppendAck
 						try {
 							const protoAck = ProtoAppendAck.fromBinary(frame.body);
