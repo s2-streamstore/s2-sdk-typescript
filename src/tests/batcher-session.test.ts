@@ -35,7 +35,17 @@ describe("BatchTransform + AppendSession integration", () => {
 	it("linger-driven batching yields single session submission", async () => {
 		const stream = makeStream();
 		const session = await stream.appendSession();
-		streamAppendSpy.mockResolvedValue(makeAck(1));
+		// Mock returns ack based on number of records submitted
+		let cumulativeSeq = 0;
+		streamAppendSpy.mockImplementation((_0: any, _1: any, records: any[]) => {
+			const start = cumulativeSeq;
+			cumulativeSeq += records.length;
+			return Promise.resolve({
+				start: { seq_num: start, timestamp: 0 },
+				end: { seq_num: cumulativeSeq, timestamp: 0 },
+				tail: { seq_num: cumulativeSeq, timestamp: 0 },
+			});
+		});
 
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
@@ -61,8 +71,17 @@ describe("BatchTransform + AppendSession integration", () => {
 	it("batch overflow increments match_seq_num across multiple flushes", async () => {
 		const stream = makeStream();
 		const session = await stream.appendSession();
-		streamAppendSpy.mockResolvedValueOnce(makeAck(1));
-		streamAppendSpy.mockResolvedValueOnce(makeAck(2));
+		// Mock returns ack based on number of records submitted
+		let cumulativeSeq = 0;
+		streamAppendSpy.mockImplementation((_0: any, _1: any, records: any[]) => {
+			const start = cumulativeSeq;
+			cumulativeSeq += records.length;
+			return Promise.resolve({
+				start: { seq_num: start, timestamp: 0 },
+				end: { seq_num: cumulativeSeq, timestamp: 0 },
+				tail: { seq_num: cumulativeSeq, timestamp: 0 },
+			});
+		});
 
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 0,
@@ -79,6 +98,8 @@ describe("BatchTransform + AppendSession integration", () => {
 		await writer.write({ body: "3" });
 		await writer.close();
 
+		// Advance timers to allow linger flushes to complete
+		await vi.advanceTimersByTimeAsync(10);
 		await pipePromise;
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
@@ -93,7 +114,17 @@ describe("BatchTransform + AppendSession integration", () => {
 	it("batches are acknowledged via session.acks()", async () => {
 		const stream = makeStream();
 		const session = await stream.appendSession();
-		streamAppendSpy.mockResolvedValue(makeAck(123));
+		// Mock returns ack based on number of records submitted
+		let cumulativeSeq = 0;
+		streamAppendSpy.mockImplementation((_0: any, _1: any, records: any[]) => {
+			const start = cumulativeSeq;
+			cumulativeSeq += records.length;
+			return Promise.resolve({
+				start: { seq_num: start, timestamp: 0 },
+				end: { seq_num: cumulativeSeq, timestamp: 0 },
+				tail: { seq_num: cumulativeSeq, timestamp: 0 },
+			});
+		});
 
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 0,
@@ -121,6 +152,6 @@ describe("BatchTransform + AppendSession integration", () => {
 		await acksPromise;
 
 		expect(acks).toHaveLength(1);
-		expect(acks[0]?.end.seq_num).toBe(123);
+		expect(acks[0]?.end.seq_num).toBe(1); // 1 record written
 	});
 });

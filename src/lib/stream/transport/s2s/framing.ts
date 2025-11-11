@@ -80,7 +80,7 @@ export function frameMessage(opts: {
  * Parser for reading s2s frames from a stream
  */
 export class S2SFrameParser {
-	private buffer: Uint8Array = new Uint8Array(0);
+	buffer: Uint8Array = new Uint8Array(0);
 
 	/**
 	 * Add data to the parser buffer

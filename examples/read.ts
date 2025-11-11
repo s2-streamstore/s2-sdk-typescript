@@ -24,7 +24,7 @@ if (streams.streams[0]) {
 
 	for await (const record of readSession) {
 		console.log(`[seq ${record.seq_num}] ${record.body}`);
-		console.log("new tail", readSession.lastReadPosition()?.seq_num);
+		console.log("new tail", readSession.nextReadPosition()?.seq_num);
 	}
 	console.log("Done reading");
 }

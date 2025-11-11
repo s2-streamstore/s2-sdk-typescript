@@ -1,0 +1,1408 @@
+import createDebug from "debug";
+import type { RetryConfig } from "../common.js";
+import { S2Error, s2Error, withS2Error } from "../error.js";
+import type { AppendAck, StreamPosition } from "../generated/index.js";
+import { meteredSizeBytes } from "../utils.js";
+import type {
+	AcksStream,
+	AppendArgs,
+	AppendRecord,
+	AppendSession,
+	AppendSessionOptions,
+	ReadArgs,
+	ReadRecord,
+	ReadSession,
+} from "./stream/types.js";
+import type { AppendResult, CloseResult } from "./result.js";
+import { ok, err, okClose, errClose } from "./result.js";
+
+const debug = createDebug("s2:retry");
+
+/**
+ * Default retry configuration.
+ */
+export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> & {
+	requestTimeoutMs: number;
+} = {
+	maxAttempts: 3,
+	retryBackoffDurationMs: 100,
+	appendRetryPolicy: "noSideEffects",
+	requestTimeoutMs: 5000, // 5 seconds
+};
+
+const RETRYABLE_STATUS_CODES = new Set([
+	408, // request_timeout
+	429, // too_many_requests
+	500, // internal_server_error
+	502, // bad_gateway
+	503, // service_unavailable
+]);
+
+/**
+ * Determines if an error should be retried based on its characteristics.
+ * 400-level errors (except 408, 429) are non-retryable validation/client errors.
+ */
+export function isRetryable(error: S2Error): boolean {
+	if (!error.status) return false;
+
+	// Explicit retryable codes (including some 4xx like 408, 429)
+	if (RETRYABLE_STATUS_CODES.has(error.status)) {
+		return true;
+	}
+
+	// 400-level errors are generally non-retryable (validation, bad request)
+	if (error.status >= 400 && error.status < 500) {
+		return false;
+	}
+
+	return false;
+}
+
+/**
+ * Calculates the delay before the next retry attempt using exponential backoff.
+ */
+export function calculateDelay(attempt: number, baseDelayMs: number): number {
+	// Exponential backoff: baseDelay * (2 ^ attempt)
+	const delay = baseDelayMs * Math.pow(2, attempt);
+	// Add jitter: random value between 0 and delay
+	const jitter = Math.random() * delay;
+	return Math.floor(delay + jitter);
+}
+
+/**
+ * Sleeps for the specified duration.
+ */
+export function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Executes an async function with automatic retry logic for transient failures.
+ *
+ * @param retryConfig Retry configuration (max attempts, backoff duration)
+ * @param fn The async function to execute
+ * @returns The result of the function
+ * @throws The last error if all retry attempts are exhausted
+ */
+export async function withRetries<T>(
+	retryConfig: RetryConfig | undefined,
+	fn: () => Promise<T>,
+	isPolicyCompliant: (config: RetryConfig, error: S2Error) => boolean = () =>
+		true,
+): Promise<T> {
+	const config = {
+		...DEFAULT_RETRY_CONFIG,
+		...retryConfig,
+	};
+
+	// If maxAttempts is 0, don't retry at all
+	if (config.maxAttempts === 0) {
+		debug("maxAttempts is 0, retries disabled");
+		return fn();
+	}
+
+	let lastError: S2Error | undefined = undefined;
+
+	for (let attempt = 0; attempt <= config.maxAttempts; attempt++) {
+		try {
+			const result = await fn();
+			if (attempt > 0) {
+				debug("succeeded after %d retries", attempt);
+			}
+			return result;
+		} catch (error) {
+			// withRetry only handles S2Errors (withS2Error should be called first)
+			if (!(error instanceof S2Error)) {
+				debug("non-S2Error thrown, rethrowing immediately: %s", error);
+				throw error;
+			}
+
+			lastError = error;
+
+			// Don't retry if this is the last attempt
+			if (attempt === config.maxAttempts) {
+				debug("max attempts exhausted, throwing error");
+				break;
+			}
+
+			// Check if error is retryable
+			if (!isPolicyCompliant(config, lastError) || !isRetryable(lastError)) {
+				debug("error not retryable, throwing immediately");
+				throw error;
+			}
+
+			// Calculate delay and wait before retrying
+			const delay = calculateDelay(attempt, config.retryBackoffDurationMs);
+			debug(
+				"retryable error, backing off for %dms, status=%s",
+				delay,
+				error.status,
+			);
+			await sleep(delay);
+		}
+	}
+
+	throw lastError;
+}
+export class RetryReadSession<Format extends "string" | "bytes" = "string">
+	extends ReadableStream<ReadRecord<Format>>
+	implements ReadSession<Format>
+{
+	private _nextReadPosition: StreamPosition | undefined = undefined;
+
+	private _recordsRead: number = 0;
+	private _bytesRead: number = 0;
+
+	static async create<Format extends "string" | "bytes" = "string">(
+		generator: (args: ReadArgs<Format>) => Promise<ReadSession<Format>>,
+		args: ReadArgs<Format> = {},
+		config?: RetryConfig,
+	) {
+		return new RetryReadSession<Format>(args, generator, config);
+	}
+
+	private constructor(
+		args: ReadArgs<Format>,
+		generator: (args: ReadArgs<Format>) => Promise<ReadSession<Format>>,
+		config?: RetryConfig,
+	) {
+		const retryConfig = {
+			...DEFAULT_RETRY_CONFIG,
+			...config,
+		};
+		let session: ReadSession<Format> | undefined = undefined;
+		super({
+			start: async (controller) => {
+				let nextArgs = { ...args };
+				let attempt = 0;
+
+				while (true) {
+					try {
+						session = await generator(nextArgs);
+						const reader = session.getReader();
+
+						while (true) {
+							const { done, value } = await reader.read();
+							attempt = 0;
+							if (done) {
+								break;
+							}
+							this._nextReadPosition = {
+								seq_num: value.seq_num + 1,
+								timestamp: value.timestamp,
+							};
+							this._recordsRead++;
+							this._bytesRead += meteredSizeBytes(value);
+
+							controller.enqueue(value);
+						}
+						reader.releaseLock();
+						break;
+					} catch (e) {
+						let error = s2Error(e);
+						if (isRetryable(error) && attempt < retryConfig.maxAttempts) {
+							if (this._nextReadPosition) {
+								nextArgs.seq_num = this._nextReadPosition.seq_num;
+							}
+							if (nextArgs.count) {
+								nextArgs.count =
+									this._recordsRead === undefined
+										? nextArgs.count
+										: nextArgs.count - this._recordsRead;
+							}
+							if (nextArgs.bytes) {
+								nextArgs.bytes =
+									this._bytesRead === undefined
+										? nextArgs.bytes
+										: nextArgs.bytes - this._bytesRead;
+							}
+							// TODO also correct wait
+							const delay = calculateDelay(
+								attempt,
+								retryConfig.retryBackoffDurationMs,
+							);
+							debug("will retry after %dms, status=%s", delay, error.status);
+							await sleep(delay);
+							attempt++;
+							continue;
+						}
+
+						debug("error in retry loop: %s", e);
+						throw error;
+					}
+				}
+
+				controller.close();
+			},
+			cancel: async () => {
+				session?.cancel();
+			},
+		});
+	}
+
+	async [Symbol.asyncDispose]() {
+		await this.cancel("disposed");
+	}
+
+	// Polyfill for older browsers / Node.js environments
+	[Symbol.asyncIterator](): AsyncIterableIterator<ReadRecord<Format>> {
+		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		if (typeof fn === "function") return fn.call(this);
+		const reader = this.getReader();
+		return {
+			next: async () => {
+				const r = await reader.read();
+				if (r.done) {
+					reader.releaseLock();
+					return { done: true, value: undefined };
+				}
+				return { done: false, value: r.value };
+			},
+			throw: async (e) => {
+				await reader.cancel(e);
+				reader.releaseLock();
+				return { done: true, value: undefined };
+			},
+			return: async () => {
+				await reader.cancel("done");
+				reader.releaseLock();
+				return { done: true, value: undefined };
+			},
+			[Symbol.asyncIterator]() {
+				return this;
+			},
+		};
+	}
+
+	lastObservedTail(): StreamPosition | undefined {
+		return undefined;
+	}
+
+	nextReadPosition(): StreamPosition | undefined {
+		return undefined;
+	}
+}
+
+/**
+ * RetryAppendSession wraps an underlying AppendSession with automatic retry logic.
+ *
+ * Architecture:
+ * - All writes (submit() and writable.write()) are serialized through inflightQueue
+ * - inflightQueue tracks batches that have been submitted but not yet acked
+ * - Background ack reader consumes acks and matches them FIFO with inflightQueue
+ * - On error, _initSession() recreates session and re-transmits all inflightQueue batches
+ * - Ack timeout is fatal: if no ack arrives within the timeout window,
+ *   the session aborts and rejects queued writers
+ *
+ * Flow for a successful append:
+ * 1. submit(records) adds batch to inflightQueue with promise resolvers
+ * 2. Calls underlying session.submit() to send batch
+ * 3. Background reader receives ack, validates record count
+ * 4. Resolves promise, removes from inflightQueue, forwards ack to user
+ *
+ * Flow for a failed append:
+ * 1. submit(records) adds batch to inflightQueue
+ * 2. Calls underlying session.submit() which fails
+ * 3. Checks if retryable (status code, retry policy, idempotency)
+ * 4. Calls _initSession() which closes old session, creates new session
+ * 5. _initSession() re-transmits ALL batches in inflightQueue (recovery)
+ * 6. Background reader receives acks for recovered batches
+ * 7. Original submit() call's promise is resolved by background reader
+ *
+ * Invariants:
+ * - Exactly one ack per batch in FIFO order
+ * - Ack record count matches batch record count
+ * - Acks arrive within ackTimeoutMs (5s) or session is retried
+ */
+class AsyncQueue<T> {
+	private values: T[] = [];
+	private waiters: Array<(value: T) => void> = [];
+
+	push(value: T): void {
+		const waiter = this.waiters.shift();
+		if (waiter) {
+			waiter(value);
+			return;
+		}
+		this.values.push(value);
+	}
+
+	async next(): Promise<T> {
+		if (this.values.length > 0) {
+			return this.values.shift()!;
+		}
+		return new Promise<T>((resolve) => {
+			this.waiters.push(resolve);
+		});
+	}
+
+	clear(): void {
+		this.values = [];
+		this.waiters = [];
+	}
+
+	// Drain currently buffered values (non-blocking) and clear the buffer.
+	drain(): T[] {
+		const out = this.values;
+		this.values = [];
+		return out;
+	}
+}
+
+/**
+ * New simplified inflight entry for the pump-based architecture.
+ * Each entry tracks a batch and its promise from the inner transport session.
+ */
+type InflightEntry = {
+	records: AppendRecord[];
+	args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number };
+	expectedCount: number;
+	meteredBytes: number;
+	enqueuedAt: number; // Timestamp for timeout anchoring
+	innerPromise: Promise<AppendResult>; // Promise from transport session
+	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
+};
+
+const DEFAULT_MAX_QUEUED_BYTES = 10 * 1024 * 1024; // 10 MiB default
+
+export class RetryAppendSession implements AppendSession, AsyncDisposable {
+	private readonly ackTimeoutMs = 10000;
+	private readonly maxQueuedBytes: number;
+	private readonly retryConfig: Required<RetryConfig>;
+
+	private readonly notificationQueue = new AsyncQueue<Notification>();
+	private readonly inflight: InflightEntry[] = [];
+	private readonly capacityWaiters: Array<() => void> = [];
+
+	private session: AppendSession | undefined = undefined;
+	private sessionWriter?: WritableStreamDefaultWriter<AppendArgs>;
+	private sessionReader?: ReadableStreamDefaultReader<AppendAck>;
+
+    private queuedBytes = 0;
+    private pendingBytes = 0;
+	private consecutiveFailures = 0;
+
+	private pumpPromise?: Promise<void>;
+	private pumpStopped = false;
+	private closePromise?: Promise<void>;
+	private closeResolve?: () => void;
+	private closeReject?: (error: S2Error) => void;
+	private closing = false;
+	private pumpError?: S2Error;
+	private readerToken?: object;
+	private readerTokenId?: number;
+	private readerTokenGen: number = 0;
+	private readonly readerTokenIds = new WeakMap<object, number>();
+	private ackTimeoutHandle?: ReturnType<typeof setTimeout>;
+	private ackTimeoutToken?: object;
+	private ackTimeoutHead?: InflightEntry;
+    // removed recoveryPromise in favor of explicit flags
+    private closed = false;
+
+    // Recovery gating
+    private pausedForRecovery: boolean = false;
+    private recoveryBarrierLeft: number = 0;
+    private backlog: InflightEntry[] = [];
+    private recovering: boolean = false;
+    private restartRequested: boolean = false;
+    private maxInflightBatches?: number;
+    private reservedBatches: number = 0;
+
+	private _lastAckedPosition?: AppendAck;
+	private acksController?: ReadableStreamDefaultController<AppendAck>;
+
+	public readonly readable: ReadableStream<AppendAck>;
+	public readonly writable: WritableStream<AppendArgs>;
+
+	/**
+	 * If the session has failed, returns the original fatal error that caused
+	 * the pump to stop. Returns undefined when the session has not failed.
+	 */
+	failureCause(): S2Error | undefined {
+		return this.pumpError;
+	}
+
+	constructor(
+		private readonly generator: (
+			options?: AppendSessionOptions,
+		) => Promise<import("./stream/types.js").TransportAppendSession>,
+		private readonly sessionOptions?: AppendSessionOptions,
+		config?: RetryConfig,
+	) {
+		this.retryConfig = {
+			...DEFAULT_RETRY_CONFIG,
+			...config,
+		};
+        this.maxQueuedBytes =
+            this.sessionOptions?.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
+        this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
+
+		this.readable = new ReadableStream<AppendAck>({
+			start: (controller) => {
+				this.acksController = controller;
+			},
+		});
+
+		this.writable = new WritableStream<AppendArgs>({
+			write: async (chunk) => {
+				const recordsArray = Array.isArray(chunk.records)
+					? chunk.records
+					: [chunk.records];
+				const args = { ...chunk } as Omit<AppendArgs, "records"> & {
+					precalculatedSize?: number;
+				};
+				delete (args as any).records;
+				const { ackPromise, enqueuedPromise } = await this.enqueueBatch(
+					recordsArray,
+					args,
+				);
+				ackPromise.catch(() => {
+					// Swallow to avoid unhandled rejection; pump already surfaces the error.
+				});
+				return enqueuedPromise;
+			},
+			close: async () => {
+				await this.close();
+			},
+			abort: async (reason) => {
+				await this.abort(reason);
+			},
+		});
+	}
+
+	static async create(
+		generator: (
+			options?: AppendSessionOptions,
+		) => Promise<import("./stream/types.js").TransportAppendSession>,
+		sessionOptions?: AppendSessionOptions,
+		config?: RetryConfig,
+	): Promise<RetryAppendSession> {
+		return new RetryAppendSession(generator, sessionOptions, config);
+	}
+
+	private ensurePump(): void {
+		if (this.pumpPromise) {
+			return;
+		}
+		this.pumpPromise = this.runPump();
+	}
+
+	private async runPump(): Promise<void> {
+		try {
+			while (true) {
+				if (this.pumpStopped) {
+					break;
+				}
+				if (this.shouldAttemptClose()) {
+					await this.finishClose();
+					continue;
+				}
+				const notification = await this.notificationQueue.next();
+				if (notification.type === "stop") {
+					break;
+				}
+				await this.processNotification(notification);
+			}
+		} catch (error) {
+			this.setPumpError(s2Error(error));
+		} finally {
+			this.closed = true;
+			this.pumpStopped = true;
+			this.resolveClosePromise();
+		}
+	}
+
+    private shouldAttemptClose(): boolean {
+        const ok =
+            this.closing &&
+            !this.pumpStopped &&
+            this.inflight.length === 0 &&
+            !this.pausedForRecovery &&
+            !this.recovering &&
+            this.backlog.length === 0;
+        if (this.closing) {
+            debug(
+                "shouldAttemptClose? %s (inflight=%d paused=%s recovering=%s backlog=%d)",
+                ok,
+                this.inflight.length,
+                this.pausedForRecovery,
+                this.recovering,
+                this.backlog.length,
+            );
+        }
+        return ok;
+    }
+
+    private async processNotification(notification: Notification): Promise<void> {
+		const tokId = (notification as any).token
+			? this.readerTokenIds.get((notification as any).token)
+			: undefined;
+		debug(
+			"process: inflight=%d type=%s tokenId=%s",
+			this.inflight.length,
+			notification.type,
+			tokId ?? "none",
+		);
+		switch (notification.type) {
+			case "batch":
+				await this.handleBatch(notification.entry);
+				break;
+			case "ack":
+				if (notification.token && notification.token !== this.readerToken) {
+					break;
+				}
+				await this.handleAck(notification.ack);
+				break;
+            case "error":
+                if (notification.token && notification.token !== this.readerToken) {
+                    break;
+                }
+                await this.startRecovery(notification.error);
+                break;
+			case "close":
+				debug("close");
+				await this.handleClose(notification);
+				break;
+			case "abort":
+				debug("abort");
+				await this.handleAbort(notification.error);
+				break;
+			case "stop":
+				return;
+		}
+	}
+
+    private async handleBatch(entry: InflightEntry): Promise<void> {
+        this.pendingBytes = Math.max(0, this.pendingBytes - entry.meteredBytes);
+        // Consume a reserved batch slot if batch-based gating is enabled
+        if (this.maxInflightBatches && this.maxInflightBatches > 0 && this.reservedBatches > 0) {
+            this.reservedBatches -= 1;
+        }
+
+        // If recovering (gated), backlog the entry and do not send yet.
+        if (this.pausedForRecovery) {
+            this.backlog.push(entry);
+            this.queuedBytes += entry.meteredBytes;
+            // Do not arm head timer here; we only arm when actually sending.
+            this.releaseCapacity();
+            return;
+        }
+
+        // Normal path: inflight + send
+        this.inflight.push(entry);
+        this.queuedBytes += entry.meteredBytes;
+        this.releaseCapacity();
+
+        try {
+            await this.ensureSession();
+            await this.sendEntry(entry);
+        } catch (error) {
+            const err = s2Error(error);
+            entry.sent = false;
+            debug("Error sending batch: %s", err.message);
+            // Respect append retry policy: only retry when allowed
+            if (!isRetryable(err) || !this.isAppendRetryAllowed(entry)) {
+                this.removeInflightEntry(entry);
+                entry.reject(err);
+                this.setPumpError(err);
+                return;
+            }
+            this.notificationQueue.push({ type: "error", error: err });
+        }
+    }
+
+	private async handleAck(ack: AppendAck): Promise<void> {
+        if (this.inflight.length === 0) {
+            const fatal = new S2Error({
+                message: "Invariant violation: received ack with empty inflight queue",
+                status: 500,
+            });
+            this.setPumpError(fatal);
+            return;
+        }
+
+		const entry = this.inflight.shift()!;
+		const actualCount = ack.end.seq_num - ack.start.seq_num;
+		if (actualCount !== entry.expectedCount) {
+			this.queuedBytes = Math.max(0, this.queuedBytes - entry.meteredBytes);
+			this.releaseCapacity();
+			const error = new S2Error({
+				message: `Invariant violation: Ack record count mismatch. Expected ${entry.expectedCount}, got ${actualCount}`,
+				status: 500,
+			});
+			entry.reject(error);
+			this.setPumpError(error);
+			return;
+		}
+
+		this.queuedBytes = Math.max(0, this.queuedBytes - entry.meteredBytes);
+		this.releaseCapacity();
+
+		this._lastAckedPosition = ack;
+		this.consecutiveFailures = 0;
+
+		entry.resolve(ack);
+		if (this.acksController) {
+			try {
+				this.acksController.enqueue(ack);
+			} catch (error) {
+				debug("Failed to enqueue ack: %s", error);
+			}
+		}
+
+        this.startAckTimerForHead();
+
+        // If recovering, count down acks from the snapshot; when drained, flush backlog and resume.
+        if (this.pausedForRecovery && this.recoveryBarrierLeft > 0) {
+            debug(
+                "recovery ack: remaining=%d inflight_after=%d",
+                this.recoveryBarrierLeft - 1,
+                this.inflight.length,
+            );
+            this.recoveryBarrierLeft -= 1;
+            if (this.recoveryBarrierLeft === 0) {
+                debug("recovery barrier drained; flushing backlog size=%d", this.backlog.length);
+                await this.flushBacklog();
+                this.pausedForRecovery = false;
+                this.recovering = false;
+                debug("recovery complete; resuming writers (waiters=%d)", this.capacityWaiters.length);
+                // Wake blocked writers
+                while (this.capacityWaiters.length > 0) {
+                    const resolve = this.capacityWaiters.shift();
+                    resolve?.();
+                }
+                await this.maybeFinishClose();
+            }
+        }
+
+        await this.maybeFinishClose();
+    }
+
+	private async handleClose(_: CloseNotification): Promise<void> {
+		this.closing = true;
+		await this.maybeFinishClose();
+	}
+
+    private async handleAbort(error: S2Error): Promise<void> {
+        if (this.pumpStopped) {
+            return;
+        }
+        this.closing = true;
+        // Cache the original fatal cause if not already recorded
+        if (!this.pumpError) {
+            this.pumpError = error;
+        }
+        this.failAll(error);
+        // Reject any backlogged entries that were never sent
+        if (this.backlog.length > 0) {
+            for (const entry of this.backlog) {
+                try {
+                    entry.reject(error);
+                } catch {}
+                this.queuedBytes = Math.max(0, this.queuedBytes - entry.meteredBytes);
+            }
+            this.backlog = [];
+        }
+        // Drain and reject any queued-but-not-processed batches.
+        const drained = this.notificationQueue.drain();
+        for (const n of drained) {
+            if ((n as any).type === "batch") {
+                const bn = n as any;
+                this.pendingBytes = Math.max(0, this.pendingBytes - bn.entry.meteredBytes);
+                try {
+                    bn.entry.reject(error);
+                } catch {}
+            }
+        }
+		await this.teardownSession();
+		// Ensure timeout continues across recovery even if we can't resend immediately.
+		this.startAckTimerForHead();
+		if (this.acksController) {
+			try {
+				this.acksController.error(error);
+			} catch (err) {
+				debug("Error signaling acks controller during abort: %s", err);
+			}
+		}
+		// Wake all capacity waiters to ensure no writers remain blocked.
+		while (this.capacityWaiters.length > 0) {
+			const resolve = this.capacityWaiters.shift();
+			try {
+				resolve?.();
+			} catch {}
+		}
+		this.stopPump(error);
+	}
+
+	private async ensureSession(): Promise<void> {
+		if (this.session && this.sessionWriter && this.sessionReader) {
+			return;
+		}
+		this.session = await this.generator(this.sessionOptions);
+		this.sessionWriter = this.session.writable.getWriter();
+		this.sessionReader = this.session.acks().getReader();
+		this.startAckReader(this.sessionReader);
+	}
+
+	private startAckReader(reader: ReadableStreamDefaultReader<AppendAck>): void {
+		const token = {};
+		const id = ++this.readerTokenGen;
+		this.readerToken = token;
+		this.readerTokenId = id;
+		this.readerTokenIds.set(token, id);
+		debug("reader[%d]: start", id);
+
+		(async () => {
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (this.readerToken !== token) {
+						break;
+					}
+					if (done) {
+						debug("reader[%d]: done -> enqueue error closed", id);
+						this.notificationQueue.push({
+							type: "error",
+							error: new S2Error({
+								message: "AppendSession reader closed unexpectedly",
+								status: 500,
+							}),
+							token,
+						});
+						break;
+					}
+					debug("reader[%d]: ack", id);
+					this.notificationQueue.push({ type: "ack", ack: value!, token });
+				}
+			} catch (error) {
+				if (this.readerToken === token) {
+					debug("reader[%d]: error %s", id, (error as any)?.message ?? String(error));
+					this.notificationQueue.push({
+						type: "error",
+						error: s2Error(error),
+						token,
+					});
+				}
+			}
+		})();
+	}
+
+	private async sendEntry(entry: InflightEntry): Promise<void> {
+		if (!this.sessionWriter) {
+			throw new S2Error({ message: "AppendSession is not ready", status: 500 });
+		}
+		const { precalculatedSize, ...rest } = entry.args ?? {};
+		const payload = {
+			...(rest as Omit<AppendArgs, "records">),
+			records: entry.records,
+		} as AppendArgs;
+
+		const firstSend = !entry.sent;
+		entry.sent = true;
+		if (firstSend) {
+			entry.enqueuedAt = Date.now();
+		}
+		await this.sessionWriter.write(payload);
+		if (this.inflight.length > 0 && this.inflight[0] === entry) {
+			this.startAckTimerForHead(firstSend);
+		}
+	}
+
+    private async startRecovery(reason: S2Error): Promise<void> {
+        debug("Starting recovery due to: %s", reason.message);
+        if (this.pumpError) return;
+        if (this.closing && this.inflight.length === 0) {
+            await this.maybeFinishClose();
+            return;
+        }
+        // Only retry errors that are retryable by status and policy
+        if (!isRetryable(reason)) {
+            this.setPumpError(reason);
+            return;
+        }
+        if (
+            (this.retryConfig.appendRetryPolicy ?? "noSideEffects") ===
+                "noSideEffects" &&
+            this.inflight.some((e) => !this.isAppendRetryAllowed(e))
+        ) {
+            // Abort via notification so that backlog and queued requests are rejected too
+            this.notificationQueue.push({ type: "abort", error: reason });
+            return;
+        }
+        if (!this.pausedForRecovery) {
+            this.pausedForRecovery = true;
+            this.recoveryBarrierLeft = this.inflight.length;
+            debug(
+                "pausing enqueues for recovery; barrier=%d inflight=%d backlog=%d",
+                this.recoveryBarrierLeft,
+                this.inflight.length,
+                this.backlog.length,
+            );
+        }
+        if (!this.recovering) {
+            this.recovering = true;
+            void this.runRecoveryLoop();
+        } else {
+            this.restartRequested = true;
+        }
+    }
+
+    private async runRecoveryLoop(): Promise<void> {
+        while (this.recovering) {
+            this.consecutiveFailures += 1;
+            debug("Recovering RetryAppendSession (attempt %d)", this.consecutiveFailures);
+            if (this.pumpStopped || this.closing) return;
+
+            await this.teardownSession(true);
+            if (this.consecutiveFailures > this.retryConfig.maxAttempts) {
+                const error = new S2Error({
+                    message: `Max retry attempts (${this.retryConfig.maxAttempts}) exceeded`,
+                    status: 500,
+                });
+                this.failAll(error);
+                this.stopPump(error);
+                return;
+            }
+
+            const delay = calculateDelay(
+                this.consecutiveFailures - 1,
+                this.retryConfig.retryBackoffDurationMs,
+            );
+            await sleep(delay);
+            if (this.pumpStopped || this.closing) return;
+
+            try {
+                this.session = await this.generator(this.sessionOptions);
+                this.sessionWriter = this.session.writable.getWriter();
+                this.sessionReader = this.session.acks().getReader();
+                this.startAckReader(this.sessionReader);
+            } catch (e) {
+                this.restartRequested = true;
+            }
+
+            debug("resending inflight batches (%d)", this.inflight.length);
+            for (const entry of this.inflight) {
+                try {
+                    if (
+                        (this.retryConfig.appendRetryPolicy ?? "noSideEffects") ===
+                            "noSideEffects" &&
+                        !this.isAppendRetryAllowed(entry)
+                    ) {
+                        // Abort and surface a policy error; do not continue resending.
+                        this.notificationQueue.push({
+                            type: "abort",
+                            error: new S2Error({
+                                message: "Append retry not allowed by policy",
+                                status: 500,
+                            }),
+                        });
+                        this.restartRequested = false;
+                        return;
+                    }
+                    await this.ensureSession();
+                    await this.sendEntry(entry);
+                } catch (error) {
+                    this.restartRequested = true;
+                    break;
+                }
+            }
+            debug("resending complete");
+
+            if (this.restartRequested) {
+                this.restartRequested = false;
+                continue;
+            }
+
+            // If there are no inflight entries to wait for, flush backlog immediately and resume.
+            if (this.pausedForRecovery && this.recoveryBarrierLeft === 0) {
+                debug("recovery barrier is zero; flushing backlog now");
+                await this.flushBacklog();
+                this.pausedForRecovery = false;
+                this.recovering = false;
+                this.consecutiveFailures = 0;
+                // Wake any blocked writers.
+                while (this.capacityWaiters.length > 0) {
+                    const resolve = this.capacityWaiters.shift();
+                    resolve?.();
+                }
+                await this.maybeFinishClose();
+                return;
+            }
+
+            while (this.pausedForRecovery && this.recoveryBarrierLeft > 0 && !this.restartRequested && !this.pumpError && !this.closing) {
+                await sleep(5);
+            }
+            if (this.restartRequested) {
+                this.restartRequested = false;
+                continue;
+            }
+            if (!this.pausedForRecovery && this.recoveryBarrierLeft === 0) {
+                this.recovering = false;
+                this.consecutiveFailures = 0;
+                await this.maybeFinishClose();
+                return;
+            }
+        }
+    }
+
+    // performRecovery and sendUnsentInflightEntries removed in favor of explicit runRecoveryLoop + gating
+
+	private async teardownSession(preserveAckTimer?: boolean): Promise<void> {
+		if (!preserveAckTimer) {
+			this.clearAckTimeout();
+		}
+		if (this.sessionReader) {
+			try {
+				if (this.readerTokenId !== undefined) {
+					debug("teardown: cancel reader[%d]", this.readerTokenId);
+				}
+				await this.sessionReader.cancel();
+			} catch (error) {
+				debug("Error cancelling ack reader: %s", error);
+			}
+		}
+		this.sessionReader = undefined;
+		this.readerToken = undefined;
+		this.readerTokenId = undefined;
+
+		if (this.sessionWriter) {
+			try {
+				this.sessionWriter.releaseLock();
+			} catch (error) {
+				debug("Error releasing session writer: %s", error);
+			}
+		}
+		this.sessionWriter = undefined;
+
+		if (this.session) {
+			try {
+				await this.session.close();
+			} catch (error) {
+				debug("Error closing underlying session: %s", error);
+			}
+		}
+		this.session = undefined;
+	}
+
+    private startAckTimerForHead(force: boolean = false): void {
+        const head = this.inflight[0];
+        if (!head) {
+            // No inflight; clear any existing timer
+            this.clearAckTimeout();
+            this.ackTimeoutHead = undefined;
+            return;
+        }
+        // If the timer is already armed for this head, do nothing to avoid
+		// cancel/reschedule loops that could postpone the callback under load.
+		if (!force && this.ackTimeoutHandle && this.ackTimeoutHead === head) {
+			return;
+		}
+        this.clearAckTimeout();
+        const delay = Math.max(0, head.enqueuedAt + this.ackTimeoutMs - Date.now());
+        debug(
+            "arm head timer: force=%s delayMs=%d inflight=%d",
+            force,
+            delay,
+            this.inflight.length,
+        );
+        const token = {};
+		this.ackTimeoutHead = head;
+		this.ackTimeoutToken = token;
+		this.ackTimeoutHandle = setTimeout(() => {
+			if (this.ackTimeoutToken !== token) {
+				return;
+			}
+			this.ackTimeoutHead = undefined;
+			// Ack timeout should abort the session rather than be retried.
+			this.notificationQueue.push({
+				type: "abort",
+				error: new S2Error({
+					message:
+						"Ack timeout: no acknowledgement received within timeout period",
+					status: 408,
+				}),
+			});
+		}, delay);
+	}
+
+    private clearAckTimeout(): void {
+        if (this.ackTimeoutHandle) {
+            clearTimeout(this.ackTimeoutHandle);
+            this.ackTimeoutHandle = undefined;
+            this.ackTimeoutToken = undefined;
+            this.ackTimeoutHead = undefined;
+        }
+    }
+
+    private async flushBacklog(): Promise<void> {
+        if (this.backlog.length === 0) return;
+        debug("flushing backlog (%d)", this.backlog.length);
+        const backlog = this.backlog;
+        this.backlog = [];
+        for (const entry of backlog) {
+            try {
+                this.inflight.push(entry);
+                await this.ensureSession();
+                await this.sendEntry(entry);
+            } catch (error) {
+                // On send failure, push error to restart recovery and requeue remaining entries
+                const idx = backlog.indexOf(entry);
+                if (idx >= 0 && idx + 1 < backlog.length) {
+                    const remaining = backlog.slice(idx + 1);
+                    // Put back remaining at front so they are not lost
+                    this.backlog.unshift(...remaining);
+                }
+                this.notificationQueue.push({ type: "error", error: s2Error(error) });
+                return;
+            }
+        }
+    }
+
+	private async drainInflight(): Promise<void> {
+		if (this.inflight.length === 0) {
+			return;
+		}
+		const timeoutMs = 30000;
+		const start = Date.now();
+		while (this.inflight.length > 0) {
+			if (Date.now() - start > timeoutMs) {
+				throw new S2Error({
+					message: "Close timeout: pending acks not received",
+					status: 408,
+				});
+			}
+			await sleep(50);
+		}
+	}
+
+	private failAll(error: S2Error): void {
+		for (const entry of this.inflight) {
+			entry.reject(error);
+		}
+		this.inflight.length = 0;
+		this.queuedBytes = 0;
+		this.pendingBytes = 0;
+		this.releaseCapacity();
+	}
+
+    private setPumpError(error: S2Error): void {
+        if (this.pumpError) {
+            return;
+        }
+        this.pumpError = error;
+        this.failAll(error);
+        // Also reject any backlogged entries and queued-but-not-processed batches
+        if (this.backlog.length > 0) {
+            for (const entry of this.backlog) {
+                try {
+                    entry.reject(error);
+                } catch {}
+                this.queuedBytes = Math.max(0, this.queuedBytes - entry.meteredBytes);
+            }
+            this.backlog = [];
+        }
+        const drained = this.notificationQueue.drain();
+        for (const n of drained) {
+            if ((n as any).type === "batch") {
+                const bn = n as any;
+                this.pendingBytes = Math.max(0, this.pendingBytes - bn.entry.meteredBytes);
+                try {
+                    bn.entry.reject(error);
+                } catch {}
+            }
+        }
+        if (this.acksController) {
+            try {
+                this.acksController.error(error);
+            } catch (err) {
+                debug("Error signaling acks controller: %s", err);
+            }
+        }
+        this.stopPump(error);
+    }
+
+    private releaseCapacity(): void {
+        // Wake a single waiter; the waiter will re-check capacity under either
+        // byte-based or batch-based gating.
+        const resolve = this.capacityWaiters.shift();
+        resolve?.();
+    }
+
+    private async finishClose(): Promise<void> {
+        if (this.pumpStopped) {
+            return;
+        }
+        try {
+            debug("finishClose: rejecting inflight=%d backlog=%d", this.inflight.length, this.backlog.length);
+            // Reject any backlogged entries that were never sent
+            if (this.backlog.length > 0) {
+                for (const entry of this.backlog) {
+                    try {
+                        entry.reject(new S2Error({ message: "AppendSession is closed", status: 400 }));
+                    } catch {}
+                    this.queuedBytes = Math.max(0, this.queuedBytes - entry.meteredBytes);
+                }
+                this.backlog = [];
+            }
+            // Drain and reject any queued-but-not-processed batches.
+            const drained = this.notificationQueue.drain();
+            let drainedBatches = 0;
+            for (const n of drained) {
+                if (n.type === "batch") {
+                    drainedBatches += 1;
+                    // Adjust pendingBytes since handleBatch won't run for these entries anymore.
+                    this.pendingBytes = Math.max(
+                        0,
+                        this.pendingBytes - n.entry.meteredBytes,
+                    );
+                    try {
+                        n.entry.reject(
+                            new S2Error({ message: "AppendSession is closed", status: 400 }),
+                        );
+                    } catch {}
+                }
+            }
+            if (this.maxInflightBatches && this.maxInflightBatches > 0 && drainedBatches > 0) {
+                this.reservedBatches = Math.max(0, this.reservedBatches - drainedBatches);
+            }
+
+			await this.teardownSession();
+            if (!this.pumpError && this.acksController) {
+                try {
+                    this.acksController.close();
+                } catch (error) {
+                    debug("Error closing acks controller: %s", error);
+                }
+            }
+            debug("finishClose: stopping pump");
+            // Wake all capacity waiters to unblock any writers waiting on backpressure.
+            while (this.capacityWaiters.length > 0) {
+                const resolve = this.capacityWaiters.shift();
+                try {
+                    resolve?.();
+				} catch {}
+			}
+			this.stopPump();
+		} catch (error) {
+			this.stopPump(s2Error(error));
+		}
+	}
+
+	private stopPump(error?: S2Error): void {
+		if (this.pumpStopped) {
+			return;
+		}
+		this.pumpStopped = true;
+		if (error && !this.pumpError) {
+			this.pumpError = error;
+		}
+		if (error) {
+			this.closeReject?.(error);
+		} else {
+			this.closeResolve?.();
+		}
+		this.closeResolve = undefined;
+		this.closeReject = undefined;
+		this.notificationQueue.push({ type: "stop" });
+	}
+
+	private resolveClosePromise(): void {
+		if (this.closePromise && !this.pumpError) {
+			this.closeResolve?.();
+		}
+		this.closeResolve = undefined;
+		this.closeReject = undefined;
+	}
+
+    private async maybeFinishClose(): Promise<void> {
+        if (!this.closing || this.pumpStopped) {
+            return;
+        }
+        if (this.inflight.length > 0 || this.pausedForRecovery || this.recovering || this.backlog.length > 0) {
+            return;
+        }
+        await this.finishClose();
+    }
+
+    private async waitForCapacity(bytes: number): Promise<void> {
+        while (!this.closing && !this.pumpError) {
+            if (this.pausedForRecovery) {
+                debug(
+                    "waitForCapacity: paused=true (inflight=%d backlog=%d); writer blocked",
+                    this.inflight.length,
+                    this.backlog.length,
+                );
+                await new Promise<void>((resolve) => {
+                    this.capacityWaiters.push(resolve);
+                });
+                continue;
+            }
+            if (this.maxInflightBatches && this.maxInflightBatches > 0) {
+                // Batch-based gating: reserve a slot if available
+                if (this.inflight.length + this.backlog.length + this.reservedBatches < this.maxInflightBatches) {
+                    this.reservedBatches += 1;
+                    return;
+                }
+            } else {
+                // Byte-based gating
+                if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
+                    this.pendingBytes += bytes;
+                    return;
+                }
+            }
+            await new Promise<void>((resolve) => {
+                this.capacityWaiters.push(resolve);
+            });
+        }
+        if (this.pumpError) {
+            throw this.pumpError;
+        }
+        throw new S2Error({ message: "AppendSession is closed", status: 400 });
+    }
+
+	private cloneRecords(records: AppendRecord[]): AppendRecord[] {
+		return records.map((record) => {
+			const cloned: AppendRecord = { ...record };
+			if (record.body instanceof Uint8Array) {
+				cloned.body = record.body.slice();
+			}
+			if (record.headers) {
+				if (Array.isArray(record.headers)) {
+					cloned.headers = record.headers.map((h) => [
+						...h,
+					]) as AppendRecord["headers"];
+				} else {
+					cloned.headers = { ...record.headers } as AppendRecord["headers"];
+				}
+			}
+			return cloned;
+		});
+	}
+
+	private removeInflightEntry(entry: InflightEntry): void {
+		const idx = this.inflight.indexOf(entry);
+		if (idx !== -1) {
+			this.inflight.splice(idx, 1);
+		}
+		this.queuedBytes = Math.max(0, this.queuedBytes - entry.meteredBytes);
+		this.releaseCapacity();
+	}
+
+	private isAppendRetryAllowed(entry: InflightEntry): boolean {
+		if (this.retryConfig.appendRetryPolicy === "all") {
+			return true;
+		}
+		return !!entry.args?.match_seq_num || !!entry.args?.fencing_token;
+	}
+
+	private async enqueueBatch(
+		records: AppendRecord[],
+		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
+	): Promise<{
+		ackPromise: Promise<AppendAck>;
+		enqueuedPromise: Promise<void>;
+	}> {
+		if (this.closing || this.pumpStopped) {
+			throw new S2Error({ message: "AppendSession is closed", status: 400 });
+		}
+		if (this.pumpError) {
+			throw this.pumpError;
+		}
+
+		const clonedRecords = this.cloneRecords(records);
+		const expectedCount = clonedRecords.length;
+		const meteredBytes =
+			args?.precalculatedSize ??
+			clonedRecords.reduce((sum, record) => sum + meteredSizeBytes(record), 0);
+
+		let resolveAck!: (ack: AppendAck) => void;
+		let rejectAck!: (err: S2Error) => void;
+		const ackPromise = new Promise<AppendAck>((resolve, reject) => {
+			resolveAck = resolve;
+			rejectAck = reject;
+		});
+
+		let resolveEnqueued!: () => void;
+		let rejectEnqueued!: (err: S2Error) => void;
+		const enqueuedPromise = new Promise<void>((resolve, reject) => {
+			resolveEnqueued = resolve;
+			rejectEnqueued = reject;
+		});
+
+		try {
+			await this.waitForCapacity(meteredBytes);
+		} catch (error) {
+			const err = s2Error(error);
+			rejectAck(err);
+			rejectEnqueued(err);
+			throw err;
+		}
+
+		const entry: InflightEntry = {
+			records: clonedRecords,
+			args,
+			expectedCount,
+			meteredBytes,
+			enqueuedAt: Date.now(),
+			sent: false,
+			resolve: (ack) => resolveAck(ack),
+			reject: (err) => rejectAck(err),
+		};
+
+		this.notificationQueue.push({ type: "batch", entry });
+		this.ensurePump();
+		resolveEnqueued();
+		return { ackPromise, enqueuedPromise };
+	}
+
+	async submit(
+		records: AppendRecord | AppendRecord[],
+		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
+	): Promise<AppendAck> {
+		const batch = Array.isArray(records) ? records : [records];
+		const { ackPromise } = await this.enqueueBatch(batch, args);
+		return ackPromise;
+	}
+
+	acks(): AcksStream {
+		return this.readable as AcksStream;
+	}
+
+	lastAckedPosition(): AppendAck | undefined {
+		return this._lastAckedPosition;
+	}
+
+	async close(): Promise<void> {
+		if (this.pumpStopped) {
+			return;
+		}
+		if (this.closePromise) {
+			return this.closePromise;
+		}
+		this.closing = true;
+		this.closePromise = new Promise<void>((resolve, reject) => {
+			this.closeResolve = resolve;
+			this.closeReject = reject;
+		});
+		this.ensurePump();
+		this.notificationQueue.push({ type: "close" });
+		return this.closePromise;
+	}
+
+	async abort(reason?: unknown): Promise<void> {
+		const error =
+			reason instanceof S2Error
+				? reason
+				: new S2Error({
+						message: reason?.toString() ?? "AppendSession aborted",
+						status: 499,
+					});
+		this.closed = true;
+		this.notificationQueue.push({ type: "abort", error });
+		this.ensurePump();
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.close();
+	}
+}

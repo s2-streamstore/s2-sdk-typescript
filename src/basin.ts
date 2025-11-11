@@ -38,6 +38,7 @@ export class S2Basin {
 			baseUrl: options.baseUrl,
 			accessToken: options.accessToken,
 			basinName: options.includeBasinHeader ? name : undefined,
+			retry: options.retryConfig,
 		};
 		this.client = createClient(
 			createConfig({

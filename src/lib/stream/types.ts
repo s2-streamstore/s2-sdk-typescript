@@ -1,4 +1,5 @@
-import type { S2RequestOptions } from "../../common.js";
+import type { RetryConfig, S2RequestOptions } from "../../common.js";
+import type { S2Error } from "../../error.js";
 import type {
 	AppendAck,
 	AppendInput as GeneratedAppendInput,
@@ -62,6 +63,23 @@ export interface AcksStream
 	extends ReadableStream<AppendAck>,
 		AsyncIterable<AppendAck> {}
 
+/**
+ * Transport-facing interface for "dumb" append sessions.
+ * Transports only implement submit/close with value-encoded errors (discriminated unions).
+ * No backpressure, no retry, no streams - RetryAppendSession adds those.
+ */
+export interface TransportAppendSession {
+	submit(
+		records: AppendRecord | AppendRecord[],
+		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
+	): Promise<import("../result.js").AppendResult>;
+	close(): Promise<import("../result.js").CloseResult>;
+}
+
+/**
+ * Public AppendSession interface with retry, backpressure, and streams.
+ * This is what users interact with - implemented by RetryAppendSession.
+ */
 export interface AppendSession
 	extends ReadableWritablePair<AppendAck, AppendArgs>,
 		AsyncDisposable {
@@ -72,18 +90,60 @@ export interface AppendSession
 	acks(): AcksStream;
 	close(): Promise<void>;
 	lastAckedPosition(): AppendAck | undefined;
+	/**
+	 * If the session has failed, returns the original fatal error that caused
+	 * the pump to stop. Returns undefined when the session has not failed.
+	 */
+	failureCause(): S2Error | undefined;
 }
 
+/**
+ * Result type for transport-level read operations.
+ * Transport sessions yield ReadResult instead of throwing errors.
+ */
+export type ReadResult<Format extends "string" | "bytes" = "string"> =
+	| { ok: true; value: ReadRecord<Format> }
+	| { ok: false; error: S2Error };
+
+/**
+ * Transport-level read session interface.
+ * Transport implementations yield ReadResult and never throw errors from the stream.
+ * RetryReadSession wraps these and converts them to the public ReadSession interface.
+ */
+export interface TransportReadSession<
+	Format extends "string" | "bytes" = "string",
+> extends ReadableStream<ReadResult<Format>>,
+		AsyncIterable<ReadResult<Format>>,
+		AsyncDisposable {
+	nextReadPosition(): StreamPosition | undefined;
+	lastObservedTail(): StreamPosition | undefined;
+}
+
+/**
+ * Public-facing read session interface.
+ * Yields records directly and propagates errors by throwing (standard stream behavior).
+ */
 export interface ReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadRecord<Format>>,
 		AsyncIterable<ReadRecord<Format>>,
 		AsyncDisposable {
-	lastReadPosition(): StreamPosition | undefined;
+	nextReadPosition(): StreamPosition | undefined;
+	lastObservedTail(): StreamPosition | undefined;
 }
 
 export interface AppendSessionOptions {
-	/** Maximum bytes to queue before applying backpressure (default: 10 MiB) */
+	/**
+	 * Maximum bytes to queue before applying backpressure (default: 10 MiB).
+	 * Enforced by RetryAppendSession; underlying transports do not apply
+	 * byte-based backpressure on their own.
+	 */
 	maxQueuedBytes?: number;
+	/**
+	 * Maximum number of batches allowed in-flight (including queued) before
+	 * applying backpressure. This is enforced by RetryAppendSession; underlying
+	 * transport sessions do not implement their own backpressure.
+	 */
+	maxInflightBatches?: number;
 }
 
 export interface SessionTransport {
@@ -109,4 +169,8 @@ export interface TransportConfig {
 	 * Basin name to include in s2-basin header when using account endpoint
 	 */
 	basinName?: string;
+	/**
+	 * Retry configuration inherited from the top-level client
+	 */
+	retry?: RetryConfig;
 }
