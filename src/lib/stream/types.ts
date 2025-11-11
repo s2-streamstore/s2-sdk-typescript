@@ -66,7 +66,7 @@ export interface AcksStream
 /**
  * Transport-facing interface for "dumb" append sessions.
  * Transports only implement submit/close with value-encoded errors (discriminated unions).
- * No backpressure, no retry, no streams - RetryAppendSession adds those.
+ * No backpressure, no retry, no streams - AppendSession adds those.
  */
 export interface TransportAppendSession {
 	submit(
@@ -78,7 +78,7 @@ export interface TransportAppendSession {
 
 /**
  * Public AppendSession interface with retry, backpressure, and streams.
- * This is what users interact with - implemented by RetryAppendSession.
+ * This is what users interact with - implemented by AppendSession.
  */
 export interface AppendSession
 	extends ReadableWritablePair<AppendAck, AppendArgs>,
@@ -108,7 +108,7 @@ export type ReadResult<Format extends "string" | "bytes" = "string"> =
 /**
  * Transport-level read session interface.
  * Transport implementations yield ReadResult and never throw errors from the stream.
- * RetryReadSession wraps these and converts them to the public ReadSession interface.
+ * ReadSession wraps these and converts them to the public ReadSession interface.
  */
 export interface TransportReadSession<
 	Format extends "string" | "bytes" = "string",
@@ -134,13 +134,13 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 export interface AppendSessionOptions {
 	/**
 	 * Maximum bytes to queue before applying backpressure (default: 10 MiB).
-	 * Enforced by RetryAppendSession; underlying transports do not apply
+	 * Enforced by AppendSession; underlying transports do not apply
 	 * byte-based backpressure on their own.
 	 */
 	maxQueuedBytes?: number;
 	/**
 	 * Maximum number of batches allowed in-flight (including queued) before
-	 * applying backpressure. This is enforced by RetryAppendSession; underlying
+	 * applying backpressure. This is enforced by AppendSession; underlying
 	 * transport sessions do not implement their own backpressure.
 	 */
 	maxInflightBatches?: number;

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
 import type { StreamPosition } from "../generated/index.js";
-import { RetryReadSession } from "../lib/retry.js";
+import { ReadSession } from "../lib/retry.js";
 import type {
 	ReadArgs,
 	ReadRecord,
@@ -10,7 +10,7 @@ import type {
 } from "../lib/stream/types.js";
 
 /**
- * Fake TransportReadSession for testing RetryReadSession.
+ * Fake TransportReadSession for testing ReadSession.
  * Implements the transport layer pattern: yields ReadResult and never throws.
  */
 class FakeReadSession<Format extends "string" | "bytes" = "string">
@@ -124,7 +124,7 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 	}
 }
 
-describe("RetryReadSession (unit)", () => {
+describe("ReadSession (unit)", () => {
 	// Note: Not using fake timers here because they don't play well with async iteration
 	// Instead, we use very short backoff times (1ms) to make tests run fast
 
@@ -138,7 +138,7 @@ describe("RetryReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await RetryReadSession.create(
+		const session = await ReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -182,7 +182,7 @@ describe("RetryReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await RetryReadSession.create(
+		const session = await ReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -226,7 +226,7 @@ describe("RetryReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await RetryReadSession.create(
+		const session = await ReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -272,7 +272,7 @@ describe("RetryReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await RetryReadSession.create(
+		const session = await ReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -315,7 +315,7 @@ describe("RetryReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await RetryReadSession.create(
+		const session = await ReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -358,7 +358,7 @@ describe("RetryReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await RetryReadSession.create(
+		const session = await ReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -416,7 +416,7 @@ describe("RetryReadSession (unit)", () => {
 	it("fails after max retry attempts exhausted", async () => {
 		let callCount = 0;
 
-		const session = await RetryReadSession.create(
+		const session = await ReadSession.create(
 			async (_args) => {
 				callCount++;
 				// Always error immediately without emitting any successful records

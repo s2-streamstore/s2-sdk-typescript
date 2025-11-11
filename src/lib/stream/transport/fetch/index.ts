@@ -18,7 +18,10 @@ import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
-import { RetryAppendSession, RetryReadSession } from "../../../retry.js";
+import {
+	AppendSession as AppendSessionImpl,
+	ReadSession as ReadSessionImpl,
+} from "../../../retry.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -556,7 +559,7 @@ export class FetchTransport implements SessionTransport {
 			...sessionOptions,
 			maxInflightBatches: 1,
 		} as AppendSessionOptions;
-		return RetryAppendSession.create(
+		return AppendSessionImpl.create(
 			(myOptions) => {
 				return FetchAppendSession.create(
 					stream,
@@ -575,7 +578,7 @@ export class FetchTransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
-		return RetryReadSession.create(
+		return ReadSessionImpl.create(
 			(myArgs) => {
 				return FetchReadSession.create(this.client, stream, myArgs, options);
 			},

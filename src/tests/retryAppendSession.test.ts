@@ -3,7 +3,7 @@ import { S2Error } from "../error.js";
 import type { AppendAck, StreamPosition } from "../generated/index.js";
 import type { AppendResult, CloseResult } from "../lib/result.js";
 import { err, errClose, ok, okClose } from "../lib/result.js";
-import { RetryAppendSession } from "../lib/retry.js";
+import { AppendSession as AppendSessionImpl } from "../lib/retry.js";
 import type {
 	AcksStream,
 	AppendArgs,
@@ -13,7 +13,7 @@ import type {
 } from "../lib/stream/types.js";
 
 /**
- * Minimal controllable AppendSession for testing RetryAppendSession.
+ * Minimal controllable AppendSession for testing AppendSessionImpl.
  */
 class FakeAppendSession implements AppendSession {
 	public readonly readable: ReadableStream<AppendAck>;
@@ -115,7 +115,7 @@ class FakeAppendSession implements AppendSession {
 
 /**
  * Transport-level fake session that returns discriminated unions.
- * Used for testing RetryAppendSession which wraps transport sessions.
+ * Used for testing AppendSessionImpl which wraps transport sessions.
  */
 class FakeTransportAppendSession implements TransportAppendSession {
 	public writes: Array<{ records: AppendRecord[]; args?: any }> = [];
@@ -178,7 +178,7 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	}
 }
 
-describe("RetryAppendSession (unit)", () => {
+describe("AppendSessionImpl (unit)", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 	});
@@ -187,7 +187,7 @@ describe("RetryAppendSession (unit)", () => {
 	});
 
 	it("aborts on ack timeout (~5s from enqueue) when no acks arrive", async () => {
-		const session = await RetryAppendSession.create(async () => {
+		const session = await AppendSessionImpl.create(async () => {
 			// Accept writes but never emit acks
 			return new FakeTransportAppendSession({ neverAck: true });
 		});
@@ -212,7 +212,7 @@ describe("RetryAppendSession (unit)", () => {
 	it("recovers from send-phase transient error and resolves after recovery", async () => {
 		// First session rejects writes; second accepts and acks immediately
 		let call = 0;
-		const session = await RetryAppendSession.create(
+		const session = await AppendSessionImpl.create(
 			async () => {
 				call++;
 				if (call === 1) {
@@ -237,7 +237,7 @@ describe("RetryAppendSession (unit)", () => {
 
 	it("fails immediately when retries are disabled and send-phase errors persist", async () => {
 		const error = new S2Error({ message: "boom", status: 500 });
-		const session = await RetryAppendSession.create(
+		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
 			{ retryBackoffDurationMs: 1, maxAttempts: 0, appendRetryPolicy: "all" },
@@ -252,7 +252,7 @@ describe("RetryAppendSession (unit)", () => {
 
 	it("does not retry non-idempotent inflight under noSideEffects policy and exposes failure cause", async () => {
 		const error = new S2Error({ message: "boom", status: 500 });
-		const session = await RetryAppendSession.create(
+		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
 			{
@@ -269,7 +269,7 @@ describe("RetryAppendSession (unit)", () => {
 
 	it("abort rejects backlog and queued submissions with the abort error", async () => {
 		const error = new S2Error({ message: "boom", status: 500 });
-		const session = await RetryAppendSession.create(
+		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
 			{
@@ -299,7 +299,7 @@ describe("RetryAppendSession (unit)", () => {
 			tail: { seq_num: 1, timestamp: 0 },
 		};
 
-		const session = await RetryAppendSession.create(
+		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ customAcks: [ack1, ack2] }),
 			undefined,
 			{ retryBackoffDurationMs: 1, maxAttempts: 0 }, // No retries
@@ -346,7 +346,7 @@ describe("RetryAppendSession (unit)", () => {
 			tail: { seq_num: 10, timestamp: 0 },
 		};
 
-		const session = await RetryAppendSession.create(
+		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ customAcks: [ack1, ack2] }),
 			undefined,
 			{ retryBackoffDurationMs: 1, maxAttempts: 0 },
