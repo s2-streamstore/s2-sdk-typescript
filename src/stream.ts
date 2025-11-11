@@ -1,5 +1,5 @@
 import type { RetryConfig, S2RequestOptions } from "./common.js";
-import { withS2Error } from "./error.js";
+import { withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import { type AppendAck, checkTail } from "./generated/index.js";
 import { isRetryable, withRetries } from "./lib/retry.js";
@@ -56,8 +56,8 @@ export class S2Stream {
 	 * Returns the next sequence number and timestamp to be assigned (`tail`).
 	 */
 	public async checkTail(options?: S2RequestOptions) {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 checkTail({
                     client: this.client,
                     path: {
@@ -66,9 +66,7 @@ export class S2Stream {
                     ...options,
                 }),
             );
-		});
-
-		return response.data!;
+        });
 	}
 
 	/**
