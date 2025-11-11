@@ -9,11 +9,9 @@ import type {
 	AcksStream,
 	AppendArgs,
 	AppendRecord,
-	AppendSession,
 	AppendSessionOptions,
 	ReadArgs,
 	ReadRecord,
-	ReadSession,
 	TransportAppendSession,
 	TransportReadSession,
 } from "./stream/types.js";
@@ -146,10 +144,9 @@ export async function withRetries<T>(
 
 	throw lastError;
 }
-export class RetryReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadRecord<Format>>
-	implements ReadSession<Format>
-{
+export class ReadSession<
+	Format extends "string" | "bytes" = "string",
+> extends ReadableStream<ReadRecord<Format>> {
 	private _nextReadPosition: StreamPosition | undefined = undefined;
 	private _lastObservedTail: StreamPosition | undefined = undefined;
 
@@ -163,7 +160,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		args: ReadArgs<Format> = {},
 		config?: RetryConfig,
 	) {
-		return new RetryReadSession<Format>(args, generator, config);
+		return new ReadSession<Format>(args, generator, config);
 	}
 
 	private constructor(
@@ -311,7 +308,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 }
 
 /**
- * RetryAppendSession wraps an underlying AppendSession with automatic retry logic.
+ * AppendSession wraps an underlying transport AppendSession with automatic retry logic.
  *
  * Architecture:
  * - All writes (submit() and writable.write()) are serialized through inflightQueue
@@ -357,7 +354,7 @@ type InflightEntry = {
 
 const DEFAULT_MAX_QUEUED_BYTES = 10 * 1024 * 1024; // 10 MiB default
 
-export class RetryAppendSession implements AppendSession, AsyncDisposable {
+export class AppendSession implements AsyncDisposable {
 	private readonly requestTimeoutMillis: number;
 	private readonly maxQueuedBytes: number;
 	private readonly maxInflightBatches?: number;
@@ -470,8 +467,8 @@ export class RetryAppendSession implements AppendSession, AsyncDisposable {
 		) => Promise<import("./stream/types.js").TransportAppendSession>,
 		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
-	): Promise<RetryAppendSession> {
-		return new RetryAppendSession(generator, sessionOptions, config);
+	): Promise<AppendSession> {
+		return new AppendSession(generator, sessionOptions, config);
 	}
 
 	/**

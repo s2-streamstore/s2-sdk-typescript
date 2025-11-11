@@ -20,7 +20,10 @@ import { meteredSizeBytes } from "../../../../utils.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
-import { RetryAppendSession, RetryReadSession } from "../../../retry.js";
+import {
+	AppendSession as AppendSessionImpl,
+	ReadSession as ReadSessionImpl,
+} from "../../../retry.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -89,7 +92,7 @@ export class S2STransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
-		return RetryAppendSession.create(
+		return AppendSessionImpl.create(
 			(myOptions) => {
 				return S2SAppendSession.create(
 					this.transportConfig.baseUrl,
@@ -111,7 +114,7 @@ export class S2STransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
-		return RetryReadSession.create(
+		return ReadSessionImpl.create(
 			(myArgs) => {
 				return S2SReadSession.create(
 					this.transportConfig.baseUrl,
