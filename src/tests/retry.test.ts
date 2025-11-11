@@ -57,10 +57,6 @@ describe("Retry Logic", () => {
 			expect(fn).toHaveBeenCalledTimes(2);
 		});
 
-		// Note: Tests for connection and abort errors will be added after implementing
-		// error kind discrimination (see claude.md). For now, withS2Error converts these
-		// to S2Error with status=undefined, and isRetryable doesn't handle them yet.
-
 		it("should exhaust retries and throw last error", async () => {
 			const error = new S2Error({ message: "Server error", status: 503 });
 			const fn = vi.fn().mockRejectedValue(error);
