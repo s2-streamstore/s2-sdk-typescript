@@ -33,7 +33,7 @@ export type BatchOutput = {
  * @example
  * ```typescript
  * const batcher = new BatchTransform<"string">({
- *   lingerDuration: 20,
+ *   lingerDurationMillis: 20,
  *   maxBatchRecords: 100,
  *   maxBatchBytes: 256 * 1024,
  *   match_seq_num: 0  // Optional: auto-increments per batch
@@ -160,7 +160,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			if (match_seq_num !== undefined) {
 				batch.match_seq_num = match_seq_num;
 			}
-			debug!({ batch });
+			debug({ batch });
 			this.controller.enqueue(batch);
 		}
 

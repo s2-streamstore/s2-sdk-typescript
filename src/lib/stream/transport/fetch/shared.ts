@@ -86,12 +86,12 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	} else {
 		const res: ReadBatch<"string"> = {
 			...response.data,
-			records: response.data.records.map((record) => ({
+			records: response.data.records?.map((record) => ({
 				...record,
 				headers: record.headers
 					? Object.fromEntries(record.headers)
 					: undefined,
-			})),
+			}))
 		};
 		return res as ReadBatch<Format>;
 	}
@@ -134,6 +134,7 @@ export async function streamAppend(
 		const format = computeAppendRecordFormat(record);
 		if (format === "bytes") {
 			const formattedRecord = record as AppendRecordForFormat<"bytes">;
+			hasAnyBytesRecords = true;
 			const encodedRecord = {
 				...formattedRecord,
 				body: formattedRecord.body

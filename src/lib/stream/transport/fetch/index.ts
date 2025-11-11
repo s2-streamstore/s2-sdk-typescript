@@ -1,4 +1,3 @@
-import { UnknownFieldHandler } from "@protobuf-ts/runtime";
 import type { S2RequestOptions } from "../../../../common.js";
 import { RangeNotSatisfiableError, S2Error } from "../../../../error.js";
 import {
@@ -33,8 +32,6 @@ import type {
 	TransportReadSession,
 } from "../../types.js";
 import { streamAppend } from "./shared.js";
-
-import last = UnknownFieldHandler.last;
 
 import createDebug from "debug";
 import { RetryAppendSession, RetryReadSession } from "../../../retry.js";
@@ -397,7 +394,7 @@ export class FetchAppendSession {
 	 */
 	submit(
 		records: AppendRecord | AppendRecord[],
-		args?: { fencing_token?: string; match_seq_num?: number },
+		args?: { fencing_token?: string; match_seq_num?: number; precalculatedSize?: number },
 		precalculatedSize?: number,
 	): Promise<AppendResult> {
 		// Validate closed state
@@ -423,7 +420,7 @@ export class FetchAppendSession {
 		}
 
 		// Validate metered size (use precalculated if provided)
-		let batchMeteredSize = precalculatedSize ?? 0;
+		let batchMeteredSize = precalculatedSize ?? args?.precalculatedSize ?? 0;
 		if (batchMeteredSize === 0) {
 			for (const record of recordsArray) {
 				batchMeteredSize += meteredSizeBytes(record);
@@ -550,6 +547,8 @@ export class FetchTransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
+		// Fetch transport intentionally enforces single-flight submission (HTTP/1.1)
+		// This ensures only one batch is in-flight at a time, regardless of user setting.
 		const opts = {
 			...sessionOptions,
 			maxInflightBatches: 1,

@@ -191,7 +191,7 @@ describe("RetryAppendSession (unit)", () => {
 			// Accept writes but never emit acks
 			return new FakeTransportAppendSession({ neverAck: true });
 		});
-		(session as any).requestTimeoutMs = 500;
+		(session as any).requestTimeoutMillis = 500;
 
 		const ackP = session.submit([{ body: "x" }]);
 

@@ -29,20 +29,8 @@ function rechunkStream(
 	});
 }
 
-// const s2 = new S2({
-// 	accessToken: process.env.S2_ACCESS_TOKEN!,
-// });
-
 const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,
-	baseUrl: `https://${process.env.S2_ACCOUNT_ENDPOINT!}/v1`,
-	makeBasinBaseUrl: (basinName) =>
-		`https://${process.env.S2_ACCOUNT_ENDPOINT!}/v1`,
-	retry: {
-		maxAttempts: 10,
-		retryBackoffDurationMs: 1000,
-		appendRetryPolicy: "all",
-	},
 });
 
 const basinName = process.env.S2_BASIN;
@@ -78,8 +66,8 @@ let append = await image
 	// Collect records into batches.
 	.pipeThrough(
 		new BatchTransform({
-			lingerDurationMillis: 1,
-			match_seq_num: 0,
+			lingerDurationMillis: 50,
+			match_seq_num: startAt.tail.seq_num,
 		}),
 	)
 	// Write to the S2 stream.
