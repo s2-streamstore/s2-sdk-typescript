@@ -104,14 +104,14 @@ export class S2STransport implements SessionTransport {
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
 		return RetryAppendSession.create(
-			(opts) => {
+			(myOptions) => {
 				return S2SAppendSession.create(
 					this.transportConfig.baseUrl,
 					this.transportConfig.accessToken,
 					stream,
 					() => this.getConnection(),
 					this.transportConfig.basinName,
-					opts,
+					myOptions,
 					requestOptions,
 				);
 			},
