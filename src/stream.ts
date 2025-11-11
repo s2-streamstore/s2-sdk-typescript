@@ -1,9 +1,8 @@
-import createDebug from "debug";
 import type { RetryConfig, S2RequestOptions } from "./common.js";
-import { S2Error, withS2Error } from "./error.js";
+import { withS2Error } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import { type AppendAck, checkTail } from "./generated/index.js";
-import { withRetries } from "./lib/retry.js";
+import { isRetryable, withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
 	streamAppend,
@@ -20,8 +19,6 @@ import type {
 	SessionTransport,
 	TransportConfig,
 } from "./lib/stream/types.js";
-
-const debug = createDebug("s2:stream");
 
 export class S2Stream {
 	private readonly client: Client;
@@ -123,11 +120,10 @@ export class S2Stream {
 			},
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "noSideEffects") === "noSideEffects") {
-					return (
-						!!args?.match_seq_num ||
-						error.status === 429 ||
-						error.status === 502
-					);
+					// Allow retry if the append is idempotent (match_seq_num or fencing_token)
+					// or if the error qualifies as retryable by shared logic.
+					const isIdempotent = !!args?.match_seq_num || !!args?.fencing_token;
+					return isIdempotent || isRetryable(error);
 				} else {
 					return true;
 				}

@@ -29,6 +29,14 @@ export type RetryConfig = {
 	 * @default "noSideEffects"
 	 */
 	appendRetryPolicy?: AppendRetryPolicy;
+
+	/**
+	 * Maximum time in milliseconds to wait for an append ack before considering
+	 * the attempt timed out and applying retry logic.
+	 *
+	 * Used by retrying append sessions. When unset, defaults to 5000ms.
+	 */
+	requestTimeoutMillis?: number;
 };
 
 /**

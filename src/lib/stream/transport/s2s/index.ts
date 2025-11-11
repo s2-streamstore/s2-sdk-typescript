@@ -8,11 +8,6 @@
 import * as http2 from "node:http2";
 import createDebug from "debug";
 import type { S2RequestOptions } from "../../../../common.js";
-import {
-	type Client,
-	createClient,
-	createConfig,
-} from "../../../../generated/client/index.js";
 import type { AppendAck, StreamPosition } from "../../../../generated/index.js";
 import {
 	AppendAck as ProtoAppendAck,
@@ -39,7 +34,6 @@ import type {
 	TransportConfig,
 	TransportReadSession,
 } from "../../types.js";
-import { FetchReadSession } from "../fetch/index.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
 
 const debug = createDebug("s2:s2s");
@@ -82,19 +76,11 @@ export function buildProtoAppendInput(
 }
 
 export class S2STransport implements SessionTransport {
-	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
 	private connection?: http2.ClientHttp2Session;
 	private connectionPromise?: Promise<http2.ClientHttp2Session>;
 
 	constructor(config: TransportConfig) {
-		this.client = createClient(
-			createConfig({
-				baseUrl: config.baseUrl,
-				auth: () => Redacted.value(config.accessToken),
-				headers: config.basinName ? { "s2-basin": config.basinName } : {},
-			}),
-		);
 		this.transportConfig = config;
 	}
 
@@ -445,12 +431,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											controller.enqueue({ ok: true, value: converted });
 
 											// Update next read position to after this record
-											if (record.seqNum !== undefined) {
-												this._nextReadPosition = {
-													seq_num: Number(record.seqNum) + 1,
-													timestamp: 0,
-												};
-											}
+												if (record.seqNum !== undefined) {
+													this._nextReadPosition = {
+														seq_num: Number(record.seqNum) + 1,
+														timestamp: Number(record.timestamp ?? 0n),
+													};
+												}
 										}
 									} catch (err) {
 										safeError(
@@ -477,7 +463,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 					stream.on("end", () => {
 						if (stream.rstCode != 0) {
-							debug!("stream reset code=%d", stream.rstCode);
+							debug("stream reset code=%d", stream.rstCode);
 							safeError(
 								new S2Error({
 									message: `Stream ended with error: ${stream.rstCode}`,
@@ -861,7 +847,7 @@ class S2SAppendSession {
 	 */
 	async submit(
 		records: AppendRecord | AppendRecord[],
-		args?: { fencing_token?: string; match_seq_num?: number },
+		args?: { fencing_token?: string; match_seq_num?: number; precalculatedSize?: number },
 	): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
@@ -898,10 +884,12 @@ class S2SAppendSession {
 			);
 		}
 
-		// Calculate metered size
-		let batchMeteredSize = 0;
-		for (const record of recordsArray) {
-			batchMeteredSize += meteredSizeBytes(record);
+		// Calculate metered size (use precalculated if provided)
+		let batchMeteredSize = args?.precalculatedSize ?? 0;
+		if (batchMeteredSize === 0) {
+			for (const record of recordsArray) {
+				batchMeteredSize += meteredSizeBytes(record);
+			}
 		}
 
 		if (batchMeteredSize > 1024 * 1024) {

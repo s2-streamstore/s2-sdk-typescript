@@ -6,7 +6,6 @@ import { meteredSizeBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import type {
-	AcksStream,
 	AppendArgs,
 	AppendRecord,
 	AppendSession,
@@ -24,12 +23,12 @@ const debug = createDebug("s2:retry");
  * Default retry configuration.
  */
 export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> & {
-	requestTimeoutMs: number;
+	requestTimeoutMillis: number;
 } = {
 	maxAttempts: 3,
 	retryBackoffDurationMs: 100,
 	appendRetryPolicy: "noSideEffects",
-	requestTimeoutMs: 5000, // 5 seconds
+	requestTimeoutMillis: 5000, // 5 seconds
 };
 
 const RETRYABLE_STATUS_CODES = new Set([
@@ -151,6 +150,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	implements ReadSession<Format>
 {
 	private _nextReadPosition: StreamPosition | undefined = undefined;
+	private _lastObservedTail: StreamPosition | undefined = undefined;
 
 	private _recordsRead: number = 0;
 	private _bytesRead: number = 0;
@@ -189,6 +189,11 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 					while (true) {
 						const { done, value: result } = await reader.read();
+						// Update last observed tail if transport exposes it
+						try {
+							const tail = session.lastObservedTail?.();
+							if (tail) this._lastObservedTail = tail;
+						} catch {}
 						if (done) {
 							reader.releaseLock();
 							controller.close();
@@ -296,11 +301,11 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	}
 
 	lastObservedTail(): StreamPosition | undefined {
-		return undefined;
+		return this._lastObservedTail;
 	}
 
 	nextReadPosition(): StreamPosition | undefined {
-		return undefined;
+		return this._nextReadPosition;
 	}
 }
 
@@ -335,41 +340,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
  * - Ack record count matches batch record count
  * - Acks arrive within ackTimeoutMs (5s) or session is retried
  */
-class AsyncQueue<T> {
-	private values: T[] = [];
-	private waiters: Array<(value: T) => void> = [];
-
-	push(value: T): void {
-		const waiter = this.waiters.shift();
-		if (waiter) {
-			waiter(value);
-			return;
-		}
-		this.values.push(value);
-	}
-
-	async next(): Promise<T> {
-		if (this.values.length > 0) {
-			return this.values.shift()!;
-		}
-		return new Promise<T>((resolve) => {
-			this.waiters.push(resolve);
-		});
-	}
-
-	clear(): void {
-		this.values = [];
-		this.waiters = [];
-	}
-
-	// Drain currently buffered values (non-blocking) and clear the buffer.
-	drain(): T[] {
-		const out = this.values;
-		this.values = [];
-		return out;
-	}
-}
-
 /**
  * New simplified inflight entry for the pump-based architecture.
  * Each entry tracks a batch and its promise from the inner transport session.
@@ -387,11 +357,11 @@ type InflightEntry = {
 const DEFAULT_MAX_QUEUED_BYTES = 10 * 1024 * 1024; // 10 MiB default
 
 export class RetryAppendSession implements AppendSession, AsyncDisposable {
-	private readonly requestTimeoutMs: number;
+	private readonly requestTimeoutMillis: number;
 	private readonly maxQueuedBytes: number;
 	private readonly maxInflightBatches?: number;
 	private readonly retryConfig: Required<RetryConfig> & {
-		requestTimeoutMs: number;
+		requestTimeoutMillis: number;
 	};
 
 	private readonly inflight: InflightEntry[] = [];
@@ -435,7 +405,7 @@ export class RetryAppendSession implements AppendSession, AsyncDisposable {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
 		};
-		this.requestTimeoutMs = this.retryConfig.requestTimeoutMs;
+		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
 		this.maxQueuedBytes =
 			this.sessionOptions?.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
 		this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
@@ -466,6 +436,9 @@ export class RetryAppendSession implements AppendSession, AsyncDisposable {
 				};
 				delete (args as any).records;
 				args.precalculatedSize = batchMeteredSize;
+
+				// Move reserved bytes to queued bytes accounting before submission
+				this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
 
 				// Submit without waiting for ack (writable doesn't need per-batch resolution)
 				const promise = this.submitInternal(
@@ -903,7 +876,7 @@ export class RetryAppendSession implements AppendSession, AsyncDisposable {
 	private async waitForHead(
 		head: InflightEntry,
 	): Promise<{ kind: "settled"; value: AppendResult } | { kind: "timeout" }> {
-		const deadline = head.enqueuedAt + this.requestTimeoutMs;
+		const deadline = head.enqueuedAt + this.requestTimeoutMillis;
 		const remaining = Math.max(0, deadline - Date.now());
 
 		let timer: any;

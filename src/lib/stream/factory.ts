@@ -13,7 +13,6 @@ import type { SessionTransport, TransportConfig } from "./types.js";
  * - Everywhere else: uses FetchTransport (JSON over HTTP/1.1)
  *
  * @param config Transport configuration
- * @param preferHttp2 Force HTTP/2 or HTTP/1.1 (default: auto-detect)
  */
 export async function createSessionTransport(
 	config: TransportConfig,
