@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.4
+
+### Patch Changes
+
+- b924836: use fetch transport in workerd
+
 ## 0.17.3
 
 ### Patch Changes
