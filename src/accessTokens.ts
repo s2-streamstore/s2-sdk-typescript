@@ -36,14 +36,13 @@ export class S2AccessTokens {
 	 */
 	public async list(args?: ListAccessTokensArgs, options?: S2RequestOptions) {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				listAccessTokens({
-					client: this.client,
-					query: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                listAccessTokens({
+                    client: this.client,
+                    query: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
@@ -59,14 +58,13 @@ export class S2AccessTokens {
 	 */
 	public async issue(args: IssueAccessTokenArgs, options?: S2RequestOptions) {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				issueAccessToken({
-					client: this.client,
-					body: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                issueAccessToken({
+                    client: this.client,
+                    body: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
@@ -79,14 +77,13 @@ export class S2AccessTokens {
 	 */
 	public async revoke(args: RevokeAccessTokenArgs, options?: S2RequestOptions) {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				revokeAccessToken({
-					client: this.client,
-					path: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                revokeAccessToken({
+                    client: this.client,
+                    path: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;

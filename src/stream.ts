@@ -57,16 +57,15 @@ export class S2Stream {
 	 */
 	public async checkTail(options?: S2RequestOptions) {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				checkTail({
-					client: this.client,
-					path: {
-						stream: this.name,
-					},
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                checkTail({
+                    client: this.client,
+                    path: {
+                        stream: this.name,
+                    },
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;

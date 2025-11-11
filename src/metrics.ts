@@ -34,14 +34,13 @@ export class S2Metrics {
 	 */
 	public async account(args: AccountMetricsArgs, options?: S2RequestOptions) {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				accountMetrics({
-					client: this.client,
-					query: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                accountMetrics({
+                    client: this.client,
+                    query: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
@@ -58,15 +57,14 @@ export class S2Metrics {
 	 */
 	public async basin(args: BasinMetricsArgs, options?: S2RequestOptions) {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				basinMetrics({
-					client: this.client,
-					path: args,
-					query: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                basinMetrics({
+                    client: this.client,
+                    path: args,
+                    query: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
@@ -84,15 +82,14 @@ export class S2Metrics {
 	 */
 	public async stream(args: StreamMetricsArgs, options?: S2RequestOptions) {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				streamMetrics({
-					client: this.client,
-					path: args,
-					query: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                streamMetrics({
+                    client: this.client,
+                    path: args,
+                    query: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;

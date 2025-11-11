@@ -48,14 +48,13 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): Promise<ListStreamsResponse> {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				listStreams({
-					client: this.client,
-					query: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                listStreams({
+                    client: this.client,
+                    query: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
@@ -72,14 +71,13 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): Promise<CreateStreamResponse> {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				createStream({
-					client: this.client,
-					body: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                createStream({
+                    client: this.client,
+                    body: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
@@ -95,14 +93,13 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): Promise<StreamConfig> {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				getStreamConfig({
-					client: this.client,
-					path: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                getStreamConfig({
+                    client: this.client,
+                    path: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
@@ -118,14 +115,13 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): Promise<void> {
 		await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				deleteStream({
-					client: this.client,
-					path: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                deleteStream({
+                    client: this.client,
+                    path: args,
+                    ...options,
+                }),
+            );
 		});
 	}
 
@@ -140,15 +136,14 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): Promise<ReconfigureStreamResponse> {
 		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Error(async () =>
-				reconfigureStream({
-					client: this.client,
-					path: args,
-					body: args,
-					...options,
-					throwOnError: true,
-				}),
-			);
+            return await withS2Error(async () =>
+                reconfigureStream({
+                    client: this.client,
+                    path: args,
+                    body: args,
+                    ...options,
+                }),
+            );
 		});
 
 		return response.data;
