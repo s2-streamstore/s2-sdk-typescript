@@ -1,3 +1,4 @@
+import createDebug from "debug";
 import type { S2RequestOptions } from "../../../../common.js";
 import { RangeNotSatisfiableError, S2Error } from "../../../../error.js";
 import {
@@ -17,6 +18,7 @@ import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
+import { RetryAppendSession, RetryReadSession } from "../../../retry.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -32,9 +34,6 @@ import type {
 	TransportReadSession,
 } from "../../types.js";
 import { streamAppend } from "./shared.js";
-
-import createDebug from "debug";
-import { RetryAppendSession, RetryReadSession } from "../../../retry.js";
 
 const debug = createDebug("s2:fetch");
 
@@ -394,7 +393,11 @@ export class FetchAppendSession {
 	 */
 	submit(
 		records: AppendRecord | AppendRecord[],
-		args?: { fencing_token?: string; match_seq_num?: number; precalculatedSize?: number },
+		args?: {
+			fencing_token?: string;
+			match_seq_num?: number;
+			precalculatedSize?: number;
+		},
 		precalculatedSize?: number,
 	): Promise<AppendResult> {
 		// Validate closed state

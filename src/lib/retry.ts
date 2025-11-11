@@ -6,6 +6,7 @@ import { meteredSizeBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import type {
+	AcksStream,
 	AppendArgs,
 	AppendRecord,
 	AppendSession,

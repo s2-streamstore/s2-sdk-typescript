@@ -91,7 +91,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 				headers: record.headers
 					? Object.fromEntries(record.headers)
 					: undefined,
-			}))
+			})),
 		};
 		return res as ReadBatch<Format>;
 	}
