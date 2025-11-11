@@ -2,7 +2,13 @@
  * Runtime environment detection for transport selection
  */
 
-export type Runtime = "node" | "browser" | "deno" | "bun" | "unknown";
+export type Runtime =
+	| "node"
+	| "browser"
+	| "deno"
+	| "bun"
+	| "workerd"
+	| "unknown";
 
 /**
  * Detect the current JavaScript runtime
@@ -17,6 +23,12 @@ export function detectRuntime(): Runtime {
 	// Check for Bun
 	if (typeof Bun !== "undefined") {
 		return "bun";
+	}
+
+	// Check for Cloudflare Workers
+	// @ts-expect-error - WebSocketPair global is not in types
+	if (typeof WebSocketPair !== "undefined") {
+		return "workerd";
 	}
 
 	// Check for Node.js
@@ -46,8 +58,8 @@ export function supportsHttp2(): boolean {
 			return true;
 
 		case "browser":
-			// Browsers don't expose raw HTTP/2 - they handle it internally
-			// but we can't use s2s protocol
+		case "workerd":
+			// Browsers and workerd don't support raw HTTP/2
 			return false;
 
 		default:
