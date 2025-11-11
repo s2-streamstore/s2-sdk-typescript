@@ -64,11 +64,45 @@ export function s2Error(error: any): S2Error {
 }
 
 export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
-	try {
-		return await fn();
-	} catch (error) {
-		throw s2Error(error);
-	}
+    try {
+        const result: any = await fn();
+
+        // Support response-parsing mode (throwOnError=false):
+        // Generated client responses have shape { data, error?, response }
+        if (
+            result &&
+            typeof result === "object" &&
+            Object.prototype.hasOwnProperty.call(result, "error")
+        ) {
+            const err = result.error;
+            if (err) {
+                const status = result.response?.status as number | undefined;
+                const statusText = result.response?.statusText as
+                    | string
+                    | undefined;
+
+                // If server provided structured error with message/code, use it
+                if (typeof err === "object" && "message" in err) {
+                    throw new S2Error({
+                        message: (err as any).message ?? statusText ?? "Error",
+                        code: (err as any).code ?? undefined,
+                        status,
+                    });
+                }
+
+                // Fallback: synthesize from HTTP response metadata
+                throw new S2Error({
+                    message: statusText ?? "Request failed",
+                    status,
+                });
+            }
+        }
+
+        return result as T;
+    } catch (error) {
+        // Network and other thrown errors
+        throw s2Error(error);
+    }
 }
 
 /**
