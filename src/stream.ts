@@ -68,7 +68,7 @@ export class S2Stream {
             );
 		});
 
-		return response.data;
+		return response.data!;
 	}
 
 	/**

@@ -178,10 +178,15 @@ export class ReadSession<
 		const startTimeMs = performance.now(); // Capture start time before super()
 		super({
 			start: async (controller) => {
-				let nextArgs = { ...args };
+				let nextArgs = { ...args } as ReadArgs<Format>;
+				// Capture original request budget so retries compute from a stable baseline
+				const baselineCount = args?.count;
+				const baselineBytes = args?.bytes;
+				const baselineWait = args?.wait;
 				let attempt = 0;
 
 				while (true) {
+					debug("starting read session with args: %o", nextArgs);
 					session = await generator(nextArgs);
 					const reader = session.getReader();
 
@@ -208,25 +213,19 @@ export class ReadSession<
 								if (this._nextReadPosition) {
 									nextArgs.seq_num = this._nextReadPosition.seq_num;
 								}
-								if (nextArgs.count) {
-									nextArgs.count =
-										this._recordsRead === undefined
-											? nextArgs.count
-											: nextArgs.count - this._recordsRead;
+								// Recompute remaining budget from original request each time to avoid double-subtraction
+								if (baselineCount !== undefined) {
+									const remaining = Math.max(0, baselineCount - this._recordsRead);
+									nextArgs.count = remaining as any;
 								}
-								if (nextArgs.bytes) {
-									nextArgs.bytes =
-										this._bytesRead === undefined
-											? nextArgs.bytes
-											: nextArgs.bytes - this._bytesRead;
+								if (baselineBytes !== undefined) {
+									const remaining = Math.max(0, baselineBytes - this._bytesRead);
+									nextArgs.bytes = remaining as any;
 								}
-								// Adjust wait to account for elapsed time.
-								// If user specified wait=10s and we've already spent 5s (including backoff),
-								// we should only wait another 5s on retry to honor the original time budget.
-								if (nextArgs.wait !== undefined) {
-									const elapsedSeconds =
-										(performance.now() - startTimeMs) / 1000;
-									nextArgs.wait = Math.max(0, nextArgs.wait - elapsedSeconds);
+								// Adjust wait from original budget based on total elapsed time since start
+								if (baselineWait !== undefined) {
+									const elapsedSeconds = (performance.now() - startTimeMs) / 1000;
+									nextArgs.wait = Math.max(0, baselineWait - elapsedSeconds) as any;
 								}
 								const delay = calculateDelay(
 									attempt,
