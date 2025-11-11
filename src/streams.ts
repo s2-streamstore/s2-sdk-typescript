@@ -1,5 +1,5 @@
 import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
-import { S2Error, withS2Error } from "./error.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	type CreateStreamData,
@@ -47,17 +47,15 @@ export class S2Streams {
 		args?: ListStreamsArgs,
 		options?: S2RequestOptions,
 	): Promise<ListStreamsResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 listStreams({
                     client: this.client,
                     query: args,
                     ...options,
                 }),
             );
-		});
-
-		return response.data;
+        });
 	}
 
 	/**
@@ -70,17 +68,15 @@ export class S2Streams {
 		args: CreateStreamArgs,
 		options?: S2RequestOptions,
 	): Promise<CreateStreamResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 createStream({
                     client: this.client,
                     body: args,
                     ...options,
                 }),
             );
-		});
-
-		return response.data;
+        });
 	}
 
 	/**
@@ -92,17 +88,15 @@ export class S2Streams {
 		args: GetStreamConfigArgs,
 		options?: S2RequestOptions,
 	): Promise<StreamConfig> {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 getStreamConfig({
                     client: this.client,
                     path: args,
                     ...options,
                 }),
             );
-		});
-
-		return response.data;
+        });
 	}
 
 	/**
@@ -114,15 +108,15 @@ export class S2Streams {
 		args: DeleteStreamArgs,
 		options?: S2RequestOptions,
 	): Promise<void> {
-		await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 deleteStream({
                     client: this.client,
                     path: args,
                     ...options,
                 }),
             );
-		});
+        });
 	}
 
 	/**
@@ -135,8 +129,8 @@ export class S2Streams {
 		args: ReconfigureStreamArgs,
 		options?: S2RequestOptions,
 	): Promise<ReconfigureStreamResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 reconfigureStream({
                     client: this.client,
                     path: args,
@@ -144,8 +138,6 @@ export class S2Streams {
                     ...options,
                 }),
             );
-		});
-
-		return response.data;
+        });
 	}
 }

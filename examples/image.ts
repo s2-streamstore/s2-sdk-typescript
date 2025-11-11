@@ -31,6 +31,11 @@ function rechunkStream(
 
 const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,
+	retry: {
+		maxAttempts: 10,
+		retryBackoffDurationMs: 100,
+		appendRetryPolicy: "noSideEffects",
+	},
 });
 
 const basinName = process.env.S2_BASIN;
@@ -45,7 +50,7 @@ const stream = basin.stream("image");
 const startAt = await stream.checkTail();
 
 const session = await stream.appendSession({
-	maxQueuedBytes: 1024 * 1024 * 10,
+	maxQueuedBytes: 1024 * 1024, // 1MiB
 });
 let image = await fetch(
 	"https://upload.wikimedia.org/wikipedia/commons/2/24/Peter_Paul_Rubens_-_Self-portrait_-_RH.S.180_-_Rubenshuis_%28after_restoration%29.jpg",

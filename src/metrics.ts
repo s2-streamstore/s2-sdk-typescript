@@ -1,5 +1,5 @@
 import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
-import { S2Error, withS2Error } from "./error.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	type AccountMetricsData,
@@ -33,17 +33,15 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async account(args: AccountMetricsArgs, options?: S2RequestOptions) {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 accountMetrics({
                     client: this.client,
                     query: args,
                     ...options,
                 }),
             );
-		});
-
-		return response.data;
+        });
 	}
 
 	/**
@@ -56,8 +54,8 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async basin(args: BasinMetricsArgs, options?: S2RequestOptions) {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 basinMetrics({
                     client: this.client,
                     path: args,
@@ -65,9 +63,7 @@ export class S2Metrics {
                     ...options,
                 }),
             );
-		});
-
-		return response.data;
+        });
 	}
 
 	/**
@@ -81,8 +77,8 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async stream(args: StreamMetricsArgs, options?: S2RequestOptions) {
-		const response = await withRetries(this.retryConfig, async () => {
-            return await withS2Error(async () =>
+        return await withRetries(this.retryConfig, async () => {
+            return await withS2Data(() =>
                 streamMetrics({
                     client: this.client,
                     path: args,
@@ -90,8 +86,6 @@ export class S2Metrics {
                     ...options,
                 }),
             );
-		});
-
-		return response.data;
+        });
 	}
 }

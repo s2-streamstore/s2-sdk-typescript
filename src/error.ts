@@ -106,6 +106,53 @@ export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Execute a generated client call and return its `data` on success.
+ * Throws S2Error when the response contains `error`, or when the
+ * response has no `data` and is not a 204 No Content.
+ */
+export async function withS2Data<T>(
+    fn: () => Promise<{
+        data?: T;
+        error?: unknown;
+        response?: { status?: number; statusText?: string };
+    } | T>,
+): Promise<T> {
+    try {
+        const res: any = await fn();
+        if (
+            res &&
+            typeof res === "object" &&
+            (Object.prototype.hasOwnProperty.call(res, "error") ||
+                Object.prototype.hasOwnProperty.call(res, "data") ||
+                Object.prototype.hasOwnProperty.call(res, "response"))
+        ) {
+            const status = res.response?.status as number | undefined;
+            const statusText = res.response?.statusText as string | undefined;
+            if (res.error) {
+                const err = res.error;
+                if (typeof err === "object" && "message" in err) {
+                    throw new S2Error({
+                        message: (err as any).message ?? statusText ?? "Error",
+                        code: (err as any).code ?? undefined,
+                        status,
+                    });
+                }
+                throw new S2Error({ message: statusText ?? "Request failed", status });
+            }
+            // No error
+            if (typeof res.data !== "undefined") return res.data as T;
+            // Treat 204 as success for void endpoints
+            if (status === 204) return undefined as T;
+            throw new S2Error({ message: "Empty response", status });
+        }
+        // Not a generated client response; return as-is
+        return res as T;
+    } catch (error) {
+        throw s2Error(error);
+    }
+}
+
+/**
  * Rich error type used by the SDK to surface HTTP and protocol errors.
  *
  * - `code` is the service error code when available.
