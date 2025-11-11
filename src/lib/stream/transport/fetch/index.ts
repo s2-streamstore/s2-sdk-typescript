@@ -555,11 +555,11 @@ export class FetchTransport implements SessionTransport {
 			maxInflightBatches: 1,
 		} as AppendSessionOptions;
 		return RetryAppendSession.create(
-			(o) => {
+			(myOptions) => {
 				return FetchAppendSession.create(
 					stream,
 					this.transportConfig,
-					o,
+					myOptions,
 					requestOptions,
 				);
 			},
@@ -574,8 +574,8 @@ export class FetchTransport implements SessionTransport {
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
 		return RetryReadSession.create(
-			(a) => {
-				return FetchReadSession.create(this.client, stream, a, options);
+			(myArgs) => {
+				return FetchReadSession.create(this.client, stream, myArgs, options);
 			},
 			args,
 			this.transportConfig.retry,
