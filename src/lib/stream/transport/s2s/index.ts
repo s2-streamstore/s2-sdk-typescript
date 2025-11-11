@@ -125,22 +125,13 @@ export class S2STransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
-		// return S2SReadSession.create(
-		// 	this.transportConfig.baseUrl,
-		// 	this.transportConfig.accessToken,
-		// 	stream,
-		// 	args,
-		// 	options,
-		// 	() => this.getConnection(),
-		// 	this.transportConfig.basinName,
-		// );
 		return RetryReadSession.create(
-			(a) => {
+			(myArgs) => {
 				return S2SReadSession.create(
 					this.transportConfig.baseUrl,
 					this.transportConfig.accessToken,
 					stream,
-					a,
+					myArgs,
 					options,
 					() => this.getConnection(),
 					this.transportConfig.basinName,
