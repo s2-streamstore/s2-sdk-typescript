@@ -245,6 +245,11 @@ export class ReadSession<
 										baselineWait - (elapsedSeconds + delay / 1000),
 									) as any;
 								}
+								// Proactively cancel the current transport session before retrying
+								try {
+									await session.cancel?.("retry");
+								} catch {}
+
 								debug("will retry after %dms, status=%s", delay, error.status);
 								await sleep(delay);
 								attempt++;
@@ -257,7 +262,7 @@ export class ReadSession<
 							return;
 						}
 
-						// Success: enqueue the record (don't reset attempt counter - track session attempts)
+						// Success: enqueue the record and reset retry attempt counter
 						const record = result.value;
 						this._nextReadPosition = {
 							seq_num: record.seq_num + 1,
@@ -375,7 +380,7 @@ type InflightEntry = {
 	args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number };
 	expectedCount: number;
 	meteredBytes: number;
-	enqueuedAt: number; // Timestamp for timeout anchoring
+	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
 };
@@ -565,7 +570,6 @@ export class AppendSession implements AsyncDisposable {
 				args,
 				expectedCount: records.length,
 				meteredBytes: batchMeteredSize,
-				enqueuedAt: Date.now(),
 				innerPromise: new Promise(() => {}), // Never-resolving placeholder
 				maybeResolve: resolve,
 				__needsSubmit: true, // Mark for pump to submit
@@ -729,10 +733,9 @@ export class AppendSession implements AsyncDisposable {
 			// Get head entry (we know it exists because we checked length above)
 			const head = this.inflight[0]!;
 			debug(
-				"[PUMP] processing head: expectedCount=%d, meteredBytes=%d, enqueuedAt=%d",
+				"[PUMP] processing head: expectedCount=%d, meteredBytes=%d",
 				head.expectedCount,
 				head.meteredBytes,
-				head.enqueuedAt,
 			);
 
 			// Ensure session exists
@@ -753,6 +756,7 @@ export class AppendSession implements AsyncDisposable {
 						entry.expectedCount,
 						entry.meteredBytes,
 					);
+					entry.attemptStartedMonotonicMs = performance.now();
 					entry.innerPromise = this.session.submit(entry.records, entry.args);
 					delete (entry as any).__needsSubmit;
 				}
@@ -764,10 +768,13 @@ export class AppendSession implements AsyncDisposable {
 			debug("[PUMP] got result: kind=%s", result.kind);
 
 			if (result.kind === "timeout") {
-				// Ack timeout - fatal
-				const elapsed = Date.now() - head.enqueuedAt;
+				// Ack timeout - fatal (per-attempt)
+				const attemptElapsed =
+					head.attemptStartedMonotonicMs != null
+						? Math.round(performance.now() - head.attemptStartedMonotonicMs)
+						: undefined;
 				const error = new S2Error({
-					message: `Request timeout after ${elapsed}ms (${head.expectedCount} records, ${head.meteredBytes} bytes, enqueued at ${new Date(head.enqueuedAt).toISOString()})`,
+					message: `Request timeout after ${attemptElapsed ?? "unknown"}ms (${head.expectedCount} records, ${head.meteredBytes} bytes)`,
 					status: 408,
 					code: "REQUEST_TIMEOUT",
 				});
@@ -894,12 +901,20 @@ export class AppendSession implements AsyncDisposable {
 	/**
 	 * Wait for head entry's innerPromise with timeout.
 	 * Returns either the settled result or a timeout indicator.
+	 *
+	 * Per-attempt ack timeout semantics:
+	 * - The deadline is computed from the most recent (re)submit attempt using
+	 *   a monotonic clock (performance.now) to avoid issues with wall clock
+	 *   adjustments.
+	 * - If attempt start is missing (for backward compatibility), we measure
+	 *   from "now" with the full timeout window.
 	 */
 	private async waitForHead(
 		head: InflightEntry,
 	): Promise<{ kind: "settled"; value: AppendResult } | { kind: "timeout" }> {
-		const deadline = head.enqueuedAt + this.requestTimeoutMillis;
-		const remaining = Math.max(0, deadline - Date.now());
+		const startMono = head.attemptStartedMonotonicMs ?? performance.now();
+		const deadline = startMono + this.requestTimeoutMillis;
+		const remaining = Math.max(0, deadline - performance.now());
 
 		let timer: any;
 		const timeoutP = new Promise<{ kind: "timeout" }>((resolve) => {
@@ -959,13 +974,14 @@ export class AppendSession implements AsyncDisposable {
 		// Store session in local variable to help TypeScript type narrowing
 		const session: TransportAppendSession = this.session;
 
-		// Resubmit all inflight entries (replace their innerPromise)
+		// Resubmit all inflight entries (replace their innerPromise and reset attempt start)
 		debug("resubmitting %d inflight entries", this.inflight.length);
 		for (const entry of this.inflight) {
 			// Attach .catch to superseded promise to avoid unhandled rejection
 			entry.innerPromise.catch(() => {});
 
 			// Create new promise from new session
+			entry.attemptStartedMonotonicMs = performance.now();
 			entry.innerPromise = session.submit(entry.records, entry.args);
 		}
 

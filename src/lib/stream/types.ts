@@ -64,7 +64,6 @@ export interface AcksStream
 		AsyncIterable<AppendAck> {}
 
 /**
- * Transport-facing interface for "dumb" append sessions.
  * Transports only implement submit/close with value-encoded errors (discriminated unions).
  * No backpressure, no retry, no streams - AppendSession adds those.
  */

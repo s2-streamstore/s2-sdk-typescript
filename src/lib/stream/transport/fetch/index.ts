@@ -33,6 +33,7 @@ import type {
 	ReadResult,
 	ReadSession,
 	SessionTransport,
+	TransportAppendSession,
 	TransportConfig,
 	TransportReadSession,
 } from "../../types.js";
@@ -84,6 +85,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			if (!response.response.body) {
 				const error = new S2Error({
 					message: "No body in SSE response",
+					code: "INVALID_RESPONSE",
 					status: 502,
 					origin: "sdk",
 				});
@@ -318,16 +320,15 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 // Removed AcksStream - transport sessions no longer expose streams
 
 /**
- * "Dumb" transport session for appending records via HTTP/1.1.
+ * Fetch-based transport session for appending records via HTTP/1.1.
  * Queues append requests and ensures only one is in-flight at a time (single-flight).
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
-export class FetchAppendSession {
+export class FetchAppendSession implements TransportAppendSession {
 	private queue: Array<{
 		records: AppendRecord[];
 		fencing_token?: string;
 		match_seq_num?: number;
-		meteredSize: number;
 	}> = [];
 	private pendingResolvers: Array<{
 		resolve: (result: AppendResult) => void;
@@ -403,7 +404,6 @@ export class FetchAppendSession {
 			match_seq_num?: number;
 			precalculatedSize?: number;
 		},
-		precalculatedSize?: number,
 	): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
@@ -428,7 +428,7 @@ export class FetchAppendSession {
 		}
 
 		// Validate metered size (use precalculated if provided)
-		let batchMeteredSize = precalculatedSize ?? args?.precalculatedSize ?? 0;
+		let batchMeteredSize = args?.precalculatedSize ?? 0;
 		if (batchMeteredSize === 0) {
 			for (const record of recordsArray) {
 				batchMeteredSize += meteredSizeBytes(record);
@@ -452,7 +452,6 @@ export class FetchAppendSession {
 				records: recordsArray,
 				fencing_token: args?.fencing_token,
 				match_seq_num: args?.match_seq_num,
-				meteredSize: batchMeteredSize,
 			});
 			this.pendingResolvers.push({ resolve });
 

@@ -9,10 +9,10 @@ import * as http2 from "node:http2";
 import createDebug from "debug";
 import type { S2RequestOptions } from "../../../../common.js";
 import {
-	FencingTokenMismatchError,
+	makeAppendPreconditionError,
+	makeServerError,
 	RangeNotSatisfiableError,
 	S2Error,
-	SeqNumMismatchError,
 } from "../../../../error.js";
 import type { AppendAck, StreamPosition } from "../../../../generated/index.js";
 import {
@@ -39,6 +39,7 @@ import type {
 	ReadResult,
 	ReadSession,
 	SessionTransport,
+	TransportAppendSession,
 	TransportConfig,
 	TransportReadSession,
 } from "../../types.js";
@@ -397,27 +398,27 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										try {
 											const errorJson = JSON.parse(errorText);
 											const status = frame.statusCode ?? 500;
-											const message = errorJson.message ?? "Unknown error";
-											const code = errorJson.code;
 
 											// Map known read errors
 											if (status === 416) {
 												safeError(new RangeNotSatisfiableError({ status }));
 											} else {
 												safeError(
-													new S2Error({
-														message,
-														code,
-														status,
-													}),
+													makeServerError(
+														{ status, statusText: undefined },
+														errorJson,
+													),
 												);
 											}
 										} catch {
 											safeError(
-												new S2Error({
-													message: errorText || "Unknown error",
-													status: frame.statusCode,
-												}),
+												makeServerError(
+													{
+														status: frame.statusCode ?? 500,
+														statusText: undefined,
+													},
+													errorText,
+												),
 											);
 										}
 									} else {
@@ -619,11 +620,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 // Removed S2SAcksStream - transport sessions no longer expose streams
 
 /**
- * "Dumb" transport session for appending records via HTTP/2.
+ * Fetch-based transport session for appending records via HTTP/2.
  * Pipelined: multiple requests can be in-flight simultaneously.
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
-class S2SAppendSession {
+class S2SAppendSession implements TransportAppendSession {
 	private http2Stream?: http2.ClientHttp2Stream;
 	private parser = new S2SFrameParser();
 	private closed = false;
@@ -662,7 +663,7 @@ class S2SAppendSession {
 		sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
 	) {
-		// No stream setup - transport is "dumb"
+		// No stream setup
 		// Initialization happens lazily on first submit
 	}
 
@@ -719,51 +720,28 @@ class S2SAppendSession {
 							const status = frame.statusCode ?? 500;
 							try {
 								const errorJson = JSON.parse(errorText);
-								const message = errorJson.message ?? "Unknown error";
-								const code = errorJson.code;
-
-								// Map known append errors (412 Precondition Failed)
 								if (status === 412) {
-									if ("seq_num_mismatch" in errorJson) {
-										const expected = Number(errorJson.seq_num_mismatch);
-										queueMicrotask(() =>
-											safeError(
-												new SeqNumMismatchError({
-													message:
-														"Append condition failed: sequence number mismatch",
-													code: "APPEND_CONDITION_FAILED",
-													status,
-													expectedSeqNum: expected,
-												}),
-											),
-										);
-									} else if ("fencing_token_mismatch" in errorJson) {
-										const expected = String(errorJson.fencing_token_mismatch);
-										queueMicrotask(() =>
-											safeError(
-												new FencingTokenMismatchError({
-													message:
-														"Append condition failed: fencing token mismatch",
-													code: "APPEND_CONDITION_FAILED",
-													status,
-													expectedFencingToken: expected,
-												}),
-											),
-										);
-									} else {
-										queueMicrotask(() =>
-											safeError(new S2Error({ message, code, status })),
-										);
-									}
+									queueMicrotask(() =>
+										safeError(makeAppendPreconditionError(status, errorJson)),
+									);
 								} else {
 									queueMicrotask(() =>
-										safeError(new S2Error({ message, code, status })),
+										safeError(
+											makeServerError(
+												{ status, statusText: undefined },
+												errorJson,
+											),
+										),
 									);
 								}
 							} catch {
-								const message = errorText || "Unknown error";
 								queueMicrotask(() =>
-									safeError(new S2Error({ message, status })),
+									safeError(
+										makeServerError(
+											{ status, statusText: undefined },
+											errorText,
+										),
+									),
 								);
 							}
 						}

@@ -336,3 +336,72 @@ export class RangeNotSatisfiableError extends S2Error {
 		this.name = "RangeNotSatisfiableError";
 	}
 }
+
+/**
+ * Build a generic S2Error from HTTP status and optional payload.
+ * If the payload contains a structured { message, code }, those are preferred.
+ */
+export function makeServerError(
+	response: { status?: number; statusText?: string },
+	payload?: unknown,
+): S2Error {
+	const status = typeof response.status === "number" ? response.status : 500;
+	// Pull message/code from structured payload when present
+	if (payload && typeof payload === "object" && "message" in (payload as any)) {
+		return new S2Error({
+			message: (payload as any).message ?? response.statusText ?? "Error",
+			code: (payload as any).code ?? undefined,
+			status,
+			origin: "server",
+		});
+	}
+	// Fallbacks
+	let message: string | undefined = undefined;
+	if (typeof payload === "string" && payload.trim().length > 0) {
+		message = payload;
+	}
+	return new S2Error({
+		message: message ?? response.statusText ?? "Request failed",
+		status,
+		origin: "server",
+	});
+}
+
+/** Map 412 Precondition Failed append errors to rich error types. */
+export function makeAppendPreconditionError(
+	status: number,
+	json: any,
+): S2Error {
+	if (json && typeof json === "object") {
+		if ("seq_num_mismatch" in json) {
+			const expected = Number(json.seq_num_mismatch);
+			return new SeqNumMismatchError({
+				message: "Append condition failed: sequence number mismatch",
+				code: "APPEND_CONDITION_FAILED",
+				status,
+				expectedSeqNum: expected,
+			});
+		}
+		if ("fencing_token_mismatch" in json) {
+			const expected = String(json.fencing_token_mismatch);
+			return new FencingTokenMismatchError({
+				message: "Append condition failed: fencing token mismatch",
+				code: "APPEND_CONDITION_FAILED",
+				status,
+				expectedFencingToken: expected,
+			});
+		}
+		if ("message" in json) {
+			return new S2Error({
+				message: json.message ?? "Append condition failed",
+				status,
+				origin: "server",
+			});
+		}
+	}
+	return new S2Error({
+		message: "Append condition failed",
+		status,
+		origin: "server",
+	});
+}

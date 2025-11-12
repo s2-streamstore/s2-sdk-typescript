@@ -3,8 +3,10 @@ import { AppendRecord, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
+const hasEnv = !!process.env.S2_ACCESS_TOKEN && !!process.env.S2_BASIN;
+const describeIf = hasEnv ? describe : describe.skip;
 
-describe("ReadSession Integration Tests", () => {
+describeIf("ReadSession Integration Tests", () => {
 	let s2: S2;
 	let basinName: string;
 	let streamName: string;
@@ -12,13 +14,9 @@ describe("ReadSession Integration Tests", () => {
 	beforeAll(() => {
 		const token = process.env.S2_ACCESS_TOKEN;
 		const basin = process.env.S2_BASIN;
-		if (!token || !basin) {
-			throw new Error(
-				"S2_ACCESS_TOKEN and S2_BASIN environment variables are required for e2e tests",
-			);
-		}
-		s2 = new S2({ accessToken: token });
-		basinName = basin;
+		if (!token || !basin) return;
+		s2 = new S2({ accessToken: token! });
+		basinName = basin!;
 	});
 
 	beforeAll(async () => {
