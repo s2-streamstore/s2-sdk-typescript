@@ -64,45 +64,43 @@ export function s2Error(error: any): S2Error {
 }
 
 export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
-    try {
-        const result: any = await fn();
+	try {
+		const result: any = await fn();
 
-        // Support response-parsing mode (throwOnError=false):
-        // Generated client responses have shape { data, error?, response }
-        if (
-            result &&
-            typeof result === "object" &&
-            Object.prototype.hasOwnProperty.call(result, "error")
-        ) {
-            const err = result.error;
-            if (err) {
-                const status = result.response?.status as number | undefined;
-                const statusText = result.response?.statusText as
-                    | string
-                    | undefined;
+		// Support response-parsing mode (throwOnError=false):
+		// Generated client responses have shape { data, error?, response }
+		if (
+			result &&
+			typeof result === "object" &&
+			Object.prototype.hasOwnProperty.call(result, "error")
+		) {
+			const err = result.error;
+			if (err) {
+				const status = result.response?.status as number | undefined;
+				const statusText = result.response?.statusText as string | undefined;
 
-                // If server provided structured error with message/code, use it
-                if (typeof err === "object" && "message" in err) {
-                    throw new S2Error({
-                        message: (err as any).message ?? statusText ?? "Error",
-                        code: (err as any).code ?? undefined,
-                        status,
-                    });
-                }
+				// If server provided structured error with message/code, use it
+				if (typeof err === "object" && "message" in err) {
+					throw new S2Error({
+						message: (err as any).message ?? statusText ?? "Error",
+						code: (err as any).code ?? undefined,
+						status,
+					});
+				}
 
-                // Fallback: synthesize from HTTP response metadata
-                throw new S2Error({
-                    message: statusText ?? "Request failed",
-                    status,
-                });
-            }
-        }
+				// Fallback: synthesize from HTTP response metadata
+				throw new S2Error({
+					message: statusText ?? "Request failed",
+					status,
+				});
+			}
+		}
 
-        return result as T;
-    } catch (error) {
-        // Network and other thrown errors
-        throw s2Error(error);
-    }
+		return result as T;
+	} catch (error) {
+		// Network and other thrown errors
+		throw s2Error(error);
+	}
 }
 
 /**
@@ -111,45 +109,48 @@ export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
  * response has no `data` and is not a 204 No Content.
  */
 export async function withS2Data<T>(
-    fn: () => Promise<{
-        data?: T;
-        error?: unknown;
-        response?: { status?: number; statusText?: string };
-    } | T>,
+	fn: () => Promise<
+		| {
+				data?: T;
+				error?: unknown;
+				response?: { status?: number; statusText?: string };
+		  }
+		| T
+	>,
 ): Promise<T> {
-    try {
-        const res: any = await fn();
-        if (
-            res &&
-            typeof res === "object" &&
-            (Object.prototype.hasOwnProperty.call(res, "error") ||
-                Object.prototype.hasOwnProperty.call(res, "data") ||
-                Object.prototype.hasOwnProperty.call(res, "response"))
-        ) {
-            const status = res.response?.status as number | undefined;
-            const statusText = res.response?.statusText as string | undefined;
-            if (res.error) {
-                const err = res.error;
-                if (typeof err === "object" && "message" in err) {
-                    throw new S2Error({
-                        message: (err as any).message ?? statusText ?? "Error",
-                        code: (err as any).code ?? undefined,
-                        status,
-                    });
-                }
-                throw new S2Error({ message: statusText ?? "Request failed", status });
-            }
-            // No error
-            if (typeof res.data !== "undefined") return res.data as T;
-            // Treat 204 as success for void endpoints
-            if (status === 204) return undefined as T;
-            throw new S2Error({ message: "Empty response", status });
-        }
-        // Not a generated client response; return as-is
-        return res as T;
-    } catch (error) {
-        throw s2Error(error);
-    }
+	try {
+		const res: any = await fn();
+		if (
+			res &&
+			typeof res === "object" &&
+			(Object.prototype.hasOwnProperty.call(res, "error") ||
+				Object.prototype.hasOwnProperty.call(res, "data") ||
+				Object.prototype.hasOwnProperty.call(res, "response"))
+		) {
+			const status = res.response?.status as number | undefined;
+			const statusText = res.response?.statusText as string | undefined;
+			if (res.error) {
+				const err = res.error;
+				if (typeof err === "object" && "message" in err) {
+					throw new S2Error({
+						message: (err as any).message ?? statusText ?? "Error",
+						code: (err as any).code ?? undefined,
+						status,
+					});
+				}
+				throw new S2Error({ message: statusText ?? "Request failed", status });
+			}
+			// No error
+			if (typeof res.data !== "undefined") return res.data as T;
+			// Treat 204 as success for void endpoints
+			if (status === 204) return undefined as T;
+			throw new S2Error({ message: "Empty response", status });
+		}
+		// Not a generated client response; return as-is
+		return res as T;
+	} catch (error) {
+		throw s2Error(error);
+	}
 }
 
 /**

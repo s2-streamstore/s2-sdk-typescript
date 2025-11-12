@@ -43,12 +43,12 @@ export class S2 {
 	constructor(options: S2ClientOptions) {
 		this.accessToken = Redacted.make(options.accessToken);
 		this.retryConfig = options.retry ?? {};
-        this.client = createClient(
-            createConfig({
-                baseUrl: options.baseUrl ?? defaultBaseUrl,
-                auth: () => Redacted.value(this.accessToken),
-            }),
-        );
+		this.client = createClient(
+			createConfig({
+				baseUrl: options.baseUrl ?? defaultBaseUrl,
+				auth: () => Redacted.value(this.accessToken),
+			}),
+		);
 
 		this.client.interceptors.error.use((err, res, req, opt) => {
 			return new S2Error({

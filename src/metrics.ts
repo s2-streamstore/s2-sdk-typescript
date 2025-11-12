@@ -33,15 +33,15 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async account(args: AccountMetricsArgs, options?: S2RequestOptions) {
-        return await withRetries(this.retryConfig, async () => {
-            return await withS2Data(() =>
-                accountMetrics({
-                    client: this.client,
-                    query: args,
-                    ...options,
-                }),
-            );
-        });
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				accountMetrics({
+					client: this.client,
+					query: args,
+					...options,
+				}),
+			);
+		});
 	}
 
 	/**
@@ -54,16 +54,16 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async basin(args: BasinMetricsArgs, options?: S2RequestOptions) {
-        return await withRetries(this.retryConfig, async () => {
-            return await withS2Data(() =>
-                basinMetrics({
-                    client: this.client,
-                    path: args,
-                    query: args,
-                    ...options,
-                }),
-            );
-        });
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				basinMetrics({
+					client: this.client,
+					path: args,
+					query: args,
+					...options,
+				}),
+			);
+		});
 	}
 
 	/**
@@ -77,15 +77,15 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async stream(args: StreamMetricsArgs, options?: S2RequestOptions) {
-        return await withRetries(this.retryConfig, async () => {
-            return await withS2Data(() =>
-                streamMetrics({
-                    client: this.client,
-                    path: args,
-                    query: args,
-                    ...options,
-                }),
-            );
-        });
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				streamMetrics({
+					client: this.client,
+					path: args,
+					query: args,
+					...options,
+				}),
+			);
+		});
 	}
 }
