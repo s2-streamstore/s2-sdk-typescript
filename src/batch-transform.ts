@@ -101,6 +101,8 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		if (recordSize > this.maxBatchBytes) {
 			throw new S2Error({
 				message: `Record size ${recordSize} bytes exceeds maximum batch size of ${this.maxBatchBytes} bytes`,
+				status: 400,
+				origin: "sdk",
 			});
 		}
 

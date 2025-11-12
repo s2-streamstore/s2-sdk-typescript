@@ -56,6 +56,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 				message: response.error.message,
 				code: response.error.code ?? undefined,
 				status: response.response.status,
+				origin: "server",
 			});
 		} else {
 			// special case for 416 - Range Not Satisfiable
@@ -193,6 +194,7 @@ export async function streamAppend(
 				message: response.error.message,
 				code: response.error.code ?? undefined,
 				status: response.response.status,
+				origin: "server",
 			});
 		} else {
 			// special case for 412 - append condition failed
@@ -215,6 +217,7 @@ export async function streamAppend(
 				throw new S2Error({
 					message: "Append condition failed",
 					status: response.response.status,
+					origin: "server",
 				});
 			}
 		}

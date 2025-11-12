@@ -9,7 +9,6 @@ function isConnectionError(error: unknown): boolean {
 
 	const cause = (error as any).cause;
 	let code = (error as any).code;
-	// TODO check if code exists
 	if (cause && typeof cause === "object") {
 		code = cause.code;
 	}
@@ -43,8 +42,8 @@ export function s2Error(error: any): S2Error {
 		const code = cause?.code || "NETWORK_ERROR";
 		return new S2Error({
 			message: `Connection failed: ${code}`,
-			// Could add a specific status or property for connection errors
-			status: 500, // or 0, or a constant
+			status: 502, // Bad Gateway for upstream/network issues
+			origin: "sdk",
 		});
 	}
 
@@ -52,14 +51,16 @@ export function s2Error(error: any): S2Error {
 	if (error instanceof Error && error.name === "AbortError") {
 		return new S2Error({
 			message: "Request cancelled",
-			status: undefined,
+			status: 499, // Client Closed Request (nginx non-standard)
+			origin: "sdk",
 		});
 	}
 
 	// Other unknown errors
 	return new S2Error({
 		message: error instanceof Error ? error.message : "Unknown error",
-		status: 0,
+		status: 0, // Non-HTTP/internal error sentinel
+		origin: "sdk",
 	});
 }
 
@@ -76,7 +77,7 @@ export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
 		) {
 			const err = result.error;
 			if (err) {
-				const status = result.response?.status as number | undefined;
+				const status = (result.response?.status as number | undefined) ?? 500;
 				const statusText = result.response?.statusText as string | undefined;
 
 				// If server provided structured error with message/code, use it
@@ -85,6 +86,7 @@ export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
 						message: (err as any).message ?? statusText ?? "Error",
 						code: (err as any).code ?? undefined,
 						status,
+						origin: "server",
 					});
 				}
 
@@ -92,6 +94,7 @@ export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
 				throw new S2Error({
 					message: statusText ?? "Request failed",
 					status,
+					origin: "server",
 				});
 			}
 		}
@@ -127,7 +130,7 @@ export async function withS2Data<T>(
 				Object.prototype.hasOwnProperty.call(res, "data") ||
 				Object.prototype.hasOwnProperty.call(res, "response"))
 		) {
-			const status = res.response?.status as number | undefined;
+			const status = (res.response?.status as number | undefined) ?? 500;
 			const statusText = res.response?.statusText as string | undefined;
 			if (res.error) {
 				const err = res.error;
@@ -136,15 +139,24 @@ export async function withS2Data<T>(
 						message: (err as any).message ?? statusText ?? "Error",
 						code: (err as any).code ?? undefined,
 						status,
+						origin: "server",
 					});
 				}
-				throw new S2Error({ message: statusText ?? "Request failed", status });
+				throw new S2Error({
+					message: statusText ?? "Request failed",
+					status,
+					origin: "server",
+				});
 			}
 			// No error
 			if (typeof res.data !== "undefined") return res.data as T;
 			// Treat 204 as success for void endpoints
 			if (status === 204) return undefined as T;
-			throw new S2Error({ message: "Empty response", status });
+			throw new S2Error({
+				message: "Empty response",
+				status,
+				origin: "server",
+			});
 		}
 		// Not a generated client response; return as-is
 		return res as T;
@@ -162,22 +174,68 @@ export async function withS2Data<T>(
  */
 export class S2Error extends Error {
 	public readonly code?: string;
-	public readonly status?: number;
+	public readonly status: number;
+	/** Optional structured error details for diagnostics. */
+	public readonly data?: unknown;
+	/** Origin of the error: server (HTTP response) or sdk (local). */
+	public readonly origin: "server" | "sdk";
 
 	constructor({
 		message,
 		code,
 		status,
+		data,
+		origin,
 	}: {
 		message: string;
 		code?: string;
 		status?: number;
+		data?: unknown;
+		origin?: "server" | "sdk";
 	}) {
 		super(message);
 		this.code = code;
-		this.status = status;
+		// Ensure status is always a number (0 for non-HTTP/internal errors)
+		this.status = typeof status === "number" ? status : 0;
+		this.data = data;
+		this.origin = origin ?? "sdk";
 		this.name = "S2Error";
 	}
+}
+
+/** Helper: construct a non-retryable invariant violation error (400). */
+export function invariantViolation(
+	message: string,
+	details?: unknown,
+): S2Error {
+	return new S2Error({
+		message: `Invariant violation: ${message}`,
+		code: "INTERNAL_ERROR",
+		status: 500,
+		origin: "sdk",
+		data: details,
+	});
+}
+
+/** Helper: construct an internal SDK error (status 0, never retried). */
+export function internalSdkError(message: string, details?: unknown): S2Error {
+	return new S2Error({
+		message: `Internal SDK error: ${message}`,
+		code: "INTERNAL_SDK_ERROR",
+		status: 0,
+		origin: "sdk",
+		data: details,
+	});
+}
+
+/** Helper: construct an aborted/cancelled error (499). */
+export function abortedError(message: string = "Request cancelled"): S2Error {
+	return new S2Error({
+		message,
+		code: "ABORTED",
+		status: 499,
+		origin: "sdk",
+	});
 }
 
 /**
@@ -208,6 +266,7 @@ export class SeqNumMismatchError extends S2Error {
 			message: `${message}\nExpected sequence number: ${expectedSeqNum}`,
 			code,
 			status,
+			origin: "server",
 		});
 		this.name = "SeqNumMismatchError";
 		this.expectedSeqNum = expectedSeqNum;
@@ -242,6 +301,7 @@ export class FencingTokenMismatchError extends S2Error {
 			message: `${message}\nExpected fencing token: ${expectedFencingToken}`,
 			code,
 			status,
+			origin: "server",
 		});
 		this.name = "FencingTokenMismatchError";
 		this.expectedFencingToken = expectedFencingToken;
@@ -271,6 +331,7 @@ export class RangeNotSatisfiableError extends S2Error {
 			message,
 			code,
 			status,
+			origin: "server",
 		});
 		this.name = "RangeNotSatisfiableError";
 	}

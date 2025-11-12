@@ -1,6 +1,6 @@
 import createDebug from "debug";
 import type { RetryConfig } from "../common.js";
-import { S2Error, s2Error, withS2Error } from "../error.js";
+import { invariantViolation, S2Error, s2Error, withS2Error } from "../error.js";
 import type { AppendAck, StreamPosition } from "../generated/index.js";
 import { meteredSizeBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
@@ -787,11 +787,9 @@ export class AppendSession implements AsyncDisposable {
 				// Invariant check: ack count matches batch count
 				const ackCount = Number(ack.end.seq_num) - Number(ack.start.seq_num);
 				if (ackCount !== head.expectedCount) {
-					const error = new S2Error({
-						message: `Ack count mismatch: expected ${head.expectedCount}, got ${ackCount}`,
-						status: 500,
-						code: "INTERNAL_ERROR",
-					});
+					const error = invariantViolation(
+						`Ack count mismatch: expected ${head.expectedCount}, got ${ackCount}`,
+					);
 					debug("invariant violation: %s", error.message);
 					await this.abort(error);
 					return;
@@ -802,11 +800,9 @@ export class AppendSession implements AsyncDisposable {
 					const prevEnd = BigInt(this._lastAckedPosition.end.seq_num);
 					const currentEnd = BigInt(ack.end.seq_num);
 					if (currentEnd <= prevEnd) {
-						const error = new S2Error({
-							message: `Sequence number not strictly increasing: previous=${prevEnd}, current=${currentEnd}`,
-							status: 500,
-							code: "INTERNAL_ERROR",
-						});
+						const error = invariantViolation(
+							`Sequence number not strictly increasing: previous=${prevEnd}, current=${currentEnd}`,
+						);
 						debug("invariant violation: %s", error.message);
 						await this.abort(error);
 						return;
