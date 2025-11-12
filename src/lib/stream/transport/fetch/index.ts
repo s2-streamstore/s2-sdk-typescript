@@ -84,6 +84,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			if (!response.response.body) {
 				const error = new S2Error({
 					message: "No body in SSE response",
+					status: 502,
+					origin: "sdk",
 				});
 				return FetchReadSession.createErrorSession<Format>(error);
 			}

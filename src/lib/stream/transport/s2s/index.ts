@@ -372,6 +372,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											message: errorJson.message ?? "Unknown error",
 											code: errorJson.code,
 											status: responseCode,
+											origin: "server",
 										}),
 									);
 								} catch {
@@ -379,6 +380,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										new S2Error({
 											message: errorText || "Unknown error",
 											status: responseCode,
+											origin: "server",
 										}),
 									);
 								}
@@ -459,6 +461,8 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										safeError(
 											new S2Error({
 												message: `Failed to parse ReadBatch: ${err}`,
+												status: 500,
+												origin: "sdk",
 											}),
 										);
 									}
@@ -473,6 +477,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									: new S2Error({
 											message: `Failed to process read data: ${error}`,
 											status: 500,
+											origin: "sdk",
 										}),
 							);
 						}
@@ -486,6 +491,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									message: `Stream ended with error: ${stream.rstCode}`,
 									status: 500,
 									code: "stream reset",
+									origin: "sdk",
 								}),
 							);
 						}
@@ -498,6 +504,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									message: "Stream closed with unparsed data remaining",
 									status: 500,
 									code: "STREAM_CLOSED_PREMATURELY",
+									origin: "sdk",
 								}),
 							);
 						} else {

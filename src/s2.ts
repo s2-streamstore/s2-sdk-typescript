@@ -55,6 +55,7 @@ export class S2 {
 				message: err instanceof Error ? err.message : "Unknown error",
 				code: res.statusText,
 				status: res.status,
+				origin: "server",
 			});
 		});
 
