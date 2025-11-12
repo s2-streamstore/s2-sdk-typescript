@@ -16,7 +16,9 @@ import type {
 	TransportReadSession,
 } from "./stream/types.js";
 
-const debug = createDebug("s2:retry");
+const debugWith = createDebug("s2:retry:with");
+const debugRead = createDebug("s2:retry:read");
+const debugSession = createDebug("s2:retry:session");
 
 /**
  * Default retry configuration.
@@ -97,7 +99,7 @@ export async function withRetries<T>(
 
 	// If maxAttempts is 0, don't retry at all
 	if (config.maxAttempts === 0) {
-		debug("maxAttempts is 0, retries disabled");
+		debugWith("maxAttempts is 0, retries disabled");
 		return fn();
 	}
 
@@ -107,13 +109,13 @@ export async function withRetries<T>(
 		try {
 			const result = await fn();
 			if (attempt > 0) {
-				debug("succeeded after %d retries", attempt);
+				debugWith("succeeded after %d retries", attempt);
 			}
 			return result;
 		} catch (error) {
 			// withRetry only handles S2Errors (withS2Error should be called first)
 			if (!(error instanceof S2Error)) {
-				debug("non-S2Error thrown, rethrowing immediately: %s", error);
+				debugWith("non-S2Error thrown, rethrowing immediately: %s", error);
 				throw error;
 			}
 
@@ -121,19 +123,19 @@ export async function withRetries<T>(
 
 			// Don't retry if this is the last attempt
 			if (attempt === config.maxAttempts) {
-				debug("max attempts exhausted, throwing error");
+				debugWith("max attempts exhausted, throwing error");
 				break;
 			}
 
 			// Check if error is retryable
 			if (!isPolicyCompliant(config, lastError) || !isRetryable(lastError)) {
-				debug("error not retryable, throwing immediately");
+				debugWith("error not retryable, throwing immediately");
 				throw error;
 			}
 
 			// Calculate delay and wait before retrying
 			const delay = calculateDelay(attempt, config.retryBackoffDurationMs);
-			debug(
+			debugWith(
 				"retryable error, backing off for %dms, status=%s",
 				delay,
 				error.status,
@@ -186,7 +188,7 @@ export class ReadSession<
 				let attempt = 0;
 
 				while (true) {
-					debug("starting read session with args: %o", nextArgs);
+					debugRead("starting read session with args: %o", nextArgs);
 					session = await generator(nextArgs);
 					const reader = session.getReader();
 
@@ -250,14 +252,18 @@ export class ReadSession<
 									await session.cancel?.("retry");
 								} catch {}
 
-								debug("will retry after %dms, status=%s", delay, error.status);
+								debugRead(
+									"will retry after %dms, status=%s",
+									delay,
+									error.status,
+								);
 								await sleep(delay);
 								attempt++;
 								break; // Break inner loop to retry
 							}
 
 							// Error is not retryable or attempts exhausted
-							debug("error in retry loop: %s", error);
+							debugRead("error in retry loop: %s", error);
 							controller.error(error);
 							return;
 						}
@@ -555,7 +561,7 @@ export class AppendSession implements AsyncDisposable {
 
 		// Check for fatal error (e.g., from abort())
 		if (this.fatalError) {
-			debug(
+			debugSession(
 				"[SUBMIT] rejecting due to fatal error: %s",
 				this.fatalError.message,
 			);
@@ -575,7 +581,7 @@ export class AppendSession implements AsyncDisposable {
 				__needsSubmit: true, // Mark for pump to submit
 			};
 
-			debug(
+			debugSession(
 				"[SUBMIT] enqueueing %d records (%d bytes): inflight=%d->%d, queuedBytes=%d->%d",
 				records.length,
 				batchMeteredSize,
@@ -602,7 +608,7 @@ export class AppendSession implements AsyncDisposable {
 	 * Wait for capacity before allowing write to proceed (writable only).
 	 */
 	private async waitForCapacity(bytes: number): Promise<void> {
-		debug(
+		debugSession(
 			"[CAPACITY] checking for %d bytes: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d",
 			bytes,
 			this.queuedBytes,
@@ -615,7 +621,7 @@ export class AppendSession implements AsyncDisposable {
 		while (true) {
 			// Check for fatal error before adding to pendingBytes
 			if (this.fatalError) {
-				debug(
+				debugSession(
 					"[CAPACITY] fatal error detected, rejecting: %s",
 					this.fatalError.message,
 				);
@@ -629,7 +635,7 @@ export class AppendSession implements AsyncDisposable {
 					this.maxInflightBatches === undefined ||
 					this.inflight.length < this.maxInflightBatches
 				) {
-					debug(
+					debugSession(
 						"[CAPACITY] capacity available, adding %d to pendingBytes",
 						bytes,
 					);
@@ -640,11 +646,11 @@ export class AppendSession implements AsyncDisposable {
 
 			// No capacity - wait
 			// WritableStream enforces writer lock, so only one write can be blocked at a time
-			debug("[CAPACITY] no capacity, waiting for release");
+			debugSession("[CAPACITY] no capacity, waiting for release");
 			await new Promise<void>((resolve) => {
 				this.capacityWaiter = resolve;
 			});
-			debug("[CAPACITY] woke up, rechecking");
+			debugSession("[CAPACITY] woke up, rechecking");
 		}
 	}
 
@@ -652,7 +658,7 @@ export class AppendSession implements AsyncDisposable {
 	 * Release capacity and wake waiter if present.
 	 */
 	private releaseCapacity(bytes: number): void {
-		debug(
+		debugSession(
 			"[CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, hasWaiter=%s",
 			bytes,
 			this.queuedBytes,
@@ -667,7 +673,7 @@ export class AppendSession implements AsyncDisposable {
 		// Wake single waiter
 		const waiter = this.capacityWaiter;
 		if (waiter) {
-			debug("[CAPACITY] waking waiter");
+			debugSession("[CAPACITY] waking waiter");
 			this.capacityWaiter = undefined;
 			waiter();
 		}
@@ -682,7 +688,7 @@ export class AppendSession implements AsyncDisposable {
 		}
 
 		this.pumpPromise = this.runPump().catch((e) => {
-			debug("pump crashed unexpectedly: %s", e);
+			debugSession("pump crashed unexpectedly: %s", e);
 			// This should never happen - pump handles all errors internally
 		});
 	}
@@ -691,10 +697,10 @@ export class AppendSession implements AsyncDisposable {
 	 * Main pump loop: processes inflight queue, handles acks, retries, and recovery.
 	 */
 	private async runPump(): Promise<void> {
-		debug("pump started");
+		debugSession("pump started");
 
 		while (true) {
-			debug(
+			debugSession(
 				"[PUMP] loop: inflight=%d, queuedBytes=%d, pendingBytes=%d, closing=%s, pumpStopped=%s",
 				this.inflight.length,
 				this.queuedBytes,
@@ -705,20 +711,20 @@ export class AppendSession implements AsyncDisposable {
 
 			// Check if we should stop
 			if (this.pumpStopped) {
-				debug("[PUMP] stopped by flag");
+				debugSession("[PUMP] stopped by flag");
 				return;
 			}
 
 			// If closing and queue is empty, stop
 			if (this.closing && this.inflight.length === 0) {
-				debug("[PUMP] closing and queue empty, stopping");
+				debugSession("[PUMP] closing and queue empty, stopping");
 				this.pumpStopped = true;
 				return;
 			}
 
 			// If no entries, sleep and continue
 			if (this.inflight.length === 0) {
-				debug("[PUMP] no entries, sleeping 10ms");
+				debugSession("[PUMP] no entries, sleeping 10ms");
 				// Use interruptible sleep - can be woken by new submissions
 				await Promise.race([
 					sleep(10),
@@ -732,18 +738,18 @@ export class AppendSession implements AsyncDisposable {
 
 			// Get head entry (we know it exists because we checked length above)
 			const head = this.inflight[0]!;
-			debug(
+			debugSession(
 				"[PUMP] processing head: expectedCount=%d, meteredBytes=%d",
 				head.expectedCount,
 				head.meteredBytes,
 			);
 
 			// Ensure session exists
-			debug("[PUMP] ensuring session exists");
+			debugSession("[PUMP] ensuring session exists");
 			await this.ensureSession();
 			if (!this.session) {
 				// Session creation failed - will retry
-				debug("[PUMP] session creation failed, sleeping 100ms");
+				debugSession("[PUMP] session creation failed, sleeping 100ms");
 				await sleep(100);
 				continue;
 			}
@@ -751,7 +757,7 @@ export class AppendSession implements AsyncDisposable {
 			// Submit ALL entries that need submitting (enables HTTP/2 pipelining for S2S)
 			for (const entry of this.inflight) {
 				if (!entry.innerPromise || (entry as any).__needsSubmit) {
-					debug(
+					debugSession(
 						"[PUMP] submitting entry to inner session (%d records, %d bytes)",
 						entry.expectedCount,
 						entry.meteredBytes,
@@ -763,9 +769,9 @@ export class AppendSession implements AsyncDisposable {
 			}
 
 			// Wait for head with timeout
-			debug("[PUMP] waiting for head result");
+			debugSession("[PUMP] waiting for head result");
 			const result = await this.waitForHead(head);
-			debug("[PUMP] got result: kind=%s", result.kind);
+			debugSession("[PUMP] got result: kind=%s", result.kind);
 
 			if (result.kind === "timeout") {
 				// Ack timeout - fatal (per-attempt)
@@ -778,7 +784,7 @@ export class AppendSession implements AsyncDisposable {
 					status: 408,
 					code: "REQUEST_TIMEOUT",
 				});
-				debug("ack timeout for head entry: %s", error.message);
+				debugSession("ack timeout for head entry: %s", error.message);
 				await this.abort(error);
 				return;
 			}
@@ -789,7 +795,7 @@ export class AppendSession implements AsyncDisposable {
 			if (appendResult.ok) {
 				// Success!
 				const ack = appendResult.value;
-				debug("[PUMP] success, got ack", { ack });
+				debugSession("[PUMP] success, got ack", { ack });
 
 				// Invariant check: ack count matches batch count
 				const ackCount = Number(ack.end.seq_num) - Number(ack.start.seq_num);
@@ -797,7 +803,7 @@ export class AppendSession implements AsyncDisposable {
 					const error = invariantViolation(
 						`Ack count mismatch: expected ${head.expectedCount}, got ${ackCount}`,
 					);
-					debug("invariant violation: %s", error.message);
+					debugSession("invariant violation: %s", error.message);
 					await this.abort(error);
 					return;
 				}
@@ -810,7 +816,7 @@ export class AppendSession implements AsyncDisposable {
 						const error = invariantViolation(
 							`Sequence number not strictly increasing: previous=${prevEnd}, current=${currentEnd}`,
 						);
-						debug("invariant violation: %s", error.message);
+						debugSession("invariant violation: %s", error.message);
 						await this.abort(error);
 						return;
 					}
@@ -828,11 +834,11 @@ export class AppendSession implements AsyncDisposable {
 				try {
 					this.acksController?.enqueue(ack);
 				} catch (e) {
-					debug("failed to enqueue ack: %s", e);
+					debugSession("failed to enqueue ack: %s", e);
 				}
 
 				// Remove from inflight and release capacity
-				debug(
+				debugSession(
 					"[PUMP] removing head from inflight, releasing %d bytes",
 					head.meteredBytes,
 				);
@@ -845,7 +851,7 @@ export class AppendSession implements AsyncDisposable {
 			} else {
 				// Error result
 				const error = appendResult.error;
-				debug(
+				debugSession(
 					"[PUMP] error: status=%s, message=%s",
 					error.status,
 					error.message,
@@ -853,7 +859,7 @@ export class AppendSession implements AsyncDisposable {
 
 				// Check if retryable
 				if (!isRetryable(error)) {
-					debug("error not retryable, aborting");
+					debugSession("error not retryable, aborting");
 					await this.abort(error);
 					return;
 				}
@@ -863,14 +869,14 @@ export class AppendSession implements AsyncDisposable {
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!this.isIdempotent(head)
 				) {
-					debug("error not policy-compliant (noSideEffects), aborting");
+					debugSession("error not policy-compliant (noSideEffects), aborting");
 					await this.abort(error);
 					return;
 				}
 
 				// Check max attempts
 				if (this.currentAttempt >= this.retryConfig.maxAttempts) {
-					debug(
+					debugSession(
 						"max attempts reached (%d), aborting",
 						this.retryConfig.maxAttempts,
 					);
@@ -887,7 +893,7 @@ export class AppendSession implements AsyncDisposable {
 				this.consecutiveFailures++;
 				this.currentAttempt++;
 
-				debug(
+				debugSession(
 					"performing recovery (attempt %d/%d)",
 					this.currentAttempt,
 					this.retryConfig.maxAttempts,
@@ -937,14 +943,14 @@ export class AppendSession implements AsyncDisposable {
 	 * Recover from transient error: recreate session and resubmit all inflight entries.
 	 */
 	private async recover(): Promise<void> {
-		debug("starting recovery");
+		debugSession("starting recovery");
 
 		// Calculate backoff delay
 		const delay = calculateDelay(
 			this.consecutiveFailures - 1,
 			this.retryConfig.retryBackoffDurationMs,
 		);
-		debug("backing off for %dms", delay);
+		debugSession("backing off for %dms", delay);
 		await sleep(delay);
 
 		// Teardown old session
@@ -952,13 +958,13 @@ export class AppendSession implements AsyncDisposable {
 			try {
 				const closeResult = await this.session.close();
 				if (!closeResult.ok) {
-					debug(
+					debugSession(
 						"error closing old session during recovery: %s",
 						closeResult.error.message,
 					);
 				}
 			} catch (e) {
-				debug("exception closing old session: %s", e);
+				debugSession("exception closing old session: %s", e);
 			}
 			this.session = undefined;
 		}
@@ -966,7 +972,7 @@ export class AppendSession implements AsyncDisposable {
 		// Create new session
 		await this.ensureSession();
 		if (!this.session) {
-			debug("failed to create new session during recovery");
+			debugSession("failed to create new session during recovery");
 			// Will retry on next pump iteration
 			return;
 		}
@@ -975,7 +981,7 @@ export class AppendSession implements AsyncDisposable {
 		const session: TransportAppendSession = this.session;
 
 		// Resubmit all inflight entries (replace their innerPromise and reset attempt start)
-		debug("resubmitting %d inflight entries", this.inflight.length);
+		debugSession("resubmitting %d inflight entries", this.inflight.length);
 		for (const entry of this.inflight) {
 			// Attach .catch to superseded promise to avoid unhandled rejection
 			entry.innerPromise.catch(() => {});
@@ -985,7 +991,7 @@ export class AppendSession implements AsyncDisposable {
 			entry.innerPromise = session.submit(entry.records, entry.args);
 		}
 
-		debug("recovery complete");
+		debugSession("recovery complete");
 	}
 
 	/**
@@ -1011,7 +1017,7 @@ export class AppendSession implements AsyncDisposable {
 			this.session = await this.generator(this.sessionOptions);
 		} catch (e) {
 			const error = s2Error(e);
-			debug("failed to create session: %s", error.message);
+			debugSession("failed to create session: %s", error.message);
 			// Don't set this.session - will retry later
 		}
 	}
@@ -1024,7 +1030,7 @@ export class AppendSession implements AsyncDisposable {
 			return; // Already aborted
 		}
 
-		debug("aborting session: %s", error.message);
+		debugSession("aborting session: %s", error.message);
 
 		this.fatalError = error;
 		this.pumpStopped = true;
@@ -1043,7 +1049,7 @@ export class AppendSession implements AsyncDisposable {
 		try {
 			this.acksController?.error(error);
 		} catch (e) {
-			debug("failed to error acks controller: %s", e);
+			debugSession("failed to error acks controller: %s", e);
 		}
 
 		// Wake capacity waiter to unblock any pending writer
@@ -1057,7 +1063,7 @@ export class AppendSession implements AsyncDisposable {
 			try {
 				await this.session.close();
 			} catch (e) {
-				debug("error closing session during abort: %s", e);
+				debugSession("error closing session during abort: %s", e);
 			}
 			this.session = undefined;
 		}
@@ -1076,7 +1082,7 @@ export class AppendSession implements AsyncDisposable {
 			return;
 		}
 
-		debug("close requested");
+		debugSession("close requested");
 		this.closing = true;
 
 		// Wake pump if it's sleeping so it can check closing flag
@@ -1094,10 +1100,10 @@ export class AppendSession implements AsyncDisposable {
 			try {
 				const result = await this.session.close();
 				if (!result.ok) {
-					debug("error closing inner session: %s", result.error.message);
+					debugSession("error closing inner session: %s", result.error.message);
 				}
 			} catch (e) {
-				debug("exception closing inner session: %s", e);
+				debugSession("exception closing inner session: %s", e);
 			}
 			this.session = undefined;
 		}
@@ -1106,7 +1112,7 @@ export class AppendSession implements AsyncDisposable {
 		try {
 			this.acksController?.close();
 		} catch (e) {
-			debug("error closing acks controller: %s", e);
+			debugSession("error closing acks controller: %s", e);
 		}
 
 		this.closed = true;
@@ -1116,7 +1122,7 @@ export class AppendSession implements AsyncDisposable {
 			throw this.fatalError;
 		}
 
-		debug("close complete");
+		debugSession("close complete");
 	}
 
 	async [Symbol.asyncDispose](): Promise<void> {
