@@ -204,21 +204,13 @@ describe("BatchTransform", () => {
 		reader.releaseLock();
 	});
 
-	it("respects maximum limits (capped at 1000 records, 1 MiB)", () => {
-		// Should cap maxBatchRecords at 1000
-		const batcher1 = new BatchTransform({
-			maxBatchRecords: 5000, // Will be capped to 1000
-		});
-		// We can't directly access private fields, but we can verify behavior
-
-		// Should cap maxBatchBytes at 1 MiB
-		const batcher2 = new BatchTransform({
-			maxBatchBytes: 10 * 1024 * 1024, // Will be capped to 1 MiB
-		});
-
-		// Both should construct without error
-		expect(batcher1).toBeDefined();
-		expect(batcher2).toBeDefined();
+	it("rejects invalid configuration (records > 1000 or bytes > 1 MiB)", () => {
+		// maxBatchRecords > 1000 should throw
+		expect(() => new BatchTransform({ maxBatchRecords: 5000 })).toThrow();
+		// maxBatchBytes > 1 MiB should throw
+		expect(
+			() => new BatchTransform({ maxBatchBytes: 10 * 1024 * 1024 }),
+		).toThrow();
 	});
 
 	it("handles empty batches gracefully", async () => {

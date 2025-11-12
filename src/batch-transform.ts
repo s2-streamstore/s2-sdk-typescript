@@ -80,12 +80,39 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			},
 		});
 
-		// Cap at maximum allowed values
-		this.maxBatchRecords = Math.min(args?.maxBatchRecords ?? 1000, 1000);
-		this.maxBatchBytes = Math.min(
-			args?.maxBatchBytes ?? 1024 * 1024,
-			1024 * 1024,
-		);
+		// Validate configuration
+		if (args?.maxBatchRecords !== undefined) {
+			if (args.maxBatchRecords < 1 || args.maxBatchRecords > 1000) {
+				throw new S2Error({
+					message: `maxBatchRecords must be between 1 and 1000 (inclusive); got ${args.maxBatchRecords}`,
+					status: 400,
+					origin: "sdk",
+				});
+			}
+		}
+		if (args?.maxBatchBytes !== undefined) {
+			const max = 1024 * 1024;
+			if (args.maxBatchBytes < 1 || args.maxBatchBytes > max) {
+				throw new S2Error({
+					message: `maxBatchBytes must be between 1 and ${max} (1 MiB) bytes (inclusive); got ${args.maxBatchBytes}`,
+					status: 400,
+					origin: "sdk",
+				});
+			}
+		}
+		if (args?.lingerDurationMillis !== undefined) {
+			if (args.lingerDurationMillis < 0) {
+				throw new S2Error({
+					message: `lingerDurationMillis must be >= 0; got ${args.lingerDurationMillis}`,
+					status: 400,
+					origin: "sdk",
+				});
+			}
+		}
+
+		// Apply defaults
+		this.maxBatchRecords = args?.maxBatchRecords ?? 1000;
+		this.maxBatchBytes = args?.maxBatchBytes ?? 1024 * 1024;
 		this.lingerDuration = args?.lingerDurationMillis ?? 5;
 		this.fencing_token = args?.fencing_token;
 		this.next_match_seq_num = args?.match_seq_num;
