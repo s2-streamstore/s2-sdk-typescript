@@ -720,29 +720,20 @@ class S2SAppendSession implements TransportAppendSession {
 							const status = frame.statusCode ?? 500;
 							try {
 								const errorJson = JSON.parse(errorText);
-								if (status === 412) {
-									queueMicrotask(() =>
-										safeError(makeAppendPreconditionError(status, errorJson)),
-									);
-								} else {
-									queueMicrotask(() =>
-										safeError(
-											makeServerError(
+								const err =
+									status === 412
+										? makeAppendPreconditionError(status, errorJson)
+										: makeServerError(
 												{ status, statusText: undefined },
 												errorJson,
-											),
-										),
-									);
-								}
+											);
+								queueMicrotask(() => safeError(err));
 							} catch {
-								queueMicrotask(() =>
-									safeError(
-										makeServerError(
-											{ status, statusText: undefined },
-											errorText,
-										),
-									),
+								const err = makeServerError(
+									{ status, statusText: undefined },
+									errorText,
 								);
+								queueMicrotask(() => safeError(err));
 							}
 						}
 						stream.close();

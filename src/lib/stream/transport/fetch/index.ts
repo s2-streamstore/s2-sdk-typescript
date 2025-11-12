@@ -236,7 +236,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					// This ensures we don't wait forever if server stops sending events
 					const result = await Promise.race([
 						reader.read(),
-						new Promise<{ done: true; value: undefined }>((_, reject) =>
+						new Promise<never>((_, reject) =>
 							setTimeout(() => {
 								const elapsed = performance.now() - lastPingTimeMs;
 								reject(
