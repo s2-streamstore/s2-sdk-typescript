@@ -1,8 +1,5 @@
-import createDebug from "debug";
 import { S2Error } from "./error.js";
 import { AppendRecord, meteredSizeBytes } from "./utils.js";
-
-const debug = createDebug("s2:batch_transform");
 
 export interface BatchTransformArgs {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
@@ -162,7 +159,6 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			if (match_seq_num !== undefined) {
 				batch.match_seq_num = match_seq_num;
 			}
-			debug({ batch });
 			this.controller.enqueue(batch);
 		}
 

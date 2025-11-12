@@ -53,7 +53,6 @@ export class S2 {
 		this.client.interceptors.error.use((err, res, req, opt) => {
 			return new S2Error({
 				message: err instanceof Error ? err.message : "Unknown error",
-				code: res.statusText,
 				status: res.status,
 				origin: "server",
 			});
