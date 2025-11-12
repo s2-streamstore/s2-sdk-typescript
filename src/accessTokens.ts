@@ -35,15 +35,15 @@ export class S2AccessTokens {
 	 * @param args.limit Max results (up to 1000)
 	 */
 	public async list(args?: ListAccessTokensArgs, options?: S2RequestOptions) {
-        return await withRetries(this.retryConfig, async () => {
-            return await withS2Data(() =>
-                listAccessTokens({
-                    client: this.client,
-                    query: args,
-                    ...options,
-                }),
-            );
-        });
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				listAccessTokens({
+					client: this.client,
+					query: args,
+					...options,
+				}),
+			);
+		});
 	}
 
 	/**
@@ -55,15 +55,15 @@ export class S2AccessTokens {
 	 * @param args.expires_at Expiration in ISO 8601; defaults to requestor's token expiry
 	 */
 	public async issue(args: IssueAccessTokenArgs, options?: S2RequestOptions) {
-        return await withRetries(this.retryConfig, async () => {
-            return await withS2Data(() =>
-                issueAccessToken({
-                    client: this.client,
-                    body: args,
-                    ...options,
-                }),
-            );
-        });
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				issueAccessToken({
+					client: this.client,
+					body: args,
+					...options,
+				}),
+			);
+		});
 	}
 
 	/**
@@ -72,14 +72,14 @@ export class S2AccessTokens {
 	 * @param args.id Token ID to revoke
 	 */
 	public async revoke(args: RevokeAccessTokenArgs, options?: S2RequestOptions) {
-        return await withRetries(this.retryConfig, async () => {
-            return await withS2Data(() =>
-                revokeAccessToken({
-                    client: this.client,
-                    path: args,
-                    ...options,
-                }),
-            );
-        });
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				revokeAccessToken({
+					client: this.client,
+					path: args,
+					...options,
+				}),
+			);
+		});
 	}
 }

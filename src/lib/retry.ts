@@ -210,36 +210,43 @@ export class ReadSession<
 
 							// Check if we can retry (track session attempts, not record reads)
 							if (isRetryable(error) && attempt < retryConfig.maxAttempts) {
-                            if (this._nextReadPosition) {
-                                nextArgs.seq_num = this._nextReadPosition.seq_num as any;
-                                // Clear alternative start position fields to avoid conflicting params
-                                delete (nextArgs as any).timestamp;
-                                delete (nextArgs as any).tail_offset;
-                            }
-                            // Compute planned backoff delay now so we can subtract it from wait budget
-                            const delay = calculateDelay(
-                                attempt,
-                                retryConfig.retryBackoffDurationMs,
-                            );
-                            // Recompute remaining budget from original request each time to avoid double-subtraction
-                            if (baselineCount !== undefined) {
-                                const remaining = Math.max(0, baselineCount - this._recordsRead);
-                                nextArgs.count = remaining as any;
-                            }
-                            if (baselineBytes !== undefined) {
-                                const remaining = Math.max(0, baselineBytes - this._bytesRead);
-                                nextArgs.bytes = remaining as any;
-                            }
-                            // Adjust wait from original budget based on total elapsed time since start
-                            if (baselineWait !== undefined) {
-                                const elapsedSeconds = (performance.now() - startTimeMs) / 1000;
-                                nextArgs.wait = Math.max(
-                                    0,
-                                    baselineWait - (elapsedSeconds + delay / 1000),
-                                ) as any;
-                            }
-                            debug("will retry after %dms, status=%s", delay, error.status);
-                            await sleep(delay);
+								if (this._nextReadPosition) {
+									nextArgs.seq_num = this._nextReadPosition.seq_num as any;
+									// Clear alternative start position fields to avoid conflicting params
+									delete (nextArgs as any).timestamp;
+									delete (nextArgs as any).tail_offset;
+								}
+								// Compute planned backoff delay now so we can subtract it from wait budget
+								const delay = calculateDelay(
+									attempt,
+									retryConfig.retryBackoffDurationMs,
+								);
+								// Recompute remaining budget from original request each time to avoid double-subtraction
+								if (baselineCount !== undefined) {
+									const remaining = Math.max(
+										0,
+										baselineCount - this._recordsRead,
+									);
+									nextArgs.count = remaining as any;
+								}
+								if (baselineBytes !== undefined) {
+									const remaining = Math.max(
+										0,
+										baselineBytes - this._bytesRead,
+									);
+									nextArgs.bytes = remaining as any;
+								}
+								// Adjust wait from original budget based on total elapsed time since start
+								if (baselineWait !== undefined) {
+									const elapsedSeconds =
+										(performance.now() - startTimeMs) / 1000;
+									nextArgs.wait = Math.max(
+										0,
+										baselineWait - (elapsedSeconds + delay / 1000),
+									) as any;
+								}
+								debug("will retry after %dms, status=%s", delay, error.status);
+								await sleep(delay);
 								attempt++;
 								break; // Break inner loop to retry
 							}
@@ -851,7 +858,7 @@ export class AppendSession implements AsyncDisposable {
 				// Check policy compliance
 				if (
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
-					!this.isAppendRetryAllowed(head)
+					!this.isIdempotent(head)
 				) {
 					debug("error not policy-compliant (noSideEffects), aborting");
 					await this.abort(error);
@@ -971,13 +978,13 @@ export class AppendSession implements AsyncDisposable {
 
 	/**
 	 * Check if append can be retried under noSideEffects policy.
+	 * For appends, idempotency requires match_seq_num.
 	 */
-	private isAppendRetryAllowed(entry: InflightEntry): boolean {
+	private isIdempotent(entry: InflightEntry): boolean {
 		const args = entry.args;
 		if (!args) return false;
 
-		// Allow retry if match_seq_num or fencing_token is set (idempotent)
-		return args.match_seq_num !== undefined || args.fencing_token !== undefined;
+		return args.match_seq_num !== undefined;
 	}
 
 	/**

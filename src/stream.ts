@@ -56,17 +56,17 @@ export class S2Stream {
 	 * Returns the next sequence number and timestamp to be assigned (`tail`).
 	 */
 	public async checkTail(options?: S2RequestOptions) {
-        return await withRetries(this.retryConfig, async () => {
-            return await withS2Data(() =>
-                checkTail({
-                    client: this.client,
-                    path: {
-                        stream: this.name,
-                    },
-                    ...options,
-                }),
-            );
-        });
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				checkTail({
+					client: this.client,
+					path: {
+						stream: this.name,
+					},
+					...options,
+				}),
+			);
+		});
 	}
 
 	/**
@@ -117,10 +117,9 @@ export class S2Stream {
 			},
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "noSideEffects") === "noSideEffects") {
-					// Allow retry if the append is idempotent (match_seq_num or fencing_token)
-					// or if the error qualifies as retryable by shared logic.
-					const isIdempotent = !!args?.match_seq_num || !!args?.fencing_token;
-					return isIdempotent || isRetryable(error);
+					// Allow retry only when the append is naturally idempotent by containing
+					// a match_seq_num condition.
+					return !!args?.match_seq_num;
 				} else {
 					return true;
 				}

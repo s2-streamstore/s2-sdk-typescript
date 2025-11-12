@@ -413,7 +413,7 @@ describe("ReadSession (unit)", () => {
 		expect(secondArgs.until).toBe(1000); // Unchanged (absolute boundary)
 	});
 
-  it("fails after max retry attempts exhausted", async () => {
+	it("fails after max retry attempts exhausted", async () => {
 		let callCount = 0;
 
 		const session = await ReadSession.create(
@@ -440,52 +440,58 @@ describe("ReadSession (unit)", () => {
 		});
 
 		// Should have tried 3 times (initial + 2 retries)
-    expect(callCount).toBe(3);
-  });
+		expect(callCount).toBe(3);
+	});
 
-  it("does not double-subtract count across multiple retries", async () => {
-    // First attempt emits 30 then errors, second emits 40 then errors, third succeeds
-    const records1: ReadRecord<"string">[] = Array.from({ length: 30 }, (_, i) => ({ seq_num: i, timestamp: 0, body: "a" }));
-    const records2: ReadRecord<"string">[] = Array.from({ length: 40 }, (_, i) => ({ seq_num: 30 + i, timestamp: 0, body: "b" }));
+	it("does not double-subtract count across multiple retries", async () => {
+		// First attempt emits 30 then errors, second emits 40 then errors, third succeeds
+		const records1: ReadRecord<"string">[] = Array.from(
+			{ length: 30 },
+			(_, i) => ({ seq_num: i, timestamp: 0, body: "a" }),
+		);
+		const records2: ReadRecord<"string">[] = Array.from(
+			{ length: 40 },
+			(_, i) => ({ seq_num: 30 + i, timestamp: 0, body: "b" }),
+		);
 
-    let call = 0;
-    const capturedArgs: Array<ReadArgs<"string">> = [];
+		let call = 0;
+		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-    const session = await ReadSession.create(
-      async (args) => {
-        capturedArgs.push({ ...args });
-        call++;
-        if (call === 1) {
-          // First call: 30 records then error
-          return new FakeReadSession({
-            records: records1,
-            errorAfterRecords: 30,
-            error: new S2Error({ message: "transient", status: 500 }),
-          });
-        } else if (call === 2) {
-          // Second call: 40 records then error
-          return new FakeReadSession({
-            records: records2,
-            errorAfterRecords: 40,
-            error: new S2Error({ message: "transient", status: 500 }),
-          });
-        }
-        // Third call: success (no more records to emit; just close)
-        return new FakeReadSession({ records: [] });
-      },
-      { seq_num: 0, count: 100 },
-      { retryBackoffDurationMs: 1, maxAttempts: 2 },
-    );
+		const session = await ReadSession.create(
+			async (args) => {
+				capturedArgs.push({ ...args });
+				call++;
+				if (call === 1) {
+					// First call: 30 records then error
+					return new FakeReadSession({
+						records: records1,
+						errorAfterRecords: 30,
+						error: new S2Error({ message: "transient", status: 500 }),
+					});
+				} else if (call === 2) {
+					// Second call: 40 records then error
+					return new FakeReadSession({
+						records: records2,
+						errorAfterRecords: 40,
+						error: new S2Error({ message: "transient", status: 500 }),
+					});
+				}
+				// Third call: success (no more records to emit; just close)
+				return new FakeReadSession({ records: [] });
+			},
+			{ seq_num: 0, count: 100 },
+			{ retryBackoffDurationMs: 1, maxAttempts: 2 },
+		);
 
-    // Drain the session
-    for await (const _ of session) {
-      // consuming until completion
-    }
+		// Drain the session
+		for await (const _ of session) {
+			// consuming until completion
+		}
 
-    // Expect args progression: 100 -> 70 -> 30
-    expect(capturedArgs).toHaveLength(3);
-    expect(capturedArgs[0]?.count).toBe(100);
-    expect(capturedArgs[1]?.count).toBe(70); // 100 - 30
-    expect(capturedArgs[2]?.count).toBe(30); // 100 - (30 + 40)
-  });
+		// Expect args progression: 100 -> 70 -> 30
+		expect(capturedArgs).toHaveLength(3);
+		expect(capturedArgs[0]?.count).toBe(100);
+		expect(capturedArgs[1]?.count).toBe(70); // 100 - 30
+		expect(capturedArgs[2]?.count).toBe(30); // 100 - (30 + 40)
+	});
 });
