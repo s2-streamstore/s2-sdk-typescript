@@ -59,13 +59,11 @@ export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 	records: Array<AppendRecord>;
 };
 
-export interface AcksStream
-	extends ReadableStream<AppendAck>,
-		AsyncIterable<AppendAck> {}
-
 /**
- * Transports only implement submit/close with value-encoded errors (discriminated unions).
- * No backpressure, no retry, no streams - AppendSession adds those.
+ * Low-level append session implemented by transports.
+ *
+ * - Never throws: errors are encoded in the returned {@link AppendResult}.
+ * - Does not implement retry or backpressure; those are added by {@link AppendSession}.
  */
 export interface TransportAppendSession {
 	submit(
@@ -112,6 +110,11 @@ export interface TransportReadSession<
 export type ReadSession<Format extends "string" | "bytes" = "string"> =
 	import("../retry.js").ReadSession<Format>;
 
+/**
+ * Options that control client-side append backpressure and concurrency.
+ *
+ * These are applied by {@link AppendSession}; transports ignore them.
+ */
 export interface AppendSessionOptions {
 	/**
 	 * Maximum bytes to queue before applying backpressure (default: 10 MiB).
