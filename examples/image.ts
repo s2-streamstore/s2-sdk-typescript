@@ -56,6 +56,20 @@ let image = await fetch(
 	"https://upload.wikimedia.org/wikipedia/commons/2/24/Peter_Paul_Rubens_-_Self-portrait_-_RH.S.180_-_Rubenshuis_%28after_restoration%29.jpg",
 );
 
+function mapWithIndexAsync<T, U>(
+	fn: (value: T, index: number) => Promise<U> | U,
+): TransformStream<T, U> {
+	let index = 0;
+
+	return new TransformStream<T, U>({
+		async transform(chunk, controller) {
+			const out = await fn(chunk, index);
+			index += 1;
+			controller.enqueue(out);
+		},
+	});
+}
+
 // Write directly from fetch response to S2 stream
 let append = await image
 	.body! // Ensure each chunk is at most 128KiB. S2 has a maximum individual record size of 1MiB.
@@ -68,10 +82,24 @@ let append = await image
 			},
 		}),
 	)
+	.pipeThrough(
+		mapWithIndexAsync(
+			(record, index) =>
+				({
+					...record,
+					headers: [
+						[
+							new TextEncoder().encode("index"),
+							new TextEncoder().encode(index.toString()),
+						],
+					],
+				}) as AppendRecord,
+		),
+	)
 	// Collect records into batches.
 	.pipeThrough(
 		new BatchTransform({
-			lingerDurationMillis: 50,
+			lingerDurationMillis: 5,
 			match_seq_num: startAt.tail.seq_num,
 		}),
 	)
