@@ -79,22 +79,8 @@ export interface TransportAppendSession {
  * Public AppendSession interface with retry, backpressure, and streams.
  * This is what users interact with - implemented by AppendSession.
  */
-export interface AppendSession
-	extends ReadableWritablePair<AppendAck, AppendArgs>,
-		AsyncDisposable {
-	submit(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<AppendAck>;
-	acks(): AcksStream;
-	close(): Promise<void>;
-	lastAckedPosition(): AppendAck | undefined;
-	/**
-	 * If the session has failed, returns the original fatal error that caused
-	 * the pump to stop. Returns undefined when the session has not failed.
-	 */
-	failureCause(): S2Error | undefined;
-}
+// Public AppendSession type is the concrete class from retry.ts
+export type AppendSession = import("../retry.js").AppendSession;
 
 /**
  * Result type for transport-level read operations.
@@ -122,13 +108,9 @@ export interface TransportReadSession<
  * Public-facing read session interface.
  * Yields records directly and propagates errors by throwing (standard stream behavior).
  */
-export interface ReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadRecord<Format>>,
-		AsyncIterable<ReadRecord<Format>>,
-		AsyncDisposable {
-	nextReadPosition(): StreamPosition | undefined;
-	lastObservedTail(): StreamPosition | undefined;
-}
+// Public ReadSession type is the concrete class from retry.ts
+export type ReadSession<Format extends "string" | "bytes" = "string"> =
+	import("../retry.js").ReadSession<Format>;
 
 export interface AppendSessionOptions {
 	/**
