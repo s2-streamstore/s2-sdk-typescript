@@ -221,12 +221,12 @@ describe("AppendSessionImpl (unit)", () => {
 				}
 				return new FakeTransportAppendSession();
 			},
-            undefined,
-            {
-                retryBackoffDurationMillis: 1,
-                maxAttempts: 2,
-                appendRetryPolicy: "all",
-            },
+			undefined,
+			{
+				retryBackoffDurationMillis: 1,
+				maxAttempts: 2,
+				appendRetryPolicy: "all",
+			},
 		);
 
 		const p = session.submit([{ body: "x" }]);
@@ -242,19 +242,19 @@ describe("AppendSessionImpl (unit)", () => {
 		const error = new S2Error({ message: "boom", status: 500 });
 		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ submitError: error }),
-            undefined,
-            {
-                retryBackoffDurationMillis: 1,
-                maxAttempts: 1,
-                appendRetryPolicy: "all",
-            },
+			undefined,
+			{
+				retryBackoffDurationMillis: 1,
+				maxAttempts: 1,
+				appendRetryPolicy: "all",
+			},
 		);
 
 		const ackP = session.submit([{ body: "x" }]);
-        await expect(ackP).rejects.toMatchObject({
-            message: "Max attempts (1) exhausted: boom",
-            status: 500,
-        });
+		await expect(ackP).rejects.toMatchObject({
+			message: "Max attempts (1) exhausted: boom",
+			status: 500,
+		});
 	});
 
 	it("does not retry non-idempotent inflight under noSideEffects policy and exposes failure cause", async () => {
@@ -262,11 +262,11 @@ describe("AppendSessionImpl (unit)", () => {
 		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
-            {
-                retryBackoffDurationMillis: 1,
-                maxAttempts: 2,
-                appendRetryPolicy: "noSideEffects",
-            },
+			{
+				retryBackoffDurationMillis: 1,
+				maxAttempts: 2,
+				appendRetryPolicy: "noSideEffects",
+			},
 		);
 
 		const p1 = session.submit([{ body: "x" }]);
@@ -309,7 +309,7 @@ describe("AppendSessionImpl (unit)", () => {
 		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ customAcks: [ack1, ack2] }),
 			undefined,
-            { retryBackoffDurationMillis: 1, maxAttempts: 1 }, // No retries
+			{ retryBackoffDurationMillis: 1, maxAttempts: 1 }, // No retries
 		);
 
 		// First submit should succeed
@@ -356,7 +356,7 @@ describe("AppendSessionImpl (unit)", () => {
 		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ customAcks: [ack1, ack2] }),
 			undefined,
-            { retryBackoffDurationMillis: 1, maxAttempts: 1 },
+			{ retryBackoffDurationMillis: 1, maxAttempts: 1 },
 		);
 
 		// First submit should succeed
