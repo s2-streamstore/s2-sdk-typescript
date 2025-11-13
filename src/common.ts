@@ -10,19 +10,19 @@ export type AppendRetryPolicy = "all" | "noSideEffects";
  * Retry configuration for handling transient failures.
  */
 export type RetryConfig = {
-	/**
-	 * Maximum number of retry attempts.
-	 * Set to 0 to disable retries.
-	 * @default 3
-	 */
-	maxAttempts?: number;
+    /**
+     * Total number of attempts, including the initial try.
+     * Must be >= 1. A value of 1 means no retries.
+     * @default 3
+     */
+    maxAttempts?: number;
 
 	/**
 	 * Base delay in milliseconds between retry attempts.
-	 * Uses exponential backoff: delay = retryBackoffDurationMs * (2 ^ attempt)
+	 * Fixed delay per attempt with jitter applied.
 	 * @default 100
 	 */
-	retryBackoffDurationMs?: number;
+	retryBackoffDurationMillis?: number;
 
 	/**
 	 * Policy for retrying append operations.
@@ -63,7 +63,7 @@ export type S2ClientOptions = {
 	/**
 	 * Retry configuration for handling transient failures.
 	 * Applies to management operations (basins, streams, tokens) and stream operations (read, append).
-	 * @default { maxAttempts: 3, retryBackoffDurationMs: 100 }
+	 * @default { maxAttempts: 3, retryBackoffDurationMillis: 100 }
 	 */
 	retry?: RetryConfig;
 };

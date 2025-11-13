@@ -118,7 +118,7 @@ export interface AppendSessionOptions {
 	 * Enforced by AppendSession; underlying transports do not apply
 	 * byte-based backpressure on their own.
 	 */
-	maxQueuedBytes?: number;
+	maxInflightBytes?: number;
 	/**
 	 * Maximum number of batches allowed in-flight (including queued) before
 	 * applying backpressure. This is enforced by AppendSession; underlying

@@ -33,7 +33,7 @@ const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,
 	retry: {
 		maxAttempts: 10,
-		retryBackoffDurationMs: 100,
+		retryBackoffDurationMillis: 100,
 		appendRetryPolicy: "noSideEffects",
 	},
 });
@@ -50,25 +50,11 @@ const stream = basin.stream("image");
 const startAt = await stream.checkTail();
 
 const session = await stream.appendSession({
-	maxQueuedBytes: 1024 * 1024, // 1MiB
+	maxInflightBytes: 1024 * 1024, // 1MiB
 });
 let image = await fetch(
 	"https://upload.wikimedia.org/wikipedia/commons/2/24/Peter_Paul_Rubens_-_Self-portrait_-_RH.S.180_-_Rubenshuis_%28after_restoration%29.jpg",
 );
-
-function mapWithIndexAsync<T, U>(
-	fn: (value: T, index: number) => Promise<U> | U,
-): TransformStream<T, U> {
-	let index = 0;
-
-	return new TransformStream<T, U>({
-		async transform(chunk, controller) {
-			const out = await fn(chunk, index);
-			index += 1;
-			controller.enqueue(out);
-		},
-	});
-}
 
 // Write directly from fetch response to S2 stream
 let append = await image
@@ -81,20 +67,6 @@ let append = await image
 				controller.enqueue(AppendRecord.make(arr));
 			},
 		}),
-	)
-	.pipeThrough(
-		mapWithIndexAsync(
-			(record, index) =>
-				({
-					...record,
-					headers: [
-						[
-							new TextEncoder().encode("index"),
-							new TextEncoder().encode(index.toString()),
-						],
-					],
-				}) as AppendRecord,
-		),
 	)
 	// Collect records into batches.
 	.pipeThrough(

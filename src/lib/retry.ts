@@ -24,12 +24,12 @@ const debugSession = createDebug("s2:retry:session");
  * Default retry configuration.
  */
 export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> & {
-	requestTimeoutMillis: number;
+    requestTimeoutMillis: number;
 } = {
-	maxAttempts: 3,
-	retryBackoffDurationMs: 100,
-	appendRetryPolicy: "noSideEffects",
-	requestTimeoutMillis: 5000, // 5 seconds
+    maxAttempts: 3,
+    retryBackoffDurationMillis: 100,
+    appendRetryPolicy: "noSideEffects",
+    requestTimeoutMillis: 5000, // 5 seconds
 };
 
 const RETRYABLE_STATUS_CODES = new Set([
@@ -61,14 +61,19 @@ export function isRetryable(error: S2Error): boolean {
 }
 
 /**
- * Calculates the delay before the next retry attempt using exponential backoff.
+ * Calculates the delay before the next retry attempt using fixed backoff
+ * with jitter. The `attempt` parameter is currently ignored to keep a
+ * constant base delay per attempt.
  */
-export function calculateDelay(attempt: number, baseDelayMs: number): number {
-	// Exponential backoff: baseDelay * (2 ^ attempt)
-	const delay = baseDelayMs * Math.pow(2, attempt);
-	// Add jitter: random value between 0 and delay
-	const jitter = Math.random() * delay;
-	return Math.floor(delay + jitter);
+export function calculateDelay(
+    attempt: number,
+    baseDelayMillis: number,
+): number {
+    // Apply ±50% jitter around the base delay
+    const jitterRange = 0.5; // 50% up or down
+    const factor = 1 + (Math.random() * 2 - 1) * jitterRange; // [0.5, 1.5]
+    const delay = Math.max(0, baseDelayMillis * factor);
+    return Math.floor(delay);
 }
 
 /**
@@ -87,45 +92,43 @@ export function sleep(ms: number): Promise<void> {
  * @throws The last error if all retry attempts are exhausted
  */
 export async function withRetries<T>(
-	retryConfig: RetryConfig | undefined,
-	fn: () => Promise<T>,
-	isPolicyCompliant: (config: RetryConfig, error: S2Error) => boolean = () =>
-		true,
+    retryConfig: RetryConfig | undefined,
+    fn: () => Promise<T>,
+    isPolicyCompliant: (config: RetryConfig, error: S2Error) => boolean = () =>
+        true,
 ): Promise<T> {
-	const config = {
-		...DEFAULT_RETRY_CONFIG,
-		...retryConfig,
-	};
+    const config = {
+        ...DEFAULT_RETRY_CONFIG,
+        ...retryConfig,
+    };
 
-	// If maxAttempts is 0, don't retry at all
-	if (config.maxAttempts === 0) {
-		debugWith("maxAttempts is 0, retries disabled");
-		return fn();
-	}
+    // Enforce minimum of 1 attempt (1 = no retries)
+    if (config.maxAttempts < 1) config.maxAttempts = 1;
 
-	let lastError: S2Error | undefined = undefined;
+    let lastError: S2Error | undefined = undefined;
 
-	for (let attempt = 0; attempt <= config.maxAttempts; attempt++) {
-		try {
-			const result = await fn();
-			if (attempt > 0) {
-				debugWith("succeeded after %d retries", attempt);
-			}
-			return result;
-		} catch (error) {
-			// withRetry only handles S2Errors (withS2Error should be called first)
-			if (!(error instanceof S2Error)) {
-				debugWith("non-S2Error thrown, rethrowing immediately: %s", error);
-				throw error;
-			}
+    // attemptNo is 1-based: 1..maxAttempts
+    for (let attemptNo = 1; attemptNo <= config.maxAttempts; attemptNo++) {
+        try {
+            const result = await fn();
+            if (attemptNo > 1) {
+                debugWith("succeeded after %d retries", attemptNo - 1);
+            }
+            return result;
+        } catch (error) {
+            // withRetry only handles S2Errors (withS2Error should be called first)
+            if (!(error instanceof S2Error)) {
+                debugWith("non-S2Error thrown, rethrowing immediately: %s", error);
+                throw error;
+            }
 
-			lastError = error;
+            lastError = error;
 
-			// Don't retry if this is the last attempt
-			if (attempt === config.maxAttempts) {
-				debugWith("max attempts exhausted, throwing error");
-				break;
-			}
+            // Don't retry if this is the last attempt
+            if (attemptNo === config.maxAttempts) {
+                debugWith("max attempts exhausted, throwing error");
+                break;
+            }
 
 			// Check if error is retryable
 			if (!isPolicyCompliant(config, lastError) || !isRetryable(lastError)) {
@@ -133,8 +136,13 @@ export async function withRetries<T>(
 				throw error;
 			}
 
-			// Calculate delay and wait before retrying
-			const delay = calculateDelay(attempt, config.retryBackoffDurationMs);
+            // Calculate delay and wait before retrying
+            const delay = calculateDelay(
+                attemptNo - 1,
+                // Support new name; fall back to legacy field if provided
+                (config as any).retryBackoffDurationMillis ??
+                    (config as any).retryBackoffDurationMs,
+            );
 			debugWith(
 				"retryable error, backing off for %dms, status=%s",
 				delay,
@@ -210,8 +218,9 @@ export class ReadSession<
 							reader.releaseLock();
 							const error = result.error;
 
-							// Check if we can retry (track session attempts, not record reads)
-							if (isRetryable(error) && attempt < retryConfig.maxAttempts) {
+						// Check if we can retry (track session attempts, not record reads)
+						const effectiveMax = Math.max(1, retryConfig.maxAttempts);
+						if (isRetryable(error) && attempt < effectiveMax - 1) {
 								if (this._nextReadPosition) {
 									nextArgs.seq_num = this._nextReadPosition.seq_num as any;
 									// Clear alternative start position fields to avoid conflicting params
@@ -221,7 +230,8 @@ export class ReadSession<
 								// Compute planned backoff delay now so we can subtract it from wait budget
 								const delay = calculateDelay(
 									attempt,
-									retryConfig.retryBackoffDurationMs,
+									(retryConfig as any).retryBackoffDurationMillis ??
+										(retryConfig as any).retryBackoffDurationMs,
 								);
 								// Recompute remaining budget from original request each time to avoid double-subtraction
 								if (baselineCount !== undefined) {
@@ -391,7 +401,7 @@ type InflightEntry = {
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
 };
 
-const DEFAULT_MAX_QUEUED_BYTES = 10 * 1024 * 1024; // 10 MiB default
+const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
 
 export class AppendSession implements AsyncDisposable {
 	private readonly requestTimeoutMillis: number;
@@ -444,7 +454,7 @@ export class AppendSession implements AsyncDisposable {
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
 		this.maxQueuedBytes =
-			this.sessionOptions?.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
+			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
 		this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
 
 		this.readable = new ReadableStream<AppendAck>({
@@ -874,14 +884,16 @@ export class AppendSession implements AsyncDisposable {
 					return;
 				}
 
-				// Check max attempts
-				if (this.currentAttempt >= this.retryConfig.maxAttempts) {
+				// Check max attempts (total attempts include initial; retries = max - 1)
+				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
+				const allowedRetries = effectiveMax - 1;
+				if (this.currentAttempt >= allowedRetries) {
 					debugSession(
 						"max attempts reached (%d), aborting",
-						this.retryConfig.maxAttempts,
+						effectiveMax,
 					);
 					const wrappedError = new S2Error({
-						message: `Max retry attempts (${this.retryConfig.maxAttempts}) exceeded: ${error.message}`,
+						message: `Max attempts (${effectiveMax}) exhausted: ${error.message}`,
 						status: error.status,
 						code: error.code,
 					});
@@ -894,9 +906,9 @@ export class AppendSession implements AsyncDisposable {
 				this.currentAttempt++;
 
 				debugSession(
-					"performing recovery (attempt %d/%d)",
+					"performing recovery (retry %d/%d)",
 					this.currentAttempt,
-					this.retryConfig.maxAttempts,
+					allowedRetries,
 				);
 
 				await this.recover();
@@ -948,7 +960,8 @@ export class AppendSession implements AsyncDisposable {
 		// Calculate backoff delay
 		const delay = calculateDelay(
 			this.consecutiveFailures - 1,
-			this.retryConfig.retryBackoffDurationMs,
+			(this.retryConfig as any).retryBackoffDurationMillis ??
+				(this.retryConfig as any).retryBackoffDurationMs,
 		);
 		debugSession("backing off for %dms", delay);
 		await sleep(delay);
