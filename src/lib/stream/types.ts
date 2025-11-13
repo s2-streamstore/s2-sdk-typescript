@@ -60,6 +60,13 @@ export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 };
 
 /**
+ * Stream of append acknowledgements used by {@link AppendSession}.
+ */
+export interface AcksStream
+	extends ReadableStream<AppendAck>,
+		AsyncIterable<AppendAck> {}
+
+/**
  * Low-level append session implemented by transports.
  *
  * - Never throws: errors are encoded in the returned {@link AppendResult}.
