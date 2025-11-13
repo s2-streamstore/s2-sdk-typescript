@@ -10,12 +10,12 @@ export type AppendRetryPolicy = "all" | "noSideEffects";
  * Retry configuration for handling transient failures.
  */
 export type RetryConfig = {
-    /**
-     * Total number of attempts, including the initial try.
-     * Must be >= 1. A value of 1 means no retries.
-     * @default 3
-     */
-    maxAttempts?: number;
+	/**
+	 * Total number of attempts, including the initial try.
+	 * Must be >= 1. A value of 1 means no retries.
+	 * @default 3
+	 */
+	maxAttempts?: number;
 
 	/**
 	 * Base delay in milliseconds between retry attempts.

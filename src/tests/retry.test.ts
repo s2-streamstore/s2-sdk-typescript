@@ -20,10 +20,10 @@ describe("Retry Logic", () => {
 				)
 				.mockResolvedValue("success");
 
-            const result = await withRetries(
-                { maxAttempts: 3, retryBackoffDurationMillis: 1 },
-                fn,
-            );
+			const result = await withRetries(
+				{ maxAttempts: 3, retryBackoffDurationMillis: 1 },
+				fn,
+			);
 
 			expect(result).toBe("success");
 			expect(fn).toHaveBeenCalledTimes(2);
@@ -33,12 +33,9 @@ describe("Retry Logic", () => {
 			const error = new S2Error({ message: "Bad request", status: 400 });
 			const fn = vi.fn().mockRejectedValue(error);
 
-            await expect(
-                withRetries(
-                    { maxAttempts: 3, retryBackoffDurationMillis: 1 },
-                    fn,
-                ),
-            ).rejects.toThrow(error);
+			await expect(
+				withRetries({ maxAttempts: 3, retryBackoffDurationMillis: 1 }, fn),
+			).rejects.toThrow(error);
 
 			expect(fn).toHaveBeenCalledTimes(1);
 		});
@@ -51,10 +48,10 @@ describe("Retry Logic", () => {
 				)
 				.mockResolvedValue("success");
 
-            const result = await withRetries(
-                { maxAttempts: 3, retryBackoffDurationMillis: 1 },
-                fn,
-            );
+			const result = await withRetries(
+				{ maxAttempts: 3, retryBackoffDurationMillis: 1 },
+				fn,
+			);
 
 			expect(result).toBe("success");
 			expect(fn).toHaveBeenCalledTimes(2);
@@ -64,12 +61,9 @@ describe("Retry Logic", () => {
 			const error = new S2Error({ message: "Server error", status: 503 });
 			const fn = vi.fn().mockRejectedValue(error);
 
-            await expect(
-                withRetries(
-                    { maxAttempts: 2, retryBackoffDurationMillis: 1 },
-                    fn,
-                ),
-            ).rejects.toThrow(error);
+			await expect(
+				withRetries({ maxAttempts: 2, retryBackoffDurationMillis: 1 }, fn),
+			).rejects.toThrow(error);
 
 			// Initial attempt + 1 retry = 2 calls
 			expect(fn).toHaveBeenCalledTimes(2);
@@ -79,12 +73,9 @@ describe("Retry Logic", () => {
 			const error = new S2Error({ message: "Server error", status: 503 });
 			const fn = vi.fn().mockRejectedValue(error);
 
-            await expect(
-                withRetries(
-                    { maxAttempts: 1, retryBackoffDurationMillis: 1 },
-                    fn,
-                ),
-            ).rejects.toThrow(error);
+			await expect(
+				withRetries({ maxAttempts: 1, retryBackoffDurationMillis: 1 }, fn),
+			).rejects.toThrow(error);
 
 			expect(fn).toHaveBeenCalledTimes(1);
 		});
@@ -99,10 +90,10 @@ describe("Retry Logic", () => {
 	});
 
 	describe("DEFAULT_RETRY_CONFIG", () => {
-        it("should have correct default values", () => {
-            expect(DEFAULT_RETRY_CONFIG.maxAttempts).toBe(3);
-            expect(DEFAULT_RETRY_CONFIG.retryBackoffDurationMillis).toBe(100);
-            expect(DEFAULT_RETRY_CONFIG.appendRetryPolicy).toBe("noSideEffects");
-        });
+		it("should have correct default values", () => {
+			expect(DEFAULT_RETRY_CONFIG.maxAttempts).toBe(3);
+			expect(DEFAULT_RETRY_CONFIG.retryBackoffDurationMillis).toBe(100);
+			expect(DEFAULT_RETRY_CONFIG.appendRetryPolicy).toBe("noSideEffects");
+		});
 	});
 });
