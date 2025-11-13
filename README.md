@@ -54,6 +54,34 @@ This TypeScript SDK is an ergonomic way to consume the [S2 REST API](https://s2.
    console.log("My basins:", basins.basins.map((basin) => basin.name));
    ```
 
+## Configuration and retries
+
+The `S2` client and stream sessions support configurable retry behavior:
+
+- Configure global retry behavior when constructing `S2`:
+
+  ```ts
+  import { S2 } from "@s2-dev/streamstore";
+
+  const s2 = new S2({
+    accessToken: process.env.S2_ACCESS_TOKEN!,
+    retry: {
+      // Total attempts including the first call (1 = no retries)
+      maxAttempts: 3,
+      // Base delay (ms) between attempts; jitter is applied
+      retryBackoffDurationMillis: 100,
+      // Retry policy for append operations (see API docs for details)
+      appendRetryPolicy: "noSideEffects",
+      // Maximum time (ms) to wait for an append ack before treating it as failed
+      requestTimeoutMillis: 5000,
+    },
+  });
+  ```
+
+- Stream append/read sessions created from `S2.basin(...).stream(...)` inherit this retry configuration.
+
+See the generated API docs for the full description of `RetryConfig`, `AppendRetryPolicy` and `AppendSessionOptions`.
+
 ## Examples
 
 The [`examples`](./examples) directory in this repository contains a variety of
