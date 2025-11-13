@@ -79,8 +79,47 @@ The `S2` client and stream sessions support configurable retry behavior:
   ```
 
 - Stream append/read sessions created from `S2.basin(...).stream(...)` inherit this retry configuration.
+- The `appendRetryPolicy` dictates how failed appends should be retried. If you are not using a concurrency control like `match_seq_num`, then retrying a failed append could result in duplicate data, depending on the nature of the failure. This policy can be set to tolerate potential duplicates by retrying all failures (`"all"`) or only failures guaranteed not to have had a side effect (`"noSideEffects"`). In most cases, `"noSideEffects"` is the safer default unless you have explicit deduplication downstream.
 
 See the generated API docs for the full description of `RetryConfig`, `AppendRetryPolicy` and `AppendSessionOptions`.
+
+## Append sessions
+
+The `AppendSession` represents a session for appending batches of records to a stream. There are two ways of interacting with an append session:
+- via `submit(...)`, which returns a `Promise<AppendAck>` that resolves when the batch is acknowledged by S2.
+- via the session's `.readable` and `.writable` streams (`ReadableStream<AppendAck>` / `WritableStream<AppendArgs>`).
+
+You obtain an append session from a stream via:
+
+```ts
+const session = await stream.appendSession();
+```
+
+All batches submitted to the same append session will be made durable in the same order as they are submitted, regardless of which method is used. Batches _can_ be duplicated, however, depending on the `appendRetryPolicy` used.
+
+### Transports
+
+The append session supports two transports:
+- One based on `fetch`
+- Another which uses our custom [`s2s` protocol](https://s2.dev/docs/rest/records/overview#s2s-spec) over HTTP/2.
+
+When possible, the `s2s` protocol is preferred as it allows for safe pipelining of concurrent appends over the same session, while still enforcing ordering across batches. This can't be guaranteed with the `fetch`-based transport, so it will not pipeline writes (effectively meaning there can only be one inflight, unacknowledged append at a time, thus limiting throughput).
+
+This SDK will attempt to detect whether `s2s` can be used, and select a transport accordingly. The transport can also be forced via the `forceTransport` option when creating a stream client:
+
+```typescript
+let stream = s2
+    .basin("my-basin")
+    .stream("my-stream", { forceTransport: "fetch" });
+```
+
+### Backpressure
+
+Only writing via `WritableStream` reflects backpressure. A `write(...)` call will return as soon as the batch is enqueued for transmission, and will block until there is capacity. Because of this, if using `WritableStream`, you should also make sure to `close()` the session, as otherwise you may miss a failure.
+
+Batches may not be enqueued for transmission immediately. The `AppendSession` controls how many batches can be "in flight" at a given time, which is the origin of backpressure. This can be configured by setting either `maxInFlightBatches` or `maxInFlightBytes`. Writes will block until there is capacity, thus exerting backpressure on upstream writers.
+In code, these options are named `maxInflightBatches` and `maxInflightBytes` on `AppendSessionOptions`.
+
 
 ## Examples
 
