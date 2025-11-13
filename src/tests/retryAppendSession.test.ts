@@ -8,14 +8,13 @@ import type {
 	AcksStream,
 	AppendArgs,
 	AppendRecord,
-	AppendSession,
 	TransportAppendSession,
 } from "../lib/stream/types.js";
 
 /**
  * Minimal controllable AppendSession for testing AppendSessionImpl.
  */
-class FakeAppendSession implements AppendSession {
+class FakeAppendSession {
 	public readonly readable: ReadableStream<AppendAck>;
 	public readonly writable: WritableStream<AppendArgs>;
 	private acksController!: ReadableStreamDefaultController<AppendAck>;
