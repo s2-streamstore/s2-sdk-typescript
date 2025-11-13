@@ -153,8 +153,8 @@ describe("ReadSession (unit)", () => {
 				// Second call: emit remaining records (none in this case, but succeed)
 				return new FakeReadSession({ records: [] });
 			},
-			{ count: 10 }, // Request 10 records
-			{ retryBackoffDurationMs: 1, maxAttempts: 1 },
+            { count: 10 }, // Request 10 records
+            { retryBackoffDurationMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -197,8 +197,8 @@ describe("ReadSession (unit)", () => {
 				// Second call: succeed
 				return new FakeReadSession({ records: [] });
 			},
-			{ bytes: 500 }, // Request 500 bytes
-			{ retryBackoffDurationMs: 1, maxAttempts: 1 },
+            { bytes: 500 }, // Request 500 bytes
+            { retryBackoffDurationMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -241,8 +241,8 @@ describe("ReadSession (unit)", () => {
 				// Second call: succeed
 				return new FakeReadSession({ records: [] });
 			},
-			{ wait: 10 }, // Wait up to 10 seconds
-			{ retryBackoffDurationMs: 1, maxAttempts: 1 },
+            { wait: 10 }, // Wait up to 10 seconds
+            { retryBackoffDurationMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -287,8 +287,8 @@ describe("ReadSession (unit)", () => {
 				// Second call: succeed
 				return new FakeReadSession({ records: [] });
 			},
-			{ seq_num: 100 }, // Start from seq_num 100
-			{ retryBackoffDurationMs: 1, maxAttempts: 1 },
+            { seq_num: 100 }, // Start from seq_num 100
+            { retryBackoffDurationMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records (including through retry)
@@ -330,8 +330,8 @@ describe("ReadSession (unit)", () => {
 				// Second call: succeed
 				return new FakeReadSession({ records: [] });
 			},
-			{ until: 1000 }, // Read until seq_num 1000
-			{ retryBackoffDurationMs: 1, maxAttempts: 1 },
+            { until: 1000 }, // Read until seq_num 1000
+            { retryBackoffDurationMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -373,14 +373,14 @@ describe("ReadSession (unit)", () => {
 				// Second call: succeed
 				return new FakeReadSession({ records: [] });
 			},
-			{
-				seq_num: 50,
-				count: 10,
-				bytes: 500,
-				wait: 30,
-				until: 1000,
-			},
-			{ retryBackoffDurationMs: 1, maxAttempts: 1 },
+            {
+                seq_num: 50,
+                count: 10,
+                bytes: 500,
+                wait: 30,
+                until: 1000,
+            },
+            { retryBackoffDurationMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -426,8 +426,8 @@ describe("ReadSession (unit)", () => {
 					error: new S2Error({ message: "persistent error", status: 500 }),
 				});
 			},
-			{ count: 10 },
-			{ retryBackoffDurationMs: 1, maxAttempts: 2 }, // Allow 2 retries
+            { count: 10 },
+            { retryBackoffDurationMillis: 1, maxAttempts: 3 }, // Allow 2 retries
 		);
 
 		// Try to consume the stream - should fail after exhausting retries
@@ -479,8 +479,8 @@ describe("ReadSession (unit)", () => {
 				// Third call: success (no more records to emit; just close)
 				return new FakeReadSession({ records: [] });
 			},
-			{ seq_num: 0, count: 100 },
-			{ retryBackoffDurationMs: 1, maxAttempts: 2 },
+            { seq_num: 0, count: 100 },
+            { retryBackoffDurationMillis: 1, maxAttempts: 3 },
 		);
 
 		// Drain the session

@@ -132,7 +132,7 @@ describe("AppendSession", () => {
 
 	it("error during processing rejects current and queued, clears queue", async () => {
 		// Create stream with no retries to test immediate failure
-		const stream = makeStream({ maxAttempts: 0 });
+		const stream = makeStream({ maxAttempts: 1 });
 
 		// With retry enabled, the first error will trigger recovery and retry
 		// So we need to mock multiple failures to exhaust retries
@@ -170,7 +170,7 @@ describe("AppendSession", () => {
 
 		// Create a session with very small max queued bytes (100 bytes)
 		const session = await stream.appendSession({
-			maxQueuedBytes: 100,
+			maxInflightBytes: 100,
 		});
 
 		// Control when appends resolve
