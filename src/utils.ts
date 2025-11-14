@@ -125,7 +125,7 @@ export function utf8ByteLength(str: string): number {
 }
 
 /**
- * Calculate the metered size in bytes of an AppendRecord.
+ * Calculate the metered size in bytes of a record (append or read).
  * This includes the body and headers, but not metadata like timestamp.
  *
  * This function calculates how many bytes the record will occupy

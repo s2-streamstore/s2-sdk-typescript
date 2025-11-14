@@ -70,16 +70,22 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			});
 			if (response.error) {
 				// Convert error to S2Error and return error session
+				const status = response.response.status;
 				const error =
 					"message" in response.error
 						? new S2Error({
 								message: response.error.message,
 								code: response.error.code ?? undefined,
-								status: response.response.status,
+								status,
 							})
-						: new RangeNotSatisfiableError({
-								status: response.response.status,
-							});
+						: status === 416
+							? new RangeNotSatisfiableError({
+									status,
+								})
+							: new S2Error({
+									message: response.response.statusText ?? "Request failed",
+									status,
+								});
 				return FetchReadSession.createErrorSession<Format>(error);
 			}
 			if (!response.response.body) {

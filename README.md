@@ -117,8 +117,7 @@ let stream = s2
 
 Only writing via `WritableStream` reflects backpressure. A `write(...)` call will return as soon as the batch is enqueued for transmission, and will block until there is capacity. Because of this, if using `WritableStream`, you should also make sure to `close()` the session, as otherwise you may miss a failure.
 
-Batches may not be enqueued for transmission immediately. The `AppendSession` controls how many batches can be "in flight" at a given time, which is the origin of backpressure. This can be configured by setting either `maxInFlightBatches` or `maxInFlightBytes`. Writes will block until there is capacity, thus exerting backpressure on upstream writers.
-In code, these options are named `maxInflightBatches` and `maxInflightBytes` on `AppendSessionOptions`.
+Batches may not be enqueued for transmission immediately. The `AppendSession` controls how many batches can be "in flight" at a given time, which is the origin of backpressure. This can be configured by setting either `maxInflightBatches` or `maxInflightBytes` on `AppendSessionOptions`. Writes will block until there is capacity, thus exerting backpressure on upstream writers.
 
 
 ## Examples
