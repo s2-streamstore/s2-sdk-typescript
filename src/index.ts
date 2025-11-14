@@ -3,6 +3,7 @@ export type {
 	ListAccessTokensArgs,
 	RevokeAccessTokenArgs,
 } from "./accessTokens.js";
+export { S2Basin } from "./basin.js";
 export type {
 	CreateBasinArgs,
 	DeleteBasinArgs,
@@ -64,7 +65,6 @@ export type {
 	StreamMetricsArgs,
 } from "./metrics.js";
 export { S2 } from "./s2.js";
-export { S2Basin } from "./basin.js";
 export { S2Stream } from "./stream.js";
 export type {
 	CreateStreamArgs,
