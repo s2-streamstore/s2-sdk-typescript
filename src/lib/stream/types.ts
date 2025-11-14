@@ -84,7 +84,7 @@ export interface TransportAppendSession {
  * Public AppendSession interface with retry, backpressure, and streams.
  * This is what users interact with - implemented by AppendSession in ../retry.ts.
  */
-export interface AppendSession extends AsyncDisposable {
+export interface AppendSessionBase extends AsyncDisposable {
 	/**
 	 * Readable stream of acknowledgements for appends.
 	 */
@@ -120,6 +120,11 @@ export interface AppendSession extends AsyncDisposable {
 }
 
 /**
+ * Public AppendSession type exposed by the SDK.
+ */
+export type AppendSession = AppendSessionBase;
+
+/**
  * Result type for transport-level read operations.
  * Transport sessions yield ReadResult instead of throwing errors.
  */
@@ -145,13 +150,19 @@ export interface TransportReadSession<
  * Public-facing read session interface.
  * Yields records directly and propagates errors by throwing (standard stream behavior).
  */
-export interface ReadSession<Format extends "string" | "bytes" = "string">
+export interface ReadSessionBase<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadRecord<Format>>,
 		AsyncIterable<ReadRecord<Format>>,
 		AsyncDisposable {
 	nextReadPosition(): StreamPosition | undefined;
 	lastObservedTail(): StreamPosition | undefined;
 }
+
+/**
+ * Public ReadSession type exposed by the SDK.
+ */
+export type ReadSession<Format extends "string" | "bytes" = "string"> =
+	ReadSessionBase<Format>;
 
 /**
  * Options that control client-side append backpressure and concurrency.

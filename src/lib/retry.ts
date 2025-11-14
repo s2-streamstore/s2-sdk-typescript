@@ -15,9 +15,11 @@ import type {
 	AcksStream,
 	AppendArgs,
 	AppendRecord,
+	AppendSession as AppendSessionType,
 	AppendSessionOptions,
 	ReadArgs,
 	ReadRecord,
+	ReadSession as ReadSessionType,
 	TransportAppendSession,
 	TransportReadSession,
 } from "./stream/types.js";
@@ -162,7 +164,7 @@ export async function withRetries<T>(
 }
 export class ReadSession<
 	Format extends "string" | "bytes" = "string",
-> extends ReadableStream<ReadRecord<Format>> {
+> extends ReadableStream<ReadRecord<Format>> implements ReadSessionType<Format> {
 	private _nextReadPosition: StreamPosition | undefined = undefined;
 	private _lastObservedTail: StreamPosition | undefined = undefined;
 
@@ -409,7 +411,7 @@ type InflightEntry = {
 
 const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
 
-export class AppendSession implements AsyncDisposable {
+export class AppendSession implements AsyncDisposable, AppendSessionType {
 	private readonly requestTimeoutMillis: number;
 	private readonly maxQueuedBytes: number;
 	private readonly maxInflightBatches?: number;
