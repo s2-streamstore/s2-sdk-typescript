@@ -1,3 +1,24 @@
+type ErrorWithCode = Error & {
+	code?: unknown;
+	cause?: unknown;
+};
+
+function getErrorCode(error: unknown): string | undefined {
+	if (!(error instanceof Error)) return undefined;
+	const err = error as ErrorWithCode;
+
+	if (typeof err.code === "string") return err.code;
+
+	if (err.cause && typeof err.cause === "object") {
+		const cause = err.cause as { code?: unknown };
+		if (typeof cause.code === "string") {
+			return cause.code;
+		}
+	}
+
+	return undefined;
+}
+
 function isConnectionError(error: unknown): boolean {
 	if (!(error instanceof Error)) {
 		return false;
@@ -7,11 +28,7 @@ function isConnectionError(error: unknown): boolean {
 		return true;
 	}
 
-	const cause = (error as any).cause;
-	let code = (error as any).code;
-	if (cause && typeof cause === "object") {
-		code = cause.code;
-	}
+	const code = getErrorCode(error);
 
 	// Common connection error codes from Node.js net module
 	const connectionErrorCodes = [
@@ -24,11 +41,7 @@ function isConnectionError(error: unknown): boolean {
 		"EPIPE", // Broken pipe
 	];
 
-	if (connectionErrorCodes.includes(code)) {
-		return true;
-	}
-
-	return false;
+	return typeof code === "string" && connectionErrorCodes.includes(code);
 }
 
 export function s2Error(error: any): S2Error {
@@ -38,8 +51,7 @@ export function s2Error(error: any): S2Error {
 
 	// Connection error?
 	if (isConnectionError(error)) {
-		const cause = (error as any).cause;
-		const code = cause?.code || "NETWORK_ERROR";
+		const code = getErrorCode(error) ?? "NETWORK_ERROR";
 		return new S2Error({
 			message: `Connection failed: ${code}`,
 			status: 502, // Bad Gateway for upstream/network issues
@@ -82,9 +94,17 @@ export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
 
 				// If server provided structured error with message/code, use it
 				if (typeof err === "object" && "message" in err) {
+					const structured = err as {
+						message?: unknown;
+						code?: unknown;
+					};
 					throw new S2Error({
-						message: (err as any).message ?? statusText ?? "Error",
-						code: (err as any).code ?? undefined,
+						message:
+							typeof structured.message === "string"
+								? structured.message
+								: (statusText ?? "Error"),
+						code:
+							typeof structured.code === "string" ? structured.code : undefined,
 						status,
 						origin: "server",
 					});
@@ -135,9 +155,17 @@ export async function withS2Data<T>(
 			if (res.error) {
 				const err = res.error;
 				if (typeof err === "object" && "message" in err) {
+					const structured = err as {
+						message?: unknown;
+						code?: unknown;
+					};
 					throw new S2Error({
-						message: (err as any).message ?? statusText ?? "Error",
-						code: (err as any).code ?? undefined,
+						message:
+							typeof structured.message === "string"
+								? structured.message
+								: (statusText ?? "Error"),
+						code:
+							typeof structured.code === "string" ? structured.code : undefined,
 						status,
 						origin: "server",
 					});
@@ -347,10 +375,17 @@ export function makeServerError(
 ): S2Error {
 	const status = typeof response.status === "number" ? response.status : 500;
 	// Pull message/code from structured payload when present
-	if (payload && typeof payload === "object" && "message" in (payload as any)) {
+	if (payload && typeof payload === "object" && "message" in payload) {
+		const structured = payload as {
+			message?: unknown;
+			code?: unknown;
+		};
 		return new S2Error({
-			message: (payload as any).message ?? response.statusText ?? "Error",
-			code: (payload as any).code ?? undefined,
+			message:
+				typeof structured.message === "string"
+					? structured.message
+					: (response.statusText ?? "Error"),
+			code: typeof structured.code === "string" ? structured.code : undefined,
 			status,
 			origin: "server",
 		});

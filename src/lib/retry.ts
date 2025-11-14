@@ -480,10 +480,10 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 				// Wait for capacity (backpressure for writable only)
 				await this.waitForCapacity(batchMeteredSize);
 
-				const args = { ...chunk } as Omit<AppendArgs, "records"> & {
+				const { records: _records, ...rest } = chunk;
+				const args: Omit<AppendArgs, "records"> & {
 					precalculatedSize?: number;
-				};
-				delete (args as any).records;
+				} = rest;
 				args.precalculatedSize = batchMeteredSize;
 
 				// Move reserved bytes to queued bytes accounting before submission
