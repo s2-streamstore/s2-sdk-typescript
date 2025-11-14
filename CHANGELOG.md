@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.6
+
+### Patch Changes
+
+- 702e735: Remove peer dependencies
+
 ## 0.17.5
 
 ### Patch Changes
