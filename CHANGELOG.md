@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.5
+
+### Patch Changes
+
+- 1be5849: Export S2Basin and S2Stream types
+
 ## 0.17.4
 
 ### Patch Changes
