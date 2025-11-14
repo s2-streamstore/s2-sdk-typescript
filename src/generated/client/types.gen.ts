@@ -10,7 +10,6 @@ import type {
   Config as CoreConfig,
 } from '../core/types.gen.js';
 import type { Middleware } from './utils.gen.js';
-import type {S2Error} from "../../error.js";
 
 export type ResponseStyle = 'data' | 'fields';
 
@@ -205,7 +204,7 @@ export type Client = CoreClient<
   BuildUrlFn,
   SseFn
 > & {
-  interceptors: Middleware<Request, Response, S2Error, ResolvedRequestOptions>;
+  interceptors: Middleware<Request, Response, unknown, ResolvedRequestOptions>;
 };
 
 /**

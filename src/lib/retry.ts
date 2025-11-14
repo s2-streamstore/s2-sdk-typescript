@@ -450,7 +450,7 @@ export class AppendSession implements AsyncDisposable {
 	constructor(
 		private readonly generator: (
 			options?: AppendSessionOptions,
-		) => Promise<import("./stream/types.js").TransportAppendSession>,
+		) => Promise<TransportAppendSession>,
 		private readonly sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 	) {
@@ -516,7 +516,7 @@ export class AppendSession implements AsyncDisposable {
 	static async create(
 		generator: (
 			options?: AppendSessionOptions,
-		) => Promise<import("./stream/types.js").TransportAppendSession>,
+		) => Promise<TransportAppendSession>,
 		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 	): Promise<AppendSession> {

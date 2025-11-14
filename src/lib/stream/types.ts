@@ -82,10 +82,42 @@ export interface TransportAppendSession {
 
 /**
  * Public AppendSession interface with retry, backpressure, and streams.
- * This is what users interact with - implemented by AppendSession.
+ * This is what users interact with - implemented by AppendSession in ../retry.ts.
  */
-// Public AppendSession type is the concrete class from retry.ts
-export type AppendSession = import("../retry.js").AppendSession;
+export interface AppendSession extends AsyncDisposable {
+	/**
+	 * Readable stream of acknowledgements for appends.
+	 */
+	readonly readable: ReadableStream<AppendAck>;
+	/**
+	 * Writable stream of append requests.
+	 */
+	readonly writable: WritableStream<AppendArgs>;
+	/**
+	 * Submit an append request and await its acknowledgement.
+	 * This method does not apply backpressure; use {@link writable} for that.
+	 */
+	submit(
+		records: AppendRecord | AppendRecord[],
+		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
+	): Promise<AppendAck>;
+	/**
+	 * Close the append session, waiting for all inflight appends to settle.
+	 */
+	close(): Promise<void>;
+	/**
+	 * Get a stream of acknowledgements for appends.
+	 */
+	acks(): AcksStream;
+	/**
+	 * Get the last acknowledged position, if any.
+	 */
+	lastAckedPosition(): AppendAck | undefined;
+	/**
+	 * If the session failed, returns the fatal error that caused it to stop.
+	 */
+	failureCause(): S2Error | undefined;
+}
 
 /**
  * Result type for transport-level read operations.
@@ -113,9 +145,13 @@ export interface TransportReadSession<
  * Public-facing read session interface.
  * Yields records directly and propagates errors by throwing (standard stream behavior).
  */
-// Public ReadSession type is the concrete class from retry.ts
-export type ReadSession<Format extends "string" | "bytes" = "string"> =
-	import("../retry.js").ReadSession<Format>;
+export interface ReadSession<Format extends "string" | "bytes" = "string">
+	extends ReadableStream<ReadRecord<Format>>,
+		AsyncIterable<ReadRecord<Format>>,
+		AsyncDisposable {
+	nextReadPosition(): StreamPosition | undefined;
+	lastObservedTail(): StreamPosition | undefined;
+}
 
 /**
  * Options that control client-side append backpressure and concurrency.

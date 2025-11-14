@@ -105,19 +105,21 @@ The append session supports two transports:
 
 When possible, the `s2s` protocol is preferred as it allows for safe pipelining of concurrent appends over the same session, while still enforcing ordering across batches. This can't be guaranteed with the `fetch`-based transport, so it will not pipeline writes (effectively meaning there can only be one inflight, unacknowledged append at a time, thus limiting throughput).
 
-This SDK will attempt to detect whether `s2s` can be used, and select a transport accordingly. The transport can also be forced via the `forceTransport` option when creating a stream client:
+This SDK will attempt to detect whether `s2s` can be used (if the runtime has `node:http2` support), and select a transport accordingly. The transport detection also be overridden via the `forceTransport` option when creating a stream client:
 
 ```typescript
-let stream = s2
+const stream = s2
     .basin("my-basin")
     .stream("my-stream", { forceTransport: "fetch" });
 ```
 
 ### Backpressure
 
-Only writing via `WritableStream` reflects backpressure. A `write(...)` call will return as soon as the batch is enqueued for transmission, and will block until there is capacity. Because of this, if using `WritableStream`, you should also make sure to `close()` the session, as otherwise you may miss a failure.
+Only writing via `WritableStream` reflects backpressure. A `write(...)` call will resolve as soon as the batch is enqueued for transmission, and will block until there is capacity.
 
-Batches may not be enqueued for transmission immediately. The `AppendSession` controls how many batches can be "in flight" at a given time, which is the origin of backpressure. This can be configured by setting either `maxInflightBatches` or `maxInflightBytes` on `AppendSessionOptions`. Writes will block until there is capacity, thus exerting backpressure on upstream writers.
+Enqueuing a batch means that the session has accepted the batch, and that it is now inflight. It _doesn't_ mean that the batch has been acknowledged by S2. Because of this, if using `WritableStream`, you should also make sure to `close()` the session, as otherwise you may miss a failure. Only after closing the writer without error can the upstream contents be considered to have been safely appended to the stream.
+
+The `AppendSession` controls how many batches can be inflight at a given time, which is the origin of backpressure. This can be configured by setting either `maxInflightBatches` or `maxInflightBytes` on `AppendSessionOptions`. Writes will block until there is capacity, thus exerting backpressure on upstream writers.
 
 
 ## Examples
