@@ -15,8 +15,8 @@ import type {
 	AcksStream,
 	AppendArgs,
 	AppendRecord,
-	AppendSession as AppendSessionType,
 	AppendSessionOptions,
+	AppendSession as AppendSessionType,
 	ReadArgs,
 	ReadRecord,
 	ReadSession as ReadSessionType,
@@ -147,9 +147,7 @@ export async function withRetries<T>(
 			// Calculate delay and wait before retrying
 			const delay = calculateDelay(
 				attemptNo - 1,
-				// Support new name; fall back to legacy field if provided
-				(config as any).retryBackoffDurationMillis ??
-					(config as any).retryBackoffDurationMs,
+				config.retryBackoffDurationMillis,
 			);
 			debugWith(
 				"retryable error, backing off for %dms, status=%s",
@@ -162,9 +160,10 @@ export async function withRetries<T>(
 
 	throw lastError;
 }
-export class ReadSession<
-	Format extends "string" | "bytes" = "string",
-> extends ReadableStream<ReadRecord<Format>> implements ReadSessionType<Format> {
+export class ReadSession<Format extends "string" | "bytes" = "string">
+	extends ReadableStream<ReadRecord<Format>>
+	implements ReadSessionType<Format>
+{
 	private _nextReadPosition: StreamPosition | undefined = undefined;
 	private _lastObservedTail: StreamPosition | undefined = undefined;
 
@@ -230,31 +229,25 @@ export class ReadSession<
 							const effectiveMax = Math.max(1, retryConfig.maxAttempts);
 							if (isRetryable(error) && attempt < effectiveMax - 1) {
 								if (this._nextReadPosition) {
-									nextArgs.seq_num = this._nextReadPosition.seq_num as any;
+									nextArgs.seq_num = this._nextReadPosition.seq_num;
 									// Clear alternative start position fields to avoid conflicting params
-									delete (nextArgs as any).timestamp;
-									delete (nextArgs as any).tail_offset;
+									delete nextArgs.timestamp;
+									delete nextArgs.tail_offset;
 								}
 								// Compute planned backoff delay now so we can subtract it from wait budget
 								const delay = calculateDelay(
 									attempt,
-									(retryConfig as any).retryBackoffDurationMillis ??
-										(retryConfig as any).retryBackoffDurationMs,
+									retryConfig.retryBackoffDurationMillis,
 								);
 								// Recompute remaining budget from original request each time to avoid double-subtraction
 								if (baselineCount !== undefined) {
-									const remaining = Math.max(
+									nextArgs.count = Math.max(
 										0,
 										baselineCount - this._recordsRead,
 									);
-									nextArgs.count = remaining as any;
 								}
 								if (baselineBytes !== undefined) {
-									const remaining = Math.max(
-										0,
-										baselineBytes - this._bytesRead,
-									);
-									nextArgs.bytes = remaining as any;
+									nextArgs.bytes = Math.max(0, baselineBytes - this._bytesRead);
 								}
 								// Adjust wait from original budget based on total elapsed time since start
 								if (baselineWait !== undefined) {
@@ -263,7 +256,7 @@ export class ReadSession<
 									nextArgs.wait = Math.max(
 										0,
 										baselineWait - (elapsedSeconds + delay / 1000),
-									) as any;
+									);
 								}
 								// Proactively cancel the current transport session before retrying
 								try {
@@ -393,7 +386,7 @@ export class ReadSession<
  * Invariants:
  * - Exactly one ack per batch in FIFO order
  * - Ack record count matches batch record count
- * - Acks arrive within ackTimeoutMs (5s) or session is retried
+ * - Acks arrive within requestTimeoutMillis or session is retried
  */
 /**
  * New simplified inflight entry for the pump-based architecture.
@@ -407,6 +400,7 @@ type InflightEntry = {
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
+	needsSubmit?: boolean;
 };
 
 const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
@@ -586,14 +580,14 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 		// Create promise for submit() callers
 		return new Promise<AppendResult>((resolve) => {
 			// Create inflight entry (innerPromise will be set when pump processes it)
-			const entry: InflightEntry & { __needsSubmit?: boolean } = {
+			const entry: InflightEntry = {
 				records,
 				args,
 				expectedCount: records.length,
 				meteredBytes: batchMeteredSize,
 				innerPromise: new Promise(() => {}), // Never-resolving placeholder
 				maybeResolve: resolve,
-				__needsSubmit: true, // Mark for pump to submit
+				needsSubmit: true, // Mark for pump to submit
 			};
 
 			debugSession(
@@ -771,7 +765,7 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 
 			// Submit ALL entries that need submitting (enables HTTP/2 pipelining for S2S)
 			for (const entry of this.inflight) {
-				if (!entry.innerPromise || (entry as any).__needsSubmit) {
+				if (!entry.innerPromise || entry.needsSubmit) {
 					debugSession(
 						"[PUMP] submitting entry to inner session (%d records, %d bytes)",
 						entry.expectedCount,
@@ -779,7 +773,7 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 					);
 					entry.attemptStartedMonotonicMs = performance.now();
 					entry.innerPromise = this.session.submit(entry.records, entry.args);
-					delete (entry as any).__needsSubmit;
+					delete entry.needsSubmit;
 				}
 			}
 
@@ -962,8 +956,7 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 		// Calculate backoff delay
 		const delay = calculateDelay(
 			this.consecutiveFailures - 1,
-			(this.retryConfig as any).retryBackoffDurationMillis ??
-				(this.retryConfig as any).retryBackoffDurationMs,
+			this.retryConfig.retryBackoffDurationMillis,
 		);
 		debugSession("backing off for %dms", delay);
 		await sleep(delay);
