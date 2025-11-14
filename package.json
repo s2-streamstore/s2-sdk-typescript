@@ -58,8 +58,5 @@
     "protoc": "^33.0.0",
     "typedoc": "^0.28.14",
     "vitest": "^4.0.2"
-  },
-  "peerDependencies": {
-    "typescript": "^5.9.3"
   }
 }
