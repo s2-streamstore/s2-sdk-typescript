@@ -322,7 +322,7 @@ describe("AppendSessionImpl (unit)", () => {
 			message: expect.stringContaining(
 				"Sequence number not strictly increasing",
 			),
-			status: 500,
+			status: 0,
 			code: "INTERNAL_ERROR",
 		});
 
@@ -331,12 +331,12 @@ describe("AppendSessionImpl (unit)", () => {
 			message: expect.stringContaining(
 				"Sequence number not strictly increasing",
 			),
-			status: 500,
+			status: 0,
 		});
 
 		// Subsequent submits should also fail
 		const p3 = session.submit([{ body: "c" }]);
-		await expect(p3).rejects.toMatchObject({ status: 500 });
+		await expect(p3).rejects.toMatchObject({ status: 0 });
 	});
 
 	it("detects non-increasing (equal) sequence numbers and aborts", async () => {
@@ -369,6 +369,6 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(error.message).toContain("Sequence number not strictly increasing");
 		expect(error.message).toContain("previous=10");
 		expect(error.message).toContain("current=10");
-		expect(error.status).toBe(500);
+		expect(error.status).toBe(0);
 	});
 });

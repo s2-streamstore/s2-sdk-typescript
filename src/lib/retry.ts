@@ -1,6 +1,12 @@
 import createDebug from "debug";
 import type { RetryConfig } from "../common.js";
-import { invariantViolation, S2Error, s2Error, withS2Error } from "../error.js";
+import {
+	abortedError,
+	invariantViolation,
+	S2Error,
+	s2Error,
+	withS2Error,
+} from "../error.js";
 import type { AppendAck, StreamPosition } from "../generated/index.js";
 import { meteredSizeBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
@@ -501,10 +507,7 @@ export class AppendSession implements AsyncDisposable {
 				await this.close();
 			},
 			abort: async (reason) => {
-				const error = new S2Error({
-					message: `AppendSession aborted: ${reason}`,
-					status: 499,
-				});
+				const error = abortedError(`AppendSession aborted: ${reason}`);
 				await this.abort(error);
 			},
 		});

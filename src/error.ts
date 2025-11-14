@@ -203,7 +203,7 @@ export class S2Error extends Error {
 	}
 }
 
-/** Helper: construct a non-retryable invariant violation error (400). */
+/** Helper: construct a non-retryable invariant violation error (status 0). */
 export function invariantViolation(
 	message: string,
 	details?: unknown,
@@ -211,7 +211,7 @@ export function invariantViolation(
 	return new S2Error({
 		message: `Invariant violation: ${message}`,
 		code: "INTERNAL_ERROR",
-		status: 500,
+		status: 0,
 		origin: "sdk",
 		data: details,
 	});
