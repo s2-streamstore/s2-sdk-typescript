@@ -64,6 +64,8 @@ export type {
 	StreamMetricsArgs,
 } from "./metrics.js";
 export { S2 } from "./s2.js";
+export { S2Basin } from "./basin.js";
+export { S2Stream } from "./stream.js";
 export type {
 	CreateStreamArgs,
 	DeleteStreamArgs,
