@@ -8,8 +8,6 @@ export type {
 	RevokeAccessTokenArgs,
 } from "./accessTokens.js";
 export { S2Basin } from "./basin.js";
-export { S2Stream } from "./stream.js";
-
 /**
  * Basin management argument types.
  * Use these with {@link S2Basins} and {@link S2Basin}.
@@ -95,16 +93,15 @@ export type {
 	ReadRecord,
 	ReadSession,
 } from "./lib/stream/types.js";
-
 /** Argument types used with {@link S2Metrics}. */
 export type {
 	AccountMetricsArgs,
 	BasinMetricsArgs,
 	StreamMetricsArgs,
 } from "./metrics.js";
-
 /** Top-level entrypoint for the SDK. */
 export { S2 } from "./s2.js";
+export { S2Stream } from "./stream.js";
 
 /** Stream management argument types used with {@link S2Streams}. */
 export type {
