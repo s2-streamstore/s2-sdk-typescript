@@ -3,31 +3,23 @@ import { AppendRecord, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
+const hasEnv = !!process.env.S2_ACCESS_TOKEN && !!process.env.S2_BASIN;
+const describeIf = hasEnv ? describe : describe.skip;
 
-describe("AppendSession Integration Tests", () => {
+describeIf("AppendSession Integration Tests", () => {
 	let s2: S2;
 	let basinName: string;
 	let streamName: string;
 
 	beforeAll(() => {
 		const token = process.env.S2_ACCESS_TOKEN;
-		if (!token) {
-			throw new Error(
-				"S2_ACCESS_TOKEN environment variable is required for integration tests",
-			);
-		}
-		s2 = new S2({ accessToken: token });
+		const basin = process.env.S2_BASIN;
+		if (!token || !basin) return;
+		s2 = new S2({ accessToken: token! });
+		basinName = basin!;
 	});
 
 	beforeAll(async () => {
-		// Get or use an existing basin
-		const basins = await s2.basins.list();
-		if (!basins.basins || basins.basins.length === 0) {
-			throw new Error("No basins found. Please create a basin first.");
-		}
-		basinName = basins.basins[0]!.name;
-		expect(basinName).toBeTruthy();
-
 		// Use a unique stream name for each test run
 		const timestamp = Date.now();
 		streamName = `integration-test-append-${timestamp}`;

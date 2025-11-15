@@ -1,5 +1,5 @@
-import type { DataToObject, S2RequestOptions } from "./common.js";
-import { S2Error } from "./error.js";
+import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	type IssueAccessTokenData,
@@ -9,6 +9,7 @@ import {
 	type RevokeAccessTokenData,
 	revokeAccessToken,
 } from "./generated/index.js";
+import { withRetries } from "./lib/retry.js";
 
 export interface ListAccessTokensArgs
 	extends DataToObject<ListAccessTokensData> {}
@@ -19,9 +20,11 @@ export interface RevokeAccessTokenArgs
 
 export class S2AccessTokens {
 	readonly client: Client;
+	private readonly retryConfig?: RetryConfig;
 
-	constructor(client: Client) {
+	constructor(client: Client, retryConfig?: RetryConfig) {
 		this.client = client;
+		this.retryConfig = retryConfig;
 	}
 
 	/**
@@ -32,21 +35,15 @@ export class S2AccessTokens {
 	 * @param args.limit Max results (up to 1000)
 	 */
 	public async list(args?: ListAccessTokensArgs, options?: S2RequestOptions) {
-		const response = await listAccessTokens({
-			client: this.client,
-			query: args,
-			...options,
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				listAccessTokens({
+					client: this.client,
+					query: args,
+					...options,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
-
-		return response.data;
 	}
 
 	/**
@@ -58,21 +55,15 @@ export class S2AccessTokens {
 	 * @param args.expires_at Expiration in ISO 8601; defaults to requestor's token expiry
 	 */
 	public async issue(args: IssueAccessTokenArgs, options?: S2RequestOptions) {
-		const response = await issueAccessToken({
-			client: this.client,
-			body: args,
-			...options,
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				issueAccessToken({
+					client: this.client,
+					body: args,
+					...options,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
-
-		return response.data;
 	}
 
 	/**
@@ -81,20 +72,14 @@ export class S2AccessTokens {
 	 * @param args.id Token ID to revoke
 	 */
 	public async revoke(args: RevokeAccessTokenArgs, options?: S2RequestOptions) {
-		const response = await revokeAccessToken({
-			client: this.client,
-			path: args,
-			...options,
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				revokeAccessToken({
+					client: this.client,
+					path: args,
+					...options,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
-
-		return response.data;
 	}
 }

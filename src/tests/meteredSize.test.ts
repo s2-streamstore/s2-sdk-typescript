@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppendRecord, meteredSizeBytes } from "../utils.js";
+import { AppendRecord, meteredBytes } from "../utils.js";
 
 describe("meteredSizeBytes", () => {
 	it("calculates size for string format records", () => {
@@ -8,7 +8,7 @@ describe("meteredSizeBytes", () => {
 			baz: "qux",
 		});
 
-		const size = meteredSizeBytes(record);
+		const size = meteredBytes(record);
 
 		// body: "hello" = 5 bytes
 		// headers: "foo" = 3, "bar" = 3, "baz" = 3, "qux" = 3 = 12 bytes
@@ -22,7 +22,7 @@ describe("meteredSizeBytes", () => {
 			emoji: "🚀",
 		});
 
-		const size = meteredSizeBytes(record);
+		const size = meteredBytes(record);
 
 		// body: "hello 世界" = 12 bytes (hello + space = 6, 世 = 3, 界 = 3)
 		// headers: "emoji" = 5, "🚀" = 4 = 9 bytes
@@ -36,7 +36,7 @@ describe("meteredSizeBytes", () => {
 			[new Uint8Array([10, 20]), new Uint8Array([30, 40, 50])],
 		]);
 
-		const size = meteredSizeBytes(record);
+		const size = meteredBytes(record);
 
 		// body: 5 bytes
 		// headers: key 2 bytes, value 3 bytes = 5 bytes
@@ -50,7 +50,7 @@ describe("meteredSizeBytes", () => {
 			foo: "bar",
 		});
 
-		const size = meteredSizeBytes(record);
+		const size = meteredBytes(record);
 
 		// body: 0 bytes
 		// headers: "foo" = 3, "bar" = 3 = 6 bytes
@@ -62,7 +62,7 @@ describe("meteredSizeBytes", () => {
 	it("calculates size for record with no headers", () => {
 		const record = AppendRecord.make("hello");
 
-		const size = meteredSizeBytes(record);
+		const size = meteredBytes(record);
 
 		// body: "hello" = 5 bytes
 		// headers: 0 bytes
@@ -74,7 +74,7 @@ describe("meteredSizeBytes", () => {
 	it("calculates size for empty record", () => {
 		const record = AppendRecord.make();
 
-		const size = meteredSizeBytes(record);
+		const size = meteredBytes(record);
 
 		// body: 0 bytes
 		// headers: 0 bytes
@@ -85,7 +85,7 @@ describe("meteredSizeBytes", () => {
 
 	it("calculates size for command records", () => {
 		const fenceRecord = AppendRecord.fence("my-token");
-		const size = meteredSizeBytes(fenceRecord);
+		const size = meteredBytes(fenceRecord);
 
 		// body: "my-token" = 8 bytes
 		// headers: "" = 0, "fence" = 5 = 5 bytes
@@ -96,7 +96,7 @@ describe("meteredSizeBytes", () => {
 
 	it("calculates size for trim command (bytes format)", () => {
 		const trimRecord = AppendRecord.trim(123);
-		const size = meteredSizeBytes(trimRecord);
+		const size = meteredBytes(trimRecord);
 
 		// body: 8 bytes (BigInt as Uint8Array)
 		// headers: empty Uint8Array = 0, "trim" as bytes = 4 = 4 bytes

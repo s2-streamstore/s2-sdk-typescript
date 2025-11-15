@@ -7,11 +7,12 @@ import { S2Stream } from "../stream.js";
 // Minimal Client shape to satisfy S2Stream constructor; we won't use it directly
 const fakeClient: any = {};
 
-const makeStream = () =>
+const makeStream = (retry?: { maxAttempts?: number }) =>
 	new S2Stream("test-stream", fakeClient, {
 		baseUrl: "https://test.b.aws.s2.dev",
 		accessToken: Redacted.make("test-access-token"),
 		forceTransport: "fetch",
+		retry,
 	});
 
 const makeAck = (n: number): AppendAck => ({
@@ -81,9 +82,14 @@ describe("AppendSession", () => {
 			}
 		})();
 
-		await session.submit([{ body: "a" }]);
-		await session.submit([{ body: "b" }]);
+		const ack1 = await session.submit([{ body: "a" }]);
+		const ack2 = await session.submit([{ body: "b" }]);
 
+		// Verify acks were received before closing
+		expect(ack1).toBeTruthy();
+		expect(ack2).toBeTruthy();
+
+		// Close session - with interruptible sleep, pump will wake immediately
 		await session.close();
 		await consumer;
 
@@ -103,6 +109,8 @@ describe("AppendSession", () => {
 		const p2 = session.submit([{ body: "y" }]);
 
 		await Promise.all([p1, p2]);
+
+		// Close - with interruptible sleep, pump will wake immediately
 		await session.close();
 
 		await expect(p1).resolves.toBeTruthy();
@@ -123,9 +131,12 @@ describe("AppendSession", () => {
 	});
 
 	it("error during processing rejects current and queued, clears queue", async () => {
-		const stream = makeStream();
+		// Create stream with no retries to test immediate failure
+		const stream = makeStream({ maxAttempts: 1 });
 
-		streamAppendSpy.mockRejectedValueOnce(new Error("boom"));
+		// With retry enabled, the first error will trigger recovery and retry
+		// So we need to mock multiple failures to exhaust retries
+		streamAppendSpy.mockRejectedValue(new Error("boom"));
 
 		const session = await stream.appendSession();
 
@@ -135,14 +146,15 @@ describe("AppendSession", () => {
 		p1.catch(() => {});
 		p2.catch(() => {});
 
+		// Advance timers to allow pump to attempt processing
+		await vi.advanceTimersByTimeAsync(10);
+
 		await expect(p1).rejects.toBeTruthy();
 		await expect(p2).rejects.toBeTruthy();
 
-		// After error, queue should be empty; new submit should restart processing
-		streamAppendSpy.mockResolvedValueOnce(makeAck(3));
+		// After fatal error, session is dead - new submits should also reject
 		const p3 = session.submit([{ body: "c" }]);
-		await expect(p3).resolves.toBeTruthy();
-		expect(streamAppendSpy).toHaveBeenCalledTimes(2); // 1 throw + 1 success
+		await expect(p3).rejects.toBeTruthy();
 	});
 
 	it("updates lastSeenPosition after successful append", async () => {
@@ -158,7 +170,7 @@ describe("AppendSession", () => {
 
 		// Create a session with very small max queued bytes (100 bytes)
 		const session = await stream.appendSession({
-			maxQueuedBytes: 100,
+			maxInflightBytes: 100,
 		});
 
 		// Control when appends resolve
@@ -210,6 +222,7 @@ describe("AppendSession", () => {
 		expect(thirdWriteStarted).toBe(true);
 		expect(streamAppendSpy).toHaveBeenCalledTimes(3);
 
+		// Close - with interruptible sleep, pump will wake immediately
 		await writer.close();
 	});
 });

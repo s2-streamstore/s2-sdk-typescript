@@ -1,7 +1,8 @@
 import { S2AccessTokens } from "./accessTokens.js";
 import { S2Basin } from "./basin.js";
 import { S2Basins } from "./basins.js";
-import type { S2ClientOptions } from "./common.js";
+import type { RetryConfig, S2ClientOptions } from "./common.js";
+import { S2Error } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
@@ -21,6 +22,7 @@ export class S2 {
 	private readonly client: Client;
 	private readonly makeBasinBaseUrl: (basin: string) => string;
 	private readonly includeBasinHeader: boolean;
+	private readonly retryConfig: RetryConfig;
 
 	/**
 	 * Account-scoped basin management operations.
@@ -40,15 +42,25 @@ export class S2 {
 	 */
 	constructor(options: S2ClientOptions) {
 		this.accessToken = Redacted.make(options.accessToken);
+		this.retryConfig = options.retry ?? {};
 		this.client = createClient(
 			createConfig({
 				baseUrl: options.baseUrl ?? defaultBaseUrl,
 				auth: () => Redacted.value(this.accessToken),
 			}),
 		);
-		this.basins = new S2Basins(this.client);
-		this.accessTokens = new S2AccessTokens(this.client);
-		this.metrics = new S2Metrics(this.client);
+
+		this.client.interceptors.error.use((err, res, req, opt) => {
+			return new S2Error({
+				message: err instanceof Error ? err.message : "Unknown error",
+				status: res.status,
+				origin: "server",
+			});
+		});
+
+		this.basins = new S2Basins(this.client, this.retryConfig);
+		this.accessTokens = new S2AccessTokens(this.client, this.retryConfig);
+		this.metrics = new S2Metrics(this.client, this.retryConfig);
 		this.makeBasinBaseUrl = options.makeBasinBaseUrl ?? defaultMakeBasinBaseUrl;
 		this.includeBasinHeader = !!options.makeBasinBaseUrl;
 	}
@@ -63,6 +75,7 @@ export class S2 {
 			accessToken: this.accessToken,
 			baseUrl: this.makeBasinBaseUrl(name),
 			includeBasinHeader: this.includeBasinHeader,
+			retryConfig: this.retryConfig,
 		});
 	}
 }

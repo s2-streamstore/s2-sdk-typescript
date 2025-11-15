@@ -1,5 +1,5 @@
 import { S2Error } from "./error.js";
-import { AppendRecord, meteredSizeBytes } from "./utils.js";
+import { AppendRecord, meteredBytes } from "./utils.js";
 
 export interface BatchTransformArgs {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
@@ -30,7 +30,7 @@ export type BatchOutput = {
  * @example
  * ```typescript
  * const batcher = new BatchTransform<"string">({
- *   lingerDuration: 20,
+ *   lingerDurationMillis: 20,
  *   maxBatchRecords: 100,
  *   maxBatchBytes: 256 * 1024,
  *   match_seq_num: 0  // Optional: auto-increments per batch
@@ -80,24 +80,53 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			},
 		});
 
-		// Cap at maximum allowed values
-		this.maxBatchRecords = Math.min(args?.maxBatchRecords ?? 1000, 1000);
-		this.maxBatchBytes = Math.min(
-			args?.maxBatchBytes ?? 1024 * 1024,
-			1024 * 1024,
-		);
+		// Validate configuration
+		if (args?.maxBatchRecords !== undefined) {
+			if (args.maxBatchRecords < 1 || args.maxBatchRecords > 1000) {
+				throw new S2Error({
+					message: `maxBatchRecords must be between 1 and 1000 (inclusive); got ${args.maxBatchRecords}`,
+					status: 400,
+					origin: "sdk",
+				});
+			}
+		}
+		if (args?.maxBatchBytes !== undefined) {
+			const max = 1024 * 1024;
+			if (args.maxBatchBytes < 1 || args.maxBatchBytes > max) {
+				throw new S2Error({
+					message: `maxBatchBytes must be between 1 and ${max} (1 MiB) bytes (inclusive); got ${args.maxBatchBytes}`,
+					status: 400,
+					origin: "sdk",
+				});
+			}
+		}
+		if (args?.lingerDurationMillis !== undefined) {
+			if (args.lingerDurationMillis < 0) {
+				throw new S2Error({
+					message: `lingerDurationMillis must be >= 0; got ${args.lingerDurationMillis}`,
+					status: 400,
+					origin: "sdk",
+				});
+			}
+		}
+
+		// Apply defaults
+		this.maxBatchRecords = args?.maxBatchRecords ?? 1000;
+		this.maxBatchBytes = args?.maxBatchBytes ?? 1024 * 1024;
 		this.lingerDuration = args?.lingerDurationMillis ?? 5;
 		this.fencing_token = args?.fencing_token;
 		this.next_match_seq_num = args?.match_seq_num;
 	}
 
 	private handleRecord(record: AppendRecord): void {
-		const recordSize = meteredSizeBytes(record);
+		const recordSize = meteredBytes(record);
 
 		// Reject individual records that exceed the max batch size
 		if (recordSize > this.maxBatchBytes) {
 			throw new S2Error({
 				message: `Record size ${recordSize} bytes exceeds maximum batch size of ${this.maxBatchBytes} bytes`,
+				status: 400,
+				origin: "sdk",
 			});
 		}
 

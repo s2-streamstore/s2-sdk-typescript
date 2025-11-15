@@ -1,3 +1,4 @@
+import createDebug from "debug";
 import type { S2RequestOptions } from "../../../../common.js";
 import { RangeNotSatisfiableError, S2Error } from "../../../../error.js";
 import {
@@ -11,10 +12,16 @@ import type {
 	StreamPosition,
 } from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
-import { meteredSizeBytes } from "../../../../utils.js";
+import { meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
+import type { AppendResult, CloseResult } from "../../../result.js";
+import { err, errClose, ok, okClose } from "../../../result.js";
+import {
+	RetryAppendSession as AppendSessionImpl,
+	RetryReadSession as ReadSessionImpl,
+} from "../../../retry.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -23,62 +30,127 @@ import type {
 	ReadArgs,
 	ReadBatch,
 	ReadRecord,
+	ReadResult,
 	ReadSession,
 	SessionTransport,
+	TransportAppendSession,
 	TransportConfig,
+	TransportReadSession,
 } from "../../types.js";
 import { streamAppend } from "./shared.js";
 
-export class FetchReadSession<
-	Format extends "string" | "bytes" = "string",
-> extends EventStream<ReadRecord<Format>> {
+const debug = createDebug("s2:fetch");
+
+export class FetchReadSession<Format extends "string" | "bytes" = "string">
+	extends ReadableStream<ReadResult<Format>>
+	implements TransportReadSession<Format>
+{
 	static async create<Format extends "string" | "bytes" = "string">(
 		client: Client,
 		name: string,
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	) {
+		debug("FetchReadSession.create stream=%s args=%o", name, args);
 		const { as, ...queryParams } = args ?? {};
-		const response = await read({
-			client,
-			path: {
-				stream: name,
-			},
-			headers: {
-				accept: "text/event-stream",
-				...(as === "bytes" ? { "s2-format": "base64" } : {}),
-			},
-			query: queryParams,
-			parseAs: "stream",
-			...options,
-		});
-		if (response.error) {
-			if ("message" in response.error) {
-				throw new S2Error({
-					message: response.error.message,
-					code: response.error.code ?? undefined,
-					status: response.response.status,
-				});
-			} else {
-				// special case for 416 - Range Not Satisfiable
-				throw new RangeNotSatisfiableError({
-					status: response.response.status,
-				});
-			}
-		}
-		if (!response.response.body) {
-			throw new S2Error({
-				message: "No body in SSE response",
+
+		try {
+			const response = await read({
+				client,
+				path: {
+					stream: name,
+				},
+				headers: {
+					accept: "text/event-stream",
+					...(as === "bytes" ? { "s2-format": "base64" } : {}),
+				},
+				query: queryParams,
+				parseAs: "stream",
+				...options,
 			});
+			if (response.error) {
+				// Convert error to S2Error and return error session
+				const status = response.response.status;
+				const error =
+					"message" in response.error
+						? new S2Error({
+								message: response.error.message,
+								code: response.error.code ?? undefined,
+								status,
+							})
+						: status === 416
+							? new RangeNotSatisfiableError({
+									status,
+								})
+							: new S2Error({
+									message: response.response.statusText ?? "Request failed",
+									status,
+								});
+				return FetchReadSession.createErrorSession<Format>(error);
+			}
+			if (!response.response.body) {
+				const error = new S2Error({
+					message: "No body in SSE response",
+					code: "INVALID_RESPONSE",
+					status: 502,
+					origin: "sdk",
+				});
+				return FetchReadSession.createErrorSession<Format>(error);
+			}
+			const format = (args?.as ?? "string") as Format;
+			return new FetchReadSession(response.response.body, format);
+		} catch (error) {
+			// Catch any thrown errors (network failures, DNS errors, etc.)
+			const s2Error =
+				error instanceof S2Error
+					? error
+					: new S2Error({
+							message: String(error),
+							status: 502, // Bad Gateway - network/fetch failure
+						});
+			return FetchReadSession.createErrorSession<Format>(s2Error);
 		}
-		const format = (args?.as ?? "string") as Format;
-		return new FetchReadSession(response.response.body, format);
 	}
 
-	private _lastReadPosition: StreamPosition | undefined = undefined;
+	/**
+	 * Create a session that immediately emits an error result and closes.
+	 * Used when errors occur during session creation.
+	 */
+	private static createErrorSession<Format extends "string" | "bytes">(
+		error: S2Error,
+	): FetchReadSession<Format> {
+		// Create a custom instance that extends ReadableStream and emits error immediately
+		const stream = new ReadableStream<ReadResult<Format>>({
+			start(controller) {
+				controller.enqueue({ ok: false, error });
+				controller.close();
+			},
+		});
+
+		// Copy methods from stream to create a proper FetchReadSession
+		const session = Object.assign(
+			Object.create(FetchReadSession.prototype),
+			stream,
+		);
+		session._nextReadPosition = undefined;
+		session._lastObservedTail = undefined;
+
+		return session as FetchReadSession<Format>;
+	}
+
+	private _nextReadPosition: StreamPosition | undefined = undefined;
+	private _lastObservedTail: StreamPosition | undefined = undefined;
 
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
-		super(stream, (msg) => {
+		// Track error from parser
+		let parserError: S2Error | null = null;
+
+		// Track last ping time for timeout detection (20s without a ping = timeout)
+		let lastPingTimeMs = performance.now();
+		const PING_TIMEOUT_MS = 20000; // 20 seconds
+
+		// Create EventStream that parses SSE and yields records
+		const eventStream = new EventStream<ReadRecord<Format>>(stream, (msg) => {
 			// Parse SSE events according to the S2 protocol
 			if (msg.event === "batch" && msg.data) {
 				const rawBatch: GeneratedReadBatch = JSON.parse(msg.data);
@@ -108,108 +180,171 @@ export class FetchReadSession<
 					}
 				})() as ReadBatch<Format>;
 				if (batch.tail) {
-					this._lastReadPosition = batch.tail;
+					this._lastObservedTail = batch.tail;
+				}
+				let lastRecord = batch.records?.at(-1);
+				if (lastRecord) {
+					this._nextReadPosition = {
+						seq_num: lastRecord.seq_num + 1,
+						timestamp: lastRecord.timestamp,
+					};
 				}
 				return { done: false, batch: true, value: batch.records ?? [] };
 			}
 			if (msg.event === "error") {
-				// Handle error events
-				throw new S2Error({ message: msg.data ?? "Unknown error" });
+				// Store error and signal end of stream
+				// SSE error events are server errors - treat as 503 (Service Unavailable) for retry logic
+				debug("parse event error");
+				parserError = new S2Error({
+					message: msg.data ?? "Unknown error",
+					status: 503,
+				});
+				return { done: true };
 			}
+			lastPingTimeMs = performance.now();
 
 			// Skip ping events and other events
 			return { done: false };
 		});
-	}
 
-	public lastReadPosition() {
-		return this._lastReadPosition;
-	}
-}
+		// Wrap the EventStream to convert records to ReadResult and check for errors
+		const reader = eventStream.getReader();
+		let done = false;
 
-class AcksStream extends ReadableStream<AppendAck> implements AsyncDisposable {
-	constructor(
-		setController: (
-			controller: ReadableStreamDefaultController<AppendAck>,
-		) => void,
-	) {
 		super({
-			start: (controller) => {
-				setController(controller);
+			pull: async (controller) => {
+				if (done) {
+					controller.close();
+					return;
+				}
+
+				// Check for ping timeout before reading
+				const now = performance.now();
+				const timeSinceLastPingMs = now - lastPingTimeMs;
+				if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
+					const timeoutError = new S2Error({
+						message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+						status: 408, // Request Timeout
+						code: "TIMEOUT",
+					});
+					debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
+					controller.enqueue({ ok: false, error: timeoutError });
+					done = true;
+					controller.close();
+					return;
+				}
+
+				try {
+					// Calculate remaining time until timeout
+					const remainingTimeMs = PING_TIMEOUT_MS - timeSinceLastPingMs;
+
+					// Race reader.read() against timeout
+					// This ensures we don't wait forever if server stops sending events
+					const result = await Promise.race([
+						reader.read(),
+						new Promise<never>((_, reject) =>
+							setTimeout(() => {
+								const elapsed = performance.now() - lastPingTimeMs;
+								reject(
+									new S2Error({
+										message: `No ping received for ${Math.floor(elapsed / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+										status: 408,
+										code: "TIMEOUT",
+									}),
+								);
+							}, remainingTimeMs),
+						),
+					]);
+
+					if (result.done) {
+						done = true;
+						// Check if stream ended due to error
+						if (parserError) {
+							controller.enqueue({ ok: false, error: parserError });
+						}
+						controller.close();
+					} else {
+						// Emit successful result
+						controller.enqueue({ ok: true, value: result.value });
+					}
+				} catch (error) {
+					// Convert unexpected errors to S2Error and emit as error result
+					const s2Err =
+						error instanceof S2Error
+							? error
+							: new S2Error({ message: String(error), status: 500 });
+					controller.enqueue({ ok: false, error: s2Err });
+					done = true;
+					controller.close();
+				}
+			},
+			cancel: async () => {
+				await eventStream.cancel();
 			},
 		});
 	}
 
-	async [Symbol.asyncDispose]() {
-		await this.cancel("disposed");
+	public nextReadPosition(): StreamPosition | undefined {
+		return this._nextReadPosition;
 	}
 
-	// Polyfill for older browsers
-	[Symbol.asyncIterator](): AsyncIterableIterator<AppendAck> {
+	public lastObservedTail(): StreamPosition | undefined {
+		return this._lastObservedTail;
+	}
+
+	// Implement AsyncIterable (for await...of support)
+	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
 		const reader = this.getReader();
 		return {
 			next: async () => {
 				const r = await reader.read();
-				if (r.done) {
-					reader.releaseLock();
-					return { done: true, value: undefined };
-				}
+				if (r.done) return { done: true, value: undefined };
 				return { done: false, value: r.value };
 			},
-			throw: async (e) => {
-				await reader.cancel(e);
+			return: async (value?: any) => {
 				reader.releaseLock();
-				return { done: true, value: undefined };
+				return { done: true, value };
 			},
-			return: async () => {
-				await reader.cancel("done");
+			throw: async (e?: any) => {
 				reader.releaseLock();
-				return { done: true, value: undefined };
+				throw e;
 			},
 			[Symbol.asyncIterator]() {
 				return this;
 			},
 		};
 	}
+
+	// Implement AsyncDisposable
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.cancel();
+	}
 }
 
+// Removed AcksStream - transport sessions no longer expose streams
+
 /**
- * Session for appending records to a stream.
- * Queues append requests and ensures only one is in-flight at a time.
+ * Fetch-based transport session for appending records via HTTP/1.1.
+ * Queues append requests and ensures only one is in-flight at a time (single-flight).
+ * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
-export class FetchAppendSession
-	implements ReadableWritablePair<AppendAck, AppendArgs>, AsyncDisposable
-{
-	private _lastAckedPosition: AppendAck | undefined = undefined;
+export class FetchAppendSession implements TransportAppendSession {
 	private queue: Array<{
 		records: AppendRecord[];
 		fencing_token?: string;
 		match_seq_num?: number;
-		meteredSize: number;
 	}> = [];
 	private pendingResolvers: Array<{
-		resolve: (ack: AppendAck) => void;
-		reject: (error: any) => void;
+		resolve: (result: AppendResult) => void;
 	}> = [];
 	private inFlight = false;
 	private readonly options?: S2RequestOptions;
 	private readonly stream: string;
-	private acksController:
-		| ReadableStreamDefaultController<AppendAck>
-		| undefined;
-	private _readable: AcksStream;
-	private _writable: WritableStream<AppendArgs>;
 	private closed = false;
 	private processingPromise: Promise<void> | null = null;
-	private queuedBytes = 0;
-	private readonly maxQueuedBytes: number;
-	private waitingForCapacity: Array<() => void> = [];
 	private readonly client: Client;
-
-	public readonly readable: ReadableStream<AppendAck>;
-	public readonly writable: WritableStream<AppendArgs>;
 
 	static async create(
 		stream: string,
@@ -233,161 +368,110 @@ export class FetchAppendSession
 	) {
 		this.options = requestOptions;
 		this.stream = stream;
-		this.maxQueuedBytes = sessionOptions?.maxQueuedBytes ?? 10 * 1024 * 1024; // 10 MiB default
 		this.client = createClient(
 			createConfig({
 				baseUrl: transportConfig.baseUrl,
 				auth: () => Redacted.value(transportConfig.accessToken),
+				headers: transportConfig.basinName
+					? { "s2-basin": transportConfig.basinName }
+					: {},
 			}),
 		);
-		// Create the readable stream for acks
-		this._readable = new AcksStream((controller) => {
-			this.acksController = controller;
-		});
-		this.readable = this._readable;
-
-		// Create the writable stream
-		let writableController: WritableStreamDefaultController;
-		this._writable = new WritableStream<AppendArgs>({
-			start: (controller) => {
-				writableController = controller;
-			},
-			write: async (chunk) => {
-				// Calculate batch size
-				let batchMeteredSize = 0;
-				for (const record of chunk.records) {
-					batchMeteredSize += meteredSizeBytes(record as AppendRecord);
-				}
-
-				// Wait for capacity if needed
-				while (
-					this.queuedBytes + batchMeteredSize > this.maxQueuedBytes &&
-					!this.closed
-				) {
-					await new Promise<void>((resolve) => {
-						this.waitingForCapacity.push(resolve);
-					});
-				}
-
-				// Submit the batch
-				this.submit(
-					chunk.records,
-					{
-						fencing_token: chunk.fencing_token ?? undefined,
-						match_seq_num: chunk.match_seq_num ?? undefined,
-					},
-					batchMeteredSize,
-				);
-			},
-			close: async () => {
-				this.closed = true;
-				await this.waitForDrain();
-			},
-			abort: async (reason) => {
-				this.closed = true;
-				this.queue = [];
-				this.queuedBytes = 0;
-
-				// Reject all pending promises
-				const error = new S2Error({
-					message: `AppendSession was aborted: ${reason}`,
-				});
-				for (const resolver of this.pendingResolvers) {
-					resolver.reject(error);
-				}
-				this.pendingResolvers = [];
-
-				// Reject all waiting for capacity
-				for (const resolver of this.waitingForCapacity) {
-					resolver();
-				}
-				this.waitingForCapacity = [];
-			},
-		});
-		this.writable = this._writable;
-	}
-
-	async [Symbol.asyncDispose]() {
-		await this.close();
-	}
-
-	/**
-	 * Get a stream of acknowledgements for appends.
-	 */
-	acks(): AcksStream {
-		return this._readable;
 	}
 
 	/**
 	 * Close the append session.
 	 * Waits for all pending appends to complete before resolving.
+	 * Never throws - returns CloseResult.
 	 */
-	async close(): Promise<void> {
-		await this.writable.close();
+	async close(): Promise<CloseResult> {
+		try {
+			this.closed = true;
+			await this.waitForDrain();
+			return okClose();
+		} catch (error) {
+			const s2Err =
+				error instanceof S2Error
+					? error
+					: new S2Error({ message: String(error), status: 500 });
+			return errClose(s2Err);
+		}
 	}
 
 	/**
 	 * Submit an append request to the session.
 	 * The request will be queued and sent when no other request is in-flight.
-	 * Returns a promise that resolves when the append is acknowledged or rejects on error.
+	 * Never throws - returns AppendResult discriminated union.
 	 */
 	submit(
 		records: AppendRecord | AppendRecord[],
-		args?: { fencing_token?: string; match_seq_num?: number },
-		precalculatedSize?: number,
-	): Promise<AppendAck> {
+		args?: {
+			fencing_token?: string;
+			match_seq_num?: number;
+			precalculatedSize?: number;
+		},
+	): Promise<AppendResult> {
+		// Validate closed state
 		if (this.closed) {
-			return Promise.reject(
-				new S2Error({ message: "AppendSession is closed" }),
+			return Promise.resolve(
+				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
 			);
 		}
 
 		const recordsArray = Array.isArray(records) ? records : [records];
 
-		// Validate batch size limits
+		// Validate batch size limits (non-retryable 400-level error)
 		if (recordsArray.length > 1000) {
-			return Promise.reject(
-				new S2Error({
-					message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
-				}),
+			return Promise.resolve(
+				err(
+					new S2Error({
+						message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
+						status: 400,
+						code: "INVALID_ARGUMENT",
+					}),
+				),
 			);
 		}
 
 		// Validate metered size (use precalculated if provided)
-		let batchMeteredSize = precalculatedSize ?? 0;
+		let batchMeteredSize = args?.precalculatedSize ?? 0;
 		if (batchMeteredSize === 0) {
 			for (const record of recordsArray) {
-				batchMeteredSize += meteredSizeBytes(record);
+				batchMeteredSize += meteredBytes(record);
 			}
 		}
 
 		if (batchMeteredSize > 1024 * 1024) {
-			return Promise.reject(
-				new S2Error({
-					message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
-				}),
+			return Promise.resolve(
+				err(
+					new S2Error({
+						message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
+						status: 400,
+						code: "INVALID_ARGUMENT",
+					}),
+				),
 			);
 		}
 
-		return new Promise((resolve, reject) => {
+		return new Promise((resolve) => {
 			this.queue.push({
 				records: recordsArray,
 				fencing_token: args?.fencing_token,
 				match_seq_num: args?.match_seq_num,
-				meteredSize: batchMeteredSize,
 			});
-			this.queuedBytes += batchMeteredSize;
-			this.pendingResolvers.push({ resolve, reject });
+			this.pendingResolvers.push({ resolve });
 
 			// Start processing if not already running
 			if (!this.processingPromise) {
-				this.processingPromise = this.processLoop();
+				// Attach a catch to avoid unhandled rejection warnings on hard failures
+				this.processingPromise = this.processLoop().catch(() => {});
 			}
 		});
 	}
 
 	/**
 	 * Main processing loop that sends queued requests one at a time.
+	 * Single-flight: only one request in progress at a time.
 	 */
 	private async processLoop(): Promise<void> {
 		while (this.queue.length > 0) {
@@ -406,48 +490,32 @@ export class FetchAppendSession
 					},
 					this.options,
 				);
-				this._lastAckedPosition = ack;
 
-				// Emit ack to the acks stream if it exists
-				if (this.acksController) {
-					this.acksController.enqueue(ack);
-				}
-
-				// Resolve the promise for this request
-				resolver.resolve(ack);
-
-				// Release capacity and wake up waiting writers
-				this.queuedBytes -= args.meteredSize;
-				while (this.waitingForCapacity.length > 0) {
-					const waiter = this.waitingForCapacity.shift()!;
-					waiter();
-					// Only wake one at a time - let them check capacity again
-					break;
-				}
+				// Resolve with success result
+				resolver.resolve(ok(ack));
 			} catch (error) {
-				this.inFlight = false;
-				this.processingPromise = null;
+				// Convert error to S2Error and resolve with error result
+				const s2Err =
+					error instanceof S2Error
+						? error
+						: new S2Error({ message: String(error), status: 502 });
 
-				// Reject the promise for this request
-				resolver.reject(error);
+				// Resolve this request with error
+				resolver.resolve(err(s2Err));
 
-				// Reject all remaining pending promises
+				// Resolve all remaining pending promises with the same error
+				// (transport failure affects all queued requests)
 				for (const pendingResolver of this.pendingResolvers) {
-					pendingResolver.reject(error);
+					pendingResolver.resolve(err(s2Err));
 				}
 				this.pendingResolvers = [];
 
-				// Clear the queue and reset queued bytes
+				// Clear the queue
 				this.queue = [];
-				this.queuedBytes = 0;
 
-				// Wake up all waiting writers (they'll see the closed state or retry)
-				for (const waiter of this.waitingForCapacity) {
-					waiter();
-				}
-				this.waitingForCapacity = [];
-
-				// Do not rethrow here to avoid unhandled rejection; callers already received rejection
+				this.inFlight = false;
+				this.processingPromise = null;
+				return;
 			}
 
 			this.inFlight = false;
@@ -466,15 +534,6 @@ export class FetchAppendSession
 		while (this.queue.length > 0 || this.inFlight) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
-
-		// Close the acks stream if it exists
-		if (this.acksController) {
-			this.acksController.close();
-		}
-	}
-
-	lastAckedPosition() {
-		return this._lastAckedPosition;
 	}
 }
 
@@ -490,6 +549,7 @@ export class FetchTransport implements SessionTransport {
 			createConfig({
 				baseUrl: config.baseUrl,
 				auth: () => Redacted.value(config.accessToken),
+				headers: config.basinName ? { "s2-basin": config.basinName } : {},
 			}),
 		);
 		this.transportConfig = config;
@@ -500,11 +560,23 @@ export class FetchTransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
-		return FetchAppendSession.create(
-			stream,
-			this.transportConfig,
-			sessionOptions,
-			requestOptions,
+		// Fetch transport intentionally enforces single-flight submission (HTTP/1.1)
+		// This ensures only one batch is in-flight at a time, regardless of user setting.
+		const opts = {
+			...sessionOptions,
+			maxInflightBatches: 1,
+		} as AppendSessionOptions;
+		return AppendSessionImpl.create(
+			(myOptions) => {
+				return FetchAppendSession.create(
+					stream,
+					this.transportConfig,
+					myOptions,
+					requestOptions,
+				);
+			},
+			opts,
+			this.transportConfig.retry,
 		);
 	}
 
@@ -513,6 +585,12 @@ export class FetchTransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
-		return FetchReadSession.create(this.client, stream, args, options);
+		return ReadSessionImpl.create(
+			(myArgs) => {
+				return FetchReadSession.create(this.client, stream, myArgs, options);
+			},
+			args,
+			this.transportConfig.retry,
+		);
 	}
 }

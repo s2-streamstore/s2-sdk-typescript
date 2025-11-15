@@ -1,9 +1,10 @@
 import type { S2RequestOptions } from "../../../../common.js";
 import {
-	FencingTokenMismatchError,
+	makeAppendPreconditionError,
+	makeServerError,
 	RangeNotSatisfiableError,
 	S2Error,
-	SeqNumMismatchError,
+	s2Error,
 } from "../../../../error.js";
 import type { Client } from "../../../../generated/client/index.js";
 import {
@@ -18,10 +19,7 @@ import {
 	read,
 	type StreamPosition,
 } from "../../../../generated/index.js";
-import {
-	computeAppendRecordFormat,
-	meteredSizeBytes,
-} from "../../../../utils.js";
+import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64, encodeToBase64 } from "../../../base64.js";
 import type {
 	AppendArgs,
@@ -39,30 +37,31 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	options?: S2RequestOptions,
 ) {
 	const { as, ...queryParams } = args ?? {};
-	const response = await read({
-		client,
-		path: {
-			stream,
-		},
-		headers: {
-			...(as === "bytes" ? { "s2-format": "base64" } : {}),
-		},
-		query: queryParams,
-		...options,
-	});
+	let response: any;
+	try {
+		response = await read({
+			client,
+			path: {
+				stream,
+			},
+			headers: {
+				...(as === "bytes" ? { "s2-format": "base64" } : {}),
+			},
+			query: queryParams,
+			...options,
+		});
+	} catch (error) {
+		throw s2Error(error);
+	}
 	if (response.error) {
-		if ("message" in response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		} else {
-			// special case for 416 - Range Not Satisfiable
-			throw new RangeNotSatisfiableError({
-				status: response.response.status,
-			});
+		const status = response.response.status;
+		if (status === 416) {
+			throw new RangeNotSatisfiableError({ status });
 		}
+		throw makeServerError(
+			{ status, statusText: response.response.statusText },
+			response.error,
+		);
 	}
 
 	if (args?.as === "bytes") {
@@ -86,12 +85,14 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	} else {
 		const res: ReadBatch<"string"> = {
 			...response.data,
-			records: response.data.records.map((record) => ({
-				...record,
-				headers: record.headers
-					? Object.fromEntries(record.headers)
-					: undefined,
-			})),
+			records: response.data.records?.map(
+				(record: GeneratedSequencedRecord) => ({
+					...record,
+					headers: record.headers
+						? Object.fromEntries(record.headers)
+						: undefined,
+				}),
+			),
 		};
 		return res as ReadBatch<Format>;
 	}
@@ -113,7 +114,7 @@ export async function streamAppend(
 	let batchMeteredSize = 0;
 
 	for (const record of recordsArray) {
-		batchMeteredSize += meteredSizeBytes(record);
+		batchMeteredSize += meteredBytes(record);
 	}
 
 	if (batchMeteredSize > 1024 * 1024) {
@@ -134,6 +135,7 @@ export async function streamAppend(
 		const format = computeAppendRecordFormat(record);
 		if (format === "bytes") {
 			const formattedRecord = record as AppendRecordForFormat<"bytes">;
+			hasAnyBytesRecords = true;
 			const encodedRecord = {
 				...formattedRecord,
 				body: formattedRecord.body
@@ -171,52 +173,35 @@ export async function streamAppend(
 		}
 	}
 
-	const response = await append({
-		client,
-		path: {
-			stream,
-		},
-		body: {
-			fencing_token: args?.fencing_token,
-			match_seq_num: args?.match_seq_num,
-			records: encodedRecords,
-		},
-		headers: {
-			...(hasAnyBytesRecords ? { "s2-format": "base64" } : {}),
-		},
-		...options,
-	});
+	let response: any;
+	try {
+		response = await append({
+			client,
+			path: {
+				stream,
+			},
+			body: {
+				fencing_token: args?.fencing_token,
+				match_seq_num: args?.match_seq_num,
+				records: encodedRecords,
+			},
+			headers: {
+				...(hasAnyBytesRecords ? { "s2-format": "base64" } : {}),
+			},
+			...options,
+		});
+	} catch (error) {
+		throw s2Error(error);
+	}
 	if (response.error) {
-		if ("message" in response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		} else {
-			// special case for 412 - append condition failed
-			if ("seq_num_mismatch" in response.error) {
-				throw new SeqNumMismatchError({
-					message: "Append condition failed: sequence number mismatch",
-					code: "APPEND_CONDITION_FAILED",
-					status: response.response.status,
-					expectedSeqNum: response.error.seq_num_mismatch,
-				});
-			} else if ("fencing_token_mismatch" in response.error) {
-				throw new FencingTokenMismatchError({
-					message: "Append condition failed: fencing token mismatch",
-					code: "APPEND_CONDITION_FAILED",
-					status: response.response.status,
-					expectedFencingToken: response.error.fencing_token_mismatch,
-				});
-			} else {
-				// fallback for unknown 412 error format
-				throw new S2Error({
-					message: "Append condition failed",
-					status: response.response.status,
-				});
-			}
+		const status = response.response.status;
+		if (status === 412) {
+			throw makeAppendPreconditionError(status, response.error);
 		}
+		throw makeServerError(
+			{ status, statusText: response.response.statusText },
+			response.error,
+		);
 	}
 	return response.data;
 }

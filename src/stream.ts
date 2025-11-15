@@ -1,7 +1,8 @@
-import type { S2RequestOptions } from "./common.js";
-import { S2Error } from "./error.js";
+import type { RetryConfig, S2RequestOptions } from "./common.js";
+import { withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import { type AppendAck, checkTail } from "./generated/index.js";
+import { isRetryable, withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
 	streamAppend,
@@ -22,14 +23,21 @@ import type {
 export class S2Stream {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
+	private readonly retryConfig?: RetryConfig;
 	private _transport?: SessionTransport;
 
 	public readonly name: string;
 
-	constructor(name: string, client: Client, transportConfig: TransportConfig) {
+	constructor(
+		name: string,
+		client: Client,
+		transportConfig: TransportConfig,
+		retryConfig?: RetryConfig,
+	) {
 		this.name = name;
 		this.client = client;
 		this.transportConfig = transportConfig;
+		this.retryConfig = retryConfig;
 	}
 
 	/**
@@ -48,23 +56,17 @@ export class S2Stream {
 	 * Returns the next sequence number and timestamp to be assigned (`tail`).
 	 */
 	public async checkTail(options?: S2RequestOptions) {
-		const response = await checkTail({
-			client: this.client,
-			path: {
-				stream: this.name,
-			},
-			...options,
+		return await withRetries(this.retryConfig, async () => {
+			return await withS2Data(() =>
+				checkTail({
+					client: this.client,
+					path: {
+						stream: this.name,
+					},
+					...options,
+				}),
+			);
 		});
-
-		if (response.error) {
-			throw new S2Error({
-				message: response.error.message,
-				code: response.error.code ?? undefined,
-				status: response.response.status,
-			});
-		}
-
-		return response.data;
 	}
 
 	/**
@@ -79,7 +81,9 @@ export class S2Stream {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadBatch<Format>> {
-		return await streamRead(this.name, this.client, args, options);
+		return await withRetries(this.retryConfig, async () => {
+			return await streamRead(this.name, this.client, args, options);
+		});
 	}
 	/**
 	 * Append one or more records to the stream.
@@ -100,7 +104,27 @@ export class S2Stream {
 		args?: Omit<AppendArgs, "records">,
 		options?: S2RequestOptions,
 	): Promise<AppendAck> {
-		return await streamAppend(this.name, this.client, records, args, options);
+		return await withRetries(
+			this.retryConfig,
+			async () => {
+				return await streamAppend(
+					this.name,
+					this.client,
+					records,
+					args,
+					options,
+				);
+			},
+			(config, error) => {
+				if ((config.appendRetryPolicy ?? "noSideEffects") === "noSideEffects") {
+					// Allow retry only when the append is naturally idempotent by containing
+					// a match_seq_num condition.
+					return !!args?.match_seq_num;
+				} else {
+					return true;
+				}
+			},
+		);
 	}
 	/**
 	 * Open a streaming read session
@@ -121,7 +145,8 @@ export class S2Stream {
 	 * Use this to coordinate high-throughput, sequential appends with backpressure.
 	 * Records can be either string or bytes format - the format is specified in each record.
 	 *
-	 * @param options Optional request options
+	 * @param sessionOptions Options that control append session behavior
+	 * @param requestOptions Optional request options
 	 */
 	public async appendSession(
 		sessionOptions?: AppendSessionOptions,

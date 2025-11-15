@@ -1,4 +1,5 @@
-import type { S2RequestOptions } from "../../common.js";
+import type { RetryConfig, S2RequestOptions } from "../../common.js";
+import type { S2Error } from "../../error.js";
 import type {
 	AppendAck,
 	AppendInput as GeneratedAppendInput,
@@ -51,39 +52,125 @@ export type AppendRecord =
 	| AppendRecordForFormat<"string">
 	| AppendRecordForFormat<"bytes">;
 
-export type StringAppendRecord = AppendRecordForFormat<"string">;
-export type BytesAppendRecord = AppendRecordForFormat<"bytes">;
-
 export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 	records: Array<AppendRecord>;
 };
 
+/**
+ * Stream of append acknowledgements used by {@link AppendSession}.
+ */
 export interface AcksStream
 	extends ReadableStream<AppendAck>,
 		AsyncIterable<AppendAck> {}
 
-export interface AppendSession
-	extends ReadableWritablePair<AppendAck, AppendArgs>,
-		AsyncDisposable {
+/**
+ * Low-level append session implemented by transports.
+ *
+ * - Never throws: errors are encoded in the returned {@link AppendResult}.
+ * - Does not implement retry or backpressure; those are added by {@link AppendSession}.
+ */
+export interface TransportAppendSession {
+	submit(
+		records: AppendRecord | AppendRecord[],
+		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
+	): Promise<import("../result.js").AppendResult>;
+	close(): Promise<import("../result.js").CloseResult>;
+}
+
+/**
+ * Public AppendSession interface with retry, backpressure, and streams.
+ * This is what users interact with - implemented by AppendSession in ../retry.ts.
+ */
+export interface AppendSession extends AsyncDisposable {
+	/**
+	 * Readable stream of acknowledgements for appends.
+	 */
+	readonly readable: ReadableStream<AppendAck>;
+	/**
+	 * Writable stream of append requests.
+	 */
+	readonly writable: WritableStream<AppendArgs>;
+	/**
+	 * Submit an append request and await its acknowledgement.
+	 * This method does not apply backpressure; use {@link writable} for that.
+	 */
 	submit(
 		records: AppendRecord | AppendRecord[],
 		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
 	): Promise<AppendAck>;
-	acks(): AcksStream;
+	/**
+	 * Close the append session, waiting for all inflight appends to settle.
+	 */
 	close(): Promise<void>;
+	/**
+	 * Get a stream of acknowledgements for appends.
+	 */
+	acks(): AcksStream;
+	/**
+	 * Get the last acknowledged position, if any.
+	 */
 	lastAckedPosition(): AppendAck | undefined;
+	/**
+	 * If the session failed, returns the fatal error that caused it to stop.
+	 */
+	failureCause(): S2Error | undefined;
 }
 
+/**
+ * Result type for transport-level read operations.
+ * Transport sessions yield ReadResult instead of throwing errors.
+ */
+export type ReadResult<Format extends "string" | "bytes" = "string"> =
+	| { ok: true; value: ReadRecord<Format> }
+	| { ok: false; error: S2Error };
+
+/**
+ * Transport-level read session interface.
+ * Transport implementations yield ReadResult and never throw errors from the stream.
+ * ReadSession wraps these and converts them to the public ReadSession interface.
+ */
+export interface TransportReadSession<
+	Format extends "string" | "bytes" = "string",
+> extends ReadableStream<ReadResult<Format>>,
+		AsyncIterable<ReadResult<Format>>,
+		AsyncDisposable {
+	nextReadPosition(): StreamPosition | undefined;
+	lastObservedTail(): StreamPosition | undefined;
+}
+
+/**
+ * Public-facing read session interface.
+ * Yields records directly and propagates errors by throwing (standard stream behavior).
+ */
 export interface ReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadRecord<Format>>,
 		AsyncIterable<ReadRecord<Format>>,
 		AsyncDisposable {
-	lastReadPosition(): StreamPosition | undefined;
+	/**
+	 * Get the next read position, if known.
+	 */
+	nextReadPosition(): StreamPosition | undefined;
+	/**
+	 * Get the last observed tail position, if known.
+	 */
+	lastObservedTail(): StreamPosition | undefined;
 }
 
+/**
+ * Options that control client-side append backpressure and concurrency.
+ *
+ * These are applied by {@link AppendSession}; transports ignore them.
+ */
 export interface AppendSessionOptions {
-	/** Maximum bytes to queue before applying backpressure (default: 10 MiB) */
-	maxQueuedBytes?: number;
+	/**
+	 * Aggregate size of records, as calculated by {@link meteredBytes}, to allow in-flight before applying backpressure (default: 10 MiB).
+	 */
+	maxInflightBytes?: number;
+	/**
+	 * Maximum number of batches allowed in-flight before
+	 * applying backpressure.
+	 */
+	maxInflightBatches?: number;
 }
 
 export interface SessionTransport {
@@ -105,4 +192,12 @@ export interface TransportConfig {
 	baseUrl: string;
 	accessToken: Redacted.Redacted;
 	forceTransport?: SessionTransports;
+	/**
+	 * Basin name to include in s2-basin header when using account endpoint
+	 */
+	basinName?: string;
+	/**
+	 * Retry configuration inherited from the top-level client
+	 */
+	retry?: RetryConfig;
 }
