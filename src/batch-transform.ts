@@ -1,5 +1,5 @@
 import { S2Error } from "./error.js";
-import { AppendRecord, meteredSizeBytes } from "./utils.js";
+import { AppendRecord, meteredBytes } from "./utils.js";
 
 export interface BatchTransformArgs {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
@@ -119,7 +119,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	}
 
 	private handleRecord(record: AppendRecord): void {
-		const recordSize = meteredSizeBytes(record);
+		const recordSize = meteredBytes(record);
 
 		// Reject individual records that exceed the max batch size
 		if (recordSize > this.maxBatchBytes) {

@@ -124,7 +124,7 @@ The `AppendSession` controls how many batches can be inflight at a given time, w
 
 ## Examples
 
-The [`examples`](./examples) directory in this repository contains a variety of
+The [`examples`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/examples) directory in this repository contains a variety of
 example use cases demonstrating how to use the SDK effectively.
 
 Run any example using the following command:

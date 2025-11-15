@@ -145,7 +145,8 @@ export class S2Stream {
 	 * Use this to coordinate high-throughput, sequential appends with backpressure.
 	 * Records can be either string or bytes format - the format is specified in each record.
 	 *
-	 * @param options Optional request options
+	 * @param sessionOptions Options that control append session behavior
+	 * @param requestOptions Optional request options
 	 */
 	public async appendSession(
 		sessionOptions?: AppendSessionOptions,

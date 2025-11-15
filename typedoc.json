@@ -8,5 +8,15 @@
   "excludeInternal": true,
   "readme": "README.md",
   "gitRevision": "main",
+  "intentionallyNotExported": [
+    "src/generated/core/types.gen.ts:Client",
+    "src/generated/client/types.gen.ts:RequestFn",
+    "src/generated/client/types.gen.ts:Config",
+    "src/generated/client/types.gen.ts:MethodFn",
+    "src/generated/client/types.gen.ts:BuildUrlFn",
+    "src/generated/client/types.gen.ts:SseFn",
+    "src/generated/client/utils.gen.ts:Middleware",
+    "src/generated/client/types.gen.ts:ResolvedRequestOptions"
+  ],
   "includeVersion": true
 }

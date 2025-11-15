@@ -3,7 +3,7 @@ import { S2Error } from "../error.js";
 import type { AppendAck, StreamPosition } from "../generated/index.js";
 import type { AppendResult, CloseResult } from "../lib/result.js";
 import { err, errClose, ok, okClose } from "../lib/result.js";
-import { AppendSession as AppendSessionImpl } from "../lib/retry.js";
+import { RetryAppendSession as AppendSessionImpl } from "../lib/retry.js";
 import type {
 	AcksStream,
 	AppendArgs,

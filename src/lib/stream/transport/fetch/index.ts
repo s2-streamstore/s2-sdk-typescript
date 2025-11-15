@@ -12,15 +12,15 @@ import type {
 	StreamPosition,
 } from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
-import { meteredSizeBytes } from "../../../../utils.js";
+import { meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
 import {
-	AppendSession as AppendSessionImpl,
-	ReadSession as ReadSessionImpl,
+	RetryAppendSession as AppendSessionImpl,
+	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
 import type {
 	AppendArgs,
@@ -437,7 +437,7 @@ export class FetchAppendSession implements TransportAppendSession {
 		let batchMeteredSize = args?.precalculatedSize ?? 0;
 		if (batchMeteredSize === 0) {
 			for (const record of recordsArray) {
-				batchMeteredSize += meteredSizeBytes(record);
+				batchMeteredSize += meteredBytes(record);
 			}
 		}
 

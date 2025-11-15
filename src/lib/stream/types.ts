@@ -52,9 +52,6 @@ export type AppendRecord =
 	| AppendRecordForFormat<"string">
 	| AppendRecordForFormat<"bytes">;
 
-export type StringAppendRecord = AppendRecordForFormat<"string">;
-export type BytesAppendRecord = AppendRecordForFormat<"bytes">;
-
 export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
 	records: Array<AppendRecord>;
 };
@@ -84,7 +81,7 @@ export interface TransportAppendSession {
  * Public AppendSession interface with retry, backpressure, and streams.
  * This is what users interact with - implemented by AppendSession in ../retry.ts.
  */
-export interface AppendSessionBase extends AsyncDisposable {
+export interface AppendSession extends AsyncDisposable {
 	/**
 	 * Readable stream of acknowledgements for appends.
 	 */
@@ -120,11 +117,6 @@ export interface AppendSessionBase extends AsyncDisposable {
 }
 
 /**
- * Public AppendSession type exposed by the SDK.
- */
-export type AppendSession = AppendSessionBase;
-
-/**
  * Result type for transport-level read operations.
  * Transport sessions yield ReadResult instead of throwing errors.
  */
@@ -150,19 +142,19 @@ export interface TransportReadSession<
  * Public-facing read session interface.
  * Yields records directly and propagates errors by throwing (standard stream behavior).
  */
-export interface ReadSessionBase<Format extends "string" | "bytes" = "string">
+export interface ReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadRecord<Format>>,
 		AsyncIterable<ReadRecord<Format>>,
 		AsyncDisposable {
+	/**
+	 * Get the next read position, if known.
+	 */
 	nextReadPosition(): StreamPosition | undefined;
+	/**
+	 * Get the last observed tail position, if known.
+	 */
 	lastObservedTail(): StreamPosition | undefined;
 }
-
-/**
- * Public ReadSession type exposed by the SDK.
- */
-export type ReadSession<Format extends "string" | "bytes" = "string"> =
-	ReadSessionBase<Format>;
 
 /**
  * Options that control client-side append backpressure and concurrency.
@@ -171,15 +163,12 @@ export type ReadSession<Format extends "string" | "bytes" = "string"> =
  */
 export interface AppendSessionOptions {
 	/**
-	 * Maximum bytes to queue before applying backpressure (default: 10 MiB).
-	 * Enforced by AppendSession; underlying transports do not apply
-	 * byte-based backpressure on their own.
+	 * Aggregate size of records, as calculated by {@link meteredBytes}, to allow in-flight before applying backpressure (default: 10 MiB).
 	 */
 	maxInflightBytes?: number;
 	/**
-	 * Maximum number of batches allowed in-flight (including queued) before
-	 * applying backpressure. This is enforced by AppendSession; underlying
-	 * transport sessions do not implement their own backpressure.
+	 * Maximum number of batches allowed in-flight before
+	 * applying backpressure.
 	 */
 	maxInflightBatches?: number;
 }

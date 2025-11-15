@@ -122,8 +122,7 @@ export class S2Basins {
 	/**
 	 * Reconfigure a basin.
 	 *
-	 * @param args.basin Basin name
-	 * @param args.body Configuration fields to change (e.g. default stream config)
+	 * @param args Configuration for the basin to reconfigure (including basin name and fields to change)
 	 */
 	public async reconfigure(
 		args: ReconfigureBasinArgs,

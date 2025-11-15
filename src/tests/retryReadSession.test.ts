@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
 import type { StreamPosition } from "../generated/index.js";
-import { ReadSession } from "../lib/retry.js";
+import { RetryReadSession } from "../lib/retry.js";
 import type {
 	ReadArgs,
 	ReadRecord,
@@ -138,7 +138,7 @@ describe("ReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -182,7 +182,7 @@ describe("ReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -226,7 +226,7 @@ describe("ReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -272,7 +272,7 @@ describe("ReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -315,7 +315,7 @@ describe("ReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -358,7 +358,7 @@ describe("ReadSession (unit)", () => {
 		let callCount = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				callCount++;
@@ -416,7 +416,7 @@ describe("ReadSession (unit)", () => {
 	it("fails after max retry attempts exhausted", async () => {
 		let callCount = 0;
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (_args) => {
 				callCount++;
 				// Always error immediately without emitting any successful records
@@ -457,7 +457,7 @@ describe("ReadSession (unit)", () => {
 		let call = 0;
 		const capturedArgs: Array<ReadArgs<"string">> = [];
 
-		const session = await ReadSession.create(
+		const session = await RetryReadSession.create(
 			async (args) => {
 				capturedArgs.push({ ...args });
 				call++;

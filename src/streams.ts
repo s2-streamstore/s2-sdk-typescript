@@ -122,8 +122,7 @@ export class S2Streams {
 	/**
 	 * Reconfigure a stream.
 	 *
-	 * @param args.stream Stream name
-	 * @param args.body Configuration fields to change
+	 * @param args Configuration for the stream to reconfigure (including stream name and fields to change)
 	 */
 	public async reconfigure(
 		args: ReconfigureStreamArgs,

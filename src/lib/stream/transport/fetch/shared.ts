@@ -19,10 +19,7 @@ import {
 	read,
 	type StreamPosition,
 } from "../../../../generated/index.js";
-import {
-	computeAppendRecordFormat,
-	meteredSizeBytes,
-} from "../../../../utils.js";
+import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64, encodeToBase64 } from "../../../base64.js";
 import type {
 	AppendArgs,
@@ -117,7 +114,7 @@ export async function streamAppend(
 	let batchMeteredSize = 0;
 
 	for (const record of recordsArray) {
-		batchMeteredSize += meteredSizeBytes(record);
+		batchMeteredSize += meteredBytes(record);
 	}
 
 	if (batchMeteredSize > 1024 * 1024) {

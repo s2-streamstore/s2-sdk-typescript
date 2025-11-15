@@ -137,7 +137,7 @@ export function utf8ByteLength(str: string): number {
  * @param record The record to measure
  * @returns The size in bytes
  */
-export function meteredSizeBytes<Format extends "string" | "bytes">(
+export function meteredBytes<Format extends "string" | "bytes">(
 	record: AppendRecord | ReadRecord<Format>,
 ): number {
 	// Calculate header size based on actual data types

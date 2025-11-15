@@ -202,6 +202,7 @@ export async function withS2Data<T>(
  */
 export class S2Error extends Error {
 	public readonly code?: string;
+	/** HTTP status code. 0 for non-HTTP/internal errors. */
 	public readonly status: number;
 	/** Optional structured error details for diagnostics. */
 	public readonly data?: unknown;

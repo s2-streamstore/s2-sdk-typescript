@@ -18,10 +18,7 @@ export class S2Basin {
 	 *
 	 * Use this to work with streams inside a single basin.
 	 * @param name Basin name
-	 * @param accessToken Redacted access token from the parent `S2` client
-	 * @param baseUrl Base URL for the basin (e.g. `https://my-basin.b.aws.s2.dev/v1`)
-	 * @param includeBasinHeader Include the `S2-Basin` header with the request
-	 * @param retryConfig Retry configuration inherited from parent S2 client
+	 * @param options Configuration for the basin-scoped client
 	 */
 	constructor(
 		name: string,

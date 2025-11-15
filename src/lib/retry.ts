@@ -8,7 +8,7 @@ import {
 	withS2Error,
 } from "../error.js";
 import type { AppendAck, StreamPosition } from "../generated/index.js";
-import { meteredSizeBytes } from "../utils.js";
+import { meteredBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import type {
@@ -160,7 +160,7 @@ export async function withRetries<T>(
 
 	throw lastError;
 }
-export class ReadSession<Format extends "string" | "bytes" = "string">
+export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadRecord<Format>>
 	implements ReadSessionType<Format>
 {
@@ -177,7 +177,7 @@ export class ReadSession<Format extends "string" | "bytes" = "string">
 		args: ReadArgs<Format> = {},
 		config?: RetryConfig,
 	) {
-		return new ReadSession<Format>(args, generator, config);
+		return new RetryReadSession<Format>(args, generator, config);
 	}
 
 	private constructor(
@@ -286,7 +286,7 @@ export class ReadSession<Format extends "string" | "bytes" = "string">
 							timestamp: record.timestamp,
 						};
 						this._recordsRead++;
-						this._bytesRead += meteredSizeBytes(record);
+						this._bytesRead += meteredBytes(record);
 						attempt = 0;
 
 						controller.enqueue(record);
@@ -405,7 +405,7 @@ type InflightEntry = {
 
 const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
 
-export class AppendSession implements AsyncDisposable, AppendSessionType {
+export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private readonly requestTimeoutMillis: number;
 	private readonly maxQueuedBytes: number;
 	private readonly maxInflightBatches?: number;
@@ -474,7 +474,7 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 				// Calculate metered size
 				let batchMeteredSize = 0;
 				for (const record of recordsArray) {
-					batchMeteredSize += meteredSizeBytes(record);
+					batchMeteredSize += meteredBytes(record);
 				}
 
 				// Wait for capacity (backpressure for writable only)
@@ -515,8 +515,8 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 		) => Promise<TransportAppendSession>,
 		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
-	): Promise<AppendSession> {
-		return new AppendSession(generator, sessionOptions, config);
+	): Promise<RetryAppendSession> {
+		return new RetryAppendSession(generator, sessionOptions, config);
 	}
 
 	/**
@@ -533,7 +533,7 @@ export class AppendSession implements AsyncDisposable, AppendSessionType {
 		let batchMeteredSize = args?.precalculatedSize ?? 0;
 		if (batchMeteredSize === 0) {
 			for (const record of recordsArray) {
-				batchMeteredSize += meteredSizeBytes(record);
+				batchMeteredSize += meteredBytes(record);
 			}
 		}
 

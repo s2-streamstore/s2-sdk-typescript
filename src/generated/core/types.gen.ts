@@ -18,6 +18,7 @@ export type HttpMethod =
   | 'put'
   | 'trace';
 
+/** @internal */
 export type Client<
   RequestFn = never,
   Config = unknown,
@@ -38,6 +39,7 @@ export type Client<
     ? { sse?: never }
     : { sse: { [K in HttpMethod]: SseFn } });
 
+/** @internal */
 export interface Config {
   /**
    * Auth token or a function returning auth token. The resolved value will be
