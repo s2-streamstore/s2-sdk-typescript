@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.0] - 2025-11-15
+
+### 🚀 Features
+
+- c98fb57: Retries, read resumption, error logic and misc
+
+### Breaking Changes 
+
+- `meteredSizeBytes` renamed to `meteredBytes`.
+- `AppendSessionOptions.maxQueuedBytes` renamed to `maxInflightBytes`
+- `ReadSession.lastReadPosition()` removed
+    - Use `session.nextReadPosition()`, or `session.lastObservedTail()` instead
+- New retry behavior on most operations.
+    -  To approximate the old "no retries" behavior, construct `S2` with `retry: { maxAttempts: 1 }`
+
 ## 0.17.6
 
 ### Patch Changes
