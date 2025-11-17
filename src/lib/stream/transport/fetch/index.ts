@@ -22,6 +22,7 @@ import {
 	RetryAppendSession as AppendSessionImpl,
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
+import { canSetUserAgentHeader, DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -368,13 +369,18 @@ export class FetchAppendSession implements TransportAppendSession {
 	) {
 		this.options = requestOptions;
 		this.stream = stream;
+		const headers: Record<string, string> = {};
+		if (transportConfig.basinName) {
+			headers["s2-basin"] = transportConfig.basinName;
+		}
+		if (canSetUserAgentHeader()) {
+			headers["user-agent"] = DEFAULT_USER_AGENT;
+		}
 		this.client = createClient(
 			createConfig({
 				baseUrl: transportConfig.baseUrl,
 				auth: () => Redacted.value(transportConfig.accessToken),
-				headers: transportConfig.basinName
-					? { "s2-basin": transportConfig.basinName }
-					: {},
+				headers: headers,
 			}),
 		);
 	}
@@ -545,11 +551,18 @@ export class FetchTransport implements SessionTransport {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
 	constructor(config: TransportConfig) {
+		const headers: Record<string, string> = {};
+		if (config.basinName) {
+			headers["s2-basin"] = config.basinName;
+		}
+		if (canSetUserAgentHeader()) {
+			headers["user-agent"] = DEFAULT_USER_AGENT;
+		}
 		this.client = createClient(
 			createConfig({
 				baseUrl: config.baseUrl,
 				auth: () => Redacted.value(config.accessToken),
-				headers: config.basinName ? { "s2-basin": config.basinName } : {},
+				headers: headers,
 			}),
 		);
 		this.transportConfig = config;

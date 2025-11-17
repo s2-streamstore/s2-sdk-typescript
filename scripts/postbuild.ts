@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
 /**
- * Post-build script to add package.json files to dist directories
- * This ensures Node.js correctly interprets the module formats
+ * Post-build script:
+ * - Add package.json files to dist directories so Node.js interprets module formats correctly
  */
 
 import { writeFileSync } from "node:fs";
@@ -20,4 +20,3 @@ writeFileSync(
 );
 
 console.log("✓ Created dist/cjs/package.json");
-
