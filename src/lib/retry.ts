@@ -407,7 +407,7 @@ const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
 
 export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private readonly requestTimeoutMillis: number;
-	private readonly maxQueuedBytes: number;
+	private readonly maxInflightBytes: number;
 	private readonly maxInflightBatches?: number;
 	private readonly retryConfig: Required<RetryConfig> & {
 		requestTimeoutMillis: number;
@@ -419,6 +419,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private session?: TransportAppendSession;
 	private queuedBytes = 0;
 	private pendingBytes = 0;
+	private pendingBatches = 0;
 	private consecutiveFailures = 0;
 	private currentAttempt = 0;
 
@@ -455,7 +456,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			...config,
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
-		this.maxQueuedBytes =
+		this.maxInflightBytes =
 			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
 		this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
 
@@ -494,6 +495,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					recordsArray,
 					args,
 					batchMeteredSize,
+					true,
 				);
 				promise.catch(() => {
 					// Swallow to avoid unhandled rejection; pump surfaces errors via readable stream
@@ -537,10 +539,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 		}
 
+		// Submit without applying backpressure (no capacity reservation)
 		const result = await this.submitInternal(
 			recordsArray,
 			args,
 			batchMeteredSize,
+			false,
 		);
 
 		// Convert discriminated union back to throw pattern for public API
@@ -576,11 +580,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		// Move reserved bytes to queued bytes accounting before submission
 		this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
 
-		const result = await this.submitInternal(
-			recordsArray,
-			args,
-			batchMeteredSize,
-		);
+		const result = await this.submitInternal(recordsArray, args, batchMeteredSize, true);
 
 		// Convert discriminated union back to throw pattern for public API
 		if (result.ok) {
@@ -600,6 +600,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			| (Omit<AppendArgs, "records"> & { precalculatedSize?: number })
 			| undefined,
 		batchMeteredSize: number,
+		usedBatchCapacityReservation = false,
 	): Promise<AppendResult> {
 		if (this.closed || this.closing) {
 			return Promise.resolve(
@@ -618,6 +619,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Create promise for submit() callers
 		return new Promise<AppendResult>((resolve) => {
+			// Convert batch reservation (from waitForCapacity) into an inflight entry
+			if (
+				usedBatchCapacityReservation &&
+				this.maxInflightBatches !== undefined &&
+				this.pendingBatches > 0
+			) {
+				this.pendingBatches -= 1;
+			}
+
 			// Create inflight entry (innerPromise will be set when pump processes it)
 			const entry: InflightEntry = {
 				records,
@@ -657,11 +667,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	private async waitForCapacity(bytes: number): Promise<void> {
 		debugSession(
-			"[CAPACITY] checking for %d bytes: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d",
+			"[CAPACITY] checking for %d bytes: queuedBytes=%d, pendingBytes=%d, maxInflightBytes=%d, inflight=%d",
 			bytes,
 			this.queuedBytes,
 			this.pendingBytes,
-			this.maxQueuedBytes,
+			this.maxInflightBytes,
 			this.inflight.length,
 		);
 
@@ -677,17 +687,24 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 
 			// Byte-based gating
-			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
+			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxInflightBytes) {
 				// Batch-based gating (if configured)
 				if (
 					this.maxInflightBatches === undefined ||
-					this.inflight.length < this.maxInflightBatches
+					this.inflight.length + this.pendingBatches <
+						this.maxInflightBatches
 				) {
 					debugSession(
-						"[CAPACITY] capacity available, adding %d to pendingBytes",
+						"[CAPACITY] capacity available, adding %d to pendingBytes (maxInflightBatches=%d, inflight=%d, pendingBatches=%d)",
 						bytes,
+						this.maxInflightBatches,
+						this.inflight.length,
+						this.pendingBatches,
 					);
 					this.pendingBytes += bytes;
+					if (this.maxInflightBatches !== undefined) {
+						this.pendingBatches += 1;
+					}
 					return;
 				}
 			}
@@ -1089,6 +1106,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.inflight.length = 0;
 		this.queuedBytes = 0;
 		this.pendingBytes = 0;
+		this.pendingBatches = 0;
 
 		// Error the readable stream
 		try {

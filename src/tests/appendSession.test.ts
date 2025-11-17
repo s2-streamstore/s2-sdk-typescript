@@ -262,9 +262,12 @@ describe("AppendSession", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 
-		// Third submit should still be pending due to backpressure
+		// Third submit should still be blocked in waitForCapacity,
+		// reflected by an outstanding capacity waiter and no third inflight entry
 		expect(thirdStarted).toBe(true);
-		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
+		const internal = session as any;
+		expect(internal.inflight.length).toBe(2);
+		expect(internal.capacityWaiters.length).toBe(1);
 
 		// Resolve first append to free capacity
 		resolveFirst();
