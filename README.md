@@ -86,7 +86,8 @@ See the generated API docs for the full description of `RetryConfig`, `AppendRet
 ## Append sessions
 
 The `AppendSession` represents a session for appending batches of records to a stream. There are two ways of interacting with an append session:
-- via `submit(...)`, which returns a `Promise<AppendAck>` that resolves when the batch is acknowledged by S2.
+- via `submit(...)`, which returns a `Promise<AppendAck>` that resolves when the batch is acknowledged by S2 and does not apply client-side backpressure.
+- via `submitWithBackpressure(...)`, which also returns a `Promise<AppendAck>` but will respect client-side backpressure limits before enqueuing the batch.
 - via the session's `.readable` and `.writable` streams (`ReadableStream<AppendAck>` / `WritableStream<AppendArgs>`).
 
 You obtain an append session from a stream via:
@@ -115,7 +116,7 @@ const stream = s2
 
 ### Backpressure
 
-Only writing via `WritableStream` reflects backpressure. A `write(...)` call will resolve as soon as the batch is enqueued for transmission, and will block until there is capacity.
+Only writing via `WritableStream` or using `submitWithBackpressure(...)` reflects backpressure. A `write(...)` call (or a call to `submitWithBackpressure(...)`) will resolve as soon as the batch is enqueued for transmission, and will block until there is capacity.
 
 Enqueuing a batch means that the session has accepted the batch, and that it is now inflight. It _doesn't_ mean that the batch has been acknowledged by S2. Because of this, if using `WritableStream`, you should also make sure to `close()` the session, as otherwise you may miss a failure. Only after closing the writer without error can the upstream contents be considered to have been safely appended to the stream.
 

@@ -414,7 +414,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	};
 
 	private readonly inflight: InflightEntry[] = [];
-	private capacityWaiter?: () => void; // Single waiter (WritableStream writer lock)
+	private capacityWaiters: Array<() => void> = [];
 
 	private session?: TransportAppendSession;
 	private queuedBytes = 0;
@@ -552,6 +552,45 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	}
 
 	/**
+	 * Submit an append request while applying client-side backpressure.
+	 * This method waits for capacity (respecting AppendSessionOptions) and then
+	 * resolves with the ack once the batch has been acknowledged.
+	 */
+	async submitWithBackpressure(
+		records: AppendRecord | AppendRecord[],
+		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
+	): Promise<AppendAck> {
+		const recordsArray = Array.isArray(records) ? records : [records];
+
+		// Calculate metered size if not provided
+		let batchMeteredSize = args?.precalculatedSize ?? 0;
+		if (batchMeteredSize === 0) {
+			for (const record of recordsArray) {
+				batchMeteredSize += meteredBytes(record);
+			}
+		}
+
+		// Wait for capacity before enqueuing; this applies backpressure
+		await this.waitForCapacity(batchMeteredSize);
+
+		// Move reserved bytes to queued bytes accounting before submission
+		this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
+
+		const result = await this.submitInternal(
+			recordsArray,
+			args,
+			batchMeteredSize,
+		);
+
+		// Convert discriminated union back to throw pattern for public API
+		if (result.ok) {
+			return result.value;
+		} else {
+			throw result.error;
+		}
+	}
+
+	/**
 	 * Internal submit that returns discriminated union.
 	 * Creates inflight entry and starts pump if needed.
 	 */
@@ -654,10 +693,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 
 			// No capacity - wait
-			// WritableStream enforces writer lock, so only one write can be blocked at a time
 			debugSession("[CAPACITY] no capacity, waiting for release");
 			await new Promise<void>((resolve) => {
-				this.capacityWaiter = resolve;
+				this.capacityWaiters.push(resolve);
 			});
 			debugSession("[CAPACITY] woke up, rechecking");
 		}
@@ -674,16 +712,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			this.queuedBytes - bytes,
 			this.pendingBytes,
 			Math.max(0, this.pendingBytes - bytes),
-			!!this.capacityWaiter,
+			this.capacityWaiters.length > 0,
 		);
 		this.queuedBytes -= bytes;
 		this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
 
-		// Wake single waiter
-		const waiter = this.capacityWaiter;
+		// Wake single waiter (FIFO)
+		const waiter = this.capacityWaiters.shift();
 		if (waiter) {
 			debugSession("[CAPACITY] waking waiter");
-			this.capacityWaiter = undefined;
 			waiter();
 		}
 	}
@@ -1060,11 +1097,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			debugSession("failed to error acks controller: %s", e);
 		}
 
-		// Wake capacity waiter to unblock any pending writer
-		if (this.capacityWaiter) {
-			this.capacityWaiter();
-			this.capacityWaiter = undefined;
+		// Wake any capacity waiters to unblock pending writers
+		for (const waiter of this.capacityWaiters) {
+			waiter();
 		}
+		this.capacityWaiters = [];
 
 		// Close inner session
 		if (this.session) {

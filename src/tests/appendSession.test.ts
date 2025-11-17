@@ -225,4 +225,57 @@ describe("AppendSession", () => {
 		// Close - with interruptible sleep, pump will wake immediately
 		await writer.close();
 	});
+
+	it("submitWithBackpressure applies backpressure based on maxInflightBytes", async () => {
+		const stream = makeStream();
+
+		// Create a session with very small max queued bytes (100 bytes)
+		const session = await stream.appendSession({
+			maxInflightBytes: 100,
+		});
+
+		// Control when appends resolve
+		let resolveFirst: any;
+		const firstPromise = new Promise<AppendAck>((resolve) => {
+			resolveFirst = () => resolve(makeAck(1));
+		});
+
+		streamAppendSpy.mockReturnValueOnce(firstPromise);
+		streamAppendSpy.mockResolvedValueOnce(makeAck(2));
+		streamAppendSpy.mockResolvedValueOnce(makeAck(3));
+
+		// Each large body is ~50 bytes with overhead
+		const largeBody = "x".repeat(42);
+
+		// First two submits should be able to reserve capacity and enqueue
+		const p1 = session.submitWithBackpressure([{ body: largeBody }]);
+		const p2 = session.submitWithBackpressure([{ body: largeBody }]);
+
+		// Third submit should block on capacity until one of the previous acks frees space
+		let thirdStarted = false;
+		const p3 = (async () => {
+			thirdStarted = true;
+			return session.submitWithBackpressure([{ body: largeBody }]);
+		})();
+
+		// Give time for any immediate processing
+		await Promise.resolve();
+		await Promise.resolve();
+
+		// Third submit should still be pending due to backpressure
+		expect(thirdStarted).toBe(true);
+		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
+
+		// Resolve first append to free capacity
+		resolveFirst();
+		await p1;
+
+		// Now second and third should be able to complete
+		await p2;
+		await p3;
+
+		expect(streamAppendSpy).toHaveBeenCalledTimes(3);
+
+		await session.close();
+	});
 });

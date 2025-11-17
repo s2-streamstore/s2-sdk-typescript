@@ -99,6 +99,15 @@ export interface AppendSession extends AsyncDisposable {
 		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
 	): Promise<AppendAck>;
 	/**
+	 * Submit an append request while applying client-side backpressure.
+	 * This method waits for capacity (respecting {@link AppendSessionOptions})
+	 * and then resolves when the batch is acknowledged.
+	 */
+	submitWithBackpressure(
+		records: AppendRecord | AppendRecord[],
+		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
+	): Promise<AppendAck>;
+	/**
 	 * Close the append session, waiting for all inflight appends to settle.
 	 */
 	close(): Promise<void>;
