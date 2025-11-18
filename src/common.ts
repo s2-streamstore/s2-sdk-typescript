@@ -1,7 +1,7 @@
 /**
  * Policy for retrying append operations.
  *
- * - `all`: Retry all append operations, including those that may have side effects
+ * - `all`: Retry all append operations, including those that may have side effects (default)
  * - `noSideEffects`: Only retry append operations that are guaranteed to have no side effects
  */
 export type AppendRetryPolicy = "all" | "noSideEffects";
@@ -26,7 +26,7 @@ export type RetryConfig = {
 
 	/**
 	 * Policy for retrying append operations.
-	 * @default "noSideEffects"
+	 * @default "all"
 	 */
 	appendRetryPolicy?: AppendRetryPolicy;
 

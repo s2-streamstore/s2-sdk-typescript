@@ -36,7 +36,7 @@ export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> & {
 } = {
 	maxAttempts: 3,
 	retryBackoffDurationMillis: 100,
-	appendRetryPolicy: "noSideEffects",
+	appendRetryPolicy: "all",
 	requestTimeoutMillis: 5000, // 5 seconds
 };
 

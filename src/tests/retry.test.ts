@@ -93,7 +93,7 @@ describe("Retry Logic", () => {
 		it("should have correct default values", () => {
 			expect(DEFAULT_RETRY_CONFIG.maxAttempts).toBe(3);
 			expect(DEFAULT_RETRY_CONFIG.retryBackoffDurationMillis).toBe(100);
-			expect(DEFAULT_RETRY_CONFIG.appendRetryPolicy).toBe("noSideEffects");
+			expect(DEFAULT_RETRY_CONFIG.appendRetryPolicy).toBe("all");
 		});
 	});
 });
