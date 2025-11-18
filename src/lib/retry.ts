@@ -407,7 +407,7 @@ const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
 
 export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private readonly requestTimeoutMillis: number;
-	private readonly maxQueuedBytes: number;
+	private readonly maxInflightBytes: number;
 	private readonly maxInflightBatches?: number;
 	private readonly retryConfig: Required<RetryConfig> & {
 		requestTimeoutMillis: number;
@@ -417,7 +417,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private capacityWaiter?: () => void; // Single waiter (WritableStream writer lock)
 
 	private session?: TransportAppendSession;
-	private queuedBytes = 0;
+	private inflightBytes = 0;
 	private pendingBytes = 0;
 	private consecutiveFailures = 0;
 	private currentAttempt = 0;
@@ -455,7 +455,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			...config,
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
-		this.maxQueuedBytes =
+		this.maxInflightBytes =
 			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
 		this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
 
@@ -591,17 +591,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			};
 
 			debugSession(
-				"[SUBMIT] enqueueing %d records (%d bytes): inflight=%d->%d, queuedBytes=%d->%d",
+				"[SUBMIT] enqueueing %d records (%d bytes): inflight=%d->%d, inflightBytes=%d->%d",
 				records.length,
 				batchMeteredSize,
 				this.inflight.length,
 				this.inflight.length + 1,
-				this.queuedBytes,
-				this.queuedBytes + batchMeteredSize,
+				this.inflightBytes,
+				this.inflightBytes + batchMeteredSize,
 			);
 
 			this.inflight.push(entry);
-			this.queuedBytes += batchMeteredSize;
+			this.inflightBytes += batchMeteredSize;
 
 			// Wake pump if it's sleeping
 			if (this.pumpWakeup) {
@@ -618,11 +618,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	private async waitForCapacity(bytes: number): Promise<void> {
 		debugSession(
-			"[CAPACITY] checking for %d bytes: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d",
+			"[CAPACITY] checking for %d bytes: inflightBytes=%d, pendingBytes=%d, maxInflightBytes=%d, inflight=%d",
 			bytes,
-			this.queuedBytes,
+			this.inflightBytes,
 			this.pendingBytes,
-			this.maxQueuedBytes,
+			this.maxInflightBytes,
 			this.inflight.length,
 		);
 
@@ -638,7 +638,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 
 			// Byte-based gating
-			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
+			if (
+				this.inflightBytes + this.pendingBytes + bytes <=
+				this.maxInflightBytes
+			) {
 				// Batch-based gating (if configured)
 				if (
 					this.maxInflightBatches === undefined ||
@@ -668,15 +671,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	private releaseCapacity(bytes: number): void {
 		debugSession(
-			"[CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, hasWaiter=%s",
+			"[CAPACITY] releasing %d bytes: inflightBytes=%d->%d, pendingBytes=%d->%d, hasWaiter=%s",
 			bytes,
-			this.queuedBytes,
-			this.queuedBytes - bytes,
+			this.inflightBytes,
+			this.inflightBytes - bytes,
 			this.pendingBytes,
 			Math.max(0, this.pendingBytes - bytes),
 			!!this.capacityWaiter,
 		);
-		this.queuedBytes -= bytes;
+		this.inflightBytes -= bytes;
 		this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
 
 		// Wake single waiter
@@ -710,9 +713,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		while (true) {
 			debugSession(
-				"[PUMP] loop: inflight=%d, queuedBytes=%d, pendingBytes=%d, closing=%s, pumpStopped=%s",
+				"[PUMP] loop: inflight=%d, inflightBytes=%d, pendingBytes=%d, closing=%s, pumpStopped=%s",
 				this.inflight.length,
-				this.queuedBytes,
+				this.inflightBytes,
 				this.pendingBytes,
 				this.closing,
 				this.pumpStopped,
@@ -1050,7 +1053,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 		}
 		this.inflight.length = 0;
-		this.queuedBytes = 0;
+		this.inflightBytes = 0;
 		this.pendingBytes = 0;
 
 		// Error the readable stream
