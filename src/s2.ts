@@ -6,6 +6,10 @@ import { S2Error } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
+import {
+	canSetUserAgentHeader,
+	DEFAULT_USER_AGENT,
+} from "./lib/stream/runtime.js";
 import { S2Metrics } from "./metrics.js";
 
 const defaultBaseUrl = "https://aws.s2.dev/v1";
@@ -43,10 +47,15 @@ export class S2 {
 	constructor(options: S2ClientOptions) {
 		this.accessToken = Redacted.make(options.accessToken);
 		this.retryConfig = options.retry ?? {};
+		const headers: Record<string, string> = {};
+		if (canSetUserAgentHeader()) {
+			headers["user-agent"] = DEFAULT_USER_AGENT;
+		}
 		this.client = createClient(
 			createConfig({
 				baseUrl: options.baseUrl ?? defaultBaseUrl,
 				auth: () => Redacted.value(this.accessToken),
+				headers: headers,
 			}),
 		);
 

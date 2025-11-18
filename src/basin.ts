@@ -2,6 +2,10 @@ import type { RetryConfig } from "./common.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
+import {
+	canSetUserAgentHeader,
+	DEFAULT_USER_AGENT,
+} from "./lib/stream/runtime.js";
 import type { SessionTransports, TransportConfig } from "./lib/stream/types.js";
 import { S2Stream } from "./stream.js";
 import { S2Streams } from "./streams.js";
@@ -37,11 +41,18 @@ export class S2Basin {
 			basinName: options.includeBasinHeader ? name : undefined,
 			retry: options.retryConfig,
 		};
+		const headers: Record<string, string> = {};
+		if (options.includeBasinHeader) {
+			headers["s2-basin"] = name;
+		}
+		if (canSetUserAgentHeader()) {
+			headers["user-agent"] = DEFAULT_USER_AGENT;
+		}
 		this.client = createClient(
 			createConfig({
 				baseUrl: options.baseUrl,
 				auth: () => Redacted.value(this.transportConfig.accessToken),
-				headers: options.includeBasinHeader ? { "s2-basin": name } : {},
+				headers: headers,
 			}),
 		);
 

@@ -29,6 +29,7 @@ import {
 	RetryAppendSession as AppendSessionImpl,
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
+import { DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -334,6 +335,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						":path": path,
 						":scheme": url.protocol.slice(0, -1),
 						":authority": url.host,
+						"user-agent": DEFAULT_USER_AGENT,
 						authorization: `Bearer ${Redacted.value(authToken)}`,
 						accept: "application/protobuf",
 						"content-type": "s2s/proto",
@@ -678,6 +680,7 @@ class S2SAppendSession implements TransportAppendSession {
 			":path": path,
 			":scheme": url.protocol.slice(0, -1),
 			":authority": url.host,
+			"user-agent": DEFAULT_USER_AGENT,
 			authorization: `Bearer ${Redacted.value(this.authToken)}`,
 			"content-type": "s2s/proto",
 			accept: "application/protobuf",

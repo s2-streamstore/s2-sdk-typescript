@@ -1,7 +1,8 @@
+import { VERSION } from "../../version.js";
+
 /**
  * Runtime environment detection for transport selection
  */
-
 export type Runtime =
 	| "node"
 	| "browser"
@@ -66,3 +67,28 @@ export function supportsHttp2(): boolean {
 			return false;
 	}
 }
+
+/**
+ * Check if the current runtime allows setting a custom User-Agent header.
+ */
+export function canSetUserAgentHeader(): boolean {
+	const runtime = detectRuntime();
+
+	switch (runtime) {
+		case "node":
+		case "bun":
+			return true;
+		default:
+			return false;
+	}
+}
+
+/**
+ * Library version used in the default User-Agent header.
+ *
+ * The actual version string is injected at build time in the compiled
+ * JavaScript output based on package.json. See src/version.ts and
+ * scripts/postbuild.ts.
+ */
+export { VERSION };
+export const DEFAULT_USER_AGENT = `s2-sdk-typescript/${VERSION}`;
