@@ -70,8 +70,8 @@ The `S2` client and stream sessions support configurable retry behavior:
       maxAttempts: 3,
       // Base delay (ms) between attempts; jitter is applied
       retryBackoffDurationMillis: 100,
-      // Retry policy for append operations (see API docs for details)
-      appendRetryPolicy: "noSideEffects",
+      // Retry policy for append operations (default: "all"; see API docs for details)
+      appendRetryPolicy: "all",
       // Maximum time (ms) to wait for an append ack before treating it as failed
       requestTimeoutMillis: 5000,
     },
@@ -79,7 +79,7 @@ The `S2` client and stream sessions support configurable retry behavior:
   ```
 
 - Stream append/read sessions created from `S2.basin(...).stream(...)` inherit this retry configuration.
-- The `appendRetryPolicy` dictates how failed appends should be retried. If you are not using a concurrency control like `match_seq_num`, then retrying a failed append could result in duplicate data, depending on the nature of the failure. This policy can be set to tolerate potential duplicates by retrying all failures (`"all"`) or only failures guaranteed not to have had a side effect (`"noSideEffects"`). In most cases, `"noSideEffects"` is the safer default unless you have explicit deduplication downstream.
+- The `appendRetryPolicy` dictates how failed appends should be retried. If you are not using a concurrency control like `match_seq_num`, then retrying a failed append could result in duplicate data, depending on the nature of the failure. This policy can be set to tolerate potential duplicates by retrying all failures (`"all"`, the default) or only failures guaranteed not to have had a side effect (`"noSideEffects"`). If you cannot tolerate potential duplicates and do not have explicit deduplication downstream, consider using `"noSideEffects"` instead of the default.
 
 See the generated API docs for the full description of `RetryConfig`, `AppendRetryPolicy` and `AppendSessionOptions`.
 
