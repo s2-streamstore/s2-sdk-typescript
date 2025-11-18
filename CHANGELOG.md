@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.18.1] - 2025-11-18
+
+### 🚀 Features
+
+- Include user-agent (#49)
+
+### 📚 Documentation
+
+- Update generated documentation
+
+### ⚙️ Miscellaneous Tasks
+
+- Change default append retry policy to `all` (#50)
+
 ## [0.18.0] - 2025-11-15
 
 ### 🚀 Features
