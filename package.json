@@ -1,6 +1,7 @@
 {
-  "name": "@s2-dev/streamstore",
-  "version": "0.18.1",
+  "name": "s2-sdk-typescript",
+  "version": "0.0.0-monorepo",
+  "private": true,
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -11,60 +12,34 @@
   "workspaces": [
     "packages/*"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
-    "build": "rm -rf dist && bun run gen:version && tsc --project tsconfig.build.esm.json && tsc --project tsconfig.build.cjs.json && bun scripts/postbuild.ts && attw --pack",
-    "build:patterns": "bun run --cwd packages/streamstore-patterns build",
+    "build": "bun run build:core && bun run build:patterns",
+    "build:core": "bun run --cwd packages/streamstore build",
+    "build:patterns": "bun run --cwd packages/patterns build",
     "test": "vitest --run",
-    "test:patterns": "bun run --cwd packages/streamstore-patterns test",
-    "check": "biome check && tsc --noEmit && bun run --cwd packages/streamstore-patterns check",
+    "test:core": "bun run --cwd packages/streamstore test",
+    "test:patterns": "bun run --cwd packages/patterns test",
+    "check": "biome check && bun run --cwd packages/streamstore check",
     "check:write": "biome check --write",
     "format": "biome format --write",
     "version-with-docs": "changeset version && bun run gen:version && bun run docs && git add docs",
-    "gen:version": "bun scripts/generate-version.ts",
+    "gen:version": "bun run --cwd packages/streamstore gen:version",
     "release": "changeset publish",
     "gen:openapi": "openapi-ts",
-    "gen:proto": "protoc --ts_out src/generated/proto --ts_opt ts_nocheck --proto_path s2-protos s2-protos/s2/v1/s2.proto && mv src/generated/proto/s2/v1/s2.ts src/generated/proto/s2.ts",
+    "gen:proto": "protoc --ts_out packages/streamstore/src/generated/proto --ts_opt ts_nocheck --proto_path s2-protos s2-protos/s2/v1/s2.proto && mv packages/streamstore/src/generated/proto/s2/v1/s2.ts packages/streamstore/src/generated/proto/s2.ts",
     "docs": "typedoc"
-  },
-  "main": "./dist/cjs/index.js",
-  "module": "./dist/esm/index.js",
-  "types": "./dist/esm/index.d.ts",
-  "sideEffects": false,
-  "exports": {
-    ".": {
-      "import": {
-        "types": "./dist/esm/index.d.ts",
-        "default": "./dist/esm/index.js"
-      },
-      "require": {
-        "types": "./dist/cjs/index.d.ts",
-        "default": "./dist/cjs/index.js"
-      }
-    }
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
-  "dependencies": {
-    "@protobuf-ts/runtime": "^2.11.1",
-    "debug": "^4.4.3"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
     "@biomejs/biome": "2.2.5",
     "@changesets/cli": "^2.29.7",
-    "@hey-api/openapi-ts": "^0.86.0",
+    "@hey-api/openapi-ts": "^0.86.12",
     "@protobuf-ts/plugin": "^2.11.1",
-    "@types/bun": "^1.3.1",
+    "@types/bun": "^1.3.2",
     "@types/debug": "^4.1.12",
     "openapi-typescript": "^7.10.1",
-    "protoc": "^33.0.0",
+    "protoc": "^33.1.0",
     "typedoc": "^0.28.14",
-    "vitest": "^4.0.2"
+    "vitest": "^4.0.10"
   }
 }

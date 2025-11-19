@@ -124,29 +124,17 @@ The `AppendSession` controls how many batches can be inflight at a given time, w
 
 ## Examples
 
-This repo is a small monorepo with:
+The [`examples`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/examples) directory in this repository contains a variety of
+example use cases demonstrating how to use the SDK effectively.
 
-- Core SDK package: `@s2-dev/streamstore` in `packages/streamstore`
-- Optional patterns package: `@s2-dev/streamstore-patterns` in `packages/patterns`
-
-Core SDK examples live under:
-
-- [`packages/streamstore/examples`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/packages/streamstore/examples)
-
-Run a core example with:
+Run any example using the following command:
 
 ```bash
 export S2_ACCESS_TOKEN="<YOUR ACCESS TOKEN>"
-npx tsx packages/streamstore/examples/<example_name>.ts
+bun run examples/<example_name>.ts
+# or
+npx tsx examples/<example_name>.ts
 ```
-
-Patterns-specific examples (serialization pipeline, typed client, etc.) live under:
-
-- [`packages/patterns/examples`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/packages/patterns/examples)
-
-To use those, first install the optional patterns package alongside the core SDK and then follow the instructions in:
-
-- [`packages/patterns/README.md`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/packages/patterns/README.md)
 
 ### Example: Appending and Reading Data
 
@@ -192,26 +180,6 @@ for await (const record of readSession) {
 > You might want to update the basin name in the examples before running since
 > basin names are globally unique and each example uses the same basin name
 > (`"my-favorite-basin"`).
-
-## Monorepo layout and scripts
-
-This repository uses npm workspaces with two published packages:
-
-- `packages/streamstore` → `@s2-dev/streamstore` (core SDK)
-- `packages/patterns` → `@s2-dev/streamstore-patterns` (optional patterns/add‑ons that wrap the core SDK)
-
-From the repo root:
-
-- Build everything: `bun run build`
-  - Core only: `bun run build:core`
-  - Patterns only: `bun run build:patterns`
-- Run tests:
-  - All packages: `bun run test`
-  - Core only: `bun run test:core`
-  - Patterns only: `bun run test:patterns`
-- Type-check and lint:
-  - All: `bun run check`
-  - Format: `bun run format`
 
 ## SDK Docs and Reference
 

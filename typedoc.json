@@ -1,8 +1,9 @@
 {
   "$schema": "https://typedoc.org/schema.json",
-  "entryPoints": ["./src/index.ts"],
+  "entryPoints": ["./packages/streamstore/src/index.ts"],
   "out": "docs",
   "plugin": [],
+  "skipErrorChecking": true,
   "excludePrivate": true,
   "excludeProtected": false,
   "excludeInternal": true,
