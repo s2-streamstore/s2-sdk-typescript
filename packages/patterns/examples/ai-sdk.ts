@@ -40,7 +40,7 @@ async function main(): Promise<void> {
 	const textDecoder = new TextDecoder();
 
 	const append = new SerializingAppendSession<AiStreamChunk>(
-		await stream.appendSession({ maxInflightBatches: 200 }),
+		await stream.appendSession(),
 		(msg) => textEncoder.encode(JSON.stringify(msg)),
 		{ dedupeSeq: 0n },
 	);
