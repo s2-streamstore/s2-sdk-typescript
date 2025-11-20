@@ -36,10 +36,10 @@ jobs:
       - name: Regenerate Proto and OpenAPI files
         if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
         run: |
-          mkdir -p src/generated/proto
+          mkdir -p packages/streamstore/src/generated/proto
           bun run gen:proto
           bun run gen:openapi
-          git add src/generated
+          git add packages/streamstore/src/generated
 
       - name: Create Pull Request
         if: ${{ steps.submodules.outputs['s2-protos--updated'] }}

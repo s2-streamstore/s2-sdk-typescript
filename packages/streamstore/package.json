@@ -1,0 +1,45 @@
+{
+  "name": "@s2-dev/streamstore",
+  "version": "0.18.1",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/s2-streamstore/s2-sdk-typescript"
+  },
+  "homepage": "https://s2.dev",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && bun ../../scripts/generate-version.ts && tsc --project tsconfig.build.esm.json && tsc --project tsconfig.build.cjs.json && bun ../../scripts/postbuild.ts && attw --pack",
+    "test": "vitest --run",
+    "check": "tsc --noEmit",
+    "gen:version": "bun ../../scripts/generate-version.ts"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@protobuf-ts/runtime": "^2.11.1",
+    "debug": "^4.4.3"
+  }
+}

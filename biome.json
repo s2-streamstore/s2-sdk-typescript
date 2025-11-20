@@ -2,10 +2,10 @@
   "$schema": "https://biomejs.dev/schemas/2.2.5/schema.json",
   "files": {
     "includes": [
-      "src/**/*.ts",
+      "packages/*/src/**/*.ts",
+      "packages/*/examples/**/*.ts",
       "*.json",
-      "!src/generated/**/*.ts",
-      "examples/**/*.ts"
+      "!packages/streamstore/src/generated/**/*.ts"
     ]
   },
   "formatter": {
