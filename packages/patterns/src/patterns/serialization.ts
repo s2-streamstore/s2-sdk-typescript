@@ -67,11 +67,8 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 				}
 				const records = self.toRecords(message);
 				// Lazily acquire a writer to the underlying AppendSession writable.
-				let writer = self.writer;
-				if (!writer) {
-					writer = self.session.writable.getWriter();
-					self.writer = writer;
-				}
+				const writer = self.writer ?? self.session.writable.getWriter();
+				self.writer = writer;
 
 				if (self.matchSeqNum !== undefined) {
 					const current = self.matchSeqNum;
