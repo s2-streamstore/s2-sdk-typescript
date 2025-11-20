@@ -5,7 +5,7 @@ import {
 	FRAME_BYTES_HEADER_BYTES,
 	FRAME_RECORDS_HEADER_BYTES,
 } from "./constants.js";
-import { encodeU64, decodeU64 } from "./u64.js";
+import { decodeU64, encodeU64 } from "./u64.js";
 
 /**
  * Minimal shape we rely on for both AppendRecord and ReadRecord<"bytes">.

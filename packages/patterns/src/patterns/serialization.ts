@@ -27,12 +27,12 @@ import {
 } from "@s2-dev/streamstore";
 
 import { chunkBytes, MAX_CHUNK_BODY_BYTES } from "./chunking.js";
+import { DedupeFilter, injectDedupeHeaders } from "./dedupe.js";
 import {
 	CompletedFrame,
 	FrameAssembler,
 	frameChunksToRecords,
 } from "./framing.js";
-import { DedupeFilter, injectDedupeHeaders } from "./dedupe.js";
 
 export interface SerializingAppendSessionOptions {
 	chunkSize?: number;
@@ -203,27 +203,24 @@ export {
 	chunkBytes,
 	MAX_CHUNK_BODY_BYTES,
 } from "./chunking.js";
-
 export {
-	FrameAssembler,
-	frameChunksToRecords,
-	type FrameMeta,
-	type CompletedFrame,
-} from "./framing.js";
+	DEDUPE_SEQ_HEADER,
+	DEDUPE_SEQ_HEADER_BYTES,
+	FRAME_BYTES_HEADER,
+	FRAME_BYTES_HEADER_BYTES,
+	FRAME_RECORDS_HEADER,
+	FRAME_RECORDS_HEADER_BYTES,
+} from "./constants.js";
 
 export {
 	DedupeFilter,
 	extractDedupeSeq,
 	injectDedupeHeaders,
 } from "./dedupe.js";
-
-export { encodeU64, decodeU64 } from "./u64.js";
-
 export {
-	FRAME_BYTES_HEADER,
-	FRAME_RECORDS_HEADER,
-	DEDUPE_SEQ_HEADER,
-	FRAME_BYTES_HEADER_BYTES,
-	FRAME_RECORDS_HEADER_BYTES,
-	DEDUPE_SEQ_HEADER_BYTES,
-} from "./constants.js";
+	type CompletedFrame,
+	FrameAssembler,
+	type FrameMeta,
+	frameChunksToRecords,
+} from "./framing.js";
+export { decodeU64, encodeU64 } from "./u64.js";

@@ -1,11 +1,12 @@
+import { openai } from "@ai-sdk/openai";
+import { S2 } from "@s2-dev/streamstore";
+import { streamText } from "ai";
+import createDebug from "debug";
 import {
 	DeserializingReadSession,
 	SerializingAppendSession,
 } from "../src/patterns/serialization.js";
-import { S2 } from "@s2-dev/streamstore";
-import { streamText } from "ai";
-import { openai } from "@ai-sdk/openai";
-import createDebug from "debug";
+
 const debug = createDebug("patterns:examples:ai-sdk");
 
 type AiStreamChunk = {
@@ -69,10 +70,10 @@ async function main(): Promise<void> {
 					});
 				},
 			}),
-		).tee();
+		)
+		.tee();
 
-	let s2Pipe = forS2
-		.pipeTo(append);
+	let s2Pipe = forS2.pipeTo(append);
 
 	// As chunks arrive from the model, write each one into S2 as a typed message.
 	for await (const textPart of forUI) {
@@ -109,7 +110,7 @@ async function main(): Promise<void> {
 
 	for await (const chunk of readSession) {
 		if (chunk.conversationId !== conversationId) {
-			debug("skipping chunk from other conversation")
+			debug("skipping chunk from other conversation");
 			continue;
 		}
 		reconstructed += chunk.content;

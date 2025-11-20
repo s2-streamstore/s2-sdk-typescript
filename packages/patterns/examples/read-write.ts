@@ -1,11 +1,12 @@
+import { createHash } from "node:crypto";
+import { decode, encode } from "@msgpack/msgpack";
+import { S2 } from "@s2-dev/streamstore";
+import createDebug from "debug";
 import {
 	DeserializingReadSession,
 	SerializingAppendSession,
 } from "../src/patterns/serialization.js";
-import { S2 } from "@s2-dev/streamstore";
-import { encode, decode } from "@msgpack/msgpack";
-import { createHash } from "node:crypto";
-import createDebug from "debug";
+
 const debug = createDebug("patterns:examples:read-write");
 
 type MultimodalMessage =
@@ -98,7 +99,7 @@ const appender = new SerializingAppendSession<ChatMessage>(
 const reader = new DeserializingReadSession<ChatMessage>(
 	await stream.readSession({ tail_offset: 0, as: "bytes" }),
 	(buf) => decode(buf) as ChatMessage,
-	{ enableDedupe: true}
+	{ enableDedupe: true },
 ).getReader();
 
 // Write 100 messages, and read them back.

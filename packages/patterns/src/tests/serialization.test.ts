@@ -1,18 +1,17 @@
-import { describe, expect, it } from "vitest";
 import { AppendAck, AppendRecord, meteredBytes } from "@s2-dev/streamstore";
-
+import { describe, expect, it } from "vitest";
+import { MAX_RECORD_BYTES } from "../patterns/chunking.js";
 import {
 	FRAME_BYTES_HEADER_BYTES,
 	FRAME_RECORDS_HEADER_BYTES,
 } from "../patterns/constants.js";
-import { MAX_RECORD_BYTES } from "../patterns/chunking.js";
-import { FrameAssembler } from "../patterns/framing.js";
 import { DedupeFilter, extractDedupeSeq } from "../patterns/dedupe.js";
-import { decodeU64 } from "../patterns/u64.js";
+import { FrameAssembler } from "../patterns/framing.js";
 import {
 	DeserializingReadSession,
 	SerializingAppendSession,
 } from "../patterns/serialization.js";
+import { decodeU64 } from "../patterns/u64.js";
 
 class FakeAppendSession {
 	submitted: { record: AppendRecord; matchSeqNum?: number }[] = [];
