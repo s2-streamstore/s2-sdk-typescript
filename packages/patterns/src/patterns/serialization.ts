@@ -134,7 +134,9 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 		const durable = await Promise.all(
 			records.map((record) =>
 				this.session.submit(record, {
-					...(this.matchSeqNum ? { match_seq_num: this.matchSeqNum++ } : {}),
+					...(this.matchSeqNum !== undefined
+						? { match_seq_num: this.matchSeqNum++ }
+						: {}),
 				}),
 			),
 		);

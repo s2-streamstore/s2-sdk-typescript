@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, webcrypto as crypto } from "node:crypto";
 import { decode, encode } from "@msgpack/msgpack";
 import { S2 } from "@s2-dev/streamstore";
 import createDebug from "debug";

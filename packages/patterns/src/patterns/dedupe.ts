@@ -7,6 +7,8 @@ import type {
 import { DEDUPE_SEQ_HEADER_BYTES } from "./constants.js";
 import { decodeU64, encodeU64 } from "./u64.js";
 
+const textEncoder = new TextEncoder();
+
 /**
  * Extract the per-record dedupe sequence number from headers, if present.
  */
@@ -66,7 +68,6 @@ export function injectDedupeHeaders(
 	startSeq: bigint,
 ): bigint {
 	let seq = startSeq;
-	const enc = new TextEncoder();
 
 	for (const record of records) {
 		const headerValue = encodeU64(seq);
@@ -84,8 +85,8 @@ export function injectDedupeHeaders(
 		} else if (Array.isArray(existing)) {
 			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
 			for (const [k, v] of existing as any) {
-				const kb = typeof k === "string" ? enc.encode(k) : k;
-				const vb = typeof v === "string" ? enc.encode(v) : v;
+				const kb = typeof k === "string" ? textEncoder.encode(k) : k;
+				const vb = typeof v === "string" ? textEncoder.encode(v) : v;
 				hdrs.push([kb, vb]);
 			}
 			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
@@ -93,7 +94,7 @@ export function injectDedupeHeaders(
 		} else {
 			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
 			for (const [k, v] of Object.entries(existing as Record<string, string>)) {
-				hdrs.push([enc.encode(k), enc.encode(v)]);
+				hdrs.push([textEncoder.encode(k), textEncoder.encode(v)]);
 			}
 			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
 			headers = hdrs as AppendHeaders<"bytes">;
