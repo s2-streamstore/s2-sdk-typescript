@@ -20,7 +20,9 @@
   </p>
 </div>
 
-This TypeScript SDK is an ergonomic way to consume the [S2 REST API](https://s2.dev/docs/rest/protocol).
+[S2](https://s2.dev) is a serverless data store for streams.
+
+This repo is the official TypeScript SDK, which provides an ergonomic interface over the service's [REST API](https://s2.dev/docs/rest/protocol).
 
 > **Note:** This is a rewrite of the TypeScript SDK. The older version (0.15.3) is still available and can be installed:
 > ```bash
@@ -28,7 +30,17 @@ This TypeScript SDK is an ergonomic way to consume the [S2 REST API](https://s2.
 > ```
 > The archived repository for the older SDK is available [here](https://github.com/s2-streamstore/s2-sdk-typescript-old).
 
-## Getting started
+## S2 Basics
+
+S2 is a managed service that provides unlimited, durable streams.
+
+Streams can be appended to, with all new records added to the tail of the stream. You can read from any portion of a stream – indexing by record sequence number, or timestamp – and follow updates live.
+
+See it in action on the playground (built with this TypeScript SDK): [s2.dev/playground](https://s2.dev/playground).
+
+## SDK
+
+### Getting started
 
 1. Add the `@s2-dev/streamstore` dependency to your project:
    ```bash
@@ -54,7 +66,7 @@ This TypeScript SDK is an ergonomic way to consume the [S2 REST API](https://s2.
    console.log("My basins:", basins.basins.map((basin) => basin.name));
    ```
 
-## Configuration and retries
+### Configuration and retries
 
 The `S2` client and stream sessions support configurable retry behavior:
 
@@ -83,7 +95,7 @@ The `S2` client and stream sessions support configurable retry behavior:
 
 See the generated API docs for the full description of `RetryConfig`, `AppendRetryPolicy` and `AppendSessionOptions`.
 
-## Append sessions
+### Append sessions
 
 The `AppendSession` represents a session for appending batches of records to a stream. There are two ways of interacting with an append session:
 - via `submit(...)`, which returns a `Promise<AppendAck>` that resolves when the batch is acknowledged by S2.
@@ -97,7 +109,7 @@ const session = await stream.appendSession();
 
 All batches submitted to the same append session will be made durable in the same order as they are submitted, regardless of which method is used. Batches _can_ be duplicated, however, depending on the `appendRetryPolicy` used.
 
-### Transports
+#### Transports
 
 The append session supports two transports:
 - One based on `fetch`
@@ -113,7 +125,7 @@ const stream = s2
     .stream("my-stream", { forceTransport: "fetch" });
 ```
 
-### Backpressure
+#### Backpressure
 
 Only writing via `WritableStream` reflects backpressure. A `write(...)` call will resolve as soon as the batch is enqueued for transmission, and will block until there is capacity.
 
@@ -193,25 +205,73 @@ for await (const record of readSession) {
 > basin names are globally unique and each example uses the same basin name
 > (`"my-favorite-basin"`).
 
-## Monorepo layout and scripts
+## Patterns 
 
-This repository uses npm workspaces with two published packages:
+This repo also contains a package of more opinionated patterns and types for building around S2. This is available as `@s2-dev/streamstore-patterns`, and located in `packages/patterns`.
 
-- `packages/streamstore` → `@s2-dev/streamstore` (core SDK)
-- `packages/patterns` → `@s2-dev/streamstore-patterns` (optional patterns/add‑ons that wrap the core SDK)
+See the [README](packages/patterns) in the package for more, as well as examples of how to create a typed client for use with AI SDK.
 
-From the repo root:
+```typescript
+type AiStreamChunk = {
+    role: "assistant" | "user",
+    content: string
+};
 
-- Build everything: `bun run build`
-  - Core only: `bun run build:core`
-  - Patterns only: `bun run build:patterns`
-- Run tests:
-  - All packages: `bun run test`
-  - Core only: `bun run test:core`
-  - Patterns only: `bun run test:patterns`
-- Type-check and lint:
-  - All: `bun run check`
-  - Format: `bun run format`
+const s2 = new S2({
+    accessToken: s2AccessToken,
+    retry: {
+        maxAttempts: 10,
+        retryBackoffDurationMillis: 100,
+        appendRetryPolicy: "all",
+    },
+});
+
+// Create the raw append session.
+const appendSession = await s2
+    .basin("mega-corp-agent-sessions")
+    .stream("session/09b5fb6")
+    .appendSession();
+
+const textEncoder = new TextEncoder();
+
+// Use the serializing append session wrapper to add framing,
+// type serialization, and deduplication logic.
+const appender = new SerializingAppendSession<AiStreamChunk>(
+    appendSession,
+    (msg) => textEncoder.encode(JSON.stringify(msg)),
+);
+
+// Get a stream of tokens from AI SDK.
+const modelStream = await streamText({
+    model: openai("gpt-4o-mini"),
+    prompt: "Tell me who has the most beautiful durable stream API in the land.",
+});
+
+// Tee the stream, using one for processing and sending the
+// other to S2.
+let [forUI, forS2] = modelStream.textStream
+    .pipeThrough(
+        new TransformStream<string, AiStreamChunk>({
+            transform: (text, controller) => {
+                controller.enqueue({
+                    role: "assistant",
+                    content: text,
+                });
+            },
+        }),
+    )
+    .tee();
+
+let s2Pipe = forS2.pipeTo(appender);
+
+for await (const msg of forUI) {
+    // Send messages to your UI.
+    console.log(msg);
+}
+
+// Ensure the stream is fully saved in S2.
+await s2Pipe;
+```
 
 ## SDK Docs and Reference
 
