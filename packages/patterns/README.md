@@ -50,20 +50,20 @@ The core S2 API essentially provides durable streams of binary records, each of 
 The `SerializingAppendSession<Message>` and `DeserializingReadSession<Message>` patterns provide an opinionated way to address all of these issues, by:
 - Being strongly typed around a `Message`
 - Splitting large messages into < 1MiB chunks, and "framing" those messages across multiple S2 records
-- Injecting a deduplication header, to allow readers to efficiently detect and filter repeated records from retried appends
+- Injecting deduplication headers (`_dedupe_seq`, `_writer_id`), to act as idempotency keys and allow readers to efficiently detect and filter repeated records caused by retried appends
 
 **Write path (append):**
 
 - `Message` → `Uint8Array` – you supply a serializer (e.g. JSON, MessagePack).
 - `Uint8Array` → `Uint8Array[]` – `chunkBytes` splits into bounded-size chunks (`MAX_CHUNK_BODY_BYTES`) so each S2 record stays under the per-record limit.
 - `Uint8Array[]` → `AppendRecord[]` – `frameChunksToRecords` adds framing headers (`_frame_bytes`, `_frame_records`) to the first record to describe the whole message.
-- `AppendRecord[]` → `AppendRecord[]` with `_dedupe_seq` – `injectDedupeHeaders` adds a monotonically increasing dedupe sequence per record.
+- `AppendRecord[]` → `AppendRecord[]` with `_dedupe_seq` and `_writer_id` – `injectDedupeHeaders` adds a monotonically increasing dedupe sequence per record, scoped to a unique writer id.
 - `AppendRecord[]` → sent to S2 – `SerializingAppendSession` submits each record, optionally using `match_seq_num` sequencing.
 
 **Read path (consume):**
 
 - S2 records → `ReadSession<"bytes">` – provided by the `@s2-dev/streamstore` SDK.
-- Records → filtered records – `DedupeFilter` drops duplicates based on `_dedupe_seq`.
+- Records → filtered records – `DedupeFilter` drops duplicates based on the pair (`_writer_id`, `_dedupe_seq`).
 - Filtered records → `CompletedFrame` – `FrameAssembler` uses `_frame_bytes` / `_frame_records` to reassemble full payloads.
 - `CompletedFrame.payload` (`Uint8Array`) → `Message` – you supply a deserializer.
 - Messages → `ReadableStream<Message>` – `DeserializingReadSession` wraps the read session and yields typed messages.

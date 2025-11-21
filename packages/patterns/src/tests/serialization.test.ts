@@ -5,7 +5,11 @@ import {
 	FRAME_BYTES_HEADER_BYTES,
 	FRAME_RECORDS_HEADER_BYTES,
 } from "../patterns/constants.js";
-import { DedupeFilter, extractDedupeSeq } from "../patterns/dedupe.js";
+import {
+	DedupeFilter,
+	extractDedupeSeq,
+	injectDedupeHeaders,
+} from "../patterns/dedupe.js";
 import { FrameAssembler } from "../patterns/framing.js";
 import {
 	DeserializingReadSession,
@@ -136,13 +140,24 @@ async function runTests(): Promise<void> {
 		Array.from({ length: totalChunks }, (_v, i) => 10 + i),
 	);
 
-	// Every record should have a dedupe sequence header which increments from 0.
-	const dedupeSeqs = submitted.map((s) =>
+	// Every record should have a dedupe header (writer id + sequence)
+	// where the writer id is constant for the session and the sequence
+	// increments from 0.
+	const dedupeMeta = submitted.map((s) =>
 		extractDedupeSeq(s.record.headers as any),
 	);
-	expect(dedupeSeqs.length).toBe(totalChunks);
-	for (let i = 0; i < dedupeSeqs.length; i += 1) {
-		expect(dedupeSeqs[i]).toBe(BigInt(i));
+	expect(dedupeMeta.length).toBe(totalChunks);
+	let writerId: string | undefined;
+	for (let i = 0; i < dedupeMeta.length; i += 1) {
+		const value = dedupeMeta[i];
+		expect(value).toBeDefined();
+		const [w, seq] = value!;
+		if (writerId === undefined) {
+			writerId = w;
+		} else {
+			expect(w).toBe(writerId);
+		}
+		expect(seq).toBe(BigInt(i));
 	}
 
 	// First record of each message should carry frame headers describing
@@ -235,5 +250,43 @@ async function runTests(): Promise<void> {
 describe("serialization patterns", () => {
 	it("writes frames with dedupe and match_seq_num and reconstructs on read", async () => {
 		await runTests();
+	});
+
+	it("dedupes per writer id and sequence", () => {
+		const mkRecord = (): AppendRecord => ({ body: new Uint8Array() });
+
+		const writer1Batch1: AppendRecord[] = [mkRecord(), mkRecord()];
+		injectDedupeHeaders(writer1Batch1, "writer-1", 0n);
+
+		// Duplicate of the first batch from the same writer.
+		const writer1Batch1Dup = writer1Batch1;
+
+		// New writer starting from seq 0 should be treated as a new stream.
+		const writer2Batch: AppendRecord[] = [mkRecord(), mkRecord()];
+		injectDedupeHeaders(writer2Batch, "writer-2", 0n);
+
+		const allRecords = [...writer1Batch1, ...writer1Batch1Dup, ...writer2Batch];
+
+		const dedupe = new DedupeFilter();
+		const accepted: AppendRecord[] = [];
+		for (const rec of allRecords) {
+			if (dedupe.shouldAccept(rec.headers as any)) {
+				accepted.push(rec);
+			}
+		}
+
+		// First writer batch (2 records) + new writer batch (2 records) should be kept.
+		// Exact duplicate batch from the same writer should be dropped.
+		expect(accepted.length).toBe(4);
+
+		const acceptedMeta = accepted.map((rec) =>
+			extractDedupeSeq(rec.headers as any),
+		);
+		expect(acceptedMeta).toEqual([
+			["writer-1", 0n],
+			["writer-1", 1n],
+			["writer-2", 0n],
+			["writer-2", 1n],
+		]);
 	});
 });
