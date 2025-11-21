@@ -25,7 +25,7 @@ import {
 	ReadSession,
 	U64,
 } from "@s2-dev/streamstore";
-
+import { nanoid } from "nanoid";
 import { chunkBytes, MAX_CHUNK_BODY_BYTES } from "./chunking.js";
 import { DedupeFilter, injectDedupeHeaders } from "./dedupe.js";
 import {
@@ -52,6 +52,7 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 
 	private matchSeqNum?: number;
 	private dedupeSeq?: bigint;
+	private writerId: string;
 	private writer?: WritableStreamDefaultWriter<any>;
 
 	constructor(
@@ -104,6 +105,7 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 		this.matchSeqNum = options?.matchSeqNum;
 		this.dedupeSeq =
 			options?.dedupeSeq !== undefined ? BigInt(options.dedupeSeq) : undefined;
+		this.writerId = nanoid(12);
 	}
 
 	private nextDedupeSeq(): bigint | undefined {
@@ -120,7 +122,7 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 
 		const dedupeSeq = this.nextDedupeSeq();
 		if (dedupeSeq !== undefined) {
-			this.dedupeSeq = injectDedupeHeaders(records, dedupeSeq);
+			this.dedupeSeq = injectDedupeHeaders(records, this.writerId, dedupeSeq);
 		}
 
 		return records;
