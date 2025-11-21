@@ -265,11 +265,7 @@ describe("serialization patterns", () => {
 		const writer2Batch: AppendRecord[] = [mkRecord(), mkRecord()];
 		injectDedupeHeaders(writer2Batch, "writer-2", 0n);
 
-		const allRecords = [
-			...writer1Batch1,
-			...writer1Batch1Dup,
-			...writer2Batch,
-		];
+		const allRecords = [...writer1Batch1, ...writer1Batch1Dup, ...writer2Batch];
 
 		const dedupe = new DedupeFilter();
 		const accepted: AppendRecord[] = [];

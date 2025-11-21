@@ -4,10 +4,7 @@ import type {
 	ReadHeaders,
 } from "@s2-dev/streamstore";
 
-import {
-	DEDUPE_SEQ_HEADER_BYTES,
-	DEDUPE_WRITER_UNIQ_ID,
-} from "./constants.js";
+import { DEDUPE_SEQ_HEADER_BYTES, DEDUPE_WRITER_UNIQ_ID } from "./constants.js";
 import { decodeU64, encodeU64 } from "./u64.js";
 
 const textEncoder = new TextEncoder();
@@ -120,7 +117,10 @@ export function injectDedupeHeaders(
 		let headers: AppendHeaders<"bytes">;
 
 		if (!existing) {
-			headers = [[DEDUPE_SEQ_HEADER_BYTES, headerValue], [DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)]];
+			headers = [
+				[DEDUPE_SEQ_HEADER_BYTES, headerValue],
+				[DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)],
+			];
 		} else if (Array.isArray(existing)) {
 			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
 			for (const [k, v] of existing as any) {
@@ -129,7 +129,7 @@ export function injectDedupeHeaders(
 				hdrs.push([kb, vb]);
 			}
 			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
-			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)])
+			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)]);
 			headers = hdrs as AppendHeaders<"bytes">;
 		} else {
 			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
@@ -137,7 +137,7 @@ export function injectDedupeHeaders(
 				hdrs.push([textEncoder.encode(k), textEncoder.encode(v)]);
 			}
 			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
-			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)])
+			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)]);
 			headers = hdrs as AppendHeaders<"bytes">;
 		}
 
