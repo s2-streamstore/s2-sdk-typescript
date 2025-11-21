@@ -50,7 +50,7 @@ The core S2 API essentially provides durable streams of binary records, each of 
 The `SerializingAppendSession<Message>` and `DeserializingReadSession<Message>` patterns provide an opinionated way to address all of these issues, by:
 - Being strongly typed around a `Message`
 - Splitting large messages into < 1MiB chunks, and "framing" those messages across multiple S2 records
-- Injecting deduplication headers (`_dedupe_seq`, `_writer_id`), to allow readers to efficiently detect and filter repeated records from retried appends and to distinguish different writers
+- Injecting deduplication headers (`_dedupe_seq`, `_writer_id`), to act as idempotency keys and allow readers to efficiently detect and filter repeated records caused by retried appends
 
 **Write path (append):**
 
