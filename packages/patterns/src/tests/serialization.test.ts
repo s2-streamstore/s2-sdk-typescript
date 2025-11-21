@@ -282,5 +282,15 @@ describe("serialization patterns", () => {
 		// First writer batch (2 records) + new writer batch (2 records) should be kept.
 		// Exact duplicate batch from the same writer should be dropped.
 		expect(accepted.length).toBe(4);
+
+		const acceptedMeta = accepted.map((rec) =>
+			extractDedupeSeq(rec.headers as any),
+		);
+		expect(acceptedMeta).toEqual([
+			["writer-1", 0n],
+			["writer-1", 1n],
+			["writer-2", 0n],
+			["writer-2", 1n],
+		]);
 	});
 });
