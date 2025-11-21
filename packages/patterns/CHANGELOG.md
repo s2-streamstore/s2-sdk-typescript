@@ -1,5 +1,11 @@
 # @s2-dev/streamstore-patterns
 
+## 0.3.0
+
+### Minor Changes
+
+- 0f7a372: Adds per-writer idempotency key (in combination with message index), to allow for record deduplication even if a writer crashes
+
 ## 0.2.0
 
 ### Minor Changes
