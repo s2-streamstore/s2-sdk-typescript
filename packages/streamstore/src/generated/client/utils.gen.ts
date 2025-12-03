@@ -288,7 +288,6 @@ class Interceptors<Interceptor> {
   }
 }
 
-/** @internal */
 export interface Middleware<Req, Res, Err, Options> {
   error: Interceptors<ErrInterceptor<Err, Res, Req, Options>>;
   request: Interceptors<ReqInterceptor<Req, Options>>;

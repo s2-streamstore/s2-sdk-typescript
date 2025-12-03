@@ -563,6 +563,7 @@ export type ListAccessTokensData = {
 export type ListAccessTokensErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type ListAccessTokensError = ListAccessTokensErrors[keyof ListAccessTokensErrors];
@@ -583,6 +584,7 @@ export type IssueAccessTokenData = {
 export type IssueAccessTokenErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
 };
 
@@ -609,6 +611,7 @@ export type RevokeAccessTokenData = {
 export type RevokeAccessTokenErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type RevokeAccessTokenError = RevokeAccessTokenErrors[keyof RevokeAccessTokenErrors];
@@ -641,6 +644,7 @@ export type ListBasinsData = {
 export type ListBasinsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type ListBasinsError = ListBasinsErrors[keyof ListBasinsErrors];
@@ -667,6 +671,7 @@ export type CreateBasinData = {
 export type CreateBasinErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
 };
 
@@ -695,6 +700,7 @@ export type DeleteBasinErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type DeleteBasinError = DeleteBasinErrors[keyof DeleteBasinErrors];
@@ -719,6 +725,7 @@ export type GetBasinConfigErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type GetBasinConfigError = GetBasinConfigErrors[keyof GetBasinConfigErrors];
@@ -745,6 +752,7 @@ export type ReconfigureBasinErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type ReconfigureBasinError = ReconfigureBasinErrors[keyof ReconfigureBasinErrors];
@@ -775,6 +783,7 @@ export type CreateOrReconfigureBasinData = {
 
 export type CreateOrReconfigureBasinErrors = {
     400: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type CreateOrReconfigureBasinError = CreateOrReconfigureBasinErrors[keyof CreateOrReconfigureBasinErrors];
@@ -814,6 +823,7 @@ export type AccountMetricsData = {
 export type AccountMetricsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type AccountMetricsError = AccountMetricsErrors[keyof AccountMetricsErrors];
@@ -856,6 +866,7 @@ export type BasinMetricsData = {
 export type BasinMetricsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type BasinMetricsError = BasinMetricsErrors[keyof BasinMetricsErrors];
@@ -902,6 +913,7 @@ export type StreamMetricsData = {
 export type StreamMetricsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type StreamMetricsError = StreamMetricsErrors[keyof StreamMetricsErrors];
@@ -937,6 +949,7 @@ export type ListStreamsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type ListStreamsError = ListStreamsErrors[keyof ListStreamsErrors];
@@ -964,6 +977,7 @@ export type CreateStreamErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
 };
 
@@ -991,6 +1005,7 @@ export type DeleteStreamErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
 };
 
 export type DeleteStreamError = DeleteStreamErrors[keyof DeleteStreamErrors];
@@ -1015,6 +1030,7 @@ export type GetStreamConfigErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
 };
 
@@ -1042,6 +1058,7 @@ export type ReconfigureStreamErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
 };
 
@@ -1075,6 +1092,7 @@ export type CreateOrReconfigureStreamErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
 };
 
@@ -1150,6 +1168,7 @@ export type ReadErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
     416: TailResponse;
 };
@@ -1186,6 +1205,7 @@ export type AppendErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
     412: AppendConditionFailed;
 };
@@ -1214,6 +1234,7 @@ export type CheckTailErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
+    408: ErrorInfo;
     409: ErrorInfo;
 };
 
