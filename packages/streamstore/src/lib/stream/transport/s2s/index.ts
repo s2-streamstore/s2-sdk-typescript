@@ -5,7 +5,7 @@
  * This file should only be imported in Node.js environments
  */
 
-import * as http2 from "node:http2";
+import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
 import createDebug from "debug";
 import type { S2RequestOptions } from "../../../../common.js";
 import {
@@ -48,6 +48,18 @@ import { frameMessage, S2SFrameParser } from "./framing.js";
 
 const debug = createDebug("s2:s2s");
 
+type Http2Module = typeof import("node:http2");
+
+let http2ModulePromise: Promise<Http2Module> | undefined;
+async function loadHttp2(): Promise<Http2Module> {
+	// Keep the specifier dynamic so browser bundlers don't try to bundle node:http2.
+	const specifier = "node:http2";
+	if (!http2ModulePromise) {
+		http2ModulePromise = import(specifier);
+	}
+	return http2ModulePromise;
+}
+
 export function buildProtoAppendInput(
 	records: AppendRecord[],
 	args: AppendArgs,
@@ -87,8 +99,8 @@ export function buildProtoAppendInput(
 
 export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
-	private connection?: http2.ClientHttp2Session;
-	private connectionPromise?: Promise<http2.ClientHttp2Session>;
+	private connection?: ClientHttp2Session;
+	private connectionPromise?: Promise<ClientHttp2Session>;
 
 	constructor(config: TransportConfig) {
 		this.transportConfig = config;
@@ -141,7 +153,7 @@ export class S2STransport implements SessionTransport {
 	/**
 	 * Get or create HTTP/2 connection (one per transport)
 	 */
-	private async getConnection(): Promise<http2.ClientHttp2Session> {
+	private async getConnection(): Promise<ClientHttp2Session> {
 		if (
 			this.connection &&
 			!this.connection.closed &&
@@ -166,7 +178,8 @@ export class S2STransport implements SessionTransport {
 		}
 	}
 
-	private async createConnection(): Promise<http2.ClientHttp2Session> {
+	private async createConnection(): Promise<ClientHttp2Session> {
+		const http2 = await loadHttp2();
 		const url = new URL(this.transportConfig.baseUrl);
 		const client = http2.connect(url.origin, {
 			// Use HTTPS settings
@@ -204,7 +217,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadResult<Format>>
 	implements TransportReadSession<Format>
 {
-	private http2Stream?: http2.ClientHttp2Stream;
+	private http2Stream?: ClientHttp2Stream;
 	private _lastReadPosition?: StreamPosition;
 	private _nextReadPosition?: StreamPosition;
 	private _lastObservedTail?: StreamPosition;
@@ -216,7 +229,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		streamName: string,
 		args: ReadArgs<Format> | undefined,
 		options: S2RequestOptions | undefined,
-		getConnection: () => Promise<http2.ClientHttp2Session>,
+		getConnection: () => Promise<ClientHttp2Session>,
 		basinName?: string,
 	): Promise<S2SReadSession<Format>> {
 		const url = new URL(baseUrl);
@@ -237,13 +250,13 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private authToken: Redacted.Redacted,
 		private url: URL,
 		private options: S2RequestOptions | undefined,
-		private getConnection: () => Promise<http2.ClientHttp2Session>,
+		private getConnection: () => Promise<ClientHttp2Session>,
 		private basinName?: string,
 	) {
 		// Initialize parser and textDecoder before super() call
 		const parser = new S2SFrameParser();
 		const textDecoder = new TextDecoder();
-		let http2Stream: http2.ClientHttp2Stream | undefined;
+		let http2Stream: ClientHttp2Stream | undefined;
 		let lastReadPosition: StreamPosition | undefined;
 
 		// Track timeout for detecting when server stops sending data
@@ -627,7 +640,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
 class S2SAppendSession implements TransportAppendSession {
-	private http2Stream?: http2.ClientHttp2Stream;
+	private http2Stream?: ClientHttp2Stream;
 	private parser = new S2SFrameParser();
 	private closed = false;
 	private pendingAcks: Array<{
@@ -640,7 +653,7 @@ class S2SAppendSession implements TransportAppendSession {
 		baseUrl: string,
 		bearerToken: Redacted.Redacted,
 		streamName: string,
-		getConnection: () => Promise<http2.ClientHttp2Session>,
+		getConnection: () => Promise<ClientHttp2Session>,
 		basinName: string | undefined,
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
@@ -660,7 +673,7 @@ class S2SAppendSession implements TransportAppendSession {
 		private baseUrl: string,
 		private authToken: Redacted.Redacted,
 		private streamName: string,
-		private getConnection: () => Promise<http2.ClientHttp2Session>,
+		private getConnection: () => Promise<ClientHttp2Session>,
 		private basinName?: string,
 		sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
