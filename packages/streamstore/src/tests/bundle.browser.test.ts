@@ -1,8 +1,8 @@
-import { build } from "esbuild";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -38,10 +38,12 @@ describe("browser bundling", () => {
 			expect(result.errors).toHaveLength(0);
 			expect(result.warnings).toHaveLength(0);
 
-			const http2Imports =
-				Object.values(result.metafile?.outputs ?? {}).flatMap(
-					(output) => output.imports?.filter((i) => i.path === "node:http2") ?? [],
-				);
+			const http2Imports = Object.values(
+				result.metafile?.outputs ?? {},
+			).flatMap(
+				(output) =>
+					output.imports?.filter((i) => i.path === "node:http2") ?? [],
+			);
 
 			expect(http2Imports.every((imp) => imp.external)).toBe(true);
 		} finally {
