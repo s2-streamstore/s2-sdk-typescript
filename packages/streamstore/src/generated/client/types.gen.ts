@@ -13,7 +13,6 @@ import type { Middleware } from './utils.gen.js';
 
 export type ResponseStyle = 'data' | 'fields';
 
-/** @internal */
 export interface Config<T extends ClientOptions = ClientOptions>
   extends Omit<RequestInit, 'body' | 'headers' | 'method'>,
     CoreConfig {
@@ -65,7 +64,6 @@ export interface Config<T extends ClientOptions = ClientOptions>
   throwOnError?: T['throwOnError'];
 }
 
-/** @internal */
 export interface RequestOptions<
   TData = unknown,
   TResponseStyle extends ResponseStyle = 'fields',
@@ -98,7 +96,6 @@ export interface RequestOptions<
   url: Url;
 }
 
-/** @internal */
 export interface ResolvedRequestOptions<
   TResponseStyle extends ResponseStyle = 'fields',
   ThrowOnError extends boolean = boolean,
@@ -158,7 +155,6 @@ export interface ClientOptions {
   throwOnError?: boolean;
 }
 
-/** @internal */
 type MethodFn = <
   TData = unknown,
   TError = unknown,
@@ -168,7 +164,6 @@ type MethodFn = <
   options: Omit<RequestOptions<TData, TResponseStyle, ThrowOnError>, 'method'>,
 ) => RequestResult<TData, TError, ThrowOnError, TResponseStyle>;
 
-/** @internal */
 type SseFn = <
   TData = unknown,
   TError = unknown,
@@ -178,7 +173,6 @@ type SseFn = <
   options: Omit<RequestOptions<TData, TResponseStyle, ThrowOnError>, 'method'>,
 ) => Promise<ServerSentEventsResult<TData, TError>>;
 
-/** @internal */
 type RequestFn = <
   TData = unknown,
   TError = unknown,
@@ -192,7 +186,6 @@ type RequestFn = <
     >,
 ) => RequestResult<TData, TError, ThrowOnError, TResponseStyle>;
 
-/** @internal */
 type BuildUrlFn = <
   TData extends {
     body?: unknown;
@@ -201,7 +194,7 @@ type BuildUrlFn = <
     url: string;
   },
 >(
-  options: Pick<TData, 'url'> & Options<TData>,
+  options: TData & Options<TData>,
 ) => string;
 
 export type Client = CoreClient<
@@ -245,7 +238,7 @@ export type Options<
   RequestOptions<TResponse, TResponseStyle, ThrowOnError>,
   'body' | 'path' | 'query' | 'url'
 > &
-  Omit<TData, 'url'>;
+  ([TData] extends [never] ? unknown : Omit<TData, 'url'>);
 
 export type OptionsLegacyParser<
   TData = unknown,
