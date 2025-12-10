@@ -52,10 +52,13 @@ type Http2Module = typeof import("node:http2");
 
 let http2ModulePromise: Promise<Http2Module> | undefined;
 async function loadHttp2(): Promise<Http2Module> {
-	// Keep the specifier dynamic so browser bundlers don't try to bundle node:http2.
-	const specifier = "node:http2";
+	// Hint bundlers to skip bundling node:http2 while keeping the specifier static for type inference.
 	if (!http2ModulePromise) {
-		http2ModulePromise = import(specifier);
+		http2ModulePromise = import(
+			/* webpackIgnore: true */
+			/* @vite-ignore */
+			"node:http2"
+		);
 	}
 	return http2ModulePromise;
 }
