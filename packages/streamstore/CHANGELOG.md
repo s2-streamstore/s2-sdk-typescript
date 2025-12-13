@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.19.2
+
+### Patch Changes
+
+- dc6919c: Fixes bug around base64 encoding of binary append records when batches include mixed string/byte records
+
 ## 0.19.1
 
 ### Patch Changes
