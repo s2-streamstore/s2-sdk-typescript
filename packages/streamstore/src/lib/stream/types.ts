@@ -20,7 +20,7 @@ export type ReadBatch<Format extends "string" | "bytes" = "string"> = Omit<
 	GeneratedReadBatch,
 	"records"
 > & {
-	records?: Array<ReadRecord<Format>>;
+	records: Array<ReadRecord<Format>>;
 };
 
 export type ReadRecord<Format extends "string" | "bytes" = "string"> = Omit<

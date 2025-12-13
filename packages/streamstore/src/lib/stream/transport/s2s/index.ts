@@ -573,17 +573,18 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				body: record.body,
 			} as ReadRecord<Format>;
 		} else {
-			// Convert to string format
+			// Convert to string format with object headers
+			const headerEntries = record.headers?.map(
+				(h) =>
+					[
+						h.name ? textDecoder.decode(h.name) : "",
+						h.value ? textDecoder.decode(h.value) : "",
+					] as [string, string],
+			);
 			return {
 				seq_num: Number(record.seqNum),
 				timestamp: Number(record.timestamp),
-				headers: record.headers?.map(
-					(h) =>
-						[
-							h.name ? textDecoder.decode(h.name) : "",
-							h.value ? textDecoder.decode(h.value) : "",
-						] as [string, string],
-				),
+				headers: headerEntries ? Object.fromEntries(headerEntries) : undefined,
 				body: record.body ? textDecoder.decode(record.body) : undefined,
 			} as ReadRecord<Format>;
 		}

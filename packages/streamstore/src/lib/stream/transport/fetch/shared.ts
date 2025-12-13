@@ -67,8 +67,8 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	if (args?.as === "bytes") {
 		const res: ReadBatch<"bytes"> = {
 			...response.data,
-			records: response.data.records?.map(
-				(record: GeneratedSequencedRecord) => ({
+			records:
+				response.data.records?.map((record: GeneratedSequencedRecord) => ({
 					...record,
 					body: record.body ? decodeFromBase64(record.body) : undefined,
 					headers: record.headers?.map(
@@ -78,21 +78,19 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 								Uint8Array,
 							],
 					),
-				}),
-			),
+				})) ?? [],
 		};
 		return res as ReadBatch<Format>;
 	} else {
 		const res: ReadBatch<"string"> = {
 			...response.data,
-			records: response.data.records?.map(
-				(record: GeneratedSequencedRecord) => ({
+			records:
+				response.data.records?.map((record: GeneratedSequencedRecord) => ({
 					...record,
 					headers: record.headers
 						? Object.fromEntries(record.headers)
 						: undefined,
-				}),
-			),
+				})) ?? [],
 		};
 		return res as ReadBatch<Format>;
 	}
@@ -131,11 +129,22 @@ export async function streamAppend(
 	let encodedRecords: GeneratedAppendRecord[] = [];
 	let hasAnyBytesRecords = false;
 
+	// First pass: determine if any records are bytes format
+	for (const record of recordsArray) {
+		const format = computeAppendRecordFormat(record);
+		if (format === "bytes") {
+			hasAnyBytesRecords = true;
+			break;
+		}
+	}
+
+	const textEncoder = new TextEncoder();
+
+	// Second pass: encode all records appropriately
 	for (const record of recordsArray) {
 		const format = computeAppendRecordFormat(record);
 		if (format === "bytes") {
 			const formattedRecord = record as AppendRecordForFormat<"bytes">;
-			hasAnyBytesRecords = true;
 			const encodedRecord = {
 				...formattedRecord,
 				body: formattedRecord.body
@@ -162,11 +171,27 @@ export async function streamAppend(
 			};
 
 			const formattedRecord = record as AppendRecordForFormat<"string">;
+			const normalizedHeaders = formattedRecord.headers
+				? normalizeHeaders(formattedRecord.headers)
+				: undefined;
+
+			const encodedHeaders: [string, string][] | undefined = normalizedHeaders
+				? hasAnyBytesRecords
+					? (normalizedHeaders.map(([name, value]) => [
+							encodeToBase64(textEncoder.encode(name)),
+							encodeToBase64(textEncoder.encode(value)),
+						]) as [string, string][])
+					: normalizedHeaders
+				: undefined;
+
+			// If batch has bytes records, encode string bodies as base64 too
 			const encodedRecord = {
 				...formattedRecord,
-				headers: formattedRecord.headers
-					? normalizeHeaders(formattedRecord.headers)
-					: undefined,
+				body:
+					hasAnyBytesRecords && formattedRecord.body
+						? encodeToBase64(textEncoder.encode(formattedRecord.body))
+						: formattedRecord.body,
+				headers: encodedHeaders,
 			};
 
 			encodedRecords.push(encodedRecord);
