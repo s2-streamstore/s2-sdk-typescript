@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "dist/cjs",
+    "rootDir": "src",
     "module": "CommonJS",
     "moduleResolution": "node10",
     "verbatimModuleSyntax": false,

@@ -10,6 +10,7 @@
     "moduleResolution": "node16",
     "allowImportingTsExtensions": false,
     "verbatimModuleSyntax": true,
+    "rootDir": ".",
     "outDir": "dist",
     "declaration": true,
     "declarationMap": true,
@@ -24,5 +25,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
+  "include": ["src/**/*", "examples/**/*"],
   "exclude": ["src/generated", "dist"]
 }
