@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.19.3
+
+### Patch Changes
+
+- 7ccd6ce: Fix timeout logic for resumable read sessions with fetch transport
+
 ## 0.19.2
 
 ### Patch Changes
