@@ -2,6 +2,10 @@
  * Code from Speakeasy (https://speakeasy.com).
  */
 
+import createDebug from "debug";
+
+const debug = createDebug("s2:event-stream");
+
 export type SseMessage<T> = {
 	data?: T | undefined;
 	event?: string | undefined;
@@ -36,10 +40,12 @@ export class EventStream<T>
 	) {
 		const upstream = responseBody.getReader();
 		let buffer: Uint8Array = new Uint8Array();
+		const eventStreamId = Math.random().toString(36).slice(2);
 		super({
 			async pull(downstream) {
 				try {
 					while (true) {
+						debug("pull loop, eventstream=%s", eventStreamId);
 						const match = findBoundary(buffer);
 						if (!match) {
 							const chunk = await upstream.read();
@@ -79,7 +85,14 @@ export class EventStream<T>
 	// Polyfill for older browsers
 	[Symbol.asyncIterator](): AsyncIterableIterator<T> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
-		if (typeof fn === "function") return fn.call(this);
+		if (typeof fn === "function") {
+			try {
+				return fn.call(this);
+			} catch {
+				// Native method may throw "Illegal invocation" when called on subclass
+				// Fall through to manual implementation
+			}
+		}
 		const reader = this.getReader();
 		return {
 			next: async () => {

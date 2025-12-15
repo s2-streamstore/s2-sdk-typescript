@@ -177,7 +177,52 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		args: ReadArgs<Format> = {},
 		config?: RetryConfig,
 	) {
-		return new RetryReadSession<Format>(args, generator, config);
+		const retryConfig = {
+			...DEFAULT_RETRY_CONFIG,
+			...config,
+		};
+
+		// Establish connection eagerly to fail fast on connection errors
+		// This way readSession() throws if we can't connect, rather than
+		// returning a stream that immediately errors
+		let attempt = 0;
+		let lastError: S2Error | undefined;
+
+		while (true) {
+			try {
+				const session = await generator(args);
+				// Connection succeeded - return the retry wrapper
+				return new RetryReadSession<Format>(args, generator, config, session);
+			} catch (err) {
+				const error =
+					err instanceof S2Error
+						? err
+						: new S2Error({
+								message: String(err),
+								status: 502,
+							});
+				lastError = error;
+
+				const effectiveMax = Math.max(1, retryConfig.maxAttempts);
+				if (isRetryable(error) && attempt < effectiveMax - 1) {
+					const delay = calculateDelay(
+						attempt,
+						retryConfig.retryBackoffDurationMillis,
+					);
+					debugRead(
+						"connection error in create, will retry after %dms, status=%s",
+						delay,
+						error.status,
+					);
+					await sleep(delay);
+					attempt++;
+					continue;
+				}
+
+				// Not retryable or attempts exhausted
+				throw lastError;
+			}
+		}
 	}
 
 	private constructor(
@@ -186,12 +231,13 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			args: ReadArgs<Format>,
 		) => Promise<TransportReadSession<Format>>,
 		config?: RetryConfig,
+		initialSession?: TransportReadSession<Format>,
 	) {
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
 		};
-		let session: TransportReadSession<Format> | undefined = undefined;
+		let session: TransportReadSession<Format> | undefined = initialSession;
 		const startTimeMs = performance.now(); // Capture start time before super()
 		super({
 			start: async (controller) => {
@@ -203,8 +249,47 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				let attempt = 0;
 
 				while (true) {
-					debugRead("starting read session with args: %o", nextArgs);
-					session = await generator(nextArgs);
+					// Use pre-established session on first iteration if provided
+					if (!session) {
+						debugRead("starting read session with args: %o", nextArgs);
+
+						// Try to create session - may throw on connection errors
+						try {
+							session = await generator(nextArgs);
+						} catch (err) {
+							// Convert to S2Error if needed
+							const error =
+								err instanceof S2Error
+									? err
+									: new S2Error({
+											message: String(err),
+											status: 502, // Bad Gateway - connection failure
+										});
+
+							// Check if we can retry connection errors
+							const effectiveMax = Math.max(1, retryConfig.maxAttempts);
+							if (isRetryable(error) && attempt < effectiveMax - 1) {
+								const delay = calculateDelay(
+									attempt,
+									retryConfig.retryBackoffDurationMillis,
+								);
+								debugRead(
+									"connection error, will retry after %dms, status=%s",
+									delay,
+									error.status,
+								);
+								await sleep(delay);
+								attempt++;
+								continue; // Retry creating session
+							}
+
+							// Error is not retryable or attempts exhausted
+							debugRead("connection error not retryable: %s", error);
+							controller.error(error);
+							return;
+						}
+					}
+
 					const reader = session.getReader();
 
 					while (true) {
@@ -263,6 +348,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 									await session.cancel?.("retry");
 								} catch {}
 
+								// Clear session so a new one gets created on retry
+								session = undefined;
+
 								debugRead(
 									"will retry after %dms, status=%s",
 									delay,
@@ -313,7 +401,14 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	// Polyfill for older browsers / Node.js environments
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadRecord<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
-		if (typeof fn === "function") return fn.call(this);
+		if (typeof fn === "function") {
+			try {
+				return fn.call(this);
+			} catch {
+				// Native method may throw "Illegal invocation" when called on subclass
+				// Fall through to manual implementation
+			}
+		}
 		const reader = this.getReader();
 		return {
 			next: async () => {

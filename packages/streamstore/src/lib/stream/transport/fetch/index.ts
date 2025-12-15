@@ -55,88 +55,49 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		debug("FetchReadSession.create stream=%s args=%o", name, args);
 		const { as, ...queryParams } = args ?? {};
 
-		try {
-			const response = await read({
-				client,
-				path: {
-					stream: name,
-				},
-				headers: {
-					accept: "text/event-stream",
-					...(as === "bytes" ? { "s2-format": "base64" } : {}),
-				},
-				query: queryParams,
-				parseAs: "stream",
-				...options,
-			});
-			if (response.error) {
-				// Convert error to S2Error and return error session
-				const status = response.response.status;
-				const error =
-					"message" in response.error
-						? new S2Error({
-								message: response.error.message,
-								code: response.error.code ?? undefined,
+		const response = await read({
+			client,
+			path: {
+				stream: name,
+			},
+			headers: {
+				accept: "text/event-stream",
+				...(as === "bytes" ? { "s2-format": "base64" } : {}),
+			},
+			query: queryParams,
+			parseAs: "stream",
+			...options,
+		});
+		if (response.error) {
+			// Convert error to S2Error and throw - let caller handle connection errors
+			const status = response.response.status;
+			const error =
+				"message" in response.error
+					? new S2Error({
+							message: response.error.message,
+							code: response.error.code ?? undefined,
+							status,
+						})
+					: status === 416
+						? new RangeNotSatisfiableError({
 								status,
 							})
-						: status === 416
-							? new RangeNotSatisfiableError({
-									status,
-								})
-							: new S2Error({
-									message: response.response.statusText ?? "Request failed",
-									status,
-								});
-				return FetchReadSession.createErrorSession<Format>(error);
-			}
-			if (!response.response.body) {
-				const error = new S2Error({
-					message: "No body in SSE response",
-					code: "INVALID_RESPONSE",
-					status: 502,
-					origin: "sdk",
-				});
-				return FetchReadSession.createErrorSession<Format>(error);
-			}
-			const format = (args?.as ?? "string") as Format;
-			return new FetchReadSession(response.response.body, format);
-		} catch (error) {
-			// Catch any thrown errors (network failures, DNS errors, etc.)
-			const s2Error =
-				error instanceof S2Error
-					? error
-					: new S2Error({
-							message: String(error),
-							status: 502, // Bad Gateway - network/fetch failure
-						});
-			return FetchReadSession.createErrorSession<Format>(s2Error);
+						: new S2Error({
+								message: response.response.statusText ?? "Request failed",
+								status,
+							});
+			throw error;
 		}
-	}
-
-	/**
-	 * Create a session that immediately emits an error result and closes.
-	 * Used when errors occur during session creation.
-	 */
-	private static createErrorSession<Format extends "string" | "bytes">(
-		error: S2Error,
-	): FetchReadSession<Format> {
-		// Create a custom instance that extends ReadableStream and emits error immediately
-		const stream = new ReadableStream<ReadResult<Format>>({
-			start(controller) {
-				controller.enqueue({ ok: false, error });
-				controller.close();
-			},
-		});
-
-		// Copy methods from stream to create a proper FetchReadSession
-		const session = Object.assign(
-			Object.create(FetchReadSession.prototype),
-			stream,
-		);
-		session._nextReadPosition = undefined;
-		session._lastObservedTail = undefined;
-
-		return session as FetchReadSession<Format>;
+		if (!response.response.body) {
+			throw new S2Error({
+				message: "No body in SSE response",
+				code: "INVALID_RESPONSE",
+				status: 502,
+				origin: "sdk",
+			});
+		}
+		const format = (args?.as ?? "string") as Format;
+		return new FetchReadSession(response.response.body, format);
 	}
 
 	private _nextReadPosition: StreamPosition | undefined = undefined;
@@ -152,6 +113,9 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 		// Create EventStream that parses SSE and yields records
 		const eventStream = new EventStream<ReadRecord<Format>>(stream, (msg) => {
+			// Update ping time on ANY event from the server
+			lastPingTimeMs = performance.now();
+
 			// Parse SSE events according to the S2 protocol
 			if (msg.event === "batch" && msg.data) {
 				const rawBatch: GeneratedReadBatch = JSON.parse(msg.data);
@@ -202,7 +166,9 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 				});
 				return { done: true };
 			}
-			lastPingTimeMs = performance.now();
+			if (msg.event === "ping") {
+				debug("ping");
+			}
 
 			// Skip ping events and other events
 			return { done: false };
@@ -211,76 +177,123 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		// Wrap the EventStream to convert records to ReadResult and check for errors
 		const reader = eventStream.getReader();
 		let done = false;
+		// Track pending read to reuse across timeout retries
+		type ReaderResult = Awaited<ReturnType<typeof reader.read>>;
+		let pendingRead: Promise<ReaderResult> | null = null;
+
+		// Result type for Promise.race
+		type RaceResult =
+			| { type: "data"; value: ReaderResult }
+			| { type: "timeout" }
+			| { type: "stale" };
 
 		super({
 			pull: async (controller) => {
-				if (done) {
-					controller.close();
-					return;
-				}
+				// Loop to retry when stale timeouts fire
+				while (true) {
+					if (done) {
+						controller.close();
+						return;
+					}
 
-				// Check for ping timeout before reading
-				const now = performance.now();
-				const timeSinceLastPingMs = now - lastPingTimeMs;
-				if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
-					const timeoutError = new S2Error({
-						message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
-						status: 408, // Request Timeout
-						code: "TIMEOUT",
-					});
-					debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
-					controller.enqueue({ ok: false, error: timeoutError });
-					done = true;
-					controller.close();
-					return;
-				}
+					// Check for ping timeout before reading
+					const now = performance.now();
+					const timeSinceLastPingMs = now - lastPingTimeMs;
+					if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
+						const timeoutError = new S2Error({
+							message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+							status: 408, // Request Timeout
+							code: "TIMEOUT",
+						});
+						debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
+						controller.enqueue({ ok: false, error: timeoutError });
+						done = true;
+						await reader.cancel();
+						controller.close();
+						return;
+					}
 
-				try {
-					// Calculate remaining time until timeout
+					// Capture current ping time to detect if activity happens during timeout
+					const capturedLastPingTime = lastPingTimeMs;
 					const remainingTimeMs = PING_TIMEOUT_MS - timeSinceLastPingMs;
 
-					// Race reader.read() against timeout
-					// This ensures we don't wait forever if server stops sending events
-					const result = await Promise.race([
-						reader.read(),
-						new Promise<never>((_, reject) =>
-							setTimeout(() => {
-								const elapsed = performance.now() - lastPingTimeMs;
-								reject(
-									new S2Error({
-										message: `No ping received for ${Math.floor(elapsed / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
-										status: 408,
-										code: "TIMEOUT",
-									}),
-								);
-							}, remainingTimeMs),
-						),
-					]);
-
-					if (result.done) {
-						done = true;
-						// Check if stream ended due to error
-						if (parserError) {
-							controller.enqueue({ ok: false, error: parserError });
-						}
-						controller.close();
-					} else {
-						// Emit successful result
-						controller.enqueue({ ok: true, value: result.value });
+					// Reuse pending read if it exists (from previous stale timeout iteration)
+					if (!pendingRead) {
+						pendingRead = reader.read();
 					}
-				} catch (error) {
-					// Convert unexpected errors to S2Error and emit as error result
-					const s2Err =
-						error instanceof S2Error
-							? error
-							: new S2Error({ message: String(error), status: 500 });
-					controller.enqueue({ ok: false, error: s2Err });
-					done = true;
-					controller.close();
+					const currentRead = pendingRead;
+
+					try {
+						// Race reader.read() against timeout
+						// If timeout fires but activity happened since scheduling, it's "stale" and we retry
+						const result: RaceResult = await Promise.race([
+							currentRead.then((r) => {
+								pendingRead = null;
+								return { type: "data" as const, value: r };
+							}),
+							new Promise<RaceResult>((resolve) =>
+								setTimeout(() => {
+									if (lastPingTimeMs === capturedLastPingTime) {
+										// No activity since timeout was scheduled - actually timed out
+										debug("read session ping timeout");
+										resolve({ type: "timeout" });
+									} else {
+										// Activity happened - this timeout is stale, retry with new timeout
+										debug("stale timeout, activity detected, retrying");
+										resolve({ type: "stale" });
+									}
+								}, remainingTimeMs),
+							),
+						]);
+
+						if (result.type === "stale") {
+							// Loop to create new timeout, reusing pendingRead
+							continue;
+						}
+
+						if (result.type === "timeout") {
+							const elapsed = performance.now() - lastPingTimeMs;
+							const timeoutError = new S2Error({
+								message: `No ping received for ${Math.floor(elapsed / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+								status: 408,
+								code: "TIMEOUT",
+							});
+							controller.enqueue({ ok: false, error: timeoutError });
+							done = true;
+							await reader.cancel();
+							controller.close();
+							return;
+						}
+
+						// Got data
+						if (result.value.done) {
+							done = true;
+							// Check if stream ended due to error
+							if (parserError) {
+								controller.enqueue({ ok: false, error: parserError });
+							}
+							controller.close();
+						} else {
+							// Emit successful result
+							controller.enqueue({ ok: true, value: result.value.value });
+						}
+						return;
+					} catch (error) {
+						// Convert unexpected errors to S2Error and emit as error result
+						const s2Err =
+							error instanceof S2Error
+								? error
+								: new S2Error({ message: String(error), status: 500 });
+						controller.enqueue({ ok: false, error: s2Err });
+						done = true;
+						await reader.cancel();
+						controller.close();
+						return;
+					}
 				}
 			},
 			cancel: async () => {
-				await eventStream.cancel();
+				await reader.cancel();
 			},
 		});
 	}
@@ -296,7 +309,14 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 	// Implement AsyncIterable (for await...of support)
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
-		if (typeof fn === "function") return fn.call(this);
+		if (typeof fn === "function") {
+			try {
+				return fn.call(this);
+			} catch {
+				// Native method may throw "Illegal invocation" when called on subclass
+				// Fall through to manual implementation
+			}
+		}
 		const reader = this.getReader();
 		return {
 			next: async () => {
