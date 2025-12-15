@@ -55,88 +55,49 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		debug("FetchReadSession.create stream=%s args=%o", name, args);
 		const { as, ...queryParams } = args ?? {};
 
-		try {
-			const response = await read({
-				client,
-				path: {
-					stream: name,
-				},
-				headers: {
-					accept: "text/event-stream",
-					...(as === "bytes" ? { "s2-format": "base64" } : {}),
-				},
-				query: queryParams,
-				parseAs: "stream",
-				...options,
-			});
-			if (response.error) {
-				// Convert error to S2Error and return error session
-				const status = response.response.status;
-				const error =
-					"message" in response.error
-						? new S2Error({
-								message: response.error.message,
-								code: response.error.code ?? undefined,
+		const response = await read({
+			client,
+			path: {
+				stream: name,
+			},
+			headers: {
+				accept: "text/event-stream",
+				...(as === "bytes" ? { "s2-format": "base64" } : {}),
+			},
+			query: queryParams,
+			parseAs: "stream",
+			...options,
+		});
+		if (response.error) {
+			// Convert error to S2Error and throw - let caller handle connection errors
+			const status = response.response.status;
+			const error =
+				"message" in response.error
+					? new S2Error({
+							message: response.error.message,
+							code: response.error.code ?? undefined,
+							status,
+						})
+					: status === 416
+						? new RangeNotSatisfiableError({
 								status,
 							})
-						: status === 416
-							? new RangeNotSatisfiableError({
-									status,
-								})
-							: new S2Error({
-									message: response.response.statusText ?? "Request failed",
-									status,
-								});
-				return FetchReadSession.createErrorSession<Format>(error);
-			}
-			if (!response.response.body) {
-				const error = new S2Error({
-					message: "No body in SSE response",
-					code: "INVALID_RESPONSE",
-					status: 502,
-					origin: "sdk",
-				});
-				return FetchReadSession.createErrorSession<Format>(error);
-			}
-			const format = (args?.as ?? "string") as Format;
-			return new FetchReadSession(response.response.body, format);
-		} catch (error) {
-			// Catch any thrown errors (network failures, DNS errors, etc.)
-			const s2Error =
-				error instanceof S2Error
-					? error
-					: new S2Error({
-							message: String(error),
-							status: 502, // Bad Gateway - network/fetch failure
-						});
-			return FetchReadSession.createErrorSession<Format>(s2Error);
+						: new S2Error({
+								message: response.response.statusText ?? "Request failed",
+								status,
+							});
+			throw error;
 		}
-	}
-
-	/**
-	 * Create a session that immediately emits an error result and closes.
-	 * Used when errors occur during session creation.
-	 */
-	private static createErrorSession<Format extends "string" | "bytes">(
-		error: S2Error,
-	): FetchReadSession<Format> {
-		// Create a custom instance that extends ReadableStream and emits error immediately
-		const stream = new ReadableStream<ReadResult<Format>>({
-			start(controller) {
-				controller.enqueue({ ok: false, error });
-				controller.close();
-			},
-		});
-
-		// Copy methods from stream to create a proper FetchReadSession
-		const session = Object.assign(
-			Object.create(FetchReadSession.prototype),
-			stream,
-		);
-		session._nextReadPosition = undefined;
-		session._lastObservedTail = undefined;
-
-		return session as FetchReadSession<Format>;
+		if (!response.response.body) {
+			throw new S2Error({
+				message: "No body in SSE response",
+				code: "INVALID_RESPONSE",
+				status: 502,
+				origin: "sdk",
+			});
+		}
+		const format = (args?.as ?? "string") as Format;
+		return new FetchReadSession(response.response.body, format);
 	}
 
 	private _nextReadPosition: StreamPosition | undefined = undefined;
@@ -348,7 +309,14 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 	// Implement AsyncIterable (for await...of support)
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
-		if (typeof fn === "function") return fn.call(this);
+		if (typeof fn === "function") {
+			try {
+				return fn.call(this);
+			} catch {
+				// Native method may throw "Illegal invocation" when called on subclass
+				// Fall through to manual implementation
+			}
+		}
 		const reader = this.getReader();
 		return {
 			next: async () => {
