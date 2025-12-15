@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.19.4
+
+### Patch Changes
+
+- 12aca9c: Revert fix for fetch read session timeouts
+
 ## 0.19.3
 
 ### Patch Changes
