@@ -2,6 +2,10 @@
  * Code from Speakeasy (https://speakeasy.com).
  */
 
+import createDebug from "debug";
+
+const debug = createDebug("s2:event-stream");
+
 export type SseMessage<T> = {
 	data?: T | undefined;
 	event?: string | undefined;
@@ -36,10 +40,12 @@ export class EventStream<T>
 	) {
 		const upstream = responseBody.getReader();
 		let buffer: Uint8Array = new Uint8Array();
+		const eventStreamId = Math.random().toString(36).slice(2);
 		super({
 			async pull(downstream) {
 				try {
 					while (true) {
+						debug("pull loop, eventstream=%s", eventStreamId);
 						const match = findBoundary(buffer);
 						if (!match) {
 							const chunk = await upstream.read();

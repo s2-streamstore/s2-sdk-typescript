@@ -152,6 +152,9 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 		// Create EventStream that parses SSE and yields records
 		const eventStream = new EventStream<ReadRecord<Format>>(stream, (msg) => {
+			// Update ping time on ANY event from the server
+			lastPingTimeMs = performance.now();
+
 			// Parse SSE events according to the S2 protocol
 			if (msg.event === "batch" && msg.data) {
 				const rawBatch: GeneratedReadBatch = JSON.parse(msg.data);
@@ -202,7 +205,9 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 				});
 				return { done: true };
 			}
-			lastPingTimeMs = performance.now();
+			if (msg.event === "ping") {
+				debug("ping");
+			}
 
 			// Skip ping events and other events
 			return { done: false };
@@ -211,76 +216,123 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		// Wrap the EventStream to convert records to ReadResult and check for errors
 		const reader = eventStream.getReader();
 		let done = false;
+		// Track pending read to reuse across timeout retries
+		type ReaderResult = Awaited<ReturnType<typeof reader.read>>;
+		let pendingRead: Promise<ReaderResult> | null = null;
+
+		// Result type for Promise.race
+		type RaceResult =
+			| { type: "data"; value: ReaderResult }
+			| { type: "timeout" }
+			| { type: "stale" };
 
 		super({
 			pull: async (controller) => {
-				if (done) {
-					controller.close();
-					return;
-				}
+				// Loop to retry when stale timeouts fire
+				while (true) {
+					if (done) {
+						controller.close();
+						return;
+					}
 
-				// Check for ping timeout before reading
-				const now = performance.now();
-				const timeSinceLastPingMs = now - lastPingTimeMs;
-				if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
-					const timeoutError = new S2Error({
-						message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
-						status: 408, // Request Timeout
-						code: "TIMEOUT",
-					});
-					debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
-					controller.enqueue({ ok: false, error: timeoutError });
-					done = true;
-					controller.close();
-					return;
-				}
+					// Check for ping timeout before reading
+					const now = performance.now();
+					const timeSinceLastPingMs = now - lastPingTimeMs;
+					if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
+						const timeoutError = new S2Error({
+							message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+							status: 408, // Request Timeout
+							code: "TIMEOUT",
+						});
+						debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
+						controller.enqueue({ ok: false, error: timeoutError });
+						done = true;
+						await reader.cancel();
+						controller.close();
+						return;
+					}
 
-				try {
-					// Calculate remaining time until timeout
+					// Capture current ping time to detect if activity happens during timeout
+					const capturedLastPingTime = lastPingTimeMs;
 					const remainingTimeMs = PING_TIMEOUT_MS - timeSinceLastPingMs;
 
-					// Race reader.read() against timeout
-					// This ensures we don't wait forever if server stops sending events
-					const result = await Promise.race([
-						reader.read(),
-						new Promise<never>((_, reject) =>
-							setTimeout(() => {
-								const elapsed = performance.now() - lastPingTimeMs;
-								reject(
-									new S2Error({
-										message: `No ping received for ${Math.floor(elapsed / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
-										status: 408,
-										code: "TIMEOUT",
-									}),
-								);
-							}, remainingTimeMs),
-						),
-					]);
-
-					if (result.done) {
-						done = true;
-						// Check if stream ended due to error
-						if (parserError) {
-							controller.enqueue({ ok: false, error: parserError });
-						}
-						controller.close();
-					} else {
-						// Emit successful result
-						controller.enqueue({ ok: true, value: result.value });
+					// Reuse pending read if it exists (from previous stale timeout iteration)
+					if (!pendingRead) {
+						pendingRead = reader.read();
 					}
-				} catch (error) {
-					// Convert unexpected errors to S2Error and emit as error result
-					const s2Err =
-						error instanceof S2Error
-							? error
-							: new S2Error({ message: String(error), status: 500 });
-					controller.enqueue({ ok: false, error: s2Err });
-					done = true;
-					controller.close();
+					const currentRead = pendingRead;
+
+					try {
+						// Race reader.read() against timeout
+						// If timeout fires but activity happened since scheduling, it's "stale" and we retry
+						const result: RaceResult = await Promise.race([
+							currentRead.then((r) => {
+								pendingRead = null;
+								return { type: "data" as const, value: r };
+							}),
+							new Promise<RaceResult>((resolve) =>
+								setTimeout(() => {
+									if (lastPingTimeMs === capturedLastPingTime) {
+										// No activity since timeout was scheduled - actually timed out
+										debug("read session ping timeout");
+										resolve({ type: "timeout" });
+									} else {
+										// Activity happened - this timeout is stale, retry with new timeout
+										debug("stale timeout, activity detected, retrying");
+										resolve({ type: "stale" });
+									}
+								}, remainingTimeMs),
+							),
+						]);
+
+						if (result.type === "stale") {
+							// Loop to create new timeout, reusing pendingRead
+							continue;
+						}
+
+						if (result.type === "timeout") {
+							const elapsed = performance.now() - lastPingTimeMs;
+							const timeoutError = new S2Error({
+								message: `No ping received for ${Math.floor(elapsed / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+								status: 408,
+								code: "TIMEOUT",
+							});
+							controller.enqueue({ ok: false, error: timeoutError });
+							done = true;
+							await reader.cancel();
+							controller.close();
+							return;
+						}
+
+						// Got data
+						if (result.value.done) {
+							done = true;
+							// Check if stream ended due to error
+							if (parserError) {
+								controller.enqueue({ ok: false, error: parserError });
+							}
+							controller.close();
+						} else {
+							// Emit successful result
+							controller.enqueue({ ok: true, value: result.value.value });
+						}
+						return;
+					} catch (error) {
+						// Convert unexpected errors to S2Error and emit as error result
+						const s2Err =
+							error instanceof S2Error
+								? error
+								: new S2Error({ message: String(error), status: 500 });
+						controller.enqueue({ ok: false, error: s2Err });
+						done = true;
+						await reader.cancel();
+						controller.close();
+						return;
+					}
 				}
 			},
 			cancel: async () => {
-				await eventStream.cancel();
+				await reader.cancel();
 			},
 		});
 	}
