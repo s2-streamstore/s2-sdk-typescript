@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.19.5
+
+### Patch Changes
+
+- 40ec9ce: Fix liveness timer issue for fetch-transport read session
+
 ## 0.19.4
 
 ### Patch Changes
