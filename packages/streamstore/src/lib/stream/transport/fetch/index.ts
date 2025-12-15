@@ -212,9 +212,6 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		const reader = eventStream.getReader();
 		let done = false;
 
-		// Sentinel value to indicate timeout check needed (not actual timeout)
-		const TIMEOUT_CHECK = Symbol("timeout-check");
-
 		super({
 			pull: async (controller) => {
 				if (done) {
@@ -222,59 +219,54 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					return;
 				}
 
+				// Check for ping timeout before reading
+				const now = performance.now();
+				const timeSinceLastPingMs = now - lastPingTimeMs;
+				if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
+					const timeoutError = new S2Error({
+						message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+						status: 408, // Request Timeout
+						code: "TIMEOUT",
+					});
+					debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
+					controller.enqueue({ ok: false, error: timeoutError });
+					done = true;
+					controller.close();
+					return;
+				}
+
 				try {
-					// Loop to handle timeout checks - pings may arrive while waiting,
-					// so we need to re-check actual elapsed time when timeout fires
-					while (true) {
-						// Check for ping timeout before reading
-						const now = performance.now();
-						const timeSinceLastPingMs = now - lastPingTimeMs;
+					// Calculate remaining time until timeout
+					const remainingTimeMs = PING_TIMEOUT_MS - timeSinceLastPingMs;
 
-						if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
-							const timeoutError = new S2Error({
-								message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
-								status: 408, // Request Timeout
-								code: "TIMEOUT",
-							});
-							debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
-							controller.enqueue({ ok: false, error: timeoutError });
-							done = true;
-							controller.close();
-							return;
+					// Race reader.read() against timeout
+					// This ensures we don't wait forever if server stops sending events
+					const result = await Promise.race([
+						reader.read(),
+						new Promise<never>((_, reject) =>
+							setTimeout(() => {
+								const elapsed = performance.now() - lastPingTimeMs;
+								reject(
+									new S2Error({
+										message: `No ping received for ${Math.floor(elapsed / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
+										status: 408,
+										code: "TIMEOUT",
+									}),
+								);
+							}, remainingTimeMs),
+						),
+					]);
+
+					if (result.done) {
+						done = true;
+						// Check if stream ended due to error
+						if (parserError) {
+							controller.enqueue({ ok: false, error: parserError });
 						}
-
-						// Calculate remaining time until timeout
-						const remainingTimeMs = PING_TIMEOUT_MS - timeSinceLastPingMs;
-
-						// Race reader.read() against timeout
-						// Timeout resolves with sentinel instead of rejecting, so we can
-						// re-check actual elapsed time (pings may have updated lastPingTimeMs)
-						const result = await Promise.race([
-							reader.read(),
-							new Promise<typeof TIMEOUT_CHECK>((resolve) =>
-								setTimeout(() => resolve(TIMEOUT_CHECK), remainingTimeMs),
-							),
-						]);
-
-						// If timeout fired, loop to check actual elapsed time
-						// (pings may have arrived during the wait, updating lastPingTimeMs)
-						if (result === TIMEOUT_CHECK) {
-							continue;
-						}
-
-						// Got actual data from reader
-						if (result.done) {
-							done = true;
-							// Check if stream ended due to error
-							if (parserError) {
-								controller.enqueue({ ok: false, error: parserError });
-							}
-							controller.close();
-						} else {
-							// Emit successful result
-							controller.enqueue({ ok: true, value: result.value });
-						}
-						return;
+						controller.close();
+					} else {
+						// Emit successful result
+						controller.enqueue({ ok: true, value: result.value });
 					}
 				} catch (error) {
 					// Convert unexpected errors to S2Error and emit as error result
