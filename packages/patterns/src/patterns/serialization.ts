@@ -22,6 +22,7 @@
 import {
 	AppendRecord,
 	AppendSession,
+	BatchSubmitTicket,
 	ReadSession,
 	U64,
 } from "@s2-dev/streamstore";
@@ -76,7 +77,7 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 					self.matchSeqNum = current + records.length;
 					await writer.write({
 						records,
-						match_seq_num: current,
+						matchSeqNum: current,
 					});
 				} else {
 					await writer.write({ records });
@@ -130,15 +131,18 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 
 	async submit(message: Message): Promise<MessageRange> {
 		const records = this.toRecords(message);
-		const durable = await Promise.all(
-			records.map((record) =>
-				this.session.submit(record, {
+		const tickets: BatchSubmitTicket[] = [];
+		for (const record of records) {
+			tickets.push(
+				await this.session.submit(record, {
 					...(this.matchSeqNum !== undefined
-						? { match_seq_num: this.matchSeqNum++ }
+						? { matchSeqNum: this.matchSeqNum++ }
 						: {}),
 				}),
-			),
-		);
+			);
+		}
+
+		const durable = await Promise.all(tickets.map((ticket) => ticket.ack()));
 		const start = durable[0]!.start.seq_num;
 		const end = durable.at(-1)!.end.seq_num;
 		return {
