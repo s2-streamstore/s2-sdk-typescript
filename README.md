@@ -91,7 +91,7 @@ The `S2` client and stream sessions support configurable retry behavior:
   ```
 
 - Stream append/read sessions created from `S2.basin(...).stream(...)` inherit this retry configuration.
-- The `appendRetryPolicy` dictates how failed appends should be retried. If you are not using a concurrency control like `match_seq_num`, then retrying a failed append could result in duplicate data, depending on the nature of the failure. This policy can be set to tolerate potential duplicates by retrying all failures (`"all"`, the default) or only failures guaranteed not to have had a side effect (`"noSideEffects"`). If you cannot tolerate potential duplicates and do not have explicit deduplication downstream, consider using `"noSideEffects"` instead of the default.
+- The `appendRetryPolicy` dictates how failed appends should be retried. If you are not using a concurrency control like `matchSeqNum`, then retrying a failed append could result in duplicate data, depending on the nature of the failure. This policy can be set to tolerate potential duplicates by retrying all failures (`"all"`, the default) or only failures guaranteed not to have had a side effect (`"noSideEffects"`). If you cannot tolerate potential duplicates and do not have explicit deduplication downstream, consider using `"noSideEffects"` instead of the default.
 
 See the generated API docs for the full description of `RetryConfig`, `AppendRetryPolicy` and `AppendSessionOptions`.
 

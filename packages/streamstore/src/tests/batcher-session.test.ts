@@ -68,7 +68,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		expect(streamAppendSpy.mock.calls?.[0]?.[2]).toHaveLength(2);
 	});
 
-	it("batch overflow increments match_seq_num across multiple flushes", async () => {
+	it("batch overflow increments matchSeqNum across multiple flushes", async () => {
 		const stream = makeStream();
 		const session = await stream.appendSession();
 		// Mock returns ack based on number of records submitted
@@ -86,7 +86,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 0,
 			maxBatchRecords: 2,
-			match_seq_num: 5,
+			matchSeqNum: 5,
 		});
 
 		// Pipe batcher output to session
@@ -104,10 +104,10 @@ describe("BatchTransform + AppendSession integration", () => {
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
 		expect(streamAppendSpy.mock.calls?.[0]?.[3]).toMatchObject({
-			match_seq_num: 5,
+			matchSeqNum: 5,
 		});
 		expect(streamAppendSpy.mock.calls?.[1]?.[3]).toMatchObject({
-			match_seq_num: 7,
+			matchSeqNum: 7,
 		});
 	});
 

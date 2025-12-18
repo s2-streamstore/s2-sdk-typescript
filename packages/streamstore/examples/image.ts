@@ -72,7 +72,7 @@ let append = await image
 	.pipeThrough(
 		new BatchTransform({
 			lingerDurationMillis: 5,
-			match_seq_num: startAt.tail.seq_num,
+			matchSeqNum: startAt.tail.seq_num,
 		}),
 	)
 	// Write to the S2 stream.

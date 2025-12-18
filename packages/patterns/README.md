@@ -58,7 +58,7 @@ The `SerializingAppendSession<Message>` and `DeserializingReadSession<Message>` 
 - `Uint8Array` → `Uint8Array[]` – `chunkBytes` splits into bounded-size chunks (`MAX_CHUNK_BODY_BYTES`) so each S2 record stays under the per-record limit.
 - `Uint8Array[]` → `AppendRecord[]` – `frameChunksToRecords` adds framing headers (`_frame_bytes`, `_frame_records`) to the first record to describe the whole message.
 - `AppendRecord[]` → `AppendRecord[]` with `_dedupe_seq` and `_writer_id` – `injectDedupeHeaders` adds a monotonically increasing dedupe sequence per record, scoped to a unique writer id.
-- `AppendRecord[]` → sent to S2 – `SerializingAppendSession` submits each record, optionally using `match_seq_num` sequencing.
+- `AppendRecord[]` → sent to S2 – `SerializingAppendSession` submits each record, optionally using `matchSeqNum` sequencing.
 
 **Read path (consume):**
 
