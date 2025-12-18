@@ -192,9 +192,9 @@ describe("AppendSessionImpl (unit)", () => {
 		});
 		(session as any).requestTimeoutMillis = 500;
 
-		const receiptP = session.submit([{ body: "x" }]);
-		const receipt = await receiptP;
-		const ackP = receipt.ack();
+		const ticketP = session.submit([{ body: "x" }]);
+		const ticket = await ticketP;
+		const ackP = ticket.ack();
 
 		// Not yet timed out at 0.49s
 		await vi.advanceTimersByTimeAsync(490);
@@ -236,8 +236,8 @@ describe("AppendSessionImpl (unit)", () => {
 		await Promise.resolve();
 		await vi.advanceTimersByTimeAsync(10);
 		await Promise.resolve();
-		const receipt = await p;
-		const ack = await receipt.ack();
+		const ticket = await p;
+		const ack = await ticket.ack();
 		expect(ack.end.seq_num - ack.start.seq_num).toBe(1);
 	});
 
@@ -253,8 +253,8 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const receipt = await session.submit([{ body: "x" }]);
-		await expect(receipt.ack()).rejects.toMatchObject({
+		const ticket = await session.submit([{ body: "x" }]);
+		await expect(ticket.ack()).rejects.toMatchObject({
 			message: "Max attempts (1) exhausted: boom",
 			status: 500,
 		});
@@ -272,8 +272,8 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const receipt1 = await session.submit([{ body: "x" }]);
-		await expect(receipt1.ack()).rejects.toMatchObject({ status: 500 });
+		const ticket1 = await session.submit([{ body: "x" }]);
+		await expect(ticket1.ack()).rejects.toMatchObject({ status: 500 });
 		expect(session.failureCause()).toMatchObject({ status: 500 });
 	});
 
@@ -289,10 +289,10 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const receipt1 = await session.submit([{ body: "a" }]);
-		const receipt2 = await session.submit([{ body: "b" }]);
-		await expect(receipt1.ack()).rejects.toMatchObject({ status: 500 });
-		await expect(receipt2.ack()).rejects.toMatchObject({ status: 500 });
+		const ticket1 = await session.submit([{ body: "a" }]);
+		const ticket2 = await session.submit([{ body: "b" }]);
+		await expect(ticket1.ack()).rejects.toMatchObject({ status: 500 });
+		await expect(ticket2.ack()).rejects.toMatchObject({ status: 500 });
 	});
 
 	it("detects non-monotonic sequence numbers and aborts with fatal error", async () => {
@@ -316,14 +316,14 @@ describe("AppendSessionImpl (unit)", () => {
 		);
 
 		// First submit should succeed
-		const receipt1 = await session.submit([{ body: "a" }]);
-		await expect(receipt1.ack()).resolves.toMatchObject({
+		const ticket1 = await session.submit([{ body: "a" }]);
+		await expect(ticket1.ack()).resolves.toMatchObject({
 			end: { seq_num: 1 },
 		});
 
 		// Second submit should trigger invariant violation
-		const receipt2 = await session.submit([{ body: "b" }]);
-		await expect(receipt2.ack()).rejects.toMatchObject({
+		const ticket2 = await session.submit([{ body: "b" }]);
+		await expect(ticket2.ack()).rejects.toMatchObject({
 			message: expect.stringContaining(
 				"Sequence number not strictly increasing",
 			),
@@ -366,14 +366,14 @@ describe("AppendSessionImpl (unit)", () => {
 		);
 
 		// First submit should succeed
-		const receipt1 = await session.submit([{ body: "a" }]);
-		await expect(receipt1.ack()).resolves.toMatchObject({
+		const ticket1 = await session.submit([{ body: "a" }]);
+		await expect(ticket1.ack()).resolves.toMatchObject({
 			end: { seq_num: 10 },
 		});
 
 		// Second submit should trigger invariant violation
-		const receipt2 = await session.submit([{ body: "b" }]);
-		const error = await receipt2.ack().catch((e) => e);
+		const ticket2 = await session.submit([{ body: "b" }]);
+		const error = await ticket2.ack().catch((e) => e);
 		expect(error.message).toContain("Sequence number not strictly increasing");
 		expect(error.message).toContain("previous=10");
 		expect(error.message).toContain("current=10");
