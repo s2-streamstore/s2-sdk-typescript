@@ -1,3 +1,5 @@
+import * as Redacted from "./lib/redacted.js";
+
 /**
  * Policy for retrying append operations.
  *
@@ -38,6 +40,33 @@ export type RetryConfig = {
 	 */
 	requestTimeoutMillis?: number;
 };
+
+export type S2EnvironmentConfig = Partial<S2ClientOptions>;
+
+export class S2Environment {
+	public static parse(): S2EnvironmentConfig {
+		const config: S2EnvironmentConfig = {};
+
+		const token = process.env.S2_ACCESS_TOKEN;
+		if (token) {
+			config.accessToken = token;
+		}
+
+		const baseUrl = process.env.S2_ACCOUNT_ENDPOINT;
+		if (baseUrl) {
+			config.baseUrl = baseUrl;
+		}
+
+		const basinEndpoint = process.env.S2_BASIN_ENDPOINT;
+		if (basinEndpoint) {
+			config.makeBasinBaseUrl = basinEndpoint.includes("{basin}")
+				? (basin: string) => basinEndpoint.replace("{basin}", basin)
+				: () => basinEndpoint;
+		}
+
+		return config;
+	}
+}
 
 /**
  * Configuration for constructing the top-level `S2` client.
