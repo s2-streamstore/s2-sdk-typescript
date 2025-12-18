@@ -1,9 +1,11 @@
 import { createWriteStream } from "node:fs";
+import { S2Environment } from "../src/common.js";
 import {
 	AppendRecord,
 	BatchTransform,
 	type ReadRecord,
 	S2,
+	type S2ClientOptions,
 } from "../src/index.js";
 import { sleep } from "../src/lib/retry.js";
 import { Producer } from "../src/producer.js";
@@ -32,6 +34,7 @@ function rechunkStream(
 }
 
 const s2 = new S2({
+	...S2Environment.parse(),
 	accessToken: process.env.S2_ACCESS_TOKEN!,
 	retry: {
 		maxAttempts: 10,

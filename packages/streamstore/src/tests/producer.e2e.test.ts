@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendRecord, BatchTransform, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 import { Producer } from "../producer.js";
@@ -48,11 +49,12 @@ describeIf("Producer Integration Tests", () => {
 	let basinName: string;
 
 	beforeAll(() => {
-		const token = process.env.S2_ACCESS_TOKEN;
 		const basin = process.env.S2_BASIN;
-		if (!token || !basin) return;
-		s2 = new S2({ accessToken: token! });
-		basinName = basin!;
+		if (!basin) return;
+		const env = S2Environment.parse();
+		if (!env.accessToken) return;
+		s2 = new S2(env as S2ClientOptions);
+		basinName = basin;
 	});
 
 	it.each(transports)(
