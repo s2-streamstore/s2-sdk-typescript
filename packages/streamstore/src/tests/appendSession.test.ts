@@ -58,10 +58,10 @@ describe("AppendSession", () => {
 		const p1 = session.submit([{ body: "a" }]);
 		const p2 = session.submit([{ body: "b" }]);
 
-		const receipt1 = await p1;
-		const receipt2 = await p2;
-		const ack1 = await receipt1.ack();
-		const ack2 = await receipt2.ack();
+		const ticket1 = await p1;
+		const ticket2 = await p2;
+		const ack1 = await ticket1.ack();
+		const ack2 = await ticket2.ack();
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
 		expect(ack1.end.seq_num).toBe(1);
@@ -145,13 +145,13 @@ describe("AppendSession", () => {
 		const p1 = session.submit([{ body: "a" }]);
 		const p2 = session.submit([{ body: "b" }]);
 
-		// Receipts should resolve (enqueued)
-		const receipt1 = await p1;
-		const receipt2 = await p2;
+		// Tickets should resolve (enqueued)
+		const ticket1 = await p1;
+		const ticket2 = await p2;
 
 		// Get ack promises and suppress their rejections
-		const ack1 = receipt1.ack();
-		const ack2 = receipt2.ack();
+		const ack1 = ticket1.ack();
+		const ack2 = ticket2.ack();
 		ack1.catch(() => {});
 		ack2.catch(() => {});
 
@@ -176,8 +176,8 @@ describe("AppendSession", () => {
 		const stream = makeStream();
 		streamAppendSpy.mockResolvedValue(makeAck(42));
 		const session = await stream.appendSession();
-		const receipt = await session.submit([{ body: "z" }]);
-		await receipt.ack();
+		const ticket = await session.submit([{ body: "z" }]);
+		await ticket.ack();
 		expect(session.lastAckedPosition()?.end.seq_num).toBe(42);
 	});
 

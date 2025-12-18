@@ -59,12 +59,12 @@ describeIf("AppendSession Integration Tests", () => {
 				AppendRecord.make("test-record-3"),
 			];
 
-			const receipt1 = await session.submit([records[0]!]);
-			const ack1 = await receipt1.ack();
-			const receipt2 = await session.submit([records[1]!]);
-			const ack2 = await receipt2.ack();
-			const receipt3 = await session.submit([records[2]!]);
-			const ack3 = await receipt3.ack();
+			const ticket1 = await session.submit([records[0]!]);
+			const ack1 = await ticket1.ack();
+			const ticket2 = await session.submit([records[1]!]);
+			const ack2 = await ticket2.ack();
+			const ticket3 = await session.submit([records[2]!]);
+			const ack3 = await ticket3.ack();
 
 			// Verify acks are sequential
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
@@ -94,8 +94,8 @@ describeIf("AppendSession Integration Tests", () => {
 				AppendRecord.make("batch-3"),
 			];
 
-			const receipt = await session.submit(records);
-			const ack = await receipt.ack();
+			const ticket = await session.submit(records);
+			const ack = await ticket.ack();
 
 			// Verify all records were appended
 			expect(ack.end.seq_num - ack.start.seq_num).toBe(3);
@@ -149,10 +149,8 @@ describeIf("AppendSession Integration Tests", () => {
 			expect(session.lastAckedPosition()).toBeUndefined();
 
 			// Submit a record
-			const receipt = await session.submit([
-				AppendRecord.make("position-test"),
-			]);
-			const ack = await receipt.ack();
+			const ticket = await session.submit([AppendRecord.make("position-test")]);
+			const ack = await ticket.ack();
 
 			// Verify lastSeenPosition is updated
 			expect(session.lastAckedPosition()).toBeDefined();
@@ -178,8 +176,8 @@ describeIf("AppendSession Integration Tests", () => {
 				"another-header": "another-value",
 			});
 
-			const receipt = await session.submit([record]);
-			const ack = await receipt.ack();
+			const ticket = await session.submit([record]);
+			const ack = await ticket.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
 
@@ -198,8 +196,8 @@ describeIf("AppendSession Integration Tests", () => {
 			const body = new TextEncoder().encode("bytes-record-test");
 			const record = AppendRecord.make(body);
 
-			const receipt = await session.submit([record]);
-			const ack = await receipt.ack();
+			const ticket = await session.submit([record]);
+			const ack = await ticket.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
 
@@ -224,8 +222,8 @@ describeIf("AppendSession Integration Tests", () => {
 				session.submit([AppendRecord.make("concurrent-5")]),
 			];
 
-			const receipts = await Promise.all(promises);
-			const acks = await Promise.all(receipts.map((receipt) => receipt.ack()));
+			const tickets = await Promise.all(promises);
+			const acks = await Promise.all(tickets.map((ticket) => ticket.ack()));
 
 			// Verify all acks are sequential (session should serialize them)
 			for (let i = 1; i < acks.length; i++) {
@@ -269,10 +267,10 @@ describeIf("AppendSession Integration Tests", () => {
 			await session.close();
 
 			// Both promises should be resolved
-			const receipt1 = await p1;
-			const receipt2 = await p2;
-			const ack1 = await receipt1.ack();
-			const ack2 = await receipt2.ack();
+			const ticket1 = await p1;
+			const ticket2 = await p2;
+			const ack1 = await ticket1.ack();
+			const ack2 = await ticket2.ack();
 
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
 			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
@@ -301,12 +299,12 @@ describeIf("AppendSession Integration Tests", () => {
 			).rejects.toThrow(/closed/i);
 
 			// All three promises should be resolved successfully
-			const receipt1 = await p1;
-			const receipt2 = await p2;
-			const receipt3 = await p3;
-			const ack1 = await receipt1.ack();
-			const ack2 = await receipt2.ack();
-			const ack3 = await receipt3.ack();
+			const ticket1 = await p1;
+			const ticket2 = await p2;
+			const ticket3 = await p3;
+			const ack1 = await ticket1.ack();
+			const ack2 = await ticket2.ack();
+			const ack3 = await ticket3.ack();
 
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
 			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);

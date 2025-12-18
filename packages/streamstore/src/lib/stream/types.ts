@@ -108,8 +108,8 @@ export interface AppendSession extends AsyncDisposable {
 	readonly writable: WritableStream<AppendArgs>;
 	/**
 	 * Submit an append request.
-	 * Returns a promise that resolves to a receipt once the batch is enqueued (has capacity).
-	 * Call receipt.ack() to get a promise for the AppendAck once the batch is durable.
+	 * Returns a promise that resolves to a submit ticket once the batch is enqueued (has capacity).
+	 * Call ticket.ack() to get a promise for the AppendAck once the batch is durable.
 	 * This method applies backpressure and will block if capacity limits are reached.
 	 */
 	submit(
