@@ -86,14 +86,19 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	return res as ReadBatch<Format>;
 }
 
+type FetchAppendOptions = S2RequestOptions & {
+	preferProtobuf?: boolean;
+};
+
 export async function streamAppend(
 	stream: string,
 	client: Client,
 	records: AppendRecord | AppendRecord[],
 	args?: Omit<AppendArgs, "records">,
-	options?: S2RequestOptions,
+	options?: FetchAppendOptions,
 ) {
 	const recordsArray = Array.isArray(records) ? records : [records];
+	const { preferProtobuf, ...requestOptions } = options ?? {};
 
 	if (recordsArray.length === 0) {
 		throw new S2Error({ message: "Cannot append empty array of records" });
@@ -116,9 +121,11 @@ export async function streamAppend(
 		});
 	}
 
-	const hasAnyBytesRecords = recordsArray.some(
-		(record) => computeAppendRecordFormat(record) === "bytes",
-	);
+	const hasAnyBytesRecords =
+		preferProtobuf ??
+		recordsArray.some(
+			(record) => computeAppendRecordFormat(record) === "bytes",
+		);
 
 	let response: any;
 
@@ -140,7 +147,7 @@ export async function streamAppend(
 				bodySerializer: null,
 				parseAs: "arrayBuffer",
 				headers,
-				...options,
+				...requestOptions,
 			});
 		} catch (error) {
 			throw s2Error(error);
@@ -178,7 +185,7 @@ export async function streamAppend(
 				match_seq_num: args?.matchSeqNum,
 				records: encodedRecords,
 			},
-			...options,
+			...requestOptions,
 		});
 	} catch (error) {
 		throw s2Error(error);

@@ -12,7 +12,7 @@ import type {
 	StreamPosition,
 } from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
-import { meteredBytes } from "../../../../utils.js";
+import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
@@ -506,6 +506,13 @@ export class FetchAppendSession implements TransportAppendSession {
 			const resolver = this.pendingResolvers.shift()!;
 
 			try {
+				const preferProtobuf = args.records.some(
+					(record) => computeAppendRecordFormat(record) === "bytes",
+				);
+				const appendOptions = this.options
+					? { ...this.options, preferProtobuf }
+					: { preferProtobuf };
+
 				const ack = await streamAppend(
 					this.stream,
 					this.client,
@@ -514,7 +521,7 @@ export class FetchAppendSession implements TransportAppendSession {
 						fencingToken: args.fencingToken,
 						matchSeqNum: args.matchSeqNum,
 					},
-					this.options,
+					appendOptions,
 				);
 
 				// Resolve with success result
