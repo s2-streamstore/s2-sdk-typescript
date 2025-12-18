@@ -145,9 +145,9 @@ export class Producer implements AsyncDisposable {
 					});
 				}
 
-				let submission: Promise<BatchSubmitTicket>;
+				let ticket: BatchSubmitTicket;
 				try {
-					submission = this.appendSession.submit(batch.records, {
+					ticket = await this.appendSession.submit(batch.records, {
 						fencingToken: batch.fencingToken,
 						matchSeqNum: batch.matchSeqNum,
 					});
@@ -165,48 +165,33 @@ export class Producer implements AsyncDisposable {
 					}
 					continue;
 				}
-				const completion = submission.then(
-					() => undefined,
-					(err) => Promise.reject(toS2Error(err)),
-				);
+
+				const completion = Promise.resolve();
 				this.submissionBarrier = this.submissionBarrier.then(() => completion);
 				this.submissionBarrier.catch(() => {});
 
-				submission.then(
-					async (ticket) => {
-						try {
-							const ack = await ticket.ack();
-							associatedRecords.forEach((pending, index) => {
-								const indexedAck = new IndexedAppendAck(index, ack);
-								pending.resolveAck(indexedAck);
-								if (this.readableController) {
-									this.readableController.enqueue(indexedAck);
-								}
-							});
-						} catch (err) {
-							const error = toS2Error(err);
-							associatedRecords.forEach((pending) => pending.rejectAck(error));
-
+				ticket
+					.ack()
+					.then((ack) => {
+						associatedRecords.forEach((pending, index) => {
+							const indexedAck = new IndexedAppendAck(index, ack);
+							pending.resolveAck(indexedAck);
 							if (this.readableController) {
-								this.readableController.error(error);
+								this.readableController.enqueue(indexedAck);
 							}
-						}
-					},
-					(err) => {
+						});
+					})
+					.catch((err) => {
 						const error = toS2Error(err);
 						if (!this.pumpError) {
 							this.pumpError = error;
 						}
-						associatedRecords.forEach((pending) => {
-							pending.rejectTicket(error);
-							pending.rejectAck(error);
-						});
+						associatedRecords.forEach((pending) => pending.rejectAck(error));
 
 						if (this.readableController) {
 							this.readableController.error(error);
 						}
-					},
-				);
+					});
 			}
 		} catch (err) {
 			this.pumpError = err as Error;
