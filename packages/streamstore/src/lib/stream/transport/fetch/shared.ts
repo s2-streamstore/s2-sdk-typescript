@@ -23,7 +23,6 @@ import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64, encodeToBase64 } from "../../../base64.js";
 import type {
 	AppendArgs,
-	AppendHeaders,
 	AppendRecord,
 	AppendRecordForFormat,
 	ReadArgs,
@@ -157,23 +156,8 @@ export async function streamAppend(
 
 			encodedRecords.push(encodedRecord);
 		} else {
-			// Normalize headers to array format
-			const normalizeHeaders = (
-				headers: AppendHeaders<"string">,
-			): [string, string][] | undefined => {
-				if (headers === undefined) {
-					return undefined;
-				} else if (Array.isArray(headers)) {
-					return headers;
-				} else {
-					return Object.entries(headers);
-				}
-			};
-
 			const formattedRecord = record as AppendRecordForFormat<"string">;
-			const normalizedHeaders = formattedRecord.headers
-				? normalizeHeaders(formattedRecord.headers)
-				: undefined;
+			const normalizedHeaders = formattedRecord.headers;
 
 			const encodedHeaders: [string, string][] | undefined = normalizedHeaders
 				? hasAnyBytesRecords

@@ -44,9 +44,7 @@ if (streams.streams[0]) {
 
 	// String format appends
 	const stringAppend = await stream.append([
-		AppendRecord.make("Hello, world!", {
-			foo: "bar",
-		}),
+		AppendRecord.make("Hello, world!", [["foo", "bar"]]),
 		AppendRecord.fence("my-fence"),
 		AppendRecord.command("foo"),
 		// still can just make by hand:

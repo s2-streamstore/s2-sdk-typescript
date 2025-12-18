@@ -84,18 +84,13 @@ function toByteHeaders(
 ): [Uint8Array, Uint8Array][] {
 	const enc = new TextEncoder();
 	if (!headers) return [];
-	if (Array.isArray(headers)) {
-		return (headers as any).map(([k, v]: any) => {
+	return (headers as Array<[string | Uint8Array, string | Uint8Array]>).map(
+		([k, v]) => {
 			const kb = typeof k === "string" ? enc.encode(k) : (k as Uint8Array);
 			const vb = typeof v === "string" ? enc.encode(v) : (v as Uint8Array);
 			return [kb, vb];
-		});
-	}
-	const result: [Uint8Array, Uint8Array][] = [];
-	for (const [k, v] of Object.entries(headers as Record<string, string>)) {
-		result.push([enc.encode(k), enc.encode(v)]);
-	}
-	return result;
+		},
+	);
 }
 
 const textEncoder = new TextEncoder();

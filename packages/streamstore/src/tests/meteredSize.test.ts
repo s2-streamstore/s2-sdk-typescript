@@ -3,10 +3,10 @@ import { AppendRecord, meteredBytes } from "../utils.js";
 
 describe("meteredSizeBytes", () => {
 	it("calculates size for string format records", () => {
-		const record = AppendRecord.make("hello", {
-			foo: "bar",
-			baz: "qux",
-		});
+		const record = AppendRecord.make("hello", [
+			["foo", "bar"],
+			["baz", "qux"],
+		]);
 
 		const size = meteredBytes(record);
 
@@ -18,9 +18,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for string format with UTF-8 characters", () => {
-		const record = AppendRecord.make("hello 世界", {
-			emoji: "🚀",
-		});
+		const record = AppendRecord.make("hello 世界", [["emoji", "🚀"]]);
 
 		const size = meteredBytes(record);
 
@@ -46,9 +44,7 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for record with no body", () => {
-		const record = AppendRecord.make(undefined, {
-			foo: "bar",
-		});
+		const record = AppendRecord.make(undefined, [["foo", "bar"]]);
 
 		const size = meteredBytes(record);
 

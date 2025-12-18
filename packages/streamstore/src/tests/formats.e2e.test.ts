@@ -64,9 +64,7 @@ describeIf("Mixed format integration tests", () => {
 
 			// Append a mixed batch via unary append
 			const unaryRecords = [
-				AppendRecord.make("unary-string", {
-					"x-test-format": "string-unary",
-				}),
+				AppendRecord.make("unary-string", [["x-test-format", "string-unary"]]),
 				AppendRecord.make(encoder.encode("unary-bytes"), [
 					bytesHeader("bytes-unary"),
 				]),
@@ -75,9 +73,9 @@ describeIf("Mixed format integration tests", () => {
 
 			// Append another mixed batch via append session
 			const sessionRecords = [
-				AppendRecord.make("session-string", {
-					"x-test-format": "string-session",
-				}),
+				AppendRecord.make("session-string", [
+					["x-test-format", "string-session"],
+				]),
 				AppendRecord.make(encoder.encode("session-bytes"), [
 					bytesHeader("bytes-session"),
 				]),

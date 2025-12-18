@@ -175,8 +175,8 @@ const stream = basin.stream("my-stream");
 
 // Append records
 await stream.append([
-  AppendRecord.make("Hello, world!", { foo: "bar" }),
-  AppendRecord.make(new Uint8Array([1, 2, 3]), { type: "binary" }),
+  AppendRecord.make("Hello, world!", [["foo", "bar"]]),
+  AppendRecord.make(new Uint8Array([1, 2, 3]), [["type", "binary"]]),
 ]);
 
 // Read records

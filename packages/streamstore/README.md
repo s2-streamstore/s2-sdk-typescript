@@ -29,7 +29,7 @@ const basin = s2.basin("my-basin");
 const stream = basin.stream("my-stream");
 
 await stream.append([
-  AppendRecord.make("Hello, world!", { foo: "bar" }),
+  AppendRecord.make("Hello, world!", [["foo", "bar"]]),
 ]);
 
 const result = await stream.read({ seq_num: 0, count: 10 });
@@ -40,4 +40,3 @@ console.log(result.records);
 
 - Full SDK overview and additional examples: see the root repo README at <https://github.com/s2-streamstore/s2-sdk-typescript>.
 - S2 service docs: <https://s2.dev/docs>.
-

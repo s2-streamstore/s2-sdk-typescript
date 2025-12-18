@@ -37,7 +37,7 @@ export type ReadArgs<Format extends "string" | "bytes" = "string"> =
 
 export type AppendHeaders<Format extends "string" | "bytes" = "string"> =
 	Format extends "string"
-		? Array<[string, string]> | Record<string, string>
+		? Array<[string, string]>
 		: Array<[Uint8Array, Uint8Array]>;
 
 export type AppendRecordForFormat<
