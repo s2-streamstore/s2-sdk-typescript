@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppendRecord, S2 } from "../index.js";
-import type { SessionTransports } from "../lib/stream/types.js";
+import type { AppendArgs, SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
 const hasEnv = !!process.env.S2_ACCESS_TOKEN && !!process.env.S2_BASIN;
@@ -202,6 +202,95 @@ describeIf("AppendSession Integration Tests", () => {
 			expect(ack.end.seq_num).toBeGreaterThan(0);
 
 			await session.close();
+		},
+	);
+
+	it.each(transports)(
+		"propagates writable stream errors when a batch fails (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const batches: AppendArgs[] = Array.from(
+				{ length: 4 },
+				(_v, i): AppendArgs => ({
+					records: [AppendRecord.make(`pipe-batch-${i}`)],
+				}),
+			);
+			batches.push({
+				records: [AppendRecord.make("pipe-batch-fail")],
+				matchSeqNum: 0, // guaranteed to mismatch once earlier batches advance the tail
+			});
+
+			const readable = new ReadableStream<AppendArgs>({
+				start(controller) {
+					for (const batch of batches) {
+						controller.enqueue(batch);
+					}
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(session.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("sequence number mismatch"),
+			});
+
+			await session.close().catch(() => {});
+		},
+	);
+
+	it.each(transports)(
+		"acks() emits existing successes then throws on fatal error (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const batches: AppendArgs[] = Array.from(
+				{ length: 4 },
+				(_v, i): AppendArgs => ({
+					records: [AppendRecord.make(`acks-pipe-${i}`)],
+				}),
+			);
+			batches.push({
+				records: [AppendRecord.make("acks-pipe-fail")],
+				matchSeqNum: 0,
+			});
+
+			const ackSeqs: number[] = [];
+			const acksPromise = (async () => {
+				try {
+					for await (const ack of session.acks()) {
+						ackSeqs.push(ack.end.seq_num);
+					}
+				} catch (err) {
+					throw err;
+				}
+			})();
+
+			const readable = new ReadableStream<AppendArgs>({
+				start(controller) {
+					for (const batch of batches) {
+						controller.enqueue(batch);
+					}
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(session.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("sequence number mismatch"),
+			});
+
+			await expect(acksPromise).rejects.toMatchObject({
+				message: expect.stringContaining("sequence number mismatch"),
+			});
+
+			expect(ackSeqs).toHaveLength(4);
+
+			await session.close().catch(() => {});
 		},
 	);
 
