@@ -94,9 +94,9 @@ export function buildProtoAppendInput(
 						: record.body,
 			};
 		}),
-		fencingToken: args.fencing_token ?? undefined,
+		fencingToken: args.fencingToken ?? undefined,
 		matchSeqNum:
-			args.match_seq_num == null ? undefined : BigInt(args.match_seq_num),
+			args.matchSeqNum == null ? undefined : BigInt(args.matchSeqNum),
 	});
 }
 
@@ -104,6 +104,7 @@ export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
 	private connection?: ClientHttp2Session;
 	private connectionPromise?: Promise<ClientHttp2Session>;
+	private closingPromise?: Promise<void>;
 
 	constructor(config: TransportConfig) {
 		this.transportConfig = config;
@@ -213,6 +214,30 @@ export class S2STransport implements SessionTransport {
 				}
 			});
 		});
+	}
+
+	async close(): Promise<void> {
+		if (this.closingPromise) {
+			return this.closingPromise;
+		}
+
+		this.closingPromise = (async () => {
+			const connection =
+				this.connection ??
+				(await this.connectionPromise?.catch(() => undefined));
+			if (connection && !connection.closed && !connection.destroyed) {
+				await new Promise<void>((resolve) => {
+					connection.close(() => resolve());
+				});
+			}
+			this.connection = undefined;
+		})();
+
+		try {
+			await this.closingPromise;
+		} finally {
+			this.closingPromise = undefined;
+		}
 	}
 }
 
@@ -639,7 +664,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 // Removed S2SAcksStream - transport sessions no longer expose streams
 
 /**
- * Fetch-based transport session for appending records via HTTP/2.
+ * S2S-based transport session for appending records via HTTP/2.
  * Pipelined: multiple requests can be in-flight simultaneously.
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
@@ -897,8 +922,8 @@ class S2SAppendSession implements TransportAppendSession {
 	async submit(
 		records: AppendRecord | AppendRecord[],
 		args?: {
-			fencing_token?: string;
-			match_seq_num?: number;
+			fencingToken?: string;
+			matchSeqNum?: number;
 			precalculatedSize?: number;
 		},
 	): Promise<AppendResult> {
@@ -959,8 +984,8 @@ class S2SAppendSession implements TransportAppendSession {
 			recordsArray,
 			{
 				records: recordsArray,
-				fencing_token: args?.fencing_token,
-				match_seq_num: args?.match_seq_num,
+				fencingToken: args?.fencingToken,
+				matchSeqNum: args?.matchSeqNum,
 			},
 			batchMeteredSize,
 		);

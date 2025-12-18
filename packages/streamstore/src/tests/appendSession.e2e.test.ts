@@ -279,4 +279,38 @@ describeIf("AppendSession Integration Tests", () => {
 		},
 	);
 
+	it.each(transports)(
+		"should drain pending appends on close and reject subsequent submits (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			// Submit a few records
+			const p1 = session.submit([AppendRecord.make("item-0")]);
+			const p2 = session.submit([AppendRecord.make("item-1")]);
+			const p3 = session.submit([AppendRecord.make("item-2")]);
+
+			// Close should wait for all pending appends to complete
+			await session.close();
+
+			// Subsequent submit after close should fail
+			await expect(
+				session.submit([AppendRecord.make("item-3")]),
+			).rejects.toThrow(/closed/i);
+
+			// All three promises should be resolved successfully
+			const receipt1 = await p1;
+			const receipt2 = await p2;
+			const receipt3 = await p3;
+			const ack1 = await receipt1.ack();
+			const ack2 = await receipt2.ack();
+			const ack3 = await receipt3.ack();
+
+			expect(ack1.end.seq_num).toBeGreaterThan(0);
+			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
+			expect(ack3.end.seq_num).toBe(ack2.end.seq_num + 1);
+		},
+	);
 });
