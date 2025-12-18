@@ -25,12 +25,12 @@ describe("BatchTransform", () => {
 		reader.releaseLock();
 	});
 
-	it("propagates fencing_token and auto-increments match_seq_num across batches", async () => {
+	it("propagates fencingToken and auto-increments matchSeqNum across batches", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 0,
 			maxBatchRecords: 2,
-			fencing_token: "ft",
-			match_seq_num: 10,
+			fencingToken: "ft",
+			matchSeqNum: 10,
 		});
 
 		const writer = batcher.writable.getWriter();
@@ -45,19 +45,19 @@ describe("BatchTransform", () => {
 			await writer.close();
 		})();
 
-		// First batch should have match_seq_num: 10 (2 records)
+		// First batch should have matchSeqNum: 10 (2 records)
 		const result1 = await reader.read();
 		expect(result1.done).toBe(false);
 		expect(result1.value?.records).toHaveLength(2);
-		expect(result1.value?.fencing_token).toBe("ft");
-		expect(result1.value?.match_seq_num).toBe(10);
+		expect(result1.value?.fencingToken).toBe("ft");
+		expect(result1.value?.matchSeqNum).toBe(10);
 
-		// Second batch should have match_seq_num: 12 (incremented by 2)
+		// Second batch should have matchSeqNum: 12 (incremented by 2)
 		const result2 = await reader.read();
 		expect(result2.done).toBe(false);
 		expect(result2.value?.records).toHaveLength(1);
-		expect(result2.value?.fencing_token).toBe("ft");
-		expect(result2.value?.match_seq_num).toBe(12);
+		expect(result2.value?.fencingToken).toBe("ft");
+		expect(result2.value?.matchSeqNum).toBe(12);
 
 		await writePromise;
 		reader.releaseLock();

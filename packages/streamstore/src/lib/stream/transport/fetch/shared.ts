@@ -206,8 +206,8 @@ export async function streamAppend(
 				stream,
 			},
 			body: {
-				fencing_token: args?.fencing_token,
-				match_seq_num: args?.match_seq_num,
+				fencing_token: args?.fencingToken,
+				match_seq_num: args?.matchSeqNum,
 				records: encodedRecords,
 			},
 			headers: {
