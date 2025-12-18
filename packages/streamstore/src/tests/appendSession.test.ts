@@ -58,8 +58,10 @@ describe("AppendSession", () => {
 		const p1 = session.submit([{ body: "a" }]);
 		const p2 = session.submit([{ body: "b" }]);
 
-		const ack1 = await p1;
-		const ack2 = await p2;
+		const receipt1 = await p1;
+		const receipt2 = await p2;
+		const ack1 = await receipt1.ack();
+		const ack2 = await receipt2.ack();
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
 		expect(ack1.end.seq_num).toBe(1);
@@ -142,26 +144,40 @@ describe("AppendSession", () => {
 
 		const p1 = session.submit([{ body: "a" }]);
 		const p2 = session.submit([{ body: "b" }]);
-		// suppress unhandled rejection warnings
-		p1.catch(() => {});
-		p2.catch(() => {});
+
+		// Receipts should resolve (enqueued)
+		const receipt1 = await p1;
+		const receipt2 = await p2;
+
+		// Get ack promises and suppress their rejections
+		const ack1 = receipt1.ack();
+		const ack2 = receipt2.ack();
+		ack1.catch(() => {});
+		ack2.catch(() => {});
 
 		// Advance timers to allow pump to attempt processing
 		await vi.advanceTimersByTimeAsync(10);
 
-		await expect(p1).rejects.toBeTruthy();
-		await expect(p2).rejects.toBeTruthy();
+		// But ack() should reject
+		await expect(ack1).rejects.toBeTruthy();
+		await expect(ack2).rejects.toBeTruthy();
 
 		// After fatal error, session is dead - new submits should also reject
-		const p3 = session.submit([{ body: "c" }]);
-		await expect(p3).rejects.toBeTruthy();
+		await expect(session.submit([{ body: "c" }])).rejects.toBeTruthy();
+
+		// Advance more timers to ensure abort completes
+		await vi.advanceTimersByTimeAsync(100);
+
+		// Close session and wait for pump to finish to avoid unhandled rejection
+		await session.close().catch(() => {});
 	});
 
 	it("updates lastSeenPosition after successful append", async () => {
 		const stream = makeStream();
 		streamAppendSpy.mockResolvedValue(makeAck(42));
 		const session = await stream.appendSession();
-		await session.submit([{ body: "z" }]);
+		const receipt = await session.submit([{ body: "z" }]);
+		await receipt.ack();
 		expect(session.lastAckedPosition()?.end.seq_num).toBe(42);
 	});
 
@@ -218,7 +234,9 @@ describe("AppendSession", () => {
 		// Now third should be able to proceed
 		await p2;
 		await p3;
-
+		// Allow pump loop to submit any newly unblocked writes before asserting
+		await Promise.resolve();
+		await Promise.resolve();
 		expect(thirdWriteStarted).toBe(true);
 		expect(streamAppendSpy).toHaveBeenCalledTimes(3);
 
