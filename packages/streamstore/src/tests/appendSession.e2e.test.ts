@@ -59,9 +59,12 @@ describeIf("AppendSession Integration Tests", () => {
 				AppendRecord.make("test-record-3"),
 			];
 
-			const ack1 = await session.submit([records[0]!]);
-			const ack2 = await session.submit([records[1]!]);
-			const ack3 = await session.submit([records[2]!]);
+			const receipt1 = await session.submit([records[0]!]);
+			const ack1 = await receipt1.ack();
+			const receipt2 = await session.submit([records[1]!]);
+			const ack2 = await receipt2.ack();
+			const receipt3 = await session.submit([records[2]!]);
+			const ack3 = await receipt3.ack();
 
 			// Verify acks are sequential
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
@@ -91,7 +94,8 @@ describeIf("AppendSession Integration Tests", () => {
 				AppendRecord.make("batch-3"),
 			];
 
-			const ack = await session.submit(records);
+			const receipt = await session.submit(records);
+			const ack = await receipt.ack();
 
 			// Verify all records were appended
 			expect(ack.end.seq_num - ack.start.seq_num).toBe(3);
@@ -119,9 +123,9 @@ describeIf("AppendSession Integration Tests", () => {
 			})();
 
 			// Submit records
-			await session.submit([AppendRecord.make("ack-test-1")]);
-			await session.submit([AppendRecord.make("ack-test-2")]);
-			await session.submit([AppendRecord.make("ack-test-3")]);
+			await (await session.submit([AppendRecord.make("ack-test-1")])).ack();
+			await (await session.submit([AppendRecord.make("ack-test-2")])).ack();
+			await (await session.submit([AppendRecord.make("ack-test-3")])).ack();
 
 			// Close session to close acks stream
 			await session.close();
@@ -145,7 +149,10 @@ describeIf("AppendSession Integration Tests", () => {
 			expect(session.lastAckedPosition()).toBeUndefined();
 
 			// Submit a record
-			const ack = await session.submit([AppendRecord.make("position-test")]);
+			const receipt = await session.submit([
+				AppendRecord.make("position-test"),
+			]);
+			const ack = await receipt.ack();
 
 			// Verify lastSeenPosition is updated
 			expect(session.lastAckedPosition()).toBeDefined();
@@ -171,7 +178,8 @@ describeIf("AppendSession Integration Tests", () => {
 				"another-header": "another-value",
 			});
 
-			const ack = await session.submit([record]);
+			const receipt = await session.submit([record]);
+			const ack = await receipt.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
 
@@ -190,7 +198,8 @@ describeIf("AppendSession Integration Tests", () => {
 			const body = new TextEncoder().encode("bytes-record-test");
 			const record = AppendRecord.make(body);
 
-			const ack = await session.submit([record]);
+			const receipt = await session.submit([record]);
+			const ack = await receipt.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
 
@@ -215,7 +224,8 @@ describeIf("AppendSession Integration Tests", () => {
 				session.submit([AppendRecord.make("concurrent-5")]),
 			];
 
-			const acks = await Promise.all(promises);
+			const receipts = await Promise.all(promises);
+			const acks = await Promise.all(receipts.map((receipt) => receipt.ack()));
 
 			// Verify all acks are sequential (session should serialize them)
 			for (let i = 1; i < acks.length; i++) {
@@ -259,11 +269,14 @@ describeIf("AppendSession Integration Tests", () => {
 			await session.close();
 
 			// Both promises should be resolved
-			const ack1 = await p1;
-			const ack2 = await p2;
+			const receipt1 = await p1;
+			const receipt2 = await p2;
+			const ack1 = await receipt1.ack();
+			const ack2 = await receipt2.ack();
 
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
 			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
 		},
 	);
+
 });

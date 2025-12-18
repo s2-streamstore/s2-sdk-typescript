@@ -23,6 +23,7 @@ import type {
 	TransportAppendSession,
 	TransportReadSession,
 } from "./stream/types.js";
+import { BatchSubmitTicket } from "./stream/types.js";
 
 const debugWith = createDebug("s2:retry:with");
 const debugRead = createDebug("s2:retry:read");
@@ -492,6 +493,7 @@ type InflightEntry = {
 	args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number };
 	expectedCount: number;
 	meteredBytes: number;
+	firstAttemptStartedMonotonicMs?: number; // First submission start timestamp for absolute timeout tracking
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
@@ -499,6 +501,12 @@ type InflightEntry = {
 };
 
 const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
+
+type CapacityWaiter = {
+	resolve: () => void;
+	bytes: number;
+	batches: number;
+};
 
 export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private readonly requestTimeoutMillis: number;
@@ -509,11 +517,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	};
 
 	private readonly inflight: InflightEntry[] = [];
-	private capacityWaiter?: () => void; // Single waiter (WritableStream writer lock)
+	private capacityWaiters: CapacityWaiter[] = []; // Queue of waiters for capacity
 
 	private session?: TransportAppendSession;
 	private queuedBytes = 0;
 	private pendingBytes = 0;
+	private pendingBatches = 0;
 	private consecutiveFailures = 0;
 	private currentAttempt = 0;
 
@@ -562,18 +571,19 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		this.writable = new WritableStream<AppendArgs>({
 			write: async (chunk) => {
+				if (this.closed || this.closing) {
+					throw new S2Error({ message: "AppendSession is closed" });
+				}
+
 				const recordsArray = Array.isArray(chunk.records)
 					? chunk.records
 					: [chunk.records];
 
-				// Calculate metered size
+				// Calculate metered size once and pass along so submit can reuse it.
 				let batchMeteredSize = 0;
 				for (const record of recordsArray) {
 					batchMeteredSize += meteredBytes(record);
 				}
-
-				// Wait for capacity (backpressure for writable only)
-				await this.waitForCapacity(batchMeteredSize);
 
 				const { records: _records, ...rest } = chunk;
 				const args: Omit<AppendArgs, "records"> & {
@@ -581,17 +591,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				} = rest;
 				args.precalculatedSize = batchMeteredSize;
 
-				// Move reserved bytes to queued bytes accounting before submission
-				this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
-
-				// Submit without waiting for ack (writable doesn't need per-batch resolution)
-				const promise = this.submitInternal(
-					recordsArray,
-					args,
-					batchMeteredSize,
-				);
-				promise.catch(() => {
-					// Swallow to avoid unhandled rejection; pump surfaces errors via readable stream
+				// Reuse submit() to leverage shared backpressure/pump logic.
+				const ticket = await this.submit(recordsArray, args);
+				// Writable stream API only needs enqueue semantics, so drop ack but
+				// suppress rejection noise (pump surfaces fatal errors elsewhere).
+				ticket.ack().catch(() => {
+					// Intentionally ignored.
 				});
 			},
 			close: async () => {
@@ -615,13 +620,83 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	}
 
 	/**
-	 * Submit an append request. Returns a promise that resolves with the ack.
-	 * This method does not block on capacity (only writable.write() does).
+	 * Wait for capacity to be available for the given batch size.
+	 * Call this before submit() to apply backpressure based on maxInflightBatches/maxInflightBytes.
+	 *
+	 * @param bytes - Size in bytes (use meteredBytes() to calculate)
+	 * @param numBatches - Number of batches (default: 1)
+	 * @returns Promise that resolves when capacity is available
+	 */
+	async waitForCapacity(bytes: number, numBatches = 1): Promise<void> {
+		debugSession(
+			"[CAPACITY] checking for %d bytes, %d batches: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d, pendingBatches=%d",
+			bytes,
+			numBatches,
+			this.queuedBytes,
+			this.pendingBytes,
+			this.maxQueuedBytes,
+			this.inflight.length,
+			this.pendingBatches,
+		);
+
+		// Check if we have capacity
+		while (true) {
+			// Check for fatal error before adding to pendingBytes
+			if (this.fatalError) {
+				debugSession(
+					"[CAPACITY] fatal error detected, rejecting: %s",
+					this.fatalError.message,
+				);
+				throw this.fatalError;
+			}
+
+			// Byte-based gating
+			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
+				// Batch-based gating (if configured)
+				if (
+					this.maxInflightBatches === undefined ||
+					this.inflight.length + this.pendingBatches + numBatches <=
+						this.maxInflightBatches
+				) {
+					debugSession(
+						"[CAPACITY] capacity available, adding %d to pendingBytes and %d to pendingBatches",
+						bytes,
+						numBatches,
+					);
+					this.pendingBytes += bytes;
+					this.pendingBatches += numBatches;
+					return;
+				}
+			}
+
+			// No capacity - wait in queue
+			debugSession("[CAPACITY] no capacity, waiting for release");
+			await new Promise<void>((resolve) => {
+				this.capacityWaiters.push({
+					resolve,
+					bytes,
+					batches: numBatches,
+				});
+			});
+			debugSession("[CAPACITY] woke up, rechecking");
+		}
+	}
+
+	/**
+	 * Submit an append request.
+	 * Returns a promise that resolves to a receipt once the batch is enqueued (has capacity).
+	 * The receipt can be awaited to get the AppendAck once the batch is durable.
+	 * This method applies backpressure and will block if capacity limits are reached.
 	 */
 	async submit(
 		records: AppendRecord | AppendRecord[],
 		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<AppendAck> {
+	): Promise<BatchSubmitTicket> {
+		if (this.closed || this.closing) {
+			return Promise.reject(
+				new S2Error({ message: "AppendSession is closed" }),
+			);
+		}
 		const recordsArray = Array.isArray(records) ? records : [records];
 
 		// Calculate metered size if not provided
@@ -632,18 +707,38 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 		}
 
-		const result = await this.submitInternal(
+		// This needs to happen in the sync path.
+		this.ensurePump();
+
+		// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
+		await this.waitForCapacity(batchMeteredSize, 1);
+
+		// Move reserved bytes and batches to queued accounting before submission
+		this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
+		this.pendingBatches = Math.max(0, this.pendingBatches - 1);
+
+		// Create the inner promise that resolves when durable
+		const innerPromise = this.submitInternal(
 			recordsArray,
 			args,
 			batchMeteredSize,
-		);
+		).then((result) => {
+			if (result.ok) {
+				return result.value;
+			} else {
+				throw result.error;
+			}
+		});
 
-		// Convert discriminated union back to throw pattern for public API
-		if (result.ok) {
-			return result.value;
-		} else {
-			throw result.error;
-		}
+		// Prevent early rejections from surfacing as unhandled when callers delay ack()
+		innerPromise.catch(() => {});
+
+		// Return receipt immediately (outer promise has resolved via waitForCapacity)
+		return new BatchSubmitTicket(
+			innerPromise,
+			batchMeteredSize,
+			recordsArray.length,
+		);
 	}
 
 	/**
@@ -657,12 +752,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			| undefined,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
-		if (this.closed || this.closing) {
-			return Promise.resolve(
-				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
-			);
-		}
-
 		// Check for fatal error (e.g., from abort())
 		if (this.fatalError) {
 			debugSession(
@@ -709,77 +798,68 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	}
 
 	/**
-	 * Wait for capacity before allowing write to proceed (writable only).
-	 */
-	private async waitForCapacity(bytes: number): Promise<void> {
-		debugSession(
-			"[CAPACITY] checking for %d bytes: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d",
-			bytes,
-			this.queuedBytes,
-			this.pendingBytes,
-			this.maxQueuedBytes,
-			this.inflight.length,
-		);
-
-		// Check if we have capacity
-		while (true) {
-			// Check for fatal error before adding to pendingBytes
-			if (this.fatalError) {
-				debugSession(
-					"[CAPACITY] fatal error detected, rejecting: %s",
-					this.fatalError.message,
-				);
-				throw this.fatalError;
-			}
-
-			// Byte-based gating
-			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
-				// Batch-based gating (if configured)
-				if (
-					this.maxInflightBatches === undefined ||
-					this.inflight.length < this.maxInflightBatches
-				) {
-					debugSession(
-						"[CAPACITY] capacity available, adding %d to pendingBytes",
-						bytes,
-					);
-					this.pendingBytes += bytes;
-					return;
-				}
-			}
-
-			// No capacity - wait
-			// WritableStream enforces writer lock, so only one write can be blocked at a time
-			debugSession("[CAPACITY] no capacity, waiting for release");
-			await new Promise<void>((resolve) => {
-				this.capacityWaiter = resolve;
-			});
-			debugSession("[CAPACITY] woke up, rechecking");
-		}
-	}
-
-	/**
 	 * Release capacity and wake waiter if present.
 	 */
 	private releaseCapacity(bytes: number): void {
 		debugSession(
-			"[CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, hasWaiter=%s",
+			"[CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, pendingBatches=%d, numWaiters=%d",
 			bytes,
 			this.queuedBytes,
 			this.queuedBytes - bytes,
 			this.pendingBytes,
 			Math.max(0, this.pendingBytes - bytes),
-			!!this.capacityWaiter,
+			this.pendingBatches,
+			this.capacityWaiters.length,
 		);
 		this.queuedBytes -= bytes;
 		this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
 
-		// Wake single waiter
-		const waiter = this.capacityWaiter;
-		if (waiter) {
-			debugSession("[CAPACITY] waking waiter");
-			this.capacityWaiter = undefined;
-			waiter();
+		this.wakeCapacityWaiters();
+	}
+
+	private wakeCapacityWaiters(): void {
+		if (this.capacityWaiters.length === 0) {
+			return;
+		}
+
+		let availableBytes = Math.max(
+			0,
+			this.maxQueuedBytes - (this.queuedBytes + this.pendingBytes),
+		);
+		let availableBatches =
+			this.maxInflightBatches === undefined
+				? Number.POSITIVE_INFINITY
+				: Math.max(
+						0,
+						this.maxInflightBatches -
+							(this.inflight.length + this.pendingBatches),
+					);
+
+		while (this.capacityWaiters.length > 0) {
+			const next = this.capacityWaiters[0]!;
+			const needsBytes = next.bytes;
+			const needsBatches = next.batches;
+			const hasBatchCapacity =
+				this.maxInflightBatches === undefined ||
+				needsBatches <= availableBatches;
+
+			if (needsBytes <= availableBytes && hasBatchCapacity) {
+				this.capacityWaiters.shift();
+				availableBytes -= needsBytes;
+				if (this.maxInflightBatches !== undefined) {
+					availableBatches -= needsBatches;
+				}
+				debugSession(
+					"[CAPACITY] waking waiter (bytes=%d, batches=%d)",
+					needsBytes,
+					needsBatches,
+				);
+				next.resolve();
+				continue;
+			}
+
+			// Not enough capacity for the next waiter yet - keep them queued.
+			break;
 		}
 	}
 
@@ -805,10 +885,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		while (true) {
 			debugSession(
-				"[PUMP] loop: inflight=%d, queuedBytes=%d, pendingBytes=%d, closing=%s, pumpStopped=%s",
+				"[PUMP] loop: inflight=%d, queuedBytes=%d, pendingBytes=%d, pendingBatches=%d, closing=%s, pumpStopped=%s",
 				this.inflight.length,
 				this.queuedBytes,
 				this.pendingBytes,
+				this.pendingBatches,
 				this.closing,
 				this.pumpStopped,
 			);
@@ -820,7 +901,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 
 			// If closing and queue is empty, stop
-			if (this.closing && this.inflight.length === 0) {
+			// BUT: if there are capacity waiters, they might add to inflight, so keep running
+			if (
+				this.closing &&
+				this.inflight.length === 0 &&
+				this.capacityWaiters.length === 0
+			) {
 				debugSession("[PUMP] closing and queue empty, stopping");
 				this.pumpStopped = true;
 				return;
@@ -828,14 +914,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 			// If no entries, sleep and continue
 			if (this.inflight.length === 0) {
-				debugSession("[PUMP] no entries, sleeping 10ms");
-				// Use interruptible sleep - can be woken by new submissions
-				await Promise.race([
-					sleep(10),
-					new Promise<void>((resolve) => {
-						this.pumpWakeup = resolve;
-					}),
-				]);
+				debugSession("[PUMP] no entries, parking until wakeup");
+				await new Promise<void>((resolve) => {
+					this.pumpWakeup = resolve;
+				});
 				this.pumpWakeup = undefined;
 				continue;
 			}
@@ -853,8 +935,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			await this.ensureSession();
 			if (!this.session) {
 				// Session creation failed - will retry
-				debugSession("[PUMP] session creation failed, sleeping 100ms");
-				await sleep(100);
+				this.consecutiveFailures++;
+				const delay = calculateDelay(
+					this.consecutiveFailures - 1,
+					this.retryConfig.retryBackoffDurationMillis,
+				);
+				debugSession(
+					"[PUMP] session creation failed, backing off for %dms",
+					delay,
+				);
+				await sleep(delay);
 				continue;
 			}
 
@@ -866,7 +956,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						entry.expectedCount,
 						entry.meteredBytes,
 					);
-					entry.attemptStartedMonotonicMs = performance.now();
+					const attemptStarted = performance.now();
+					if (entry.firstAttemptStartedMonotonicMs === undefined) {
+						entry.firstAttemptStartedMonotonicMs = attemptStarted;
+					}
+					entry.attemptStartedMonotonicMs = attemptStarted;
 					entry.innerPromise = this.session.submit(entry.records, entry.args);
 					delete entry.needsSubmit;
 				}
@@ -880,11 +974,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			if (result.kind === "timeout") {
 				// Ack timeout - fatal (per-attempt)
 				const attemptElapsed =
-					head.attemptStartedMonotonicMs != null
-						? Math.round(performance.now() - head.attemptStartedMonotonicMs)
-						: undefined;
+					head.firstAttemptStartedMonotonicMs != null
+						? Math.round(
+								performance.now() - head.firstAttemptStartedMonotonicMs,
+							)
+						: head.attemptStartedMonotonicMs != null
+							? Math.round(performance.now() - head.attemptStartedMonotonicMs)
+							: undefined;
 				const error = new S2Error({
-					message: `Request timeout after ${attemptElapsed ?? "unknown"}ms (${head.expectedCount} records, ${head.meteredBytes} bytes)`,
+					message: `Request timeout after ${attemptElapsed ?? "unknown"}ms (${
+						head.expectedCount
+					} records, ${head.meteredBytes} bytes)`,
 					status: 408,
 					code: "REQUEST_TIMEOUT",
 				});
@@ -1012,17 +1112,20 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Returns either the settled result or a timeout indicator.
 	 *
 	 * Per-attempt ack timeout semantics:
-	 * - The deadline is computed from the most recent (re)submit attempt using
-	 *   a monotonic clock (performance.now) to avoid issues with wall clock
-	 *   adjustments.
+	 * - The deadline is computed from the first submit attempt using a monotonic clock
+	 *   (performance.now) to avoid issues with wall clock adjustments. Recovery does
+	 *   not reset this absolute timeout window.
 	 * - If attempt start is missing (for backward compatibility), we measure
 	 *   from "now" with the full timeout window.
 	 */
 	private async waitForHead(
 		head: InflightEntry,
 	): Promise<{ kind: "settled"; value: AppendResult } | { kind: "timeout" }> {
-		const startMono = head.attemptStartedMonotonicMs ?? performance.now();
-		const deadline = startMono + this.requestTimeoutMillis;
+		const firstAttemptStart =
+			head.firstAttemptStartedMonotonicMs ??
+			head.attemptStartedMonotonicMs ??
+			performance.now();
+		const deadline = firstAttemptStart + this.requestTimeoutMillis;
 		const remaining = Math.max(0, deadline - performance.now());
 
 		let timer: any;
@@ -1090,7 +1193,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			entry.innerPromise.catch(() => {});
 
 			// Create new promise from new session
-			entry.attemptStartedMonotonicMs = performance.now();
+			const attemptStarted = performance.now();
+			entry.attemptStartedMonotonicMs = attemptStarted;
 			entry.innerPromise = session.submit(entry.records, entry.args);
 		}
 
@@ -1099,13 +1203,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 	/**
 	 * Check if append can be retried under noSideEffects policy.
-	 * For appends, idempotency requires match_seq_num.
+	 * For appends, idempotency requires matchSeqNum.
 	 */
 	private isIdempotent(entry: InflightEntry): boolean {
 		const args = entry.args;
 		if (!args) return false;
 
-		return args.match_seq_num !== undefined;
+		return args.matchSeqNum !== undefined;
 	}
 
 	/**
@@ -1147,6 +1251,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.inflight.length = 0;
 		this.queuedBytes = 0;
 		this.pendingBytes = 0;
+		this.pendingBatches = 0;
 
 		// Error the readable stream
 		try {
@@ -1155,14 +1260,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			debugSession("failed to error acks controller: %s", e);
 		}
 
-		// Wake capacity waiter to unblock any pending writer
-		if (this.capacityWaiter) {
-			this.capacityWaiter();
-			this.capacityWaiter = undefined;
+		// Wake all capacity waiters to unblock any pending writers
+		for (const waiter of this.capacityWaiters) {
+			waiter.resolve();
 		}
+		this.capacityWaiters = [];
 
 		// Close inner session
 		if (this.session) {
+			debugSession("closing inner session");
 			try {
 				await this.session.close();
 			} catch (e) {
@@ -1195,6 +1301,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Wait for pump to stop (drains inflight queue, including through recovery)
 		if (this.pumpPromise) {
+			debugSession("[CLOSE] awaiting pump to drain inflight queue");
 			await this.pumpPromise;
 		}
 

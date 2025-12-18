@@ -120,6 +120,7 @@ export type {
 	AppendRecordForFormat,
 	AppendSession,
 	AppendSessionOptions,
+	BatchSubmitTicket,
 	ReadArgs,
 	ReadBatch,
 	ReadHeaders,
