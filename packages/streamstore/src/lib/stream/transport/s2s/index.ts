@@ -17,7 +17,6 @@ import {
 import type { AppendAck, StreamPosition } from "../../../../generated/index.js";
 import {
 	AppendAck as ProtoAppendAck,
-	AppendInput as ProtoAppendInput,
 	ReadBatch as ProtoReadBatch,
 	type StreamPosition as ProtoStreamPosition,
 } from "../../../../generated/proto/s2.js";
@@ -44,6 +43,7 @@ import type {
 	TransportConfig,
 	TransportReadSession,
 } from "../../types.js";
+import { encodeProtoAppendInput } from "../proto.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
 
 const debug = createDebug("s2:s2s");
@@ -61,31 +61,6 @@ async function loadHttp2(): Promise<Http2Module> {
 		);
 	}
 	return http2ModulePromise;
-}
-
-export function buildProtoAppendInput(
-	records: AppendRecord[],
-	args: AppendArgs,
-): ProtoAppendInput {
-	const textEncoder = new TextEncoder();
-	return ProtoAppendInput.create({
-		records: records.map((record) => {
-			return {
-				timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
-				headers: record.headers?.map((h) => ({
-					name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
-					value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
-				})),
-				body:
-					typeof record.body === "string"
-						? textEncoder.encode(record.body)
-						: record.body,
-			};
-		}),
-		fencingToken: args.fencingToken ?? undefined,
-		matchSeqNum:
-			args.matchSeqNum == null ? undefined : BigInt(args.matchSeqNum),
-	});
 }
 
 export class S2STransport implements SessionTransport {
@@ -837,8 +812,7 @@ class S2SAppendSession implements TransportAppendSession {
 		}
 
 		// Convert to protobuf AppendInput
-		const protoInput = buildProtoAppendInput(records, args);
-		const bodyBytes = ProtoAppendInput.toBinary(protoInput);
+		const bodyBytes = encodeProtoAppendInput(records, args);
 
 		// Frame the message
 		const frame = frameMessage({

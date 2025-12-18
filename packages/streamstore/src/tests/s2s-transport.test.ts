@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildProtoAppendInput } from "../lib/stream/transport/s2s/index.js";
+import { buildProtoAppendInput } from "../lib/stream/transport/proto.js";
 import type { AppendArgs, AppendRecord } from "../lib/stream/types.js";
 
 const makeRecords = (): AppendRecord[] => [{ body: "hello" }];
