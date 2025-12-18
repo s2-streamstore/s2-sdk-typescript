@@ -121,20 +121,14 @@ export function injectDedupeHeaders(
 				[DEDUPE_SEQ_HEADER_BYTES, headerValue],
 				[DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)],
 			];
-		} else if (Array.isArray(existing)) {
+		} else {
 			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
-			for (const [k, v] of existing as any) {
+			for (const [k, v] of existing as Array<
+				[string | Uint8Array, string | Uint8Array]
+			>) {
 				const kb = typeof k === "string" ? textEncoder.encode(k) : k;
 				const vb = typeof v === "string" ? textEncoder.encode(v) : v;
 				hdrs.push([kb, vb]);
-			}
-			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
-			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)]);
-			headers = hdrs as AppendHeaders<"bytes">;
-		} else {
-			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
-			for (const [k, v] of Object.entries(existing as Record<string, string>)) {
-				hdrs.push([textEncoder.encode(k), textEncoder.encode(v)]);
 			}
 			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
 			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)]);

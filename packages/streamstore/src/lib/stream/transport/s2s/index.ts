@@ -70,21 +70,9 @@ export function buildProtoAppendInput(
 	const textEncoder = new TextEncoder();
 	return ProtoAppendInput.create({
 		records: records.map((record) => {
-			let headersArray:
-				| Array<[string, string]>
-				| Array<[Uint8Array, Uint8Array]>
-				| undefined;
-			if (record.headers) {
-				if (Array.isArray(record.headers)) {
-					headersArray = record.headers;
-				} else {
-					headersArray = Object.entries(record.headers);
-				}
-			}
-
 			return {
 				timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
-				headers: headersArray?.map((h) => ({
+				headers: record.headers?.map((h) => ({
 					name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
 					value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
 				})),

@@ -171,10 +171,10 @@ describeIf("AppendSession Integration Tests", () => {
 
 			const session = await stream.appendSession();
 
-			const record = AppendRecord.make("header-test", {
-				"custom-header": "custom-value",
-				"another-header": "another-value",
-			});
+			const record = AppendRecord.make("header-test", [
+				["custom-header", "custom-value"],
+				["another-header", "another-value"],
+			]);
 
 			const ticket = await session.submit([record]);
 			const ack = await ticket.ack();
