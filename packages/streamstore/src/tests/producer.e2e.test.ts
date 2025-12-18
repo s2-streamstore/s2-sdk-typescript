@@ -12,6 +12,7 @@ const SAMPLE_SIZE = 8;
 const TEST_TIMEOUT_MS = 60_000;
 const MAX_PARALLEL_SUBMITS = 64;
 const CHUNK_SIZE_BYTES = 128 * 1024;
+const ILLEGAL_RECORD_BYTES = 1_100_000;
 
 const pickSampleIndexes = (count: number, sampleSize: number): number[] => {
 	let seed = 0xdecafbad;
@@ -129,6 +130,66 @@ describeIf("Producer Integration Tests", () => {
 						error,
 					);
 				}
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it.each(transports)(
+		"propagates writable errors for oversized records (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const uniqueStreamName = `integration-test-producer-overflow-${transport}-${Date.now()}-${Math.random()
+				.toString(36)
+				.slice(2, 8)}`;
+			await basin.streams.create({
+				stream: uniqueStreamName,
+			});
+
+			const stream = basin.stream(uniqueStreamName, {
+				forceTransport: transport,
+			});
+
+			const appendSession = await stream.appendSession({
+				maxInflightBytes: 512 * 1024,
+				maxInflightBatches: 2,
+			});
+			const producer = new Producer(
+				new BatchTransform({
+					lingerDurationMillis: 0,
+					maxBatchRecords: 1,
+					matchSeqNum: (await stream.checkTail()).tail.seq_num,
+				}),
+				appendSession,
+			);
+			producer.pump.catch(() => {});
+
+			const oversized = new Uint8Array(ILLEGAL_RECORD_BYTES);
+			oversized.fill(0xab);
+
+			const readable = new ReadableStream<AppendRecord>({
+				start(controller) {
+					for (let i = 0; i < 4; i++) {
+						controller.enqueue(AppendRecord.make(`ok-${i}`));
+					}
+					controller.enqueue(AppendRecord.make(oversized));
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(producer.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("exceeds maximum batch size"),
+			});
+
+			await producer.close().catch(() => {});
+
+			try {
+				await basin.streams.delete({ stream: uniqueStreamName });
+			} catch (error) {
+				console.warn(
+					`Failed to cleanup producer test stream ${uniqueStreamName}:`,
+					error,
+				);
 			}
 		},
 		TEST_TIMEOUT_MS,

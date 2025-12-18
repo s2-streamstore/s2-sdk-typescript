@@ -213,8 +213,6 @@ export class Producer implements AsyncDisposable {
 				this.readableController.error(error);
 				this.readableController = null;
 			}
-
-			throw err;
 		}
 	}
 
@@ -246,6 +244,8 @@ export class Producer implements AsyncDisposable {
 			resolveTicket = resolve;
 			rejectTicket = reject;
 		});
+		// Avoid unhandled rejections if we throw before returning ticketPromise
+		ticketPromise.catch(() => {});
 
 		let resolveAck!: (ack: IndexedAppendAck) => void;
 		let rejectAck!: (err: S2Error) => void;
