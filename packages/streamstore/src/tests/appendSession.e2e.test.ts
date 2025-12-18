@@ -3,6 +3,7 @@ import { AppendRecord, S2 } from "../index.js";
 import type { AppendArgs, SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
+const ILLEGAL_RECORD_BYTES = 1_100_000;
 const hasEnv = !!process.env.S2_ACCESS_TOKEN && !!process.env.S2_BASIN;
 const describeIf = hasEnv ? describe : describe.skip;
 
@@ -398,6 +399,42 @@ describeIf("AppendSession Integration Tests", () => {
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
 			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
 			expect(ack3.end.seq_num).toBe(ack2.end.seq_num + 1);
+		},
+	);
+
+	it.each(transports)(
+		"propagates writable errors for oversized records (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const oversized = new Uint8Array(ILLEGAL_RECORD_BYTES);
+			oversized.fill(0xab);
+
+			const batches: AppendArgs[] = [
+				{ records: [AppendRecord.make("ok-0")] },
+				{ records: [AppendRecord.make("ok-1")] },
+				{ records: [AppendRecord.make("ok-2")] },
+				{ records: [AppendRecord.make("ok-3")] },
+				{ records: [AppendRecord.make(oversized)] },
+			];
+
+			const readable = new ReadableStream<AppendArgs>({
+				start(controller) {
+					for (const batch of batches) {
+						controller.enqueue(batch);
+					}
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(session.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("exceeds maximum"),
+			});
+
+			await session.close().catch(() => {});
 		},
 	);
 });
