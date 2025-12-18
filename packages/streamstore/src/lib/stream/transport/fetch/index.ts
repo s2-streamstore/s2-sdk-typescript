@@ -354,8 +354,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 export class FetchAppendSession implements TransportAppendSession {
 	private queue: Array<{
 		records: AppendRecord[];
-		fencing_token?: string;
-		match_seq_num?: number;
+		fencingToken?: string;
+		matchSeqNum?: number;
 	}> = [];
 	private pendingResolvers: Array<{
 		resolve: (result: AppendResult) => void;
@@ -432,8 +432,8 @@ export class FetchAppendSession implements TransportAppendSession {
 	submit(
 		records: AppendRecord | AppendRecord[],
 		args?: {
-			fencing_token?: string;
-			match_seq_num?: number;
+			fencingToken?: string;
+			matchSeqNum?: number;
 			precalculatedSize?: number;
 		},
 	): Promise<AppendResult> {
@@ -482,8 +482,8 @@ export class FetchAppendSession implements TransportAppendSession {
 		return new Promise((resolve) => {
 			this.queue.push({
 				records: recordsArray,
-				fencing_token: args?.fencing_token,
-				match_seq_num: args?.match_seq_num,
+				fencingToken: args?.fencingToken,
+				matchSeqNum: args?.matchSeqNum,
 			});
 			this.pendingResolvers.push({ resolve });
 
@@ -511,8 +511,8 @@ export class FetchAppendSession implements TransportAppendSession {
 					this.client,
 					args.records,
 					{
-						fencing_token: args.fencing_token,
-						match_seq_num: args.match_seq_num,
+						fencingToken: args.fencingToken,
+						matchSeqNum: args.matchSeqNum,
 					},
 					this.options,
 				);
@@ -593,12 +593,6 @@ export class FetchTransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
-		// Fetch transport intentionally enforces single-flight submission (HTTP/1.1)
-		// This ensures only one batch is in-flight at a time, regardless of user setting.
-		const opts = {
-			...sessionOptions,
-			maxInflightBatches: 1,
-		} as AppendSessionOptions;
 		return AppendSessionImpl.create(
 			(myOptions) => {
 				return FetchAppendSession.create(
@@ -608,7 +602,7 @@ export class FetchTransport implements SessionTransport {
 					requestOptions,
 				);
 			},
-			opts,
+			sessionOptions,
 			this.transportConfig.retry,
 		);
 	}
@@ -625,5 +619,10 @@ export class FetchTransport implements SessionTransport {
 			args,
 			this.transportConfig.retry,
 		);
+	}
+
+	async close(): Promise<void> {
+		// Fetch transport holds no long-lived resources beyond the client.
+		// Provided for API symmetry; nothing to tear down.
 	}
 }
