@@ -93,6 +93,7 @@ describeIf("Producer Integration Tests", () => {
 				const pending: Array<Promise<Awaited<ReturnType<Producer["submit"]>>>> =
 					[];
 				for (let i = 0; i < TOTAL_RECORDS; i++) {
+					// TODO, having concurrent submits could lead to issues with matchSeqNum, if order assigned msn != order serialized to session
 					const submission = producer.submit(AppendRecord.make(buildChunk(i)));
 					pending.push(submission);
 					if (pending.length >= MAX_PARALLEL_SUBMITS) {
