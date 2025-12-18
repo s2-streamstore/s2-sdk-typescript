@@ -5,6 +5,8 @@ import {
 	type ReadRecord,
 	S2,
 } from "../src/index.js";
+import { sleep } from "../src/lib/retry.js";
+import { Producer } from "../src/producer.js";
 
 function rechunkStream(
 	desiredChunkSize: number,
@@ -49,9 +51,15 @@ const stream = basin.stream("image");
 
 const startAt = await stream.checkTail();
 
-const session = await stream.appendSession({
-	maxInflightBytes: 1024 * 1024, // 1MiB
-});
+const producer = new Producer(
+	new BatchTransform({
+		lingerDurationMillis: 10,
+		matchSeqNum: startAt.tail.seq_num,
+	}),
+	await stream.appendSession({
+		maxInflightBytes: 2 * 1024 * 1024, // 1MiB
+	}),
+);
 let image = await fetch(
 	"https://upload.wikimedia.org/wikipedia/commons/2/24/Peter_Paul_Rubens_-_Self-portrait_-_RH.S.180_-_Rubenshuis_%28after_restoration%29.jpg",
 );
@@ -68,23 +76,18 @@ let append = await image
 			},
 		}),
 	)
-	// Collect records into batches.
-	.pipeThrough(
-		new BatchTransform({
-			lingerDurationMillis: 5,
-			matchSeqNum: startAt.tail.seq_num,
-		}),
-	)
 	// Write to the S2 stream.
-	.pipeTo(session.writable);
+	.pipeTo(producer.writable);
 
 console.log(
-	`image written to S2 over ${session.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num} records, starting at seqNum=${startAt.tail.seq_num}`,
+	`image written to S2 over ${producer.appendSession.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num} records, starting at seqNum=${startAt.tail.seq_num}`,
 );
 
 let readSession = await stream.readSession({
 	seq_num: startAt.tail.seq_num,
-	count: session.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num,
+	count:
+		producer.appendSession.lastAckedPosition()!.end!.seq_num -
+		startAt.tail.seq_num,
 	as: "bytes",
 });
 
