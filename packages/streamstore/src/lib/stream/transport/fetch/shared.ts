@@ -20,7 +20,6 @@ import {
 	type StreamPosition,
 } from "../../../../generated/index.js";
 import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
-import { decodeFromBase64, encodeToBase64 } from "../../../base64.js";
 import type {
 	AppendArgs,
 	AppendRecord,
@@ -28,6 +27,12 @@ import type {
 	ReadArgs,
 	ReadBatch,
 } from "../../types.js";
+import {
+	decodeProtoAppendAck,
+	decodeProtoReadBatch,
+	encodeProtoAppendInput,
+	protoAppendAckToJson,
+} from "../proto.js";
 
 export async function streamRead<Format extends "string" | "bytes" = "string">(
 	stream: string,
@@ -36,6 +41,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	options?: S2RequestOptions,
 ) {
 	const { as, ...queryParams } = args ?? {};
+	const wantsBytes = (as ?? "string") === "bytes";
 	let response: any;
 	try {
 		response = await read({
@@ -43,10 +49,9 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 			path: {
 				stream,
 			},
-			headers: {
-				...(as === "bytes" ? { "s2-format": "base64" } : {}),
-			},
+			headers: wantsBytes ? { Accept: "application/protobuf" } : undefined,
 			query: queryParams,
+			parseAs: wantsBytes ? "arrayBuffer" : undefined,
 			...options,
 		});
 	} catch (error) {
@@ -63,36 +68,22 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 		);
 	}
 
-	if (args?.as === "bytes") {
-		const res: ReadBatch<"bytes"> = {
-			...response.data,
-			records:
-				response.data.records?.map((record: GeneratedSequencedRecord) => ({
-					...record,
-					body: record.body ? decodeFromBase64(record.body) : undefined,
-					headers: record.headers?.map(
-						(header: [string, string]) =>
-							header.map((h: string) => decodeFromBase64(h)) as [
-								Uint8Array,
-								Uint8Array,
-							],
-					),
-				})) ?? [],
-		};
-		return res as ReadBatch<Format>;
-	} else {
-		const res: ReadBatch<"string"> = {
-			...response.data,
-			records:
-				response.data.records?.map((record: GeneratedSequencedRecord) => ({
-					...record,
-					headers: record.headers
-						? Object.fromEntries(record.headers)
-						: undefined,
-				})) ?? [],
-		};
-		return res as ReadBatch<Format>;
+	if (wantsBytes) {
+		const batch = decodeProtoReadBatch(response.data as ArrayBuffer);
+		return batch as ReadBatch<Format>;
 	}
+
+	const res: ReadBatch<"string"> = {
+		...response.data,
+		records:
+			response.data.records?.map((record: GeneratedSequencedRecord) => ({
+				...record,
+				headers: record.headers
+					? Object.fromEntries(record.headers)
+					: undefined,
+			})) ?? [],
+	};
+	return res as ReadBatch<Format>;
 }
 
 export async function streamAppend(
@@ -125,64 +116,57 @@ export async function streamAppend(
 		});
 	}
 
-	let encodedRecords: GeneratedAppendRecord[] = [];
-	let hasAnyBytesRecords = false;
-
-	// First pass: determine if any records are bytes format
-	for (const record of recordsArray) {
-		const format = computeAppendRecordFormat(record);
-		if (format === "bytes") {
-			hasAnyBytesRecords = true;
-			break;
-		}
-	}
-
-	const textEncoder = new TextEncoder();
-
-	// Second pass: encode all records appropriately
-	for (const record of recordsArray) {
-		const format = computeAppendRecordFormat(record);
-		if (format === "bytes") {
-			const formattedRecord = record as AppendRecordForFormat<"bytes">;
-			const encodedRecord = {
-				...formattedRecord,
-				body: formattedRecord.body
-					? encodeToBase64(formattedRecord.body)
-					: undefined,
-				headers: formattedRecord.headers?.map((header) =>
-					header.map((h) => encodeToBase64(h)),
-				) as [string, string][] | undefined,
-			};
-
-			encodedRecords.push(encodedRecord);
-		} else {
-			const formattedRecord = record as AppendRecordForFormat<"string">;
-			const normalizedHeaders = formattedRecord.headers;
-
-			const encodedHeaders: [string, string][] | undefined = normalizedHeaders
-				? hasAnyBytesRecords
-					? (normalizedHeaders.map(([name, value]) => [
-							encodeToBase64(textEncoder.encode(name)),
-							encodeToBase64(textEncoder.encode(value)),
-						]) as [string, string][])
-					: normalizedHeaders
-				: undefined;
-
-			// If batch has bytes records, encode string bodies as base64 too
-			const encodedRecord = {
-				...formattedRecord,
-				body:
-					hasAnyBytesRecords && formattedRecord.body
-						? encodeToBase64(textEncoder.encode(formattedRecord.body))
-						: formattedRecord.body,
-				headers: encodedHeaders,
-			};
-
-			encodedRecords.push(encodedRecord);
-		}
-	}
+	const hasAnyBytesRecords = recordsArray.some(
+		(record) => computeAppendRecordFormat(record) === "bytes",
+	);
 
 	let response: any;
+
+	if (hasAnyBytesRecords) {
+		const protoBody = encodeProtoAppendInput(recordsArray, args);
+
+		const headers = {
+			Accept: "application/protobuf",
+			"Content-Type": "application/protobuf",
+		};
+
+		try {
+			response = await append({
+				client,
+				path: {
+					stream,
+				},
+				body: protoBody as unknown as GeneratedAppendInput,
+				bodySerializer: null,
+				parseAs: "arrayBuffer",
+				headers,
+				...options,
+			});
+		} catch (error) {
+			throw s2Error(error);
+		}
+		if (response.error) {
+			const status = response.response.status;
+			if (status === 412) {
+				throw makeAppendPreconditionError(status, response.error);
+			}
+			throw makeServerError(
+				{ status, statusText: response.response.statusText },
+				response.error,
+			);
+		}
+
+		const ack = decodeProtoAppendAck(response.data as ArrayBuffer);
+		return protoAppendAckToJson(ack);
+	}
+
+	const encodedRecords: GeneratedAppendRecord[] = recordsArray.map((record) => {
+		const formattedRecord = record as AppendRecordForFormat<"string">;
+		return {
+			...formattedRecord,
+		};
+	});
+
 	try {
 		response = await append({
 			client,
@@ -193,9 +177,6 @@ export async function streamAppend(
 				fencing_token: args?.fencingToken,
 				match_seq_num: args?.matchSeqNum,
 				records: encodedRecords,
-			},
-			headers: {
-				...(hasAnyBytesRecords ? { "s2-format": "base64" } : {}),
 			},
 			...options,
 		});
