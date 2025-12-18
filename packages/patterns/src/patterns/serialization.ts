@@ -46,6 +46,7 @@ type MessageRange = {
 	end: U64;
 };
 
+// TODO: rework to use the Producer API
 export class SerializingAppendSession<Message> extends WritableStream<Message> {
 	private readonly session: AppendSession;
 	private readonly serializer: (message: Message) => Uint8Array;
