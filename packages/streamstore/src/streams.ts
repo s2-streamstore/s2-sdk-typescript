@@ -18,6 +18,7 @@ import {
 	type StreamConfig,
 	type StreamInfo,
 } from "./generated/index.js";
+import { randomToken } from "./lib/base64.js";
 import { type ListAllArgs, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 
@@ -101,11 +102,13 @@ export class S2Streams {
 		args: CreateStreamArgs,
 		options?: S2RequestOptions,
 	): Promise<CreateStreamResponse> {
+		const requestToken = randomToken();
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createStream({
 					client: this.client,
 					body: args,
+					headers: { "s2-request-token": requestToken },
 					...options,
 				}),
 			);

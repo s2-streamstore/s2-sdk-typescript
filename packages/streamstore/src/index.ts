@@ -109,6 +109,8 @@ export type {
 	TimestampingReconfiguration,
 	U64,
 } from "./generated/types.gen.js";
+/** Base64 encoding/decoding and random token generation utilities. */
+export { randomToken } from "./lib/base64.js";
 /** Generic pagination helper for async iteration over paginated responses. */
 export type { ListAllArgs, PageFetcher } from "./lib/paginate.js";
 export { paginate } from "./lib/paginate.js";
