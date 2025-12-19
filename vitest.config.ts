@@ -16,5 +16,12 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     env: loadEnv(mode, process.cwd(), ''),
+    // Run e2e tests in a separate pool with limited concurrency
+    poolMatchGlobs: [['**/*.e2e.test.ts', 'forks']],
+    poolOptions: {
+      forks: {
+        maxForks: 1,
+      },
+    },
   },
 }))
