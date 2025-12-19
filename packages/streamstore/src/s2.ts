@@ -2,7 +2,7 @@ import { S2AccessTokens } from "./accessTokens.js";
 import { S2Basin } from "./basin.js";
 import { S2Basins } from "./basins.js";
 import type { RetryConfig, S2ClientOptions } from "./common.js";
-import { S2Error } from "./error.js";
+import { makeServerError } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
@@ -59,12 +59,8 @@ export class S2 {
 			}),
 		);
 
-		this.client.interceptors.error.use((err, res, req, opt) => {
-			return new S2Error({
-				message: err instanceof Error ? err.message : "Unknown error",
-				status: res.status,
-				origin: "server",
-			});
+		this.client.interceptors.error.use((err, res) => {
+			return makeServerError(res, err);
 		});
 
 		this.basins = new S2Basins(this.client, this.retryConfig);
