@@ -3,6 +3,7 @@
 export type {
 	IssueAccessTokenArgs,
 	ListAccessTokensArgs,
+	ListAllAccessTokensArgs,
 	RevokeAccessTokenArgs,
 } from "./accessTokens.js";
 export { S2AccessTokens } from "./accessTokens.js";
@@ -17,6 +18,7 @@ export type {
 	CreateBasinArgs,
 	DeleteBasinArgs,
 	GetBasinConfigArgs,
+	ListAllBasinsArgs,
 	ListBasinsArgs,
 	ReconfigureBasinArgs,
 } from "./basins.js";
@@ -107,6 +109,9 @@ export type {
 	TimestampingReconfiguration,
 	U64,
 } from "./generated/types.gen.js";
+/** Generic pagination helper for async iteration over paginated responses. */
+export type { ListAllArgs, PageFetcher } from "./lib/paginate.js";
+export { paginate } from "./lib/paginate.js";
 /** Redacted access token wrapper type. */
 export type { Redacted } from "./lib/redacted.js";
 /**
@@ -146,6 +151,7 @@ export type {
 	CreateStreamArgs,
 	DeleteStreamArgs,
 	GetStreamConfigArgs,
+	ListAllStreamsArgs,
 	ListStreamsArgs,
 	ReconfigureStreamArgs,
 } from "./streams.js";

@@ -2,6 +2,7 @@ import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
 import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
+	type AccessTokenInfo,
 	type IssueAccessTokenData,
 	issueAccessToken,
 	type ListAccessTokensData,
@@ -9,10 +10,13 @@ import {
 	type RevokeAccessTokenData,
 	revokeAccessToken,
 } from "./generated/index.js";
+import { type ListAllArgs, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 
 export interface ListAccessTokensArgs
 	extends DataToObject<ListAccessTokensData> {}
+export interface ListAllAccessTokensArgs
+	extends ListAllArgs<ListAccessTokensArgs> {}
 export interface IssueAccessTokenArgs
 	extends DataToObject<IssueAccessTokenData> {}
 export interface RevokeAccessTokenArgs
@@ -44,6 +48,35 @@ export class S2AccessTokens {
 				}),
 			);
 		});
+	}
+
+	/**
+	 * List all access tokens with automatic pagination.
+	 * Returns a lazy async iterable that fetches pages as needed.
+	 *
+	 * @param args.prefix Filter to IDs beginning with this prefix
+	 * @param args.limit Max results per page (up to 1000)
+	 *
+	 * @example
+	 * ```ts
+	 * for await (const token of s2.accessTokens.listAll({ prefix: "service-" })) {
+	 *   console.log(token.id);
+	 * }
+	 * ```
+	 */
+	public listAll(
+		args?: ListAllAccessTokensArgs,
+		options?: S2RequestOptions,
+	): AsyncIterable<AccessTokenInfo> {
+		return paginate(
+			(a) =>
+				this.list(a, options).then((r) => ({
+					items: r.access_tokens,
+					has_more: r.has_more,
+				})),
+			args ?? {},
+			(token) => token.id,
+		);
 	}
 
 	/**
