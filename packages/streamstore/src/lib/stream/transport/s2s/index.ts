@@ -92,6 +92,7 @@ export class S2STransport implements SessionTransport {
 			},
 			sessionOptions,
 			this.transportConfig.retry,
+			stream, // Pass stream name for debug context
 		);
 	}
 

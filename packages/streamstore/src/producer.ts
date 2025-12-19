@@ -1,8 +1,11 @@
+import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
 import { S2Error } from "./error.js";
 import type { AppendAck } from "./generated/index.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
-import { AppendRecord } from "./utils.js";
+import { AppendRecord, meteredBytes } from "./utils.js";
+
+const debugProducer = createDebug("s2:producer");
 
 // TODO this should live in error utils, nothing specific to this module
 const toS2Error = (err: unknown): S2Error =>
@@ -86,12 +89,21 @@ export class Producer implements AsyncDisposable {
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
 		null;
 
-	constructor(batchTransform: BatchTransform, appendSession: AppendSession) {
+	private readonly debugName: string;
+	private submitCounter = 0;
+
+	constructor(
+		batchTransform: BatchTransform,
+		appendSession: AppendSession,
+		debugName?: string,
+	) {
+		this.debugName = debugName ?? `producer-${Date.now()}`;
 		this.batchTransform = batchTransform;
 		this.transformWriter = batchTransform.writable.getWriter();
 		this.transformReader = batchTransform.readable.getReader();
 
 		this.appendSession = appendSession;
+		debugProducer("[%s] created", this.debugName);
 
 		// Create readable stream that emits batch acknowledgements
 		this.readable = new ReadableStream<IndexedAppendAck>({
@@ -125,15 +137,33 @@ export class Producer implements AsyncDisposable {
 	}
 
 	async readPump(): Promise<void> {
+		debugProducer("[%s] readPump started", this.debugName);
 		try {
 			while (true) {
 				const { value, done } = await this.transformReader.read();
 
 				if (done) {
+					debugProducer(
+						"[%s] readPump done (transform closed)",
+						this.debugName,
+					);
 					break;
 				}
 
 				const batch = value!;
+				const batchBytes = batch.records.reduce(
+					(sum, r) => sum + meteredBytes(r),
+					0,
+				);
+
+				debugProducer(
+					"[%s] readPump got batch: records=%d, bytes=%d, matchSeqNum=%s, pendingRecords=%d",
+					this.debugName,
+					batch.records.length,
+					batchBytes,
+					batch.matchSeqNum ?? "none",
+					this.pendingRecords.length,
+				);
 
 				const recordCount = batch.records.length;
 				const associatedRecords = this.pendingRecords.splice(0, recordCount);
@@ -147,12 +177,24 @@ export class Producer implements AsyncDisposable {
 
 				let ticket: BatchSubmitTicket;
 				try {
+					debugProducer(
+						"[%s] readPump submitting to session: records=%d, matchSeqNum=%s",
+						this.debugName,
+						batch.records.length,
+						batch.matchSeqNum ?? "none",
+					);
 					ticket = await this.appendSession.submit(batch.records, {
 						fencingToken: batch.fencingToken,
 						matchSeqNum: batch.matchSeqNum,
 					});
+					debugProducer("[%s] readPump submit returned ticket", this.debugName);
 				} catch (err) {
 					const error = toS2Error(err);
+					debugProducer(
+						"[%s] readPump submit error: %s",
+						this.debugName,
+						error.message,
+					);
 					if (!this.pumpError) {
 						this.pumpError = error;
 					}
@@ -173,6 +215,12 @@ export class Producer implements AsyncDisposable {
 				ticket
 					.ack()
 					.then((ack) => {
+						debugProducer(
+							"[%s] readPump ack received: seq_num=%d-%d",
+							this.debugName,
+							ack.start.seq_num,
+							ack.end.seq_num,
+						);
 						associatedRecords.forEach((pending, index) => {
 							const indexedAck = new IndexedAppendAck(index, ack);
 							pending.resolveAck(indexedAck);
@@ -183,6 +231,11 @@ export class Producer implements AsyncDisposable {
 					})
 					.catch((err) => {
 						const error = toS2Error(err);
+						debugProducer(
+							"[%s] readPump ack error: %s",
+							this.debugName,
+							error.message,
+						);
 						if (!this.pumpError) {
 							this.pumpError = error;
 						}
@@ -195,6 +248,7 @@ export class Producer implements AsyncDisposable {
 			}
 		} catch (err) {
 			this.pumpError = err as Error;
+			debugProducer("[%s] readPump caught error: %s", this.debugName, err);
 
 			// Reject all pending promises
 			const error = new S2Error({
@@ -229,8 +283,24 @@ export class Producer implements AsyncDisposable {
 	// }
 
 	async submit(record: AppendRecord): Promise<RecordSubmitTicket> {
+		const submitId = ++this.submitCounter;
+		const recordBytes = meteredBytes(record);
+
+		debugProducer(
+			"[%s] submit #%d: bytes=%d, pendingRecords=%d",
+			this.debugName,
+			submitId,
+			recordBytes,
+			this.pendingRecords.length,
+		);
+
 		// Check if pump has already failed
 		if (this.pumpError) {
+			debugProducer(
+				"[%s] submit #%d: pump already failed",
+				this.debugName,
+				submitId,
+			);
 			throw new S2Error({
 				message: `Cannot submit: pump has failed: ${this.pumpError}`,
 				status: 500,
@@ -264,10 +334,28 @@ export class Producer implements AsyncDisposable {
 		};
 		this.pendingRecords.push(entry);
 
+		debugProducer(
+			"[%s] submit #%d: pushed to pendingRecords (now %d), writing to transform",
+			this.debugName,
+			submitId,
+			this.pendingRecords.length,
+		);
+
 		try {
 			// Awaiting write enforces backpressure before returning the ticket.
 			await this.transformWriter.write(record);
+			debugProducer(
+				"[%s] submit #%d: write completed",
+				this.debugName,
+				submitId,
+			);
 		} catch (err) {
+			debugProducer(
+				"[%s] submit #%d: write failed: %s",
+				this.debugName,
+				submitId,
+				err,
+			);
 			// Remove resolver if the write failed so we do not leak the slot.
 			const idx = this.pendingRecords.indexOf(entry);
 			if (idx >= 0) {
