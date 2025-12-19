@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>S2 SDK Browser Test</title>
+  <style>
+    body {
+      font-family: monospace;
+      max-width: 900px;
+      margin: 20px auto;
+      padding: 10px;
+      font-size: 14px;
+    }
+    h1 { margin: 0 0 10px 0; }
+    h3 { margin: 15px 0 5px 0; border-bottom: 1px solid #ccc; padding-bottom: 3px; }
+    fieldset {
+      border: 1px solid #999;
+      margin: 10px 0;
+      padding: 10px;
+    }
+    legend { font-weight: bold; }
+    label { margin-right: 15px; }
+    input[type="text"], input[type="password"], input[type="number"] {
+      font-family: monospace;
+      padding: 3px;
+      border: 1px solid #999;
+    }
+    input[type="text"], input[type="password"] { width: 300px; }
+    input[type="number"] { width: 80px; }
+    button {
+      padding: 5px 15px;
+      margin: 3px;
+      cursor: pointer;
+    }
+    button:disabled { cursor: not-allowed; color: #999; }
+    .row { margin: 5px 0; }
+    .inline { display: inline-block; margin-right: 20px; }
+    #log {
+      border: 1px solid #999;
+      padding: 10px;
+      height: 350px;
+      overflow-y: auto;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: #f9f9f9;
+    }
+    .log-info { color: #333; }
+    .log-success { color: #060; }
+    .log-error { color: #c00; }
+    .log-debug { color: #666; }
+    .log-data { color: #006; }
+    hr { margin: 15px 0; border: none; border-top: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <h1>S2 SDK Browser Test</h1>
+
+  <fieldset>
+    <legend>Configuration</legend>
+    <div class="row">
+      <label>Access Token: <input type="password" id="accessToken"></label>
+    </div>
+    <div class="row">
+      <label>Basin: <input type="text" id="basinName" size="20"></label>
+      <label>Stream: <input type="text" id="streamName" size="20"></label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Stream Operations</legend>
+    <button id="btnCheckTail">Check Tail</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Read</legend>
+    <div class="row">
+      <label>Start seq_num: <input type="number" id="readSeqNum" value="0" min="0"></label>
+      <label>Count: <input type="number" id="readCount" value="10" min="1" max="1000"></label>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="readFormat" value="string" checked> String</label>
+      <label><input type="radio" name="readFormat" value="bytes"> Bytes (show hash/length)</label>
+    </div>
+    <div class="row">
+      <button id="btnReadUnary">Unary Read</button>
+      <button id="btnReadSession">Read Session</button>
+      <button id="btnStopReadSession" disabled>Stop Session</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Append Session</legend>
+    <div class="row">
+      <label>Record count: <input type="number" id="appendCount" value="10" min="1" max="1000"></label>
+      <label>Record size (bytes): <input type="number" id="appendSize" value="100" min="1" max="100000"></label>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="appendFormat" value="string" checked> String records</label>
+      <label><input type="radio" name="appendFormat" value="bytes"> Byte records</label>
+    </div>
+    <div class="row">
+      <button id="btnAppendSession">Run Append Session</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Producer (with batching)</legend>
+    <div class="row">
+      <label>Record count: <input type="number" id="producerCount" value="100" min="1" max="10000"></label>
+      <label>Record size (bytes): <input type="number" id="producerSize" value="100" min="1" max="100000"></label>
+    </div>
+    <div class="row">
+      <label>Linger (ms): <input type="number" id="producerLinger" value="10" min="0" max="1000"></label>
+      <label>Max batch records: <input type="number" id="producerMaxRecords" value="100" min="1" max="1000"></label>
+    </div>
+    <div class="row">
+      <label><input type="radio" name="producerFormat" value="string" checked> String records</label>
+      <label><input type="radio" name="producerFormat" value="bytes"> Byte records</label>
+    </div>
+    <div class="row">
+      <button id="btnProducer">Run Producer</button>
+    </div>
+  </fieldset>
+
+  <hr>
+
+  <div class="row">
+    <button id="btnClear">Clear Log</button>
+  </div>
+
+  <div id="log"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
