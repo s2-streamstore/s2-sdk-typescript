@@ -18,6 +18,7 @@ import {
 	type ReconfigureBasinResponse,
 	reconfigureBasin,
 } from "./generated/index.js";
+import { randomToken } from "./lib/base64.js";
 import { type ListAllArgs, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 
@@ -104,11 +105,13 @@ export class S2Basins {
 		args: CreateBasinArgs,
 		options?: S2RequestOptions,
 	): Promise<CreateBasinResponse> {
+		const requestToken = randomToken();
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createBasin({
 					client: this.client,
 					body: args,
+					headers: { "s2-request-token": requestToken },
 					...options,
 				}),
 			);

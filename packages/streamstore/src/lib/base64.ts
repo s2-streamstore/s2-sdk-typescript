@@ -1,3 +1,16 @@
+/**
+ * Generate a random token of the specified byte length, base64 encoded.
+ * Uses crypto.getRandomValues() which is available in browsers and Node.js 19+.
+ *
+ * @param byteLength Number of random bytes to generate (default: 16)
+ * @returns Base64-encoded random string
+ */
+export const randomToken = (byteLength = 16): string => {
+	const bytes = new Uint8Array(byteLength);
+	crypto.getRandomValues(bytes);
+	return encodeToBase64(bytes);
+};
+
 export const encodeToBase64 = (bytes: Uint8Array) => {
 	const length = bytes.length;
 
