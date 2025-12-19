@@ -59,9 +59,27 @@ export class S2 {
 			}),
 		);
 
-		this.client.interceptors.error.use((err, res, req, opt) => {
+		this.client.interceptors.error.use((err, res) => {
+			let message = "Unknown error";
+			let code: string | undefined;
+
+			if (err && typeof err === "object" && "message" in err) {
+				const structured = err as { message?: unknown; code?: unknown };
+				if (typeof structured.message === "string") {
+					message = structured.message;
+				}
+				if (typeof structured.code === "string") {
+					code = structured.code;
+				}
+			} else if (typeof err === "string" && err.trim().length > 0) {
+				message = err;
+			} else if (err instanceof Error) {
+				message = err.message;
+			}
+
 			return new S2Error({
-				message: err instanceof Error ? err.message : "Unknown error",
+				message,
+				code,
 				status: res.status,
 				origin: "server",
 			});
