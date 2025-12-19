@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.20.0
+
+### Minor Changes
+
+- 49e851c: Fix error messages to contain more info
+
 ## 0.19.5
 
 ### Patch Changes
