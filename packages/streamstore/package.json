@@ -15,7 +15,8 @@
     "build": "rm -rf dist && bun ../../scripts/generate-version.ts && tsc --project tsconfig.build.esm.json && tsc --project tsconfig.build.cjs.json && bun ../../scripts/postbuild.ts && attw --pack",
     "test": "vitest --run",
     "check": "tsc --noEmit",
-    "gen:version": "bun ../../scripts/generate-version.ts"
+    "gen:version": "bun ../../scripts/generate-version.ts",
+    "example:browser": "bun examples/browser/serve.ts"
   },
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",

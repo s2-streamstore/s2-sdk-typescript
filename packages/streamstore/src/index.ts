@@ -137,6 +137,8 @@ export type {
 } from "./metrics.js";
 /** Metrics helper and argument types. */
 export { S2Metrics } from "./metrics.js";
+/** High-level producer with automatic batching. */
+export { IndexedAppendAck, Producer, RecordSubmitTicket } from "./producer.js";
 /** Top-level entrypoint for the SDK. */
 export { S2 } from "./s2.js";
 export { S2Stream } from "./stream.js";
