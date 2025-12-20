@@ -125,14 +125,6 @@ describeIf("Producer Integration Tests", () => {
 				}
 			} finally {
 				await producer.close();
-				try {
-					await basin.streams.delete({ stream: uniqueStreamName });
-				} catch (error) {
-					console.warn(
-						`Failed to cleanup producer test stream ${uniqueStreamName}:`,
-						error,
-					);
-				}
 			}
 		},
 		TEST_TIMEOUT_MS,
@@ -185,15 +177,6 @@ describeIf("Producer Integration Tests", () => {
 			});
 
 			await producer.close().catch(() => {});
-
-			try {
-				await basin.streams.delete({ stream: uniqueStreamName });
-			} catch (error) {
-				console.warn(
-					`Failed to cleanup producer test stream ${uniqueStreamName}:`,
-					error,
-				);
-			}
 		},
 		TEST_TIMEOUT_MS,
 	);
