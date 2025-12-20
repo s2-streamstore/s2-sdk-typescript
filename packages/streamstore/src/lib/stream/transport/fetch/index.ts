@@ -62,6 +62,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			},
 			headers: {
 				accept: "text/event-stream",
+				"accept-encoding": "zstd, gzip",
 				...(as === "bytes" ? { "s2-format": "base64" } : {}),
 			},
 			query: queryParams,
@@ -396,6 +397,8 @@ export class FetchAppendSession implements TransportAppendSession {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
+		// Indicate supported response encodings to allow server-side compression
+		headers["accept-encoding"] = "zstd, gzip";
 		this.client = createClient(
 			createConfig({
 				baseUrl: transportConfig.baseUrl,
@@ -578,6 +581,8 @@ export class FetchTransport implements SessionTransport {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
+		// Indicate supported response encodings to allow server-side compression
+		headers["accept-encoding"] = "zstd, gzip";
 		this.client = createClient(
 			createConfig({
 				baseUrl: config.baseUrl,
