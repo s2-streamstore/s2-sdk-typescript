@@ -270,17 +270,6 @@ export class Producer implements AsyncDisposable {
 		}
 	}
 
-	// acks(): AcksStream {
-	// 	return undefined;
-	// }
-	//
-	// failureCause(): S2Error | undefined {
-	// 	return undefined;
-	// }
-	//
-	// lastAckedPosition(): AppendAck | undefined {
-	// 	return undefined;
-	// }
 
 	async submit(record: AppendRecord): Promise<RecordSubmitTicket> {
 		const submitId = ++this.submitCounter;
