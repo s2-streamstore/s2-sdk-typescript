@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendRecord, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
@@ -35,19 +35,6 @@ describeIf("ReadSession Integration Tests", () => {
 		await stream.append([AppendRecord.make("read-test-1")]);
 		await stream.append([AppendRecord.make("read-test-2")]);
 		await stream.append([AppendRecord.make("read-test-3")]);
-	});
-
-	afterAll(async () => {
-		// Clean up: delete the test stream
-		if (basinName && streamName) {
-			try {
-				const basin = s2.basin(basinName);
-				await basin.streams.delete({ stream: streamName });
-			} catch (error) {
-				// Ignore cleanup errors
-				console.warn("Failed to cleanup test stream:", error);
-			}
-		}
 	});
 
 	it.each(transports)(

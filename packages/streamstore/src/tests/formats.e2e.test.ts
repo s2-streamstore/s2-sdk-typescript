@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendRecord, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
@@ -39,20 +39,6 @@ describeIf("Mixed format integration tests", () => {
 		if (!env.accessToken) return;
 		s2 = new S2(env as S2ClientOptions);
 		basinName = basin;
-	});
-
-	afterAll(async () => {
-		if (!s2 || !basinName) {
-			return;
-		}
-		const basin = s2.basin(basinName);
-		for (const streamName of createdStreams) {
-			try {
-				await basin.streams.delete({ stream: streamName });
-			} catch (error) {
-				console.warn("Failed to cleanup test stream:", streamName, error);
-			}
-		}
 	});
 
 	it.each(transports)(

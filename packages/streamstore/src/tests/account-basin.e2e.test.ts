@@ -20,7 +20,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * - Valid (lowercase alphanumeric and hyphens, 8-48 chars, no leading/trailing hyphens)
  */
 const generateBasinName = (): string => {
-	const prefix = "s2-sdk-ts-";
+	const prefix = "typescript-tmp-";
 	// Generate random token, strip non-alphanumeric, lowercase
 	const suffix = randomToken(16)
 		.replace(/[^a-zA-Z0-9]/g, "")
