@@ -6,7 +6,7 @@ import { randomToken } from "../lib/base64.js";
 const hasEnv = !!process.env.S2_ACCESS_TOKEN;
 const describeIf = hasEnv ? describe : describe.skip;
 
-const TEST_TIMEOUT_MS = 300_000; // 5 minutes for large operations
+const TEST_TIMEOUT_MS = 60_000; // 1 minute
 const STREAM_COUNT = 5000;
 const STREAM_CREATE_DELAY_MS = 1; // Small delay between stream creations
 const RETENTION_AGE_SECS = 600; // 10 minutes
@@ -212,6 +212,97 @@ describeIf("Basin Management Integration Tests", () => {
 			expect(readResult.records[1]?.body).toBe("test-record-2");
 			expect(readResult.records[2]?.body).toBe("test-record-3");
 			console.log("Read verification successful");
+
+			// Step 11: Create a read-only access token with auto-prefix
+			console.log("Creating read-only access token with auto-prefix...");
+			const tokenId = `e2e-test-token-${randomToken(8)
+				.replace(/[^a-zA-Z0-9]/g, "")
+				.toLowerCase()}`;
+
+			// Token expires 1 hour from now
+			const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+			const tokenResponse = await s2.accessTokens.issue({
+				id: tokenId,
+				auto_prefix_streams: true,
+				expires_at: expiresAt,
+				scope: {
+					// Basin scope: only basins starting with "typescript"
+					basins: { prefix: "typescript" },
+					// Stream scope: only streams starting with "test/"
+					// This is also the prefix that will be stripped with auto_prefix_streams
+					streams: { prefix: "test/" },
+					// Read-only via op_groups
+					op_groups: {
+						account: { read: true },
+						basin: { read: true },
+						stream: { read: true },
+					},
+				},
+			});
+
+			expect(tokenResponse.access_token).toBeDefined();
+			expect(tokenResponse.access_token.length).toBeGreaterThan(0);
+			console.log(`Created access token: ${tokenId}`);
+
+			// Step 12: Create a new S2 client with the scoped token
+			const scopedS2 = new S2({
+				accessToken: tokenResponse.access_token,
+			});
+
+			// Step 13: List streams using the scoped client
+			// With auto_prefix_streams, the "test/" prefix should be stripped
+			console.log(
+				"Listing streams with scoped token (should see auto-prefixed names)...",
+			);
+			const scopedBasin = scopedS2.basin(basinName);
+			const scopedStreamNames: string[] = [];
+
+			for await (const streamInfo of scopedBasin.streams.listAll()) {
+				scopedStreamNames.push(streamInfo.name);
+			}
+
+			// Should see all 5000 streams, but with "test/" prefix stripped
+			expect(scopedStreamNames).toHaveLength(STREAM_COUNT);
+
+			// Verify the names are stripped of "test/" prefix
+			// e.g., "test/0000" becomes "0000"
+			expect(scopedStreamNames[0]).toBe("0000");
+			expect(scopedStreamNames[1]).toBe("0001");
+			expect(scopedStreamNames[STREAM_COUNT - 1]).toBe(
+				String(STREAM_COUNT - 1).padStart(4, "0"),
+			);
+
+			// Verify lexicographic ordering still holds
+			const sortedScopedNames = [...scopedStreamNames].sort();
+			expect(scopedStreamNames).toEqual(sortedScopedNames);
+			console.log(
+				`Scoped client listed ${scopedStreamNames.length} streams with auto-prefixed names`,
+			);
+
+			// Step 14: Verify read-only access - reading should work
+			const scopedStream = scopedBasin.stream(
+				String(anotherRandomIndex).padStart(4, "0"),
+			);
+			const scopedReadResult = await scopedStream.read({
+				seq_num: 0,
+				count: 3,
+				as: "string",
+			});
+
+			expect(scopedReadResult.records).toHaveLength(3);
+			expect(scopedReadResult.records[0]?.body).toBe("test-record-1");
+			console.log("Scoped client read verification successful");
+
+			// Step 15: Verify read-only access - writing should fail
+			let writeError: Error | undefined;
+			try {
+				await scopedStream.append([AppendRecord.make("should-fail")]);
+			} catch (err) {
+				writeError = err as Error;
+			}
+			expect(writeError).toBeDefined();
+			console.log("Scoped client correctly rejected write attempt");
 
 			console.log("All basin management tests passed!");
 		},
