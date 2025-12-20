@@ -354,6 +354,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						"user-agent": DEFAULT_USER_AGENT,
 						authorization: `Bearer ${Redacted.value(authToken)}`,
 						accept: "application/protobuf",
+						"accept-encoding": "zstd, gzip",
 						"content-type": "s2s/proto",
 						...(basinName ? { "s2-basin": basinName } : {}),
 					});
@@ -701,6 +702,7 @@ class S2SAppendSession implements TransportAppendSession {
 			authorization: `Bearer ${Redacted.value(this.authToken)}`,
 			"content-type": "s2s/proto",
 			accept: "application/protobuf",
+			"accept-encoding": "zstd, gzip",
 			...(this.basinName ? { "s2-basin": this.basinName } : {}),
 		});
 
