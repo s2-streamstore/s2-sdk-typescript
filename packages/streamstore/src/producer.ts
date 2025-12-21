@@ -3,11 +3,10 @@ import { type BatchOutput, BatchTransform } from "./batch-transform.js";
 import { S2Error } from "./error.js";
 import type { AppendAck } from "./generated/index.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
-import { AppendRecord, meteredBytes } from "./utils.js";
+import { AppendRecord } from "./utils.js";
 
 const debugProducer = createDebug("s2:producer");
 
-// TODO this should live in error utils, nothing specific to this module
 const toS2Error = (err: unknown): S2Error =>
 	err instanceof S2Error
 		? err
@@ -39,36 +38,31 @@ export class RecordSubmitTicket {
 	}
 
 	/**
-	 * Returns a promise that resolves with the AppendAck once the batch is durable.
+	 * Returns a promise that resolves with the IndexedAppendAck once the record is durable.
 	 */
 	ack(): Promise<IndexedAppendAck> {
 		return this.ackPromise;
 	}
 }
 
-type PendingRecord = {
-	ticket: RecordSubmitTicket;
-	resolveTicket: (ticket: RecordSubmitTicket) => void;
-	rejectTicket: (err: S2Error) => void;
+/**
+ * Internal record tracking - only needs ack callbacks since submit() resolves
+ * based on backpressure from the transform stream write.
+ */
+type InflightRecord = {
 	resolveAck: (ack: IndexedAppendAck) => void;
 	rejectAck: (err: S2Error) => void;
 };
 
 /**
- * Producer mirrors AppendSession semantics for per-record submissions:
+ * Producer provides per-record append semantics on top of a batched AppendSession.
  *
- * - submit(record) resolves immediately while the record is only buffered locally.
- * - Once the buffered batch is flushed and appendSession.submit(...) is invoked, all
- *   subsequent submit(record) calls await that BatchSubmitTicket promise before resolving.
- *   This is the point where ordering/capacity is fixed.
- * - ticket.ack() still waits for the underlying batch ack to resolve before yielding an IndexedAppendAck.
- */
-/**
- * Semantics:
- * - `submit(record)` resolves as soon as the record is buffered, unless there is
- *   an outstanding appendSession.submit promise, in which case it waits for that
- *   promise to settle (ordering/capacity fixed).
- * - `ticket.ack()` still waits for the batch's BatchSubmitTicket.ack().
+ * - submit(record) returns a Promise<RecordSubmitTicket> that resolves once the record
+ *   has been accepted (written to the batch transform). Backpressure is applied
+ *   automatically via the transform stream when the AppendSession is at capacity.
+ * - ticket.ack() returns a Promise<IndexedAppendAck> that resolves once the record is durable.
+ *
+ * See docs/producer-spec.md for detailed specification.
  */
 export class Producer implements AsyncDisposable {
 	readonly batchTransform: BatchTransform;
@@ -82,10 +76,9 @@ export class Producer implements AsyncDisposable {
 	readonly readable: ReadableStream<IndexedAppendAck>;
 	readonly writable: WritableStream<AppendRecord>;
 
-	private readonly pendingRecords: PendingRecord[] = [];
-	private submissionBarrier: Promise<void> = Promise.resolve();
+	private readonly inflightRecords: InflightRecord[] = [];
 
-	private pumpError: Error | null = null;
+	private pumpError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
 		null;
 
@@ -105,13 +98,12 @@ export class Producer implements AsyncDisposable {
 		this.appendSession = appendSession;
 		debugProducer("[%s] created", this.debugName);
 
-		// Create readable stream that emits batch acknowledgements
+		// Create readable stream that emits individual record acknowledgements
 		this.readable = new ReadableStream<IndexedAppendAck>({
 			start: (controller) => {
 				this.readableController = controller;
 			},
 			cancel: () => {
-				// If readable is cancelled, we should close the session
 				this.close().catch(() => {
 					// Ignore errors during cleanup
 				});
@@ -127,119 +119,124 @@ export class Producer implements AsyncDisposable {
 				await this.close();
 			},
 			abort: async (reason) => {
-				// Mark as failed
-				this.pumpError = reason;
+				this.pumpError = toS2Error(reason);
 				await this.close();
 			},
 		});
 
-		this.pump = this.readPump();
+		this.pump = this.runPump();
 	}
 
-	async readPump(): Promise<void> {
-		debugProducer("[%s] readPump started", this.debugName);
+	/**
+	 * Main pump loop: reads batches from transform, submits to session, handles acks.
+	 */
+	private async runPump(): Promise<void> {
+		debugProducer("[%s] pump started", this.debugName);
+
 		try {
 			while (true) {
-				const { value, done } = await this.transformReader.read();
+				const { value: batch, done } = await this.transformReader.read();
 
 				if (done) {
-					debugProducer(
-						"[%s] readPump done (transform closed)",
-						this.debugName,
-					);
+					debugProducer("[%s] pump done (transform closed)", this.debugName);
 					break;
 				}
 
-				const batch = value!;
-				const batchBytes = batch.records.reduce(
-					(sum, r) => sum + meteredBytes(r),
-					0,
-				);
-
 				debugProducer(
-					"[%s] readPump got batch: records=%d, bytes=%d, matchSeqNum=%s, pendingRecords=%d",
+					"[%s] pump got batch: records=%d, matchSeqNum=%s, inflightRecords=%d",
 					this.debugName,
 					batch.records.length,
-					batchBytes,
 					batch.matchSeqNum ?? "none",
-					this.pendingRecords.length,
+					this.inflightRecords.length,
 				);
 
+				// Associate records with this batch (FIFO correspondence)
 				const recordCount = batch.records.length;
-				const associatedRecords = this.pendingRecords.splice(0, recordCount);
+				const associatedRecords = this.inflightRecords.splice(0, recordCount);
+
 				if (associatedRecords.length !== recordCount) {
 					throw new S2Error({
-						message: `Internal error: flushed ${recordCount} records but only ${associatedRecords.length} pending entries`,
+						message: `Internal error: flushed ${recordCount} records but only ${associatedRecords.length} inflight entries`,
 						status: 500,
 						origin: "sdk",
 					});
 				}
 
+				// Submit to AppendSession (blocks on capacity)
 				let ticket: BatchSubmitTicket;
 				try {
 					debugProducer(
-						"[%s] readPump submitting to session: records=%d, matchSeqNum=%s",
+						"[%s] pump submitting to session: records=%d, matchSeqNum=%s",
 						this.debugName,
 						batch.records.length,
 						batch.matchSeqNum ?? "none",
 					);
+
 					ticket = await this.appendSession.submit(batch.records, {
 						fencingToken: batch.fencingToken,
 						matchSeqNum: batch.matchSeqNum,
 					});
-					debugProducer("[%s] readPump submit returned ticket", this.debugName);
+
+					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
 					const error = toS2Error(err);
 					debugProducer(
-						"[%s] readPump submit error: %s",
+						"[%s] pump submit error: %s",
 						this.debugName,
 						error.message,
 					);
+
 					if (!this.pumpError) {
 						this.pumpError = error;
 					}
-					associatedRecords.forEach((pending) => {
-						pending.rejectTicket(error);
-						pending.rejectAck(error);
-					});
+
+					// Reject acks for records in this batch
+					for (const record of associatedRecords) {
+						record.rejectAck(error);
+					}
+
 					if (this.readableController) {
 						this.readableController.error(error);
 					}
+
 					continue;
 				}
 
-				const completion = Promise.resolve();
-				this.submissionBarrier = this.submissionBarrier.then(() => completion);
-				this.submissionBarrier.catch(() => {});
-
+				// Handle ack asynchronously (non-blocking)
 				ticket
 					.ack()
 					.then((ack) => {
 						debugProducer(
-							"[%s] readPump ack received: seq_num=%d-%d",
+							"[%s] pump ack received: seq_num=%d-%d",
 							this.debugName,
 							ack.start.seq_num,
 							ack.end.seq_num,
 						);
-						associatedRecords.forEach((pending, index) => {
-							const indexedAck = new IndexedAppendAck(index, ack);
-							pending.resolveAck(indexedAck);
+
+						for (const [i, record] of associatedRecords.entries()) {
+							const indexedAck = new IndexedAppendAck(i, ack);
+							record.resolveAck(indexedAck);
+
 							if (this.readableController) {
 								this.readableController.enqueue(indexedAck);
 							}
-						});
+						}
 					})
 					.catch((err) => {
 						const error = toS2Error(err);
 						debugProducer(
-							"[%s] readPump ack error: %s",
+							"[%s] pump ack error: %s",
 							this.debugName,
 							error.message,
 						);
+
 						if (!this.pumpError) {
 							this.pumpError = error;
 						}
-						associatedRecords.forEach((pending) => pending.rejectAck(error));
+
+						for (const record of associatedRecords) {
+							record.rejectAck(error);
+						}
 
 						if (this.readableController) {
 							this.readableController.error(error);
@@ -247,19 +244,20 @@ export class Producer implements AsyncDisposable {
 					});
 			}
 		} catch (err) {
-			this.pumpError = err as Error;
-			debugProducer("[%s] readPump caught error: %s", this.debugName, err);
+			const error = toS2Error(err);
+			debugProducer(
+				"[%s] pump caught error: %s",
+				this.debugName,
+				error.message,
+			);
 
-			// Reject all pending promises
-			const error = new S2Error({
-				message: `Pump failed: ${err}`,
-				status: 500,
-				origin: "sdk",
-			});
+			if (!this.pumpError) {
+				this.pumpError = error;
+			}
 
-			for (const pending of this.pendingRecords.splice(0)) {
-				pending.rejectTicket(error);
-				pending.rejectAck(error);
+			// Reject all remaining inflight records
+			for (const record of this.inflightRecords.splice(0)) {
+				record.rejectAck(error);
 			}
 
 			// Error the readable stream
@@ -270,17 +268,23 @@ export class Producer implements AsyncDisposable {
 		}
 	}
 
-
+	/**
+	 * Submit a single record for appending.
+	 *
+	 * Returns a promise that resolves to a RecordSubmitTicket once the record has been
+	 * accepted. The promise blocks if the underlying AppendSession is at capacity
+	 * (backpressure is applied via the transform stream).
+	 *
+	 * @throws S2Error if the Producer has failed
+	 */
 	async submit(record: AppendRecord): Promise<RecordSubmitTicket> {
 		const submitId = ++this.submitCounter;
-		const recordBytes = meteredBytes(record);
 
 		debugProducer(
-			"[%s] submit #%d: bytes=%d, pendingRecords=%d",
+			"[%s] submit #%d: inflightRecords=%d",
 			this.debugName,
 			submitId,
-			recordBytes,
-			this.pendingRecords.length,
+			this.inflightRecords.length,
 		);
 
 		// Check if pump has already failed
@@ -291,48 +295,37 @@ export class Producer implements AsyncDisposable {
 				submitId,
 			);
 			throw new S2Error({
-				message: `Cannot submit: pump has failed: ${this.pumpError}`,
+				message: `Cannot submit: producer has failed: ${this.pumpError.message}`,
 				status: 500,
 				origin: "sdk",
 			});
 		}
 
-		let resolveTicket!: (ticket: RecordSubmitTicket) => void;
-		let rejectTicket!: (err: S2Error) => void;
-		const ticketPromise = new Promise<RecordSubmitTicket>((resolve, reject) => {
-			resolveTicket = resolve;
-			rejectTicket = reject;
-		});
-		// Avoid unhandled rejections if we throw before returning ticketPromise
-		ticketPromise.catch(() => {});
-
+		// Create the ack promise (resolved later by pump)
 		let resolveAck!: (ack: IndexedAppendAck) => void;
 		let rejectAck!: (err: S2Error) => void;
 		const ackPromise = new Promise<IndexedAppendAck>((resolve, reject) => {
 			resolveAck = resolve;
 			rejectAck = reject;
 		});
+		// Suppress unhandled rejection if write fails before we return the ticket
+		ackPromise.catch(() => {});
 
-		const recordTicket = new RecordSubmitTicket(ackPromise);
-		const entry: PendingRecord = {
-			ticket: recordTicket,
-			resolveTicket,
-			rejectTicket,
-			resolveAck,
-			rejectAck,
-		};
-		this.pendingRecords.push(entry);
+		// Track this record
+		const entry: InflightRecord = { resolveAck, rejectAck };
+		this.inflightRecords.push(entry);
 
 		debugProducer(
-			"[%s] submit #%d: pushed to pendingRecords (now %d), writing to transform",
+			"[%s] submit #%d: pushed to inflightRecords (now %d), writing to transform",
 			this.debugName,
 			submitId,
-			this.pendingRecords.length,
+			this.inflightRecords.length,
 		);
 
 		try {
-			// Awaiting write enforces backpressure before returning the ticket.
+			// Write to transform - BLOCKS on backpressure
 			await this.transformWriter.write(record);
+
 			debugProducer(
 				"[%s] submit #%d: write completed",
 				this.debugName,
@@ -345,28 +338,31 @@ export class Producer implements AsyncDisposable {
 				submitId,
 				err,
 			);
-			// Remove resolver if the write failed so we do not leak the slot.
-			const idx = this.pendingRecords.indexOf(entry);
+
+			// Remove from inflight if the write failed
+			const idx = this.inflightRecords.indexOf(entry);
 			if (idx >= 0) {
-				this.pendingRecords.splice(idx, 1);
+				this.inflightRecords.splice(idx, 1);
 			}
 
 			const error = toS2Error(err);
-			rejectTicket(error);
 			rejectAck(error);
 			throw error;
 		}
 
-		const gate = this.submissionBarrier;
-		gate.then(
-			() => entry.resolveTicket(entry.ticket),
-			(err) => entry.rejectTicket(toS2Error(err)),
-		);
-
-		return ticketPromise;
+		// Write succeeded - return ticket immediately
+		return new RecordSubmitTicket(ackPromise);
 	}
 
+	/**
+	 * Close the Producer gracefully.
+	 *
+	 * Waits for all pending records to be flushed, submitted, and acknowledged.
+	 * If any error occurred during the Producer's lifetime, this method throws it.
+	 */
 	async close(): Promise<void> {
+		debugProducer("[%s] close requested", this.debugName);
+
 		// Close the writer to signal no more records
 		await this.transformWriter.close();
 
@@ -376,20 +372,30 @@ export class Producer implements AsyncDisposable {
 		// Close the underlying session
 		await this.appendSession.close();
 
-		const closingError = new S2Error({
-			message: "Session closed",
-			status: 499,
-			origin: "sdk",
-		});
-		for (const pending of this.pendingRecords.splice(0)) {
-			pending.rejectTicket(closingError);
-			pending.rejectAck(closingError);
+		// Reject any remaining inflight records (shouldn't happen in normal operation)
+		if (this.inflightRecords.length > 0) {
+			const closingError = new S2Error({
+				message: "Producer closed with pending records",
+				status: 499,
+				origin: "sdk",
+			});
+
+			for (const record of this.inflightRecords.splice(0)) {
+				record.rejectAck(closingError);
+			}
 		}
 
 		// Close the readable stream
 		if (this.readableController) {
 			this.readableController.close();
 			this.readableController = null;
+		}
+
+		debugProducer("[%s] close complete", this.debugName);
+
+		// If an error occurred, throw it
+		if (this.pumpError) {
+			throw this.pumpError;
 		}
 	}
 
