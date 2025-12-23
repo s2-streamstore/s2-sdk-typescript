@@ -13,7 +13,7 @@ export type AccessTokenInfo = {
      */
     auto_prefix_streams?: boolean;
     /**
-     * Expiration time in ISO 8601 format.
+     * Expiration time in RFC 3339 format.
      * If not set, the expiration will be set to that of the requestor's token.
      */
     expires_at?: string | null;
@@ -471,11 +471,11 @@ export type StreamConfig = {
 
 export type StreamInfo = {
     /**
-     * Creation time in ISO 8601 format.
+     * Creation time in RFC 3339 format.
      */
     created_at: string;
     /**
-     * Deletion time in ISO 8601 format, if the stream is being deleted.
+     * Deletion time in RFC 3339 format, if the stream is being deleted.
      */
     deleted_at?: string | null;
     /**
