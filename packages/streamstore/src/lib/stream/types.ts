@@ -1,8 +1,7 @@
 import type { RetryConfig, S2RequestOptions } from "../../common.js";
-import type { S2Error } from "../../error.js";
+import { S2Error } from "../../error.js";
 import type {
 	AppendAck,
-	AppendInput as GeneratedAppendInput,
 	AppendRecord as GeneratedAppendRecord,
 	ReadBatch as GeneratedReadBatch,
 	SequencedRecord as GeneratedSequencedRecord,
@@ -38,7 +37,7 @@ export type ReadArgs<Format extends "string" | "bytes" = "string"> =
 
 export type AppendHeaders<Format extends "string" | "bytes" = "string"> =
 	Format extends "string"
-		? Array<[string, string]> | Record<string, string>
+		? Array<[string, string]>
 		: Array<[Uint8Array, Uint8Array]>;
 
 export type AppendRecordForFormat<
@@ -52,8 +51,10 @@ export type AppendRecord =
 	| AppendRecordForFormat<"string">
 	| AppendRecordForFormat<"bytes">;
 
-export type AppendArgs = Omit<GeneratedAppendInput, "records"> & {
+export type AppendArgs = {
 	records: Array<AppendRecord>;
+	fencingToken?: string;
+	matchSeqNum?: number;
 };
 
 /**
@@ -77,6 +78,21 @@ export interface TransportAppendSession {
 	close(): Promise<import("../result.js").CloseResult>;
 }
 
+export class BatchSubmitTicket {
+	constructor(
+		private readonly promise: Promise<AppendAck>,
+		public readonly bytes: number,
+		public readonly numRecords: number,
+	) {}
+
+	/**
+	 * Returns a promise that resolves with the AppendAck once the batch is durable.
+	 */
+	ack(): Promise<AppendAck> {
+		return this.promise;
+	}
+}
+
 /**
  * Public AppendSession interface with retry, backpressure, and streams.
  * This is what users interact with - implemented by AppendSession in ../retry.ts.
@@ -91,13 +107,15 @@ export interface AppendSession extends AsyncDisposable {
 	 */
 	readonly writable: WritableStream<AppendArgs>;
 	/**
-	 * Submit an append request and await its acknowledgement.
-	 * This method does not apply backpressure; use {@link writable} for that.
+	 * Submit an append request.
+	 * Returns a promise that resolves to a submit ticket once the batch is enqueued (has capacity).
+	 * Call ticket.ack() to get a promise for the AppendAck once the batch is durable.
+	 * This method applies backpressure and will block if capacity limits are reached.
 	 */
 	submit(
 		records: AppendRecord | AppendRecord[],
 		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<AppendAck>;
+	): Promise<BatchSubmitTicket>;
 	/**
 	 * Close the append session, waiting for all inflight appends to settle.
 	 */
@@ -184,6 +202,7 @@ export interface SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>>;
+	close(): Promise<void>;
 }
 
 export type SessionTransports = "fetch" | "s2s";

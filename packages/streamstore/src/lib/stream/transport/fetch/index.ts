@@ -12,7 +12,7 @@ import type {
 	StreamPosition,
 } from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
-import { meteredBytes } from "../../../../utils.js";
+import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
@@ -354,8 +354,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 export class FetchAppendSession implements TransportAppendSession {
 	private queue: Array<{
 		records: AppendRecord[];
-		fencing_token?: string;
-		match_seq_num?: number;
+		fencingToken?: string;
+		matchSeqNum?: number;
 	}> = [];
 	private pendingResolvers: Array<{
 		resolve: (result: AppendResult) => void;
@@ -389,6 +389,7 @@ export class FetchAppendSession implements TransportAppendSession {
 	) {
 		this.options = requestOptions;
 		this.stream = stream;
+		debug("[%s] FetchAppendSession created", stream);
 		const headers: Record<string, string> = {};
 		if (transportConfig.basinName) {
 			headers["s2-basin"] = transportConfig.basinName;
@@ -411,15 +412,22 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * Never throws - returns CloseResult.
 	 */
 	async close(): Promise<CloseResult> {
+		debug("[%s] FetchAppendSession close requested", this.stream);
 		try {
 			this.closed = true;
 			await this.waitForDrain();
+			debug("[%s] FetchAppendSession close complete", this.stream);
 			return okClose();
 		} catch (error) {
 			const s2Err =
 				error instanceof S2Error
 					? error
 					: new S2Error({ message: String(error), status: 500 });
+			debug(
+				"[%s] FetchAppendSession close error: %s",
+				this.stream,
+				s2Err.message,
+			);
 			return errClose(s2Err);
 		}
 	}
@@ -432,13 +440,25 @@ export class FetchAppendSession implements TransportAppendSession {
 	submit(
 		records: AppendRecord | AppendRecord[],
 		args?: {
-			fencing_token?: string;
-			match_seq_num?: number;
+			fencingToken?: string;
+			matchSeqNum?: number;
 			precalculatedSize?: number;
 		},
 	): Promise<AppendResult> {
+		debug(
+			"[%s] FetchAppendSession.submit: records=%d, matchSeqNum=%s, queueLen=%d",
+			this.stream,
+			Array.isArray(records) ? records.length : 1,
+			args?.matchSeqNum ?? "none",
+			this.queue.length,
+		);
+
 		// Validate closed state
 		if (this.closed) {
+			debug(
+				"[%s] FetchAppendSession.submit: session closed, rejecting",
+				this.stream,
+			);
 			return Promise.resolve(
 				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
 			);
@@ -448,6 +468,11 @@ export class FetchAppendSession implements TransportAppendSession {
 
 		// Validate batch size limits (non-retryable 400-level error)
 		if (recordsArray.length > 1000) {
+			debug(
+				"[%s] FetchAppendSession.submit: batch too large (%d records)",
+				this.stream,
+				recordsArray.length,
+			);
 			return Promise.resolve(
 				err(
 					new S2Error({
@@ -468,6 +493,11 @@ export class FetchAppendSession implements TransportAppendSession {
 		}
 
 		if (batchMeteredSize > 1024 * 1024) {
+			debug(
+				"[%s] FetchAppendSession.submit: batch too large (%d bytes)",
+				this.stream,
+				batchMeteredSize,
+			);
 			return Promise.resolve(
 				err(
 					new S2Error({
@@ -482,10 +512,15 @@ export class FetchAppendSession implements TransportAppendSession {
 		return new Promise((resolve) => {
 			this.queue.push({
 				records: recordsArray,
-				fencing_token: args?.fencing_token,
-				match_seq_num: args?.match_seq_num,
+				fencingToken: args?.fencingToken,
+				matchSeqNum: args?.matchSeqNum,
 			});
 			this.pendingResolvers.push({ resolve });
+			debug(
+				"[%s] FetchAppendSession.submit: queued, queueLen=%d",
+				this.stream,
+				this.queue.length,
+			);
 
 			// Start processing if not already running
 			if (!this.processingPromise) {
@@ -500,21 +535,43 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * Single-flight: only one request in progress at a time.
 	 */
 	private async processLoop(): Promise<void> {
+		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
 		while (this.queue.length > 0) {
 			this.inFlight = true;
 			const args = this.queue.shift()!;
 			const resolver = this.pendingResolvers.shift()!;
 
+			debug(
+				"[%s] FetchAppendSession.processLoop: sending %d records, matchSeqNum=%s",
+				this.stream,
+				args.records.length,
+				args.matchSeqNum ?? "none",
+			);
+
 			try {
+				const preferProtobuf = args.records.some(
+					(record) => computeAppendRecordFormat(record) === "bytes",
+				);
+				const appendOptions = this.options
+					? { ...this.options, preferProtobuf }
+					: { preferProtobuf };
+
 				const ack = await streamAppend(
 					this.stream,
 					this.client,
 					args.records,
 					{
-						fencing_token: args.fencing_token,
-						match_seq_num: args.match_seq_num,
+						fencingToken: args.fencingToken,
+						matchSeqNum: args.matchSeqNum,
 					},
-					this.options,
+					appendOptions,
+				);
+
+				debug(
+					"[%s] FetchAppendSession.processLoop: success, seq_num=%d-%d",
+					this.stream,
+					ack.start.seq_num,
+					ack.end.seq_num,
 				);
 
 				// Resolve with success result
@@ -526,11 +583,23 @@ export class FetchAppendSession implements TransportAppendSession {
 						? error
 						: new S2Error({ message: String(error), status: 502 });
 
+				debug(
+					"[%s] FetchAppendSession.processLoop: error, status=%s, message=%s",
+					this.stream,
+					s2Err.status,
+					s2Err.message,
+				);
+
 				// Resolve this request with error
 				resolver.resolve(err(s2Err));
 
 				// Resolve all remaining pending promises with the same error
 				// (transport failure affects all queued requests)
+				debug(
+					"[%s] FetchAppendSession.processLoop: failing %d queued requests",
+					this.stream,
+					this.pendingResolvers.length,
+				);
 				for (const pendingResolver of this.pendingResolvers) {
 					pendingResolver.resolve(err(s2Err));
 				}
@@ -547,6 +616,7 @@ export class FetchAppendSession implements TransportAppendSession {
 			this.inFlight = false;
 		}
 
+		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
 	}
 
@@ -593,12 +663,6 @@ export class FetchTransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
-		// Fetch transport intentionally enforces single-flight submission (HTTP/1.1)
-		// This ensures only one batch is in-flight at a time, regardless of user setting.
-		const opts = {
-			...sessionOptions,
-			maxInflightBatches: 1,
-		} as AppendSessionOptions;
 		return AppendSessionImpl.create(
 			(myOptions) => {
 				return FetchAppendSession.create(
@@ -608,8 +672,9 @@ export class FetchTransport implements SessionTransport {
 					requestOptions,
 				);
 			},
-			opts,
+			sessionOptions,
 			this.transportConfig.retry,
+			stream, // Pass stream name for debug context
 		);
 	}
 
@@ -625,5 +690,10 @@ export class FetchTransport implements SessionTransport {
 			args,
 			this.transportConfig.retry,
 		);
+	}
+
+	async close(): Promise<void> {
+		// Fetch transport holds no long-lived resources beyond the client.
+		// Provided for API symmetry; nothing to tear down.
 	}
 }

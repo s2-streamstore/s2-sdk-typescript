@@ -9,23 +9,23 @@ export interface BatchTransformArgs {
 	/** Maximum batch size in metered bytes (default: 1 MiB, max: 1 MiB) */
 	maxBatchBytes?: number;
 	/** Optional fencing token to enforce (remains static across batches) */
-	fencing_token?: string;
+	fencingToken?: string;
 	/** Optional sequence number to match for first batch (auto-increments for subsequent batches) */
-	match_seq_num?: number;
+	matchSeqNum?: number;
 }
 
-/** Batch output type with optional fencing token and match_seq_num */
+/** Batch output type with optional fencing token and matchSeqNum */
 export type BatchOutput = {
 	records: AppendRecord[];
-	fencing_token?: string;
-	match_seq_num?: number;
+	fencingToken?: string;
+	matchSeqNum?: number;
 };
 
 /**
  * A TransformStream that batches AppendRecords based on time, record count, and byte size.
  *
  * Input: AppendRecord (individual records)
- * Output: { records: AppendRecord[], fencing_token?: string, match_seq_num?: number }
+ * Output: { records: AppendRecord[], fencingToken?: string, matchSeqNum?: number }
  *
  * @example
  * ```typescript
@@ -33,7 +33,7 @@ export type BatchOutput = {
  *   lingerDurationMillis: 20,
  *   maxBatchRecords: 100,
  *   maxBatchBytes: 256 * 1024,
- *   match_seq_num: 0  // Optional: auto-increments per batch
+ *   matchSeqNum: 0  // Optional: auto-increments per batch
  * });
  *
  * // Pipe through the batcher and session to get acks
@@ -58,8 +58,8 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	private readonly maxBatchRecords: number;
 	private readonly maxBatchBytes: number;
 	private readonly lingerDuration: number;
-	private readonly fencing_token?: string;
-	private next_match_seq_num?: number;
+	private readonly fencingToken?: string;
+	private nextMatchSeqNum?: number;
 
 	constructor(args?: BatchTransformArgs) {
 		let controller: TransformStreamDefaultController<BatchOutput>;
@@ -114,8 +114,8 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		this.maxBatchRecords = args?.maxBatchRecords ?? 1000;
 		this.maxBatchBytes = args?.maxBatchBytes ?? 1024 * 1024;
 		this.lingerDuration = args?.lingerDurationMillis ?? 5;
-		this.fencing_token = args?.fencing_token;
-		this.next_match_seq_num = args?.match_seq_num;
+		this.fencingToken = args?.fencingToken;
+		this.nextMatchSeqNum = args?.matchSeqNum;
 	}
 
 	private handleRecord(record: AppendRecord): void {
@@ -169,22 +169,22 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			return;
 		}
 
-		// Auto-increment match_seq_num for next batch
-		const match_seq_num = this.next_match_seq_num;
-		if (this.next_match_seq_num !== undefined) {
-			this.next_match_seq_num += this.currentBatch.length;
+		// Auto-increment matchSeqNum for next batch
+		const matchSeqNum = this.nextMatchSeqNum;
+		if (this.nextMatchSeqNum !== undefined) {
+			this.nextMatchSeqNum += this.currentBatch.length;
 		}
 
-		// Emit the batch downstream with optional fencing token and match_seq_num
+		// Emit the batch downstream with optional fencing token and matchSeqNum
 		if (this.controller) {
 			const batch: BatchOutput = {
 				records: [...this.currentBatch],
 			};
-			if (this.fencing_token !== undefined) {
-				batch.fencing_token = this.fencing_token;
+			if (this.fencingToken !== undefined) {
+				batch.fencingToken = this.fencingToken;
 			}
-			if (match_seq_num !== undefined) {
-				batch.match_seq_num = match_seq_num;
+			if (matchSeqNum !== undefined) {
+				batch.matchSeqNum = matchSeqNum;
 			}
 			this.controller.enqueue(batch);
 		}

@@ -17,7 +17,6 @@ import {
 import type { AppendAck, StreamPosition } from "../../../../generated/index.js";
 import {
 	AppendAck as ProtoAppendAck,
-	AppendInput as ProtoAppendInput,
 	ReadBatch as ProtoReadBatch,
 	type StreamPosition as ProtoStreamPosition,
 } from "../../../../generated/proto/s2.js";
@@ -44,6 +43,7 @@ import type {
 	TransportConfig,
 	TransportReadSession,
 } from "../../types.js";
+import { encodeProtoAppendInput } from "../proto.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
 
 const debug = createDebug("s2:s2s");
@@ -63,47 +63,11 @@ async function loadHttp2(): Promise<Http2Module> {
 	return http2ModulePromise;
 }
 
-export function buildProtoAppendInput(
-	records: AppendRecord[],
-	args: AppendArgs,
-): ProtoAppendInput {
-	const textEncoder = new TextEncoder();
-	return ProtoAppendInput.create({
-		records: records.map((record) => {
-			let headersArray:
-				| Array<[string, string]>
-				| Array<[Uint8Array, Uint8Array]>
-				| undefined;
-			if (record.headers) {
-				if (Array.isArray(record.headers)) {
-					headersArray = record.headers;
-				} else {
-					headersArray = Object.entries(record.headers);
-				}
-			}
-
-			return {
-				timestamp: record.timestamp ? BigInt(record.timestamp) : undefined,
-				headers: headersArray?.map((h) => ({
-					name: typeof h[0] === "string" ? textEncoder.encode(h[0]) : h[0],
-					value: typeof h[1] === "string" ? textEncoder.encode(h[1]) : h[1],
-				})),
-				body:
-					typeof record.body === "string"
-						? textEncoder.encode(record.body)
-						: record.body,
-			};
-		}),
-		fencingToken: args.fencing_token ?? undefined,
-		matchSeqNum:
-			args.match_seq_num == null ? undefined : BigInt(args.match_seq_num),
-	});
-}
-
 export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
 	private connection?: ClientHttp2Session;
 	private connectionPromise?: Promise<ClientHttp2Session>;
+	private closingPromise?: Promise<void>;
 
 	constructor(config: TransportConfig) {
 		this.transportConfig = config;
@@ -128,6 +92,7 @@ export class S2STransport implements SessionTransport {
 			},
 			sessionOptions,
 			this.transportConfig.retry,
+			stream, // Pass stream name for debug context
 		);
 	}
 
@@ -213,6 +178,30 @@ export class S2STransport implements SessionTransport {
 				}
 			});
 		});
+	}
+
+	async close(): Promise<void> {
+		if (this.closingPromise) {
+			return this.closingPromise;
+		}
+
+		this.closingPromise = (async () => {
+			const connection =
+				this.connection ??
+				(await this.connectionPromise?.catch(() => undefined));
+			if (connection && !connection.closed && !connection.destroyed) {
+				await new Promise<void>((resolve) => {
+					connection.close(() => resolve());
+				});
+			}
+			this.connection = undefined;
+		})();
+
+		try {
+			await this.closingPromise;
+		} finally {
+			this.closingPromise = undefined;
+		}
 	}
 }
 
@@ -639,7 +628,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 // Removed S2SAcksStream - transport sessions no longer expose streams
 
 /**
- * Fetch-based transport session for appending records via HTTP/2.
+ * S2S-based transport session for appending records via HTTP/2.
  * Pipelined: multiple requests can be in-flight simultaneously.
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
@@ -824,8 +813,7 @@ class S2SAppendSession implements TransportAppendSession {
 		}
 
 		// Convert to protobuf AppendInput
-		const protoInput = buildProtoAppendInput(records, args);
-		const bodyBytes = ProtoAppendInput.toBinary(protoInput);
+		const bodyBytes = encodeProtoAppendInput(records, args);
 
 		// Frame the message
 		const frame = frameMessage({
@@ -897,8 +885,8 @@ class S2SAppendSession implements TransportAppendSession {
 	async submit(
 		records: AppendRecord | AppendRecord[],
 		args?: {
-			fencing_token?: string;
-			match_seq_num?: number;
+			fencingToken?: string;
+			matchSeqNum?: number;
 			precalculatedSize?: number;
 		},
 	): Promise<AppendResult> {
@@ -959,8 +947,8 @@ class S2SAppendSession implements TransportAppendSession {
 			recordsArray,
 			{
 				records: recordsArray,
-				fencing_token: args?.fencing_token,
-				match_seq_num: args?.match_seq_num,
+				fencingToken: args?.fencingToken,
+				matchSeqNum: args?.matchSeqNum,
 			},
 			batchMeteredSize,
 		);

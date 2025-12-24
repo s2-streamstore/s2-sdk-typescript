@@ -3,6 +3,7 @@
 export type {
 	IssueAccessTokenArgs,
 	ListAccessTokensArgs,
+	ListAllAccessTokensArgs,
 	RevokeAccessTokenArgs,
 } from "./accessTokens.js";
 export { S2AccessTokens } from "./accessTokens.js";
@@ -17,6 +18,7 @@ export type {
 	CreateBasinArgs,
 	DeleteBasinArgs,
 	GetBasinConfigArgs,
+	ListAllBasinsArgs,
 	ListBasinsArgs,
 	ReconfigureBasinArgs,
 } from "./basins.js";
@@ -107,6 +109,11 @@ export type {
 	TimestampingReconfiguration,
 	U64,
 } from "./generated/types.gen.js";
+/** Base64 encoding/decoding and random token generation utilities. */
+export { randomToken } from "./lib/base64.js";
+/** Generic pagination helper for async iteration over paginated responses. */
+export type { ListAllArgs, PageFetcher } from "./lib/paginate.js";
+export { paginate } from "./lib/paginate.js";
 /** Redacted access token wrapper type. */
 export type { Redacted } from "./lib/redacted.js";
 /**
@@ -120,6 +127,7 @@ export type {
 	AppendRecordForFormat,
 	AppendSession,
 	AppendSessionOptions,
+	BatchSubmitTicket,
 	ReadArgs,
 	ReadBatch,
 	ReadHeaders,
@@ -136,6 +144,8 @@ export type {
 } from "./metrics.js";
 /** Metrics helper and argument types. */
 export { S2Metrics } from "./metrics.js";
+/** High-level producer with automatic batching. */
+export { IndexedAppendAck, Producer, RecordSubmitTicket } from "./producer.js";
 /** Top-level entrypoint for the SDK. */
 export { S2 } from "./s2.js";
 export { S2Stream } from "./stream.js";
@@ -143,6 +153,7 @@ export type {
 	CreateStreamArgs,
 	DeleteStreamArgs,
 	GetStreamConfigArgs,
+	ListAllStreamsArgs,
 	ListStreamsArgs,
 	ReconfigureStreamArgs,
 } from "./streams.js";

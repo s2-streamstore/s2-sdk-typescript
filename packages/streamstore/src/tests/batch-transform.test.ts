@@ -348,10 +348,10 @@ describe("BatchTransform", () => {
 		expect(error.message).toContain("exceeds maximum batch size");
 	});
 
-	it("includes fencing_token in batch output", async () => {
+	it("includes fencingToken in batch output", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
-			fencing_token: "my-fence-token",
+			fencingToken: "my-fence-token",
 		});
 
 		const writer = batcher.writable.getWriter();
@@ -366,17 +366,17 @@ describe("BatchTransform", () => {
 		const result = await reader.read();
 		expect(result.done).toBe(false);
 		expect(result.value?.records).toHaveLength(2);
-		expect(result.value?.fencing_token).toBe("my-fence-token");
+		expect(result.value?.fencingToken).toBe("my-fence-token");
 
 		await writePromise;
 		reader.releaseLock();
 	});
 
-	it("auto-increments match_seq_num across batches", async () => {
+	it("auto-increments matchSeqNum across batches", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
 			maxBatchRecords: 2,
-			match_seq_num: 0, // Start at 0
+			matchSeqNum: 0, // Start at 0
 		});
 
 		const writer = batcher.writable.getWriter();
@@ -393,29 +393,29 @@ describe("BatchTransform", () => {
 			await writer.close();
 		})();
 
-		// First batch should have match_seq_num: 0 (2 records)
+		// First batch should have matchSeqNum: 0 (2 records)
 		const result1 = await reader.read();
 		expect(result1.done).toBe(false);
 		expect(result1.value?.records).toHaveLength(2);
-		expect(result1.value?.match_seq_num).toBe(0);
+		expect(result1.value?.matchSeqNum).toBe(0);
 
-		// Second batch should have match_seq_num: 2 (incremented by batch size)
+		// Second batch should have matchSeqNum: 2 (incremented by batch size)
 		const result2 = await reader.read();
 		expect(result2.done).toBe(false);
 		expect(result2.value?.records).toHaveLength(2);
-		expect(result2.value?.match_seq_num).toBe(2);
+		expect(result2.value?.matchSeqNum).toBe(2);
 
-		// Third batch should have match_seq_num: 4
+		// Third batch should have matchSeqNum: 4
 		const result3 = await reader.read();
 		expect(result3.done).toBe(false);
 		expect(result3.value?.records).toHaveLength(1);
-		expect(result3.value?.match_seq_num).toBe(4);
+		expect(result3.value?.matchSeqNum).toBe(4);
 
 		await writePromise;
 		reader.releaseLock();
 	});
 
-	it("works without fencing_token or match_seq_num", async () => {
+	it("works without fencingToken or matchSeqNum", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
 		});
@@ -431,8 +431,8 @@ describe("BatchTransform", () => {
 		const result = await reader.read();
 		expect(result.done).toBe(false);
 		expect(result.value?.records).toHaveLength(1);
-		expect(result.value?.fencing_token).toBeUndefined();
-		expect(result.value?.match_seq_num).toBeUndefined();
+		expect(result.value?.fencingToken).toBeUndefined();
+		expect(result.value?.matchSeqNum).toBeUndefined();
 
 		await writePromise;
 		reader.releaseLock();

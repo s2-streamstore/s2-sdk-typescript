@@ -1,8 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendRecord, S2 } from "../index.js";
-import type { SessionTransports } from "../lib/stream/types.js";
+import type { AppendArgs, SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
+const ILLEGAL_RECORD_BYTES = 1_100_000;
 const hasEnv = !!process.env.S2_ACCESS_TOKEN && !!process.env.S2_BASIN;
 const describeIf = hasEnv ? describe : describe.skip;
 
@@ -12,11 +14,12 @@ describeIf("AppendSession Integration Tests", () => {
 	let streamName: string;
 
 	beforeAll(() => {
-		const token = process.env.S2_ACCESS_TOKEN;
 		const basin = process.env.S2_BASIN;
-		if (!token || !basin) return;
-		s2 = new S2({ accessToken: token! });
-		basinName = basin!;
+		if (!basin) return;
+		const env = S2Environment.parse();
+		if (!env.accessToken) return;
+		s2 = new S2(env as S2ClientOptions);
+		basinName = basin;
 	});
 
 	beforeAll(async () => {
@@ -29,19 +32,6 @@ describeIf("AppendSession Integration Tests", () => {
 		await basin.streams.create({
 			stream: streamName,
 		});
-	});
-
-	afterAll(async () => {
-		// Clean up: delete the test stream
-		if (basinName && streamName) {
-			try {
-				const basin = s2.basin(basinName);
-				await basin.streams.delete({ stream: streamName });
-			} catch (error) {
-				// Ignore cleanup errors
-				console.warn("Failed to cleanup test stream:", error);
-			}
-		}
 	});
 
 	it.each(transports)(
@@ -59,9 +49,12 @@ describeIf("AppendSession Integration Tests", () => {
 				AppendRecord.make("test-record-3"),
 			];
 
-			const ack1 = await session.submit([records[0]!]);
-			const ack2 = await session.submit([records[1]!]);
-			const ack3 = await session.submit([records[2]!]);
+			const ticket1 = await session.submit([records[0]!]);
+			const ack1 = await ticket1.ack();
+			const ticket2 = await session.submit([records[1]!]);
+			const ack2 = await ticket2.ack();
+			const ticket3 = await session.submit([records[2]!]);
+			const ack3 = await ticket3.ack();
 
 			// Verify acks are sequential
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
@@ -91,7 +84,8 @@ describeIf("AppendSession Integration Tests", () => {
 				AppendRecord.make("batch-3"),
 			];
 
-			const ack = await session.submit(records);
+			const ticket = await session.submit(records);
+			const ack = await ticket.ack();
 
 			// Verify all records were appended
 			expect(ack.end.seq_num - ack.start.seq_num).toBe(3);
@@ -119,9 +113,9 @@ describeIf("AppendSession Integration Tests", () => {
 			})();
 
 			// Submit records
-			await session.submit([AppendRecord.make("ack-test-1")]);
-			await session.submit([AppendRecord.make("ack-test-2")]);
-			await session.submit([AppendRecord.make("ack-test-3")]);
+			await (await session.submit([AppendRecord.make("ack-test-1")])).ack();
+			await (await session.submit([AppendRecord.make("ack-test-2")])).ack();
+			await (await session.submit([AppendRecord.make("ack-test-3")])).ack();
 
 			// Close session to close acks stream
 			await session.close();
@@ -145,7 +139,8 @@ describeIf("AppendSession Integration Tests", () => {
 			expect(session.lastAckedPosition()).toBeUndefined();
 
 			// Submit a record
-			const ack = await session.submit([AppendRecord.make("position-test")]);
+			const ticket = await session.submit([AppendRecord.make("position-test")]);
+			const ack = await ticket.ack();
 
 			// Verify lastSeenPosition is updated
 			expect(session.lastAckedPosition()).toBeDefined();
@@ -166,12 +161,13 @@ describeIf("AppendSession Integration Tests", () => {
 
 			const session = await stream.appendSession();
 
-			const record = AppendRecord.make("header-test", {
-				"custom-header": "custom-value",
-				"another-header": "another-value",
-			});
+			const record = AppendRecord.make("header-test", [
+				["custom-header", "custom-value"],
+				["another-header", "another-value"],
+			]);
 
-			const ack = await session.submit([record]);
+			const ticket = await session.submit([record]);
+			const ack = await ticket.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
 
@@ -190,11 +186,101 @@ describeIf("AppendSession Integration Tests", () => {
 			const body = new TextEncoder().encode("bytes-record-test");
 			const record = AppendRecord.make(body);
 
-			const ack = await session.submit([record]);
+			const ticket = await session.submit([record]);
+			const ack = await ticket.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
 
 			await session.close();
+		},
+	);
+
+	it.each(transports)(
+		"propagates writable stream errors when a batch fails (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const batches: AppendArgs[] = Array.from(
+				{ length: 4 },
+				(_v, i): AppendArgs => ({
+					records: [AppendRecord.make(`pipe-batch-${i}`)],
+				}),
+			);
+			batches.push({
+				records: [AppendRecord.make("pipe-batch-fail")],
+				matchSeqNum: 0, // guaranteed to mismatch once earlier batches advance the tail
+			});
+
+			const readable = new ReadableStream<AppendArgs>({
+				start(controller) {
+					for (const batch of batches) {
+						controller.enqueue(batch);
+					}
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(session.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("sequence number mismatch"),
+			});
+
+			await session.close().catch(() => {});
+		},
+	);
+
+	it.each(transports)(
+		"acks() emits existing successes then throws on fatal error (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const batches: AppendArgs[] = Array.from(
+				{ length: 4 },
+				(_v, i): AppendArgs => ({
+					records: [AppendRecord.make(`acks-pipe-${i}`)],
+				}),
+			);
+			batches.push({
+				records: [AppendRecord.make("acks-pipe-fail")],
+				matchSeqNum: 0,
+			});
+
+			const ackSeqs: number[] = [];
+			const acksPromise = (async () => {
+				try {
+					for await (const ack of session.acks()) {
+						ackSeqs.push(ack.end.seq_num);
+					}
+				} catch (err) {
+					throw err;
+				}
+			})();
+
+			const readable = new ReadableStream<AppendArgs>({
+				start(controller) {
+					for (const batch of batches) {
+						controller.enqueue(batch);
+					}
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(session.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("sequence number mismatch"),
+			});
+
+			await expect(acksPromise).rejects.toMatchObject({
+				message: expect.stringContaining("sequence number mismatch"),
+			});
+
+			expect(ackSeqs).toHaveLength(4);
+
+			await session.close().catch(() => {});
 		},
 	);
 
@@ -215,7 +301,8 @@ describeIf("AppendSession Integration Tests", () => {
 				session.submit([AppendRecord.make("concurrent-5")]),
 			];
 
-			const acks = await Promise.all(promises);
+			const tickets = await Promise.all(promises);
+			const acks = await Promise.all(tickets.map((ticket) => ticket.ack()));
 
 			// Verify all acks are sequential (session should serialize them)
 			for (let i = 1; i < acks.length; i++) {
@@ -259,11 +346,84 @@ describeIf("AppendSession Integration Tests", () => {
 			await session.close();
 
 			// Both promises should be resolved
-			const ack1 = await p1;
-			const ack2 = await p2;
+			const ticket1 = await p1;
+			const ticket2 = await p2;
+			const ack1 = await ticket1.ack();
+			const ack2 = await ticket2.ack();
 
 			expect(ack1.end.seq_num).toBeGreaterThan(0);
 			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
+		},
+	);
+
+	it.each(transports)(
+		"should drain pending appends on close and reject subsequent submits (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			// Submit a few records
+			const p1 = session.submit([AppendRecord.make("item-0")]);
+			const p2 = session.submit([AppendRecord.make("item-1")]);
+			const p3 = session.submit([AppendRecord.make("item-2")]);
+
+			// Close should wait for all pending appends to complete
+			await session.close();
+
+			// Subsequent submit after close should fail
+			await expect(
+				session.submit([AppendRecord.make("item-3")]),
+			).rejects.toThrow(/closed/i);
+
+			// All three promises should be resolved successfully
+			const ticket1 = await p1;
+			const ticket2 = await p2;
+			const ticket3 = await p3;
+			const ack1 = await ticket1.ack();
+			const ack2 = await ticket2.ack();
+			const ack3 = await ticket3.ack();
+
+			expect(ack1.end.seq_num).toBeGreaterThan(0);
+			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
+			expect(ack3.end.seq_num).toBe(ack2.end.seq_num + 1);
+		},
+	);
+
+	it.each(transports)(
+		"propagates writable errors for oversized records (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const session = await stream.appendSession();
+
+			const oversized = new Uint8Array(ILLEGAL_RECORD_BYTES);
+			oversized.fill(0xab);
+
+			const batches: AppendArgs[] = [
+				{ records: [AppendRecord.make("ok-0")] },
+				{ records: [AppendRecord.make("ok-1")] },
+				{ records: [AppendRecord.make("ok-2")] },
+				{ records: [AppendRecord.make("ok-3")] },
+				{ records: [AppendRecord.make(oversized)] },
+			];
+
+			const readable = new ReadableStream<AppendArgs>({
+				start(controller) {
+					for (const batch of batches) {
+						controller.enqueue(batch);
+					}
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(session.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("exceeds maximum"),
+			});
+
+			await session.close().catch(() => {});
 		},
 	);
 });

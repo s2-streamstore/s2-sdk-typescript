@@ -16,10 +16,14 @@ import {
 	type ReconfigureStreamResponse,
 	reconfigureStream,
 	type StreamConfig,
+	type StreamInfo,
 } from "./generated/index.js";
+import { randomToken } from "./lib/base64.js";
+import { type ListAllArgs, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 
 export interface ListStreamsArgs extends DataToObject<ListStreamsData> {}
+export interface ListAllStreamsArgs extends ListAllArgs<ListStreamsArgs> {}
 export interface CreateStreamArgs extends DataToObject<CreateStreamData> {}
 export interface GetStreamConfigArgs
 	extends DataToObject<GetStreamConfigData> {}
@@ -59,6 +63,36 @@ export class S2Streams {
 	}
 
 	/**
+	 * List all streams in the basin with automatic pagination.
+	 * Returns a lazy async iterable that fetches pages as needed.
+	 *
+	 * @param args.prefix Return streams whose names start with the given prefix
+	 * @param args.limit Max results per page (up to 1000)
+	 *
+	 * @example
+	 * ```ts
+	 * for await (const stream of basin.streams.listAll({ prefix: "events-" })) {
+	 *   console.log(stream.name);
+	 * }
+	 * ```
+	 */
+	public listAll(
+		includeDeleted = false,
+		args?: ListAllStreamsArgs,
+		options?: S2RequestOptions,
+	): AsyncIterable<StreamInfo> {
+		return paginate(
+			(a) =>
+				this.list(a, options).then((r) => ({
+					items: r.streams.filter((s) => includeDeleted || !s.deleted_at),
+					has_more: r.has_more,
+				})),
+			args ?? {},
+			(stream) => stream.name,
+		);
+	}
+
+	/**
 	 * Create a stream.
 	 *
 	 * @param args.stream Stream name (1-512 bytes, unique within the basin)
@@ -68,11 +102,13 @@ export class S2Streams {
 		args: CreateStreamArgs,
 		options?: S2RequestOptions,
 	): Promise<CreateStreamResponse> {
+		const requestToken = randomToken();
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createStream({
 					client: this.client,
 					body: args,
+					headers: { "s2-request-token": requestToken },
 					...options,
 				}),
 			);

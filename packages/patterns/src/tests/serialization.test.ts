@@ -23,14 +23,14 @@ class FakeAppendSession {
 
 	async submit(
 		records: AppendRecord | AppendRecord[],
-		args?: { match_seq_num?: number },
-	): Promise<AppendAck> {
+		args?: { matchSeqNum?: number },
+	): Promise<any> {
 		const batch = Array.isArray(records) ? records : [records];
 
 		for (const r of batch) {
 			this.submitted.push({
 				record: r,
-				matchSeqNum: args?.match_seq_num,
+				matchSeqNum: args?.matchSeqNum,
 			});
 		}
 
@@ -42,11 +42,22 @@ class FakeAppendSession {
 		this.nextSeqNum = endSeq;
 
 		// Minimal AppendAck shape used by SerializingAppendSession.submit
-		return {
+		const ack = {
 			start: { seq_num: startSeq, timestamp },
 			end: { seq_num: endSeq, timestamp },
 			tail: { seq_num: endSeq, timestamp },
 		} as AppendAck;
+
+		const bytes = batch.reduce(
+			(total, record) => total + meteredBytes(record),
+			0,
+		);
+
+		return {
+			ack: async () => ack,
+			bytes,
+			numRecords: batch.length,
+		};
 	}
 }
 
@@ -73,18 +84,13 @@ function toByteHeaders(
 ): [Uint8Array, Uint8Array][] {
 	const enc = new TextEncoder();
 	if (!headers) return [];
-	if (Array.isArray(headers)) {
-		return (headers as any).map(([k, v]: any) => {
+	return (headers as Array<[string | Uint8Array, string | Uint8Array]>).map(
+		([k, v]) => {
 			const kb = typeof k === "string" ? enc.encode(k) : (k as Uint8Array);
 			const vb = typeof v === "string" ? enc.encode(v) : (v as Uint8Array);
 			return [kb, vb];
-		});
-	}
-	const result: [Uint8Array, Uint8Array][] = [];
-	for (const [k, v] of Object.entries(headers as Record<string, string>)) {
-		result.push([enc.encode(k), enc.encode(v)]);
-	}
-	return result;
+		},
+	);
 }
 
 const textEncoder = new TextEncoder();
@@ -134,7 +140,7 @@ async function runTests(): Promise<void> {
 	// Total records should match expected chunk counts for both messages.
 	expect(submitted.length).toBe(totalChunks);
 
-	// match_seq_num should start at 10 and increment per record.
+	// matchSeqNum should start at 10 and increment per record.
 	const matchSeqNums = submitted.map((s) => s.matchSeqNum);
 	expect(matchSeqNums).toEqual(
 		Array.from({ length: totalChunks }, (_v, i) => 10 + i),
@@ -248,7 +254,7 @@ async function runTests(): Promise<void> {
 }
 
 describe("serialization patterns", () => {
-	it("writes frames with dedupe and match_seq_num and reconstructs on read", async () => {
+	it("writes frames with dedupe and matchSeqNum and reconstructs on read", async () => {
 		await runTests();
 	});
 

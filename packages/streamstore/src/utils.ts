@@ -66,8 +66,8 @@ export const AppendRecord = {
 	// overloads for only string or only bytes
 	make: appendRecordMake,
 	command: appendRecordCommand,
-	fence: (fencing_token: string, timestamp?: number): AppendRecord => {
-		return AppendRecord.command("fence", fencing_token, timestamp);
+	fence: (fencingToken: string, timestamp?: number): AppendRecord => {
+		return AppendRecord.command("fence", fencingToken, timestamp);
 	},
 	trim: (seqNum: number | bigint, timestamp?: number): AppendRecord => {
 		// Encode sequence number as 8 big-endian bytes
