@@ -148,10 +148,7 @@ export type BasinInfo = {
      * Basin name.
      */
     name: BasinNameStr;
-    /**
-     * Basin scope.
-     */
-    scope: BasinScope;
+    scope?: null | BasinScope;
     /**
      * Basin state.
      */
@@ -186,19 +183,12 @@ export type CreateBasinRequest = {
      */
     basin: BasinNameStr;
     config?: null | BasinConfig;
-    /**
-     * Basin scope.
-     */
-    scope?: BasinScope;
+    scope?: null | BasinScope;
 };
 
 export type CreateOrReconfigureBasinRequest = {
     config?: null | BasinConfig;
-    /**
-     * Basin scope.
-     * This cannot be reconfigured.
-     */
-    scope?: BasinScope;
+    scope?: null | BasinScope;
 };
 
 export type CreateStreamRequest = {
