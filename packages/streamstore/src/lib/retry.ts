@@ -493,7 +493,6 @@ type InflightEntry = {
 	args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number };
 	expectedCount: number;
 	meteredBytes: number;
-	firstAttemptStartedMonotonicMs?: number; // First submission start timestamp for absolute timeout tracking
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
@@ -990,9 +989,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						entry.args?.matchSeqNum ?? "none",
 					);
 					const attemptStarted = performance.now();
-					if (entry.firstAttemptStartedMonotonicMs === undefined) {
-						entry.firstAttemptStartedMonotonicMs = attemptStarted;
-					}
 					entry.attemptStartedMonotonicMs = attemptStarted;
 					entry.innerPromise = this.session.submit(entry.records, entry.args);
 					delete entry.needsSubmit;
@@ -1008,34 +1004,32 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				result.kind,
 			);
 
+			// Convert result to AppendResult (timeout becomes retryable error)
+			let appendResult: AppendResult;
 			if (result.kind === "timeout") {
-				// Ack timeout - fatal (per-attempt)
+				// Ack timeout - convert to retryable error that flows through retry logic
 				const attemptElapsed =
-					head.firstAttemptStartedMonotonicMs != null
-						? Math.round(
-								performance.now() - head.firstAttemptStartedMonotonicMs,
-							)
-						: head.attemptStartedMonotonicMs != null
-							? Math.round(performance.now() - head.attemptStartedMonotonicMs)
-							: undefined;
+					head.attemptStartedMonotonicMs != null
+						? Math.round(performance.now() - head.attemptStartedMonotonicMs)
+						: undefined;
 				const error = new S2Error({
 					message: `Request timeout after ${attemptElapsed ?? "unknown"}ms (${
 						head.expectedCount
 					} records, ${head.meteredBytes} bytes)`,
 					status: 408,
 					code: "REQUEST_TIMEOUT",
+					origin: "sdk"
 				});
 				debugSession(
 					"[%s] ack timeout for head entry: %s",
 					this.streamName,
 					error.message,
 				);
-				await this.abort(error);
-				return;
+				appendResult = err(error);
+			} else {
+				// Promise settled
+				appendResult = result.value;
 			}
-
-			// Promise settled
-			const appendResult = result.value;
 
 			if (appendResult.ok) {
 				// Success!
@@ -1176,20 +1170,19 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Returns either the settled result or a timeout indicator.
 	 *
 	 * Per-attempt ack timeout semantics:
-	 * - The deadline is computed from the first submit attempt using a monotonic clock
-	 *   (performance.now) to avoid issues with wall clock adjustments. Recovery does
-	 *   not reset this absolute timeout window.
+	 * - The deadline is computed from the current attempt's start time using a
+	 *   monotonic clock (performance.now) to avoid issues with wall clock adjustments.
+	 * - Each retry gets a fresh timeout window (attemptStartedMonotonicMs is reset
+	 *   during recovery).
 	 * - If attempt start is missing (for backward compatibility), we measure
 	 *   from "now" with the full timeout window.
 	 */
 	private async waitForHead(
 		head: InflightEntry,
 	): Promise<{ kind: "settled"; value: AppendResult } | { kind: "timeout" }> {
-		const firstAttemptStart =
-			head.firstAttemptStartedMonotonicMs ??
-			head.attemptStartedMonotonicMs ??
-			performance.now();
-		const deadline = firstAttemptStart + this.requestTimeoutMillis;
+		const attemptStart =
+			head.attemptStartedMonotonicMs ?? performance.now();
+		const deadline = attemptStart + this.requestTimeoutMillis;
 		const remaining = Math.max(0, deadline - performance.now());
 
 		let timer: any;
