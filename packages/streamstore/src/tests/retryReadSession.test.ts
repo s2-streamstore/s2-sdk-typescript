@@ -154,7 +154,7 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ count: 10 }, // Request 10 records
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -198,7 +198,7 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ bytes: 500 }, // Request 500 bytes
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -242,7 +242,7 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ wait: 10 }, // Wait up to 10 seconds
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -288,7 +288,7 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ seq_num: 100 }, // Start from seq_num 100
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records (including through retry)
@@ -331,7 +331,7 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ until: 1000 }, // Read until seq_num 1000
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -380,7 +380,7 @@ describe("ReadSession (unit)", () => {
 				wait: 30,
 				until: 1000,
 			},
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
@@ -427,7 +427,7 @@ describe("ReadSession (unit)", () => {
 				});
 			},
 			{ count: 10 },
-			{ retryBackoffDurationMillis: 1, maxAttempts: 3 }, // Allow 2 retries
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 3 }, // Allow 2 retries
 		);
 
 		// Try to consume the stream - should fail after exhausting retries
@@ -480,7 +480,7 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ seq_num: 0, count: 100 },
-			{ retryBackoffDurationMillis: 1, maxAttempts: 3 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 3 },
 		);
 
 		// Drain the session

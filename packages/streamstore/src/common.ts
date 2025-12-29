@@ -20,11 +20,19 @@ export type RetryConfig = {
 	maxAttempts?: number;
 
 	/**
-	 * Base delay in milliseconds between retry attempts.
-	 * Fixed delay per attempt with jitter applied.
+	 * Minimum delay in milliseconds for exponential backoff.
+	 * The first retry will have a delay in the range [minDelayMillis, 2*minDelayMillis).
 	 * @default 100
 	 */
-	retryBackoffDurationMillis?: number;
+	minDelayMillis?: number;
+
+	/**
+	 * Maximum base delay in milliseconds for exponential backoff.
+	 * Once the exponential backoff reaches this value, it stays capped here.
+	 * Note: actual delay with jitter can be up to 2*maxDelayMillis.
+	 * @default 1000
+	 */
+	maxDelayMillis?: number;
 
 	/**
 	 * Policy for retrying append operations.
@@ -92,7 +100,7 @@ export type S2ClientOptions = {
 	/**
 	 * Retry configuration for handling transient failures.
 	 * Applies to management operations (basins, streams, tokens) and stream operations (read, append).
-	 * @default { maxAttempts: 3, retryBackoffDurationMillis: 100 }
+	 * @default { maxAttempts: 3, minDelayMillis: 100, maxDelayMillis: 1000, appendRetryPolicy: "all" }
 	 */
 	retry?: RetryConfig;
 };

@@ -32,11 +32,10 @@ const debugSession = createDebug("s2:retry:session");
 /**
  * Default retry configuration.
  */
-export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> & {
-	requestTimeoutMillis: number;
-} = {
+export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
 	maxAttempts: 3,
-	retryBackoffDurationMillis: 100,
+	minDelayMillis: 100,
+	maxDelayMillis: 1000,
 	appendRetryPolicy: "all",
 	requestTimeoutMillis: 5000, // 5 seconds
 };
@@ -70,19 +69,34 @@ export function isRetryable(error: S2Error): boolean {
 }
 
 /**
- * Calculates the delay before the next retry attempt using fixed backoff
- * with jitter. The `attempt` parameter is currently ignored to keep a
- * constant base delay per attempt.
+ * Calculates the delay before the next retry attempt using exponential backoff
+ * with additive jitter.
+ *
+ * Formula:
+ *   baseDelay = min(minDelayMillis * 2^attempt, maxDelayMillis)
+ *   jitter = random(0, baseDelay)
+ *   delay = baseDelay + jitter
+ *
+ * @param attempt - Zero-based retry attempt number (0 = first retry)
+ * @param minDelayMillis - Minimum delay for exponential backoff
+ * @param maxDelayMillis - Maximum base delay (actual delay can be up to 2x with jitter)
  */
 export function calculateDelay(
 	attempt: number,
-	baseDelayMillis: number,
+	minDelayMillis: number,
+	maxDelayMillis: number,
 ): number {
-	// Apply ±50% jitter around the base delay
-	const jitterRange = 0.5; // 50% up or down
-	const factor = 1 + (Math.random() * 2 - 1) * jitterRange; // [0.5, 1.5]
-	const delay = Math.max(0, baseDelayMillis * factor);
-	return Math.floor(delay);
+	// Calculate exponential backoff: minDelay * 2^attempt, capped at maxDelay
+	const baseDelay = Math.min(
+		minDelayMillis * Math.pow(2, attempt),
+		maxDelayMillis,
+	);
+
+	// Add jitter: random value in [0, baseDelay)
+	const jitter = Math.random() * baseDelay;
+
+	// Total delay is base + jitter
+	return Math.floor(baseDelay + jitter);
 }
 
 /**
@@ -148,7 +162,8 @@ export async function withRetries<T>(
 			// Calculate delay and wait before retrying
 			const delay = calculateDelay(
 				attemptNo - 1,
-				config.retryBackoffDurationMillis,
+				config.minDelayMillis,
+				config.maxDelayMillis,
 			);
 			debugWith(
 				"retryable error, backing off for %dms, status=%s",
@@ -208,7 +223,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				if (isRetryable(error) && attempt < effectiveMax - 1) {
 					const delay = calculateDelay(
 						attempt,
-						retryConfig.retryBackoffDurationMillis,
+						retryConfig.minDelayMillis,
+						retryConfig.maxDelayMillis,
 					);
 					debugRead(
 						"connection error in create, will retry after %dms, status=%s",
@@ -272,7 +288,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							if (isRetryable(error) && attempt < effectiveMax - 1) {
 								const delay = calculateDelay(
 									attempt,
-									retryConfig.retryBackoffDurationMillis,
+									retryConfig.minDelayMillis,
+									retryConfig.maxDelayMillis,
 								);
 								debugRead(
 									"connection error, will retry after %dms, status=%s",
@@ -323,7 +340,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								// Compute planned backoff delay now so we can subtract it from wait budget
 								const delay = calculateDelay(
 									attempt,
-									retryConfig.retryBackoffDurationMillis,
+									retryConfig.minDelayMillis,
+									retryConfig.maxDelayMillis,
 								);
 								// Recompute remaining budget from original request each time to avoid double-subtraction
 								if (baselineCount !== undefined) {
@@ -967,7 +985,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.consecutiveFailures++;
 				const delay = calculateDelay(
 					this.consecutiveFailures - 1,
-					this.retryConfig.retryBackoffDurationMillis,
+					this.retryConfig.minDelayMillis,
+					this.retryConfig.maxDelayMillis,
 				);
 				debugSession(
 					"[%s] [PUMP] session creation failed, backing off for %dms",
@@ -1018,7 +1037,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					} records, ${head.meteredBytes} bytes)`,
 					status: 408,
 					code: "REQUEST_TIMEOUT",
-					origin: "sdk"
+					origin: "sdk",
 				});
 				debugSession(
 					"[%s] ack timeout for head entry: %s",
@@ -1180,8 +1199,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private async waitForHead(
 		head: InflightEntry,
 	): Promise<{ kind: "settled"; value: AppendResult } | { kind: "timeout" }> {
-		const attemptStart =
-			head.attemptStartedMonotonicMs ?? performance.now();
+		const attemptStart = head.attemptStartedMonotonicMs ?? performance.now();
 		const deadline = attemptStart + this.requestTimeoutMillis;
 		const remaining = Math.max(0, deadline - performance.now());
 
@@ -1211,7 +1229,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		// Calculate backoff delay
 		const delay = calculateDelay(
 			this.consecutiveFailures - 1,
-			this.retryConfig.retryBackoffDurationMillis,
+			this.retryConfig.minDelayMillis,
+			this.retryConfig.maxDelayMillis,
 		);
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);

@@ -38,7 +38,8 @@ const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,
 	retry: {
 		maxAttempts: 10,
-		retryBackoffDurationMillis: 100,
+		minDelayMillis: 100,
+		maxDelayMillis: 100,
 		appendRetryPolicy: "noSideEffects",
 	},
 });
