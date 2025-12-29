@@ -38,6 +38,7 @@ export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
 	maxDelayMillis: 1000,
 	appendRetryPolicy: "all",
 	requestTimeoutMillis: 5000, // 5 seconds
+	connectionTimeoutMillis: 5000, // 5 seconds
 };
 
 const RETRYABLE_STATUS_CODES = new Set([

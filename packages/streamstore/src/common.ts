@@ -47,6 +47,18 @@ export type RetryConfig = {
 	 * Used by retrying append sessions. When unset, defaults to 5000ms.
 	 */
 	requestTimeoutMillis?: number;
+
+	/**
+	 * Maximum time in milliseconds to wait for connection establishment.
+	 * This is a "fail fast" timeout that aborts slow connections early.
+	 * Connection time counts toward requestTimeoutMillis.
+	 *
+	 * Only applies to S2S (HTTP/2) transport when establishing new connections.
+	 * Reused pooled connections are not subject to this timeout.
+	 *
+	 * @default 5000
+	 */
+	connectionTimeoutMillis?: number;
 };
 
 export type S2EnvironmentConfig = Partial<S2ClientOptions>;

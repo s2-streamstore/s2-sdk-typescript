@@ -104,6 +104,8 @@ describe("Retry Logic", () => {
 			expect(DEFAULT_RETRY_CONFIG.minDelayMillis).toBe(100);
 			expect(DEFAULT_RETRY_CONFIG.maxDelayMillis).toBe(1000);
 			expect(DEFAULT_RETRY_CONFIG.appendRetryPolicy).toBe("all");
+			expect(DEFAULT_RETRY_CONFIG.requestTimeoutMillis).toBe(5000);
+			expect(DEFAULT_RETRY_CONFIG.connectionTimeoutMillis).toBe(5000);
 		});
 	});
 });

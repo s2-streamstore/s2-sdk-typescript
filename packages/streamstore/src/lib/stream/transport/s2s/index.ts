@@ -161,23 +161,55 @@ export class S2STransport implements SessionTransport {
 			},
 		});
 
-		return new Promise((resolve, reject) => {
-			client.once("connect", () => {
-				client.setLocalWindowSize(10 * 1024 * 1024);
-				resolve(client);
-			});
+		const connectPromise = new Promise<ClientHttp2Session>(
+			(resolve, reject) => {
+				client.once("connect", () => {
+					client.setLocalWindowSize(10 * 1024 * 1024);
+					resolve(client);
+				});
 
-			client.once("error", (err) => {
-				reject(err);
-			});
+				client.once("error", (err) => {
+					reject(err);
+				});
 
-			// Handle connection close
-			client.once("close", () => {
-				if (this.connection === client) {
-					this.connection = undefined;
+				// Handle connection close
+				client.once("close", () => {
+					if (this.connection === client) {
+						this.connection = undefined;
+					}
+				});
+			},
+		);
+
+		// Apply connection timeout if configured
+		const connectionTimeout =
+			this.transportConfig.retry?.connectionTimeoutMillis ?? 5000;
+
+		let timeoutId: NodeJS.Timeout | undefined;
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			timeoutId = setTimeout(() => {
+				// Destroy the client on timeout
+				if (!client.closed && !client.destroyed) {
+					client.destroy();
 				}
-			});
+				reject(
+					new S2Error({
+						message: `Connection timeout after ${connectionTimeout}ms`,
+						status: 408,
+						code: "CONNECTION_TIMEOUT",
+						origin: "sdk",
+					}),
+				);
+			}, connectionTimeout);
 		});
+
+		try {
+			return await Promise.race([connectPromise, timeoutPromise]);
+		} finally {
+			if (timeoutId) {
+				clearTimeout(timeoutId);
+			}
+		}
 	}
 
 	async close(): Promise<void> {
