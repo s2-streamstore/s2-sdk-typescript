@@ -186,10 +186,14 @@ describe("AppendSessionImpl (unit)", () => {
 	});
 
 	it("aborts on ack timeout (~5s from enqueue) when no acks arrive", async () => {
-		const session = await AppendSessionImpl.create(async () => {
-			// Accept writes but never emit acks
-			return new FakeTransportAppendSession({ neverAck: true });
-		});
+		const session = await AppendSessionImpl.create(
+			async () => {
+				// Accept writes but never emit acks
+				return new FakeTransportAppendSession({ neverAck: true });
+			},
+			undefined,
+			{ maxAttempts: 1 }, // Disable retries for this test
+		);
 		(session as any).requestTimeoutMillis = 500;
 
 		const ticketP = session.submit([{ body: "x" }]);
