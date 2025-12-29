@@ -37,7 +37,7 @@ describeIf("Correctness Integration Tests", () => {
 			maxAttempts: 65536,
 			minDelayMillis: 1000,
 			maxDelayMillis: 1000,
-			requestTimeoutMillis: 60_000,
+			requestTimeoutMillis: 5_000,
 		};
 
 		const clientConfig: S2ClientOptions = {
