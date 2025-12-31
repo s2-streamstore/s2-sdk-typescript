@@ -1,6 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
-import { AppendRecord, BatchTransform, Producer, S2 } from "../index.js";
+import {
+	AppendInput,
+	AppendRecord,
+	BatchTransform,
+	Producer,
+	S2,
+} from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
@@ -91,7 +97,7 @@ describeIf("Correctness Integration Tests", () => {
 				);
 
 				const readSession = await stream.readSession({
-					seq_num: 0,
+					start: { from: { seq_num: 0 } },
 				});
 
 				const readPromise = (async () => {
@@ -122,6 +128,8 @@ describeIf("Correctness Integration Tests", () => {
 							observedRecords += 1;
 
 							if (highestContiguousIndex + 1 >= TOTAL_RECORDS) {
+								// Close the read session immediately to avoid waiting for more records
+								await readSession.cancel().catch(() => {});
 								break;
 							}
 						}
@@ -145,7 +153,9 @@ describeIf("Correctness Integration Tests", () => {
 					try {
 						for (let i = 0; i < TOTAL_RECORDS; i += 1) {
 							// Await each submit to preserve Producer ordering guarantees.
-							const ticket = await producer.submit(AppendRecord.make(`${i}`));
+							const ticket = await producer.submit(
+								AppendRecord.string({ body: `${i}` }),
+							);
 							pendingTickets.push(ticket);
 						}
 

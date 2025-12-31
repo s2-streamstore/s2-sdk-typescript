@@ -3,6 +3,23 @@ import createDebug from "debug";
 const debug = createDebug("s2:paginate");
 
 /**
+ * Paginated response containing a page of results.
+ *
+ * @template T The type of items in the page
+ */
+export interface Page<T> {
+	/**
+	 * Items in this page.
+	 */
+	readonly values: readonly T[];
+	/**
+	 * Whether there are more pages available.
+	 * If true, use the last item in `values` as the cursor for the next page.
+	 */
+	readonly hasMore: boolean;
+}
+
+/**
  * A function that fetches a single page of results.
  * @template TItem The type of items in the page
  * @template TArgs The query arguments type (excluding start_after)

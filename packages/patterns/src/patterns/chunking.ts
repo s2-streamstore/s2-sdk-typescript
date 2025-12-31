@@ -27,7 +27,7 @@ function computeOverheads(): {
 	baseOverheadBytes: number;
 	frameHeaderOverheadBytes: number;
 } {
-	const empty = AppendRecord.make(new Uint8Array(0), undefined);
+	const empty = AppendRecord.bytes({ body: new Uint8Array(0) });
 
 	const headers: AppendHeaders<"bytes"> = [
 		[FRAME_RECORDS_HEADER_BYTES, new Uint8Array(8)],
@@ -35,7 +35,7 @@ function computeOverheads(): {
 		[DEDUPE_SEQ_HEADER_BYTES, new Uint8Array(8)],
 	];
 
-	const withHeaders = AppendRecord.make(new Uint8Array(0), headers);
+	const withHeaders = AppendRecord.bytes({ body: new Uint8Array(0), headers });
 
 	const baseOverheadBytes = meteredBytes(empty);
 	const frameHeaderOverheadBytes =

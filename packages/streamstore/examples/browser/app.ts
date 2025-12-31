@@ -1,4 +1,10 @@
-import { AppendRecord, BatchTransform, Producer, S2 } from "../../src/index.js";
+import {
+	AppendInput,
+	AppendRecord,
+	BatchTransform,
+	Producer,
+	S2,
+} from "../../src/index.js";
 
 // Logging utilities
 const logEl = document.getElementById("log")!;
@@ -138,11 +144,13 @@ document.getElementById("btnReadUnary")!.addEventListener("click", async () => {
 		);
 		const startTime = performance.now();
 
-		const result = await ctx.stream.read({
-			seq_num: seqNum,
-			count,
-			as: format,
-		});
+		const result = await ctx.stream.read(
+			{
+				start: { from: { seq_num: seqNum } },
+				stop: { limits: { count } },
+			},
+			{ as: format },
+		);
 
 		const elapsed = (performance.now() - startTime).toFixed(1);
 		log(`Read ${result.records.length} records in ${elapsed}ms`, "success");
@@ -204,11 +212,13 @@ document
 			btnStart.disabled = true;
 			btnStop.disabled = false;
 
-			const session = await ctx.stream.readSession({
-				seq_num: seqNum,
-				count,
-				as: format,
-			});
+			const session = await ctx.stream.readSession(
+				{
+					start: { from: { seq_num: seqNum } },
+					stop: { limits: { count } },
+				},
+				{ as: format },
+			);
 			activeReadSession = session.getReader();
 
 			let recordCount = 0;
@@ -304,11 +314,19 @@ document
 			for (let i = 0; i < count; i++) {
 				let ticket;
 				if (format === "bytes") {
-					ticket = await session.submit([{ body: randomBytes(size) }]);
+					ticket = await session.submit(
+						AppendInput.create([
+							AppendRecord.bytes({ body: randomBytes(size) }),
+						]),
+					);
 				} else {
-					ticket = await session.submit([
-						{ body: `[${i}] ${randomString(size - 10)}` },
-					] as AppendRecord[]);
+					ticket = await session.submit(
+						AppendInput.create([
+							AppendRecord.string({
+								body: `[${i}] ${randomString(size - 10)}`,
+							}),
+						]),
+					);
 				}
 				tickets.push({ i, ticket });
 			}
@@ -398,11 +416,15 @@ document.getElementById("btnProducer")!.addEventListener("click", async () => {
 		for (let i = 0; i < count; i++) {
 			let ticket;
 			if (format === "bytes") {
-				ticket = await producer.submit({ body: randomBytes(size) });
+				ticket = await producer.submit(
+					AppendRecord.bytes({ body: randomBytes(size) }),
+				);
 			} else {
-				ticket = await producer.submit({
-					body: `[${i}] ${randomString(Math.max(0, size - 10))}`,
-				} as AppendRecord);
+				ticket = await producer.submit(
+					AppendRecord.string({
+						body: `[${i}] ${randomString(Math.max(0, size - 10))}`,
+					}),
+				);
 			}
 			tickets.push(ticket);
 		}

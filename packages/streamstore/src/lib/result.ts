@@ -4,7 +4,7 @@
  */
 
 import { S2Error } from "../error.js";
-import type { AppendAck } from "../generated/index.js";
+import type { AppendAck } from "../types.js";
 
 /**
  * Result of an append operation.

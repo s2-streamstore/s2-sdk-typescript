@@ -1,19 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { BatchTransform } from "../batch-transform.js";
-import type { AppendAck } from "../generated/index.js";
+import { AppendRecord } from "../index.js";
 import {
 	type AcksStream,
-	type AppendArgs,
 	type AppendRecord as AppendRecordType,
 	type AppendSession,
 	BatchSubmitTicket,
 } from "../lib/stream/types.js";
 import { Producer } from "../producer.js";
-import { AppendRecord } from "../utils.js";
+import { type AppendAck, type AppendInput } from "../types.js";
 
 class MockAppendSession implements AppendSession {
 	readonly readable = new ReadableStream<AppendAck>();
-	readonly writable = new WritableStream<AppendArgs>();
+	readonly writable = new WritableStream<AppendInput>();
 	private readonly acksStream: AcksStream =
 		new ReadableStream<AppendAck>() as AcksStream;
 
@@ -21,14 +20,14 @@ class MockAppendSession implements AppendSession {
 	private seq = 0;
 	private closed = false;
 
-	async submit(
-		records: AppendRecordType | AppendRecordType[],
-	): Promise<BatchSubmitTicket> {
+	async submit(input: AppendInput): Promise<BatchSubmitTicket> {
 		if (this.closed) {
 			throw new Error("session closed");
 		}
 
-		const batch = Array.isArray(records) ? records : [records];
+		const batch = Array.isArray(input.records)
+			? input.records
+			: [input.records];
 		for (const record of batch) {
 			if (typeof record.body !== "string") {
 				throw new Error("expected string body in test harness");
@@ -74,7 +73,7 @@ class MockAppendSession implements AppendSession {
 
 class AsyncMockAppendSession implements AppendSession {
 	readonly readable = new ReadableStream<AppendAck>();
-	readonly writable = new WritableStream<AppendArgs>();
+	readonly writable = new WritableStream<AppendInput>();
 	private readonly acksStream: AcksStream =
 		new ReadableStream<AppendAck>() as AcksStream;
 
@@ -83,14 +82,14 @@ class AsyncMockAppendSession implements AppendSession {
 	private closed = false;
 	private callCount = 0;
 
-	async submit(
-		records: AppendRecordType | AppendRecordType[],
-	): Promise<BatchSubmitTicket> {
+	async submit(input: AppendInput): Promise<BatchSubmitTicket> {
 		if (this.closed) {
 			throw new Error("session closed");
 		}
 
-		const batch = Array.isArray(records) ? records : [records];
+		const batch = Array.isArray(input.records)
+			? input.records
+			: [input.records];
 		for (const record of batch) {
 			if (typeof record.body !== "string") {
 				throw new Error("expected string body in test harness");
@@ -157,7 +156,7 @@ describe("Producer", () => {
 
 		const total = 100;
 		for (let i = 0; i < total; i++) {
-			await producer.submit(AppendRecord.make(`rec-${i}`));
+			await producer.submit(AppendRecord.string({ body: `rec-${i}` }));
 		}
 
 		await producer.close();
@@ -180,7 +179,9 @@ describe("Producer", () => {
 
 		const submissions = [];
 		for (let i = 0; i < 4; i++) {
-			submissions.push(producer.submit(AppendRecord.make(`rec-${i}`)));
+			submissions.push(
+				producer.submit(AppendRecord.string({ body: `rec-${i}` })),
+			);
 		}
 		await Promise.all(submissions);
 

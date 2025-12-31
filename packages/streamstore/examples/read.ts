@@ -16,11 +16,13 @@ if (streams.streams[0]) {
 		`reading s2://${basins.basins[0].name}/${streams.streams[0].name}`,
 	);
 
-	const readSession = await stream.readSession({
-		tail_offset: 5,
-		wait: 10, // wait up to 10 seconds for new records
-		as: "bytes",
-	});
+	const readSession = await stream.readSession(
+		{
+			start: { from: { tail_offset: 5 } },
+			stop: { wait: 10 }, // wait up to 10 seconds for new records
+		},
+		{ as: "bytes" },
+	);
 
 	for await (const record of readSession) {
 		console.log(`[seq ${record.seq_num}] ${record.body}`);

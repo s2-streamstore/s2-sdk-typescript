@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppendAck } from "../generated/index.js";
+import * as API from "../generated/index.js";
+import { AppendInput, AppendRecord } from "../index.js";
 import * as Redacted from "../lib/redacted.js";
 import * as SharedTransport from "../lib/stream/transport/fetch/shared.js";
 import { S2Stream } from "../stream.js";
+import * as Types from "../types.js";
 
 // Minimal Client shape to satisfy S2Stream constructor; we won't use it directly
 const fakeClient: any = {};
@@ -15,7 +17,8 @@ const makeStream = (retry?: { maxAttempts?: number }) =>
 		retry,
 	});
 
-const makeAck = (n: number): AppendAck => ({
+// streamAppendSpy returns generated types (not SDK types)
+const makeAck = (n: number): API.AppendAck => ({
 	start: { seq_num: n - 1, timestamp: 0 },
 	end: { seq_num: n, timestamp: 0 },
 	tail: { seq_num: n, timestamp: 0 },
@@ -55,8 +58,12 @@ describe("AppendSession", () => {
 
 		const session = await stream.appendSession();
 
-		const p1 = session.submit([{ body: "a" }]);
-		const p2 = session.submit([{ body: "b" }]);
+		const p1 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const p2 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
 
 		const ticket1 = await p1;
 		const ticket2 = await p2;
@@ -77,15 +84,19 @@ describe("AppendSession", () => {
 		const session = await stream.appendSession();
 		const acks = session.acks();
 
-		const received: AppendAck[] = [];
+		const received: Types.AppendAck[] = [];
 		const consumer = (async () => {
 			for await (const ack of acks) {
 				received.push(ack);
 			}
 		})();
 
-		const ack1 = await session.submit([{ body: "a" }]);
-		const ack2 = await session.submit([{ body: "b" }]);
+		const ack1 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const ack2 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
 
 		// Verify acks were received before closing
 		expect(ack1).toBeTruthy();
@@ -107,8 +118,12 @@ describe("AppendSession", () => {
 
 		const session = await stream.appendSession();
 
-		const p1 = session.submit([{ body: "x" }]);
-		const p2 = session.submit([{ body: "y" }]);
+		const p1 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		const p2 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "y" })]),
+		);
 
 		await Promise.all([p1, p2]);
 
@@ -127,7 +142,9 @@ describe("AppendSession", () => {
 
 		await session.close();
 
-		await expect(session.submit([{ body: "x" }])).rejects.toMatchObject({
+		await expect(
+			session.submit(AppendInput.create([AppendRecord.string({ body: "x" })])),
+		).rejects.toMatchObject({
 			message: expect.stringContaining("AppendSession is closed"),
 		});
 	});
@@ -142,8 +159,12 @@ describe("AppendSession", () => {
 
 		const session = await stream.appendSession();
 
-		const p1 = session.submit([{ body: "a" }]);
-		const p2 = session.submit([{ body: "b" }]);
+		const p1 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const p2 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
 
 		// Tickets should resolve (enqueued)
 		const ticket1 = await p1;
@@ -163,7 +184,9 @@ describe("AppendSession", () => {
 		await expect(ack2).rejects.toBeTruthy();
 
 		// After fatal error, session is dead - new submits should also reject
-		await expect(session.submit([{ body: "c" }])).rejects.toBeTruthy();
+		await expect(
+			session.submit(AppendInput.create([AppendRecord.string({ body: "c" })])),
+		).rejects.toBeTruthy();
 
 		// Advance more timers to ensure abort completes
 		await vi.advanceTimersByTimeAsync(100);
@@ -176,7 +199,9 @@ describe("AppendSession", () => {
 		const stream = makeStream();
 		streamAppendSpy.mockResolvedValue(makeAck(42));
 		const session = await stream.appendSession();
-		const ticket = await session.submit([{ body: "z" }]);
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "z" })]),
+		);
 		await ticket.ack();
 		expect(session.lastAckedPosition()?.end.seq_num).toBe(42);
 	});
@@ -191,7 +216,7 @@ describe("AppendSession", () => {
 
 		// Control when appends resolve
 		let resolveFirst: any;
-		const firstPromise = new Promise<AppendAck>((resolve) => {
+		const firstPromise = new Promise<API.AppendAck>((resolve) => {
 			resolveFirst = () => resolve(makeAck(1));
 		});
 
@@ -204,19 +229,21 @@ describe("AppendSession", () => {
 
 		// Submit first batch (50 bytes) - should succeed immediately
 		const largeBody = "x".repeat(42); // ~50 bytes with overhead
-		const p1 = writer.write({
-			records: [{ body: largeBody }],
-		});
+		const p1 = writer.write(
+			AppendInput.create([AppendRecord.string({ body: largeBody })]),
+		);
 
 		// Submit second batch (50 bytes) - should also queue
-		const p2 = writer.write({
-			records: [{ body: largeBody }],
-		});
+		const p2 = writer.write(
+			AppendInput.create([AppendRecord.string({ body: largeBody })]),
+		);
 
 		// Submit third batch (50 bytes) - should block due to backpressure
 		let thirdWriteStarted = false;
 		const p3 = (async () => {
-			await writer.write({ records: [{ body: largeBody }] });
+			await writer.write(
+				AppendInput.create([AppendRecord.string({ body: largeBody })]),
+			);
 			thirdWriteStarted = true;
 		})();
 

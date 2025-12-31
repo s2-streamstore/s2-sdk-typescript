@@ -1,25 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
-import type { AppendAck, StreamPosition } from "../generated/index.js";
+import { AppendInput, AppendRecord } from "../index.js";
 import type { AppendResult, CloseResult } from "../lib/result.js";
 import { err, errClose, ok, okClose } from "../lib/result.js";
 import { RetryAppendSession as AppendSessionImpl } from "../lib/retry.js";
 import type {
 	AcksStream,
-	AppendArgs,
-	AppendRecord,
 	TransportAppendSession,
 } from "../lib/stream/types.js";
+import type { AppendAck, StreamPosition } from "../types.js";
 
 /**
  * Minimal controllable AppendSession for testing AppendSessionImpl.
  */
 class FakeAppendSession {
 	public readonly readable: ReadableStream<AppendAck>;
-	public readonly writable: WritableStream<AppendArgs>;
+	public readonly writable: WritableStream<AppendInput>;
 	private acksController!: ReadableStreamDefaultController<AppendAck>;
 	private closed = false;
-	public writes: AppendArgs[] = [];
+	public writes: AppendInput[] = [];
 
 	failureCause(): undefined {
 		return undefined;
@@ -38,15 +37,15 @@ class FakeAppendSession {
 			},
 		});
 
-		this.writable = new WritableStream<AppendArgs>({
-			write: async (args) => {
+		this.writable = new WritableStream<AppendInput>({
+			write: async (input) => {
 				if (this.closed) {
 					throw new S2Error({ message: "AppendSession is closed" });
 				}
 				if (this.behavior.rejectWritesWith) {
 					throw this.behavior.rejectWritesWith;
 				}
-				this.writes.push(args);
+				this.writes.push(input);
 
 				// Optionally error the acks stream right after a write
 				if (this.behavior.errorAcksWith) {
@@ -59,10 +58,13 @@ class FakeAppendSession {
 
 				// Optionally emit an ack immediately
 				if (!this.behavior.neverAck && !this.behavior.errorAcksWith) {
-					const count = Array.isArray(args.records) ? args.records.length : 1;
-					const start = { seq_num: 0, timestamp: 0 } as StreamPosition;
-					const end = { seq_num: count, timestamp: 0 } as StreamPosition;
-					const tail = { seq_num: count, timestamp: 0 } as StreamPosition;
+					const batch = Array.isArray(input.records)
+						? input.records
+						: [input.records];
+					const count = batch.length;
+					const start: StreamPosition = { seq_num: 0, timestamp: 0 };
+					const end: StreamPosition = { seq_num: count, timestamp: 0 };
+					const tail: StreamPosition = { seq_num: count, timestamp: 0 };
 					const ack: AppendAck = { start, end, tail };
 					this.acksController.enqueue(ack);
 				}
@@ -98,13 +100,9 @@ class FakeAppendSession {
 		await this.close();
 	}
 
-	submit(
-		records: AppendRecord | AppendRecord[],
-		_args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<AppendAck> {
+	submit(input: AppendInput): Promise<AppendAck> {
 		const writer = this.writable.getWriter();
-		const batch = Array.isArray(records) ? records : [records];
-		return writer.write({ records: batch } as AppendArgs) as any;
+		return writer.write(input) as any;
 	}
 
 	lastAckedPosition(): AppendAck | undefined {
@@ -130,10 +128,7 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		} = {},
 	) {}
 
-	async submit(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<AppendResult> {
+	async submit(input: AppendInput): Promise<AppendResult> {
 		if (this.closed) {
 			return err(new S2Error({ message: "session is closed", status: 400 }));
 		}
@@ -147,8 +142,16 @@ class FakeTransportAppendSession implements TransportAppendSession {
 			return new Promise(() => {});
 		}
 
-		const batch = Array.isArray(records) ? records : [records];
-		this.writes.push({ records: batch, args });
+		const batch = Array.isArray(input.records)
+			? input.records
+			: [input.records];
+		this.writes.push({
+			records: batch,
+			args: {
+				matchSeqNum: input.match_seq_num,
+				fencingToken: input.fencing_token,
+			},
+		});
 
 		// Return custom ack if provided
 		if (
@@ -161,9 +164,9 @@ class FakeTransportAppendSession implements TransportAppendSession {
 
 		// Return default successful ack
 		const count = batch.length;
-		const start = { seq_num: 0, timestamp: 0 } as StreamPosition;
-		const end = { seq_num: count, timestamp: 0 } as StreamPosition;
-		const tail = { seq_num: count, timestamp: 0 } as StreamPosition;
+		const start: StreamPosition = { seq_num: 0, timestamp: 0 };
+		const end: StreamPosition = { seq_num: count, timestamp: 0 };
+		const tail: StreamPosition = { seq_num: count, timestamp: 0 };
 		const ack: AppendAck = { start, end, tail };
 		return ok(ack);
 	}
@@ -196,7 +199,9 @@ describe("AppendSessionImpl (unit)", () => {
 		);
 		(session as any).requestTimeoutMillis = 500;
 
-		const ticketP = session.submit([{ body: "x" }]);
+		const ticketP = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
 		const ticket = await ticketP;
 		const ackP = ticket.ack();
 
@@ -236,7 +241,9 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const p = session.submit([{ body: "x" }]);
+		const p = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
 		// Allow microtasks (acks error propagation) to run
 		await Promise.resolve();
 		await vi.advanceTimersByTimeAsync(10);
@@ -259,7 +266,9 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const ticket = await session.submit([{ body: "x" }]);
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
 		await expect(ticket.ack()).rejects.toMatchObject({
 			message: "Max attempts (1) exhausted: boom",
 			status: 500,
@@ -279,7 +288,9 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const ticket1 = await session.submit([{ body: "x" }]);
+		const ticket1 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
 		await expect(ticket1.ack()).rejects.toMatchObject({ status: 500 });
 		expect(session.failureCause()).toMatchObject({ status: 500 });
 	});
@@ -297,8 +308,12 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const ticket1 = await session.submit([{ body: "a" }]);
-		const ticket2 = await session.submit([{ body: "b" }]);
+		const ticket1 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const ticket2 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
 		await expect(ticket1.ack()).rejects.toMatchObject({ status: 500 });
 		await expect(ticket2.ack()).rejects.toMatchObject({ status: 500 });
 	});
@@ -324,13 +339,17 @@ describe("AppendSessionImpl (unit)", () => {
 		);
 
 		// First submit should succeed
-		const ticket1 = await session.submit([{ body: "a" }]);
+		const ticket1 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
 		await expect(ticket1.ack()).resolves.toMatchObject({
 			end: { seq_num: 1 },
 		});
 
 		// Second submit should trigger invariant violation
-		const ticket2 = await session.submit([{ body: "b" }]);
+		const ticket2 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
 		await expect(ticket2.ack()).rejects.toMatchObject({
 			message: expect.stringContaining(
 				"Sequence number not strictly increasing",
@@ -348,7 +367,9 @@ describe("AppendSessionImpl (unit)", () => {
 		});
 
 		// Subsequent submits should also fail
-		await expect(session.submit([{ body: "c" }])).rejects.toMatchObject({
+		await expect(
+			session.submit(AppendInput.create([AppendRecord.string({ body: "c" })])),
+		).rejects.toMatchObject({
 			status: 0,
 		});
 	});
@@ -374,13 +395,17 @@ describe("AppendSessionImpl (unit)", () => {
 		);
 
 		// First submit should succeed
-		const ticket1 = await session.submit([{ body: "a" }]);
+		const ticket1 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
 		await expect(ticket1.ack()).resolves.toMatchObject({
 			end: { seq_num: 10 },
 		});
 
 		// Second submit should trigger invariant violation
-		const ticket2 = await session.submit([{ body: "b" }]);
+		const ticket2 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
 		const error = await ticket2.ack().catch((e) => e);
 		expect(error.message).toContain("Sequence number not strictly increasing");
 		expect(error.message).toContain("previous=10");

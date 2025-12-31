@@ -7,13 +7,13 @@ import {
 	s2Error,
 	withS2Error,
 } from "../error.js";
-import type { AppendAck, StreamPosition } from "../generated/index.js";
+import type * as API from "../generated/index.js";
+import * as Types from "../types.js";
 import { meteredBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import type {
 	AcksStream,
-	AppendArgs,
 	AppendRecord,
 	AppendSessionOptions,
 	AppendSession as AppendSessionType,
@@ -28,6 +28,45 @@ import { BatchSubmitTicket } from "./stream/types.js";
 const debugWith = createDebug("s2:retry:with");
 const debugRead = createDebug("s2:retry:read");
 const debugSession = createDebug("s2:retry:session");
+
+/**
+ * Convert generated StreamPosition to SDK StreamPosition.
+ */
+function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
+	return {
+		seq_num: pos.seq_num,
+		timestamp: pos.timestamp,
+	};
+}
+
+/**
+ * Convert internal ReadRecord (with headers as object for strings) to SDK ReadRecord (with headers as array).
+ */
+function toSDKReadRecord<Format extends "string" | "bytes">(
+	record: ReadRecord<Format>,
+): Types.ReadRecord<Format> {
+	if (
+		record.headers &&
+		typeof record.headers === "object" &&
+		!Array.isArray(record.headers)
+	) {
+		// String format: headers is an object, convert to array of tuples
+		return {
+			seq_num: record.seq_num,
+			timestamp: record.timestamp,
+			body: record.body as any,
+			headers: Object.entries(record.headers) as any,
+		} as Types.ReadRecord<Format>;
+	} else {
+		// Bytes format: headers is already an array
+		return {
+			seq_num: record.seq_num,
+			timestamp: record.timestamp,
+			body: record.body as any,
+			headers: (record.headers ?? []) as any,
+		} as Types.ReadRecord<Format>;
+	}
+}
 
 /**
  * Default retry configuration.
@@ -178,11 +217,11 @@ export async function withRetries<T>(
 	throw lastError;
 }
 export class RetryReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadRecord<Format>>
+	extends ReadableStream<Types.ReadRecord<Format>>
 	implements ReadSessionType<Format>
 {
-	private _nextReadPosition: StreamPosition | undefined = undefined;
-	private _lastObservedTail: StreamPosition | undefined = undefined;
+	private _nextReadPosition: API.StreamPosition | undefined = undefined;
+	private _lastObservedTail: API.StreamPosition | undefined = undefined;
 
 	private _recordsRead: number = 0;
 	private _bytesRead: number = 0;
@@ -397,7 +436,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						this._bytesRead += meteredBytes(record);
 						attempt = 0;
 
-						controller.enqueue(record);
+						controller.enqueue(toSDKReadRecord(record));
 					}
 				}
 			},
@@ -419,7 +458,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	}
 
 	// Polyfill for older browsers / Node.js environments
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadRecord<Format>> {
+	[Symbol.asyncIterator](): AsyncIterableIterator<Types.ReadRecord<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") {
 			try {
@@ -463,12 +502,16 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		};
 	}
 
-	lastObservedTail(): StreamPosition | undefined {
-		return this._lastObservedTail;
+	lastObservedTail(): Types.StreamPosition | undefined {
+		return this._lastObservedTail
+			? toSDKStreamPosition(this._lastObservedTail)
+			: undefined;
 	}
 
-	nextReadPosition(): StreamPosition | undefined {
-		return this._nextReadPosition;
+	nextReadPosition(): Types.StreamPosition | undefined {
+		return this._nextReadPosition
+			? toSDKStreamPosition(this._nextReadPosition)
+			: undefined;
 	}
 }
 
@@ -508,10 +551,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
  * Each entry tracks a batch and its promise from the inner transport session.
  */
 type InflightEntry = {
-	records: AppendRecord[];
-	args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number };
+	input: Types.AppendInput;
 	expectedCount: number;
-	meteredBytes: number;
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
@@ -551,11 +592,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private closed = false;
 	private fatalError?: S2Error;
 
-	private _lastAckedPosition?: AppendAck;
-	private acksController?: ReadableStreamDefaultController<AppendAck>;
+	private _lastAckedPosition?: Types.AppendAck;
+	private acksController?: ReadableStreamDefaultController<Types.AppendAck>;
 
-	public readonly readable: ReadableStream<AppendAck>;
-	public readonly writable: WritableStream<AppendArgs>;
+	public readonly readable: ReadableStream<Types.AppendAck>;
+	public readonly writable: WritableStream<Types.AppendInput>;
 
 	private readonly streamName: string;
 
@@ -585,36 +626,21 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
 		this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
 
-		this.readable = new ReadableStream<AppendAck>({
+		this.readable = new ReadableStream<Types.AppendAck>({
 			start: (controller) => {
 				this.acksController = controller;
 			},
 		});
 
-		this.writable = new WritableStream<AppendArgs>({
+		this.writable = new WritableStream<Types.AppendInput>({
 			write: async (chunk) => {
 				if (this.closed || this.closing) {
 					throw new S2Error({ message: "AppendSession is closed" });
 				}
 
-				const recordsArray = Array.isArray(chunk.records)
-					? chunk.records
-					: [chunk.records];
-
-				// Calculate metered size once and pass along so submit can reuse it.
-				let batchMeteredSize = 0;
-				for (const record of recordsArray) {
-					batchMeteredSize += meteredBytes(record);
-				}
-
-				const { records: _records, ...rest } = chunk;
-				const args: Omit<AppendArgs, "records"> & {
-					precalculatedSize?: number;
-				} = rest;
-				args.precalculatedSize = batchMeteredSize;
-
+				// chunk is already AppendInput with meteredBytes computed
 				// Reuse submit() to leverage shared backpressure/pump logic.
-				const ticket = await this.submit(recordsArray, args);
+				const ticket = await this.submit(chunk);
 				// Writable stream API only needs enqueue semantics, so drop ack but
 				// suppress rejection noise (pump surfaces fatal errors elsewhere).
 				ticket.ack().catch(() => {
@@ -722,24 +748,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * The ticket's ack() can be awaited to get the AppendAck once the batch is durable.
 	 * This method applies backpressure and will block if capacity limits are reached.
 	 */
-	async submit(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<BatchSubmitTicket> {
+	async submit(input: Types.AppendInput): Promise<BatchSubmitTicket> {
 		if (this.closed || this.closing) {
 			return Promise.reject(
 				new S2Error({ message: "AppendSession is closed" }),
 			);
 		}
-		const recordsArray = Array.isArray(records) ? records : [records];
 
-		// Calculate metered size if not provided
-		let batchMeteredSize = args?.precalculatedSize ?? 0;
-		if (batchMeteredSize === 0) {
-			for (const record of recordsArray) {
-				batchMeteredSize += meteredBytes(record);
-			}
-		}
+		// Use cached metered size from AppendInput
+		const batchMeteredSize = input.meteredBytes;
 
 		// This needs to happen in the sync path.
 		this.ensurePump();
@@ -752,17 +769,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.pendingBatches = Math.max(0, this.pendingBatches - 1);
 
 		// Create the inner promise that resolves when durable
-		const innerPromise = this.submitInternal(
-			recordsArray,
-			args,
-			batchMeteredSize,
-		).then((result) => {
-			if (result.ok) {
-				return result.value;
-			} else {
-				throw result.error;
-			}
-		});
+		const innerPromise = this.submitInternal(input, batchMeteredSize).then(
+			(result) => {
+				if (result.ok) {
+					return result.value;
+				} else {
+					throw result.error;
+				}
+			},
+		);
 
 		// Prevent early rejections from surfacing as unhandled when callers delay ack()
 		innerPromise.catch(() => {});
@@ -771,7 +786,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		return new BatchSubmitTicket(
 			innerPromise,
 			batchMeteredSize,
-			recordsArray.length,
+			input.records.length,
 		);
 	}
 
@@ -780,10 +795,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Creates inflight entry and starts pump if needed.
 	 */
 	private submitInternal(
-		records: AppendRecord[],
-		args:
-			| (Omit<AppendArgs, "records"> & { precalculatedSize?: number })
-			| undefined,
+		input: Types.AppendInput,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
 		// Check for fatal error (e.g., from abort())
@@ -800,21 +812,19 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		return new Promise<AppendResult>((resolve) => {
 			// Create inflight entry (innerPromise will be set when pump processes it)
 			const entry: InflightEntry = {
-				records,
-				args,
-				expectedCount: records.length,
-				meteredBytes: batchMeteredSize,
+				input,
+				expectedCount: input.records.length,
 				innerPromise: new Promise(() => {}), // Never-resolving placeholder
 				maybeResolve: resolve,
 				needsSubmit: true, // Mark for pump to submit
 			};
 
 			debugSession(
-				"[%s] [SUBMIT] enqueueing %d records (%d bytes), matchSeqNum=%s: inflight=%d->%d, queuedBytes=%d->%d",
+				"[%s] [SUBMIT] enqueueing %d records (%d bytes), match_seq_num=%s: inflight=%d->%d, queuedBytes=%d->%d",
 				this.streamName,
-				records.length,
+				input.records.length,
 				batchMeteredSize,
-				args?.matchSeqNum ?? "none",
+				input.match_seq_num ?? "none",
 				this.inflight.length,
 				this.inflight.length + 1,
 				this.queuedBytes,
@@ -971,11 +981,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Get head entry (we know it exists because we checked length above)
 			const head = this.inflight[0]!;
 			debugSession(
-				"[%s] [PUMP] processing head: expectedCount=%d, meteredBytes=%d, matchSeqNum=%s",
+				"[%s] [PUMP] processing head: expectedCount=%d, meteredBytes=%d, match_seq_num=%s",
 				this.streamName,
 				head.expectedCount,
-				head.meteredBytes,
-				head.args?.matchSeqNum ?? "none",
+				head.input.meteredBytes,
+				head.input.match_seq_num ?? "none",
 			);
 
 			// Ensure session exists
@@ -1002,15 +1012,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			for (const entry of this.inflight) {
 				if (!entry.innerPromise || entry.needsSubmit) {
 					debugSession(
-						"[%s] [PUMP] submitting entry to inner session (%d records, %d bytes, matchSeqNum=%s)",
+						"[%s] [PUMP] submitting entry to inner session (%d records, %d bytes, match_seq_num=%s)",
 						this.streamName,
 						entry.expectedCount,
-						entry.meteredBytes,
-						entry.args?.matchSeqNum ?? "none",
+						entry.input.meteredBytes,
+						entry.input.match_seq_num ?? "none",
 					);
 					const attemptStarted = performance.now();
 					entry.attemptStartedMonotonicMs = attemptStarted;
-					entry.innerPromise = this.session.submit(entry.records, entry.args);
+					entry.innerPromise = this.session.submit(entry.input);
 					delete entry.needsSubmit;
 				}
 			}
@@ -1035,7 +1045,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				const error = new S2Error({
 					message: `Request timeout after ${attemptElapsed ?? "unknown"}ms (${
 						head.expectedCount
-					} records, ${head.meteredBytes} bytes)`,
+					} records, ${head.input.meteredBytes} bytes)`,
 					status: 408,
 					code: "REQUEST_TIMEOUT",
 					origin: "sdk",
@@ -1062,7 +1072,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				);
 
 				// Invariant check: ack count matches batch count
-				const ackCount = Number(ack.end.seq_num) - Number(ack.start.seq_num);
+				const ackCount = ack.end.seq_num - ack.start.seq_num;
 				if (ackCount !== head.expectedCount) {
 					const error = invariantViolation(
 						`Ack count mismatch: expected ${head.expectedCount}, got ${ackCount}`,
@@ -1078,8 +1088,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 				// Invariant check: sequence numbers must be strictly increasing
 				if (this._lastAckedPosition) {
-					const prevEnd = BigInt(this._lastAckedPosition.end.seq_num);
-					const currentEnd = BigInt(ack.end.seq_num);
+					const prevEnd = this._lastAckedPosition.end.seq_num;
+					const currentEnd = ack.end.seq_num;
 					if (currentEnd <= prevEnd) {
 						const error = invariantViolation(
 							`Sequence number not strictly increasing: previous=${prevEnd}, current=${currentEnd}`,
@@ -1113,10 +1123,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				debugSession(
 					"[%s] [PUMP] removing head from inflight, releasing %d bytes",
 					this.streamName,
-					head.meteredBytes,
+					head.input.meteredBytes,
 				);
 				this.inflight.shift();
-				this.releaseCapacity(head.meteredBytes);
+				this.releaseCapacity(head.input.meteredBytes);
 
 				// Reset consecutive failures on success
 				this.consecutiveFailures = 0;
@@ -1284,13 +1294,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Create new promise from new session
 			const attemptStarted = performance.now();
 			entry.attemptStartedMonotonicMs = attemptStarted;
-			entry.innerPromise = session.submit(entry.records, entry.args);
+			entry.innerPromise = session.submit(entry.input);
 			debugSession(
-				"[%s] resubmitted entry (%d records, %d bytes, matchSeqNum=%s)",
+				"[%s] resubmitted entry (%d records, %d bytes, match_seq_num=%s)",
 				this.streamName,
 				entry.expectedCount,
-				entry.meteredBytes,
-				entry.args?.matchSeqNum ?? "none",
+				entry.input.meteredBytes,
+				entry.input.match_seq_num ?? "none",
 			);
 		}
 
@@ -1299,13 +1309,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 	/**
 	 * Check if append can be retried under noSideEffects policy.
-	 * For appends, idempotency requires matchSeqNum.
+	 * For appends, idempotency requires match_seq_num.
 	 */
 	private isIdempotent(entry: InflightEntry): boolean {
-		const args = entry.args;
-		if (!args) return false;
-
-		return args.matchSeqNum !== undefined;
+		return entry.input.match_seq_num !== undefined;
 	}
 
 	/**
@@ -1479,7 +1486,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	/**
 	 * Get the last acknowledged position.
 	 */
-	lastAckedPosition(): AppendAck | undefined {
+	lastAckedPosition(): Types.AppendAck | undefined {
 		return this._lastAckedPosition;
 	}
 }

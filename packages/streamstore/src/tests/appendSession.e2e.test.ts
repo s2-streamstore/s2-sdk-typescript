@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
-import { AppendRecord, S2 } from "../index.js";
-import type { AppendArgs, SessionTransports } from "../lib/stream/types.js";
+import { AppendInput, AppendRecord, S2 } from "../index.js";
+import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
 const ILLEGAL_RECORD_BYTES = 1_100_000;
@@ -44,16 +44,16 @@ describeIf("AppendSession Integration Tests", () => {
 
 			// Submit multiple records sequentially
 			const records = [
-				AppendRecord.make("test-record-1"),
-				AppendRecord.make("test-record-2"),
-				AppendRecord.make("test-record-3"),
+				AppendRecord.string({ body: "test-record-1" }),
+				AppendRecord.string({ body: "test-record-2" }),
+				AppendRecord.string({ body: "test-record-3" }),
 			];
 
-			const ticket1 = await session.submit([records[0]!]);
+			const ticket1 = await session.submit(AppendInput.create([records[0]!]));
 			const ack1 = await ticket1.ack();
-			const ticket2 = await session.submit([records[1]!]);
+			const ticket2 = await session.submit(AppendInput.create([records[1]!]));
 			const ack2 = await ticket2.ack();
-			const ticket3 = await session.submit([records[2]!]);
+			const ticket3 = await session.submit(AppendInput.create([records[2]!]));
 			const ack3 = await ticket3.ack();
 
 			// Verify acks are sequential
@@ -79,12 +79,12 @@ describeIf("AppendSession Integration Tests", () => {
 			const session = await stream.appendSession();
 
 			const records = [
-				AppendRecord.make("batch-1"),
-				AppendRecord.make("batch-2"),
-				AppendRecord.make("batch-3"),
+				AppendRecord.string({ body: "batch-1" }),
+				AppendRecord.string({ body: "batch-2" }),
+				AppendRecord.string({ body: "batch-3" }),
 			];
 
-			const ticket = await session.submit(records);
+			const ticket = await session.submit(AppendInput.create(records));
 			const ack = await ticket.ack();
 
 			// Verify all records were appended
@@ -107,15 +107,27 @@ describeIf("AppendSession Integration Tests", () => {
 			const collectedAcks: Array<{ seq_num: number }> = [];
 			const acksPromise = (async () => {
 				for await (const ack of session.acks()) {
-					collectedAcks.push({ seq_num: ack.end.seq_num });
+					collectedAcks.push({ seq_num: Number(ack.end.seq_num) });
 					// Collect all acks until stream closes
 				}
 			})();
 
 			// Submit records
-			await (await session.submit([AppendRecord.make("ack-test-1")])).ack();
-			await (await session.submit([AppendRecord.make("ack-test-2")])).ack();
-			await (await session.submit([AppendRecord.make("ack-test-3")])).ack();
+			await (
+				await session.submit(
+					AppendInput.create([AppendRecord.string({ body: "ack-test-1" })]),
+				)
+			).ack();
+			await (
+				await session.submit(
+					AppendInput.create([AppendRecord.string({ body: "ack-test-2" })]),
+				)
+			).ack();
+			await (
+				await session.submit(
+					AppendInput.create([AppendRecord.string({ body: "ack-test-3" })]),
+				)
+			).ack();
 
 			// Close session to close acks stream
 			await session.close();
@@ -139,7 +151,9 @@ describeIf("AppendSession Integration Tests", () => {
 			expect(session.lastAckedPosition()).toBeUndefined();
 
 			// Submit a record
-			const ticket = await session.submit([AppendRecord.make("position-test")]);
+			const ticket = await session.submit(
+				AppendInput.create([AppendRecord.string({ body: "position-test" })]),
+			);
 			const ack = await ticket.ack();
 
 			// Verify lastSeenPosition is updated
@@ -161,12 +175,15 @@ describeIf("AppendSession Integration Tests", () => {
 
 			const session = await stream.appendSession();
 
-			const record = AppendRecord.make("header-test", [
-				["custom-header", "custom-value"],
-				["another-header", "another-value"],
-			]);
+			const record = AppendRecord.string({
+				body: "header-test",
+				headers: [
+					["custom-header", "custom-value"],
+					["another-header", "another-value"],
+				],
+			});
 
-			const ticket = await session.submit([record]);
+			const ticket = await session.submit(AppendInput.create([record]));
 			const ack = await ticket.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
@@ -184,9 +201,9 @@ describeIf("AppendSession Integration Tests", () => {
 			const session = await stream.appendSession();
 
 			const body = new TextEncoder().encode("bytes-record-test");
-			const record = AppendRecord.make(body);
+			const record = AppendRecord.bytes({ body: body });
 
-			const ticket = await session.submit([record]);
+			const ticket = await session.submit(AppendInput.create([record]));
 			const ack = await ticket.ack();
 
 			expect(ack.end.seq_num).toBeGreaterThan(0);
@@ -203,18 +220,16 @@ describeIf("AppendSession Integration Tests", () => {
 
 			const session = await stream.appendSession();
 
-			const batches: AppendArgs[] = Array.from(
-				{ length: 4 },
-				(_v, i): AppendArgs => ({
-					records: [AppendRecord.make(`pipe-batch-${i}`)],
+			const batches: AppendInput[] = Array.from({ length: 4 }, (_v, i) =>
+				AppendInput.create([AppendRecord.string({ body: `pipe-batch-${i}` })]),
+			);
+			batches.push(
+				AppendInput.create([AppendRecord.string({ body: "pipe-batch-fail" })], {
+					matchSeqNum: 0, // guaranteed to mismatch once earlier batches advance the tail
 				}),
 			);
-			batches.push({
-				records: [AppendRecord.make("pipe-batch-fail")],
-				matchSeqNum: 0, // guaranteed to mismatch once earlier batches advance the tail
-			});
 
-			const readable = new ReadableStream<AppendArgs>({
+			const readable = new ReadableStream<AppendInput>({
 				start(controller) {
 					for (const batch of batches) {
 						controller.enqueue(batch);
@@ -239,29 +254,27 @@ describeIf("AppendSession Integration Tests", () => {
 
 			const session = await stream.appendSession();
 
-			const batches: AppendArgs[] = Array.from(
-				{ length: 4 },
-				(_v, i): AppendArgs => ({
-					records: [AppendRecord.make(`acks-pipe-${i}`)],
+			const batches: AppendInput[] = Array.from({ length: 4 }, (_v, i) =>
+				AppendInput.create([AppendRecord.string({ body: `acks-pipe-${i}` })]),
+			);
+			batches.push(
+				AppendInput.create([AppendRecord.string({ body: "acks-pipe-fail" })], {
+					matchSeqNum: 0,
 				}),
 			);
-			batches.push({
-				records: [AppendRecord.make("acks-pipe-fail")],
-				matchSeqNum: 0,
-			});
 
 			const ackSeqs: number[] = [];
 			const acksPromise = (async () => {
 				try {
 					for await (const ack of session.acks()) {
-						ackSeqs.push(ack.end.seq_num);
+						ackSeqs.push(Number(ack.end.seq_num));
 					}
 				} catch (err) {
 					throw err;
 				}
 			})();
 
-			const readable = new ReadableStream<AppendArgs>({
+			const readable = new ReadableStream<AppendInput>({
 				start(controller) {
 					for (const batch of batches) {
 						controller.enqueue(batch);
@@ -294,11 +307,21 @@ describeIf("AppendSession Integration Tests", () => {
 
 			// Submit multiple records concurrently
 			const promises = [
-				session.submit([AppendRecord.make("concurrent-1")]),
-				session.submit([AppendRecord.make("concurrent-2")]),
-				session.submit([AppendRecord.make("concurrent-3")]),
-				session.submit([AppendRecord.make("concurrent-4")]),
-				session.submit([AppendRecord.make("concurrent-5")]),
+				session.submit(
+					AppendInput.create([AppendRecord.string({ body: "concurrent-1" })]),
+				),
+				session.submit(
+					AppendInput.create([AppendRecord.string({ body: "concurrent-2" })]),
+				),
+				session.submit(
+					AppendInput.create([AppendRecord.string({ body: "concurrent-3" })]),
+				),
+				session.submit(
+					AppendInput.create([AppendRecord.string({ body: "concurrent-4" })]),
+				),
+				session.submit(
+					AppendInput.create([AppendRecord.string({ body: "concurrent-5" })]),
+				),
 			];
 
 			const tickets = await Promise.all(promises);
@@ -325,7 +348,9 @@ describeIf("AppendSession Integration Tests", () => {
 
 			// Submit after close should reject
 			await expect(
-				session.submit([AppendRecord.make("after-close")]),
+				session.submit(
+					AppendInput.create([AppendRecord.string({ body: "after-close" })]),
+				),
 			).rejects.toThrow();
 		},
 	);
@@ -339,8 +364,12 @@ describeIf("AppendSession Integration Tests", () => {
 			const session = await stream.appendSession();
 
 			// Submit records
-			const p1 = session.submit([AppendRecord.make("drain-1")]);
-			const p2 = session.submit([AppendRecord.make("drain-2")]);
+			const p1 = session.submit(
+				AppendInput.create([AppendRecord.string({ body: "drain-1" })]),
+			);
+			const p2 = session.submit(
+				AppendInput.create([AppendRecord.string({ body: "drain-2" })]),
+			);
 
 			// Close should wait for all appends to complete
 			await session.close();
@@ -365,16 +394,24 @@ describeIf("AppendSession Integration Tests", () => {
 			const session = await stream.appendSession();
 
 			// Submit a few records
-			const p1 = session.submit([AppendRecord.make("item-0")]);
-			const p2 = session.submit([AppendRecord.make("item-1")]);
-			const p3 = session.submit([AppendRecord.make("item-2")]);
+			const p1 = session.submit(
+				AppendInput.create([AppendRecord.string({ body: "item-0" })]),
+			);
+			const p2 = session.submit(
+				AppendInput.create([AppendRecord.string({ body: "item-1" })]),
+			);
+			const p3 = session.submit(
+				AppendInput.create([AppendRecord.string({ body: "item-2" })]),
+			);
 
 			// Close should wait for all pending appends to complete
 			await session.close();
 
 			// Subsequent submit after close should fail
 			await expect(
-				session.submit([AppendRecord.make("item-3")]),
+				session.submit(
+					AppendInput.create([AppendRecord.string({ body: "item-3" })]),
+				),
 			).rejects.toThrow(/closed/i);
 
 			// All three promises should be resolved successfully
@@ -402,15 +439,18 @@ describeIf("AppendSession Integration Tests", () => {
 			const oversized = new Uint8Array(ILLEGAL_RECORD_BYTES);
 			oversized.fill(0xab);
 
-			const batches: AppendArgs[] = [
-				{ records: [AppendRecord.make("ok-0")] },
-				{ records: [AppendRecord.make("ok-1")] },
-				{ records: [AppendRecord.make("ok-2")] },
-				{ records: [AppendRecord.make("ok-3")] },
-				{ records: [AppendRecord.make(oversized)] },
+			const batches: AppendInput[] = [
+				AppendInput.create([AppendRecord.string({ body: "ok-0" })]),
+				AppendInput.create([AppendRecord.string({ body: "ok-1" })]),
+				AppendInput.create([AppendRecord.string({ body: "ok-2" })]),
+				AppendInput.create([AppendRecord.string({ body: "ok-3" })]),
+				{
+					records: [AppendRecord.bytes({ body: oversized })],
+					meteredBytes: 1100008,
+				},
 			];
 
-			const readable = new ReadableStream<AppendArgs>({
+			const readable = new ReadableStream<AppendInput>({
 				start(controller) {
 					for (const batch of batches) {
 						controller.enqueue(batch);

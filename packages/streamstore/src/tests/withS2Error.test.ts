@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { S2Error, withS2Error } from "../error.js";
+import { AppendInput, AppendRecord } from "../index.js";
 
 describe("withS2Error response parsing", () => {
 	it("returns result when response has no error", async () => {

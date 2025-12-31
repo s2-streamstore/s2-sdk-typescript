@@ -17,7 +17,7 @@ const LEGACY_WRITER_ID = "__legacy__";
  */
 export function extractDedupeSeq(
 	headers?: ReadHeaders<"bytes">,
-): [string, bigint] | undefined {
+): [string, number] | undefined {
 	if (!headers) return undefined;
 
 	let seq: bigint | undefined;
@@ -57,7 +57,7 @@ export function extractDedupeSeq(
 	}
 
 	if (seq === undefined) return undefined;
-	return [writerId ?? LEGACY_WRITER_ID, seq];
+	return [writerId ?? LEGACY_WRITER_ID, Number(seq)];
 }
 
 /**
@@ -68,7 +68,7 @@ export function extractDedupeSeq(
  * duplicate and should be dropped.
  */
 export class DedupeFilter {
-	private lastSeenSeq: bigint | undefined;
+	private lastSeenSeq: number | undefined;
 	private lastWriterId: string | undefined;
 
 	shouldAccept(headers?: ReadHeaders<"bytes">): boolean {
@@ -101,13 +101,13 @@ export class DedupeFilter {
 export function injectDedupeHeaders(
 	records: AppendRecord[],
 	writerId: string,
-	startSeq: bigint,
-): bigint {
+	startSeq: number,
+): number {
 	let seq = startSeq;
 
 	for (const record of records) {
 		const headerValue = encodeU64(seq);
-		seq += 1n;
+		seq += 1;
 
 		const existing = record.headers as
 			| AppendHeaders<"string">

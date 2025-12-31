@@ -76,7 +76,7 @@ let append = await image
 	.pipeThrough(
 		new TransformStream<Uint8Array, AppendRecord>({
 			transform(arr, controller) {
-				controller.enqueue(AppendRecord.make(arr));
+				controller.enqueue(AppendRecord.bytes({ body: arr }));
 			},
 		}),
 	)
@@ -84,16 +84,22 @@ let append = await image
 	.pipeTo(producer.writable);
 
 console.log(
-	`image written to S2 over ${producer.appendSession.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num} records, starting at seqNum=${startAt.tail.seq_num}`,
+	`image written to S2 over ${producer.appendSession.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num} records, starting at seq_num=${startAt.tail.seq_num}`,
 );
 
-let readSession = await stream.readSession({
-	seq_num: startAt.tail.seq_num,
-	count:
-		producer.appendSession.lastAckedPosition()!.end!.seq_num -
-		startAt.tail.seq_num,
-	as: "bytes",
-});
+let readSession = await stream.readSession(
+	{
+		start: { from: { seq_num: startAt.tail.seq_num } },
+		stop: {
+			limits: {
+				count:
+					producer.appendSession.lastAckedPosition()!.end.seq_num -
+					startAt.tail.seq_num,
+			},
+		},
+	},
+	{ as: "bytes" },
+);
 
 // Write to a local file.
 const id = Math.random().toString(36).slice(2, 10);

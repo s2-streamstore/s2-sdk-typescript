@@ -6,14 +6,15 @@ import {
 	accountMetrics,
 	type BasinMetricsData,
 	basinMetrics,
+	type MetricSetResponse,
 	type StreamMetricsData,
 	streamMetrics,
 } from "./generated/index.js";
 import { withRetries } from "./lib/retry.js";
 
-export interface AccountMetricsArgs extends DataToObject<AccountMetricsData> {}
-export interface BasinMetricsArgs extends DataToObject<BasinMetricsData> {}
-export interface StreamMetricsArgs extends DataToObject<StreamMetricsData> {}
+export interface AccountMetricsInput extends DataToObject<AccountMetricsData> {}
+export interface BasinMetricsInput extends DataToObject<BasinMetricsData> {}
+export interface StreamMetricsInput extends DataToObject<StreamMetricsData> {}
 
 export class S2Metrics {
 	readonly client: Client;
@@ -32,7 +33,10 @@ export class S2Metrics {
 	 * @param args.end Optional end timestamp (Unix seconds)
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
-	public async account(args: AccountMetricsArgs, options?: S2RequestOptions) {
+	public async account(
+		args: AccountMetricsInput,
+		options?: S2RequestOptions,
+	): Promise<MetricSetResponse> {
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				accountMetrics({
@@ -53,7 +57,10 @@ export class S2Metrics {
 	 * @param args.end Optional end timestamp (Unix seconds)
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
-	public async basin(args: BasinMetricsArgs, options?: S2RequestOptions) {
+	public async basin(
+		args: BasinMetricsInput,
+		options?: S2RequestOptions,
+	): Promise<MetricSetResponse> {
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				basinMetrics({
@@ -76,7 +83,10 @@ export class S2Metrics {
 	 * @param args.end Optional end timestamp (Unix seconds)
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
-	public async stream(args: StreamMetricsArgs, options?: S2RequestOptions) {
+	public async stream(
+		args: StreamMetricsInput,
+		options?: S2RequestOptions,
+	): Promise<MetricSetResponse> {
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				streamMetrics({

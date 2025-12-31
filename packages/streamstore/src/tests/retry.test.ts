@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
+import { AppendInput, AppendRecord } from "../index.js";
 import { DEFAULT_RETRY_CONFIG, withRetries } from "../lib/retry.js";
 
 describe("Retry Logic", () => {

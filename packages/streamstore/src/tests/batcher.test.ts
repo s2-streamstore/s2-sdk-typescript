@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BatchTransform } from "../batch-transform.js";
 import { S2Error } from "../error.js";
+import { AppendInput, AppendRecord } from "../index.js";
 
 describe("BatchTransform", () => {
 	it("close() flushes remaining records", async () => {
@@ -13,7 +14,7 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ body: "x" });
+			await writer.write(AppendRecord.string({ body: "x" }));
 			await writer.close();
 		})();
 
@@ -38,10 +39,10 @@ describe("BatchTransform", () => {
 
 		const writePromise = (async () => {
 			// First batch: two records
-			await writer.write({ body: "a" });
-			await writer.write({ body: "b" });
+			await writer.write(AppendRecord.string({ body: "a" }));
+			await writer.write(AppendRecord.string({ body: "b" }));
 			// Second batch: one record
-			await writer.write({ body: "c" });
+			await writer.write(AppendRecord.string({ body: "c" }));
 			await writer.close();
 		})();
 
@@ -49,15 +50,15 @@ describe("BatchTransform", () => {
 		const result1 = await reader.read();
 		expect(result1.done).toBe(false);
 		expect(result1.value?.records).toHaveLength(2);
-		expect(result1.value?.fencingToken).toBe("ft");
-		expect(result1.value?.matchSeqNum).toBe(10);
+		expect(result1.value?.fencing_token).toBe("ft");
+		expect(result1.value?.match_seq_num).toBe(10);
 
 		// Second batch should have matchSeqNum: 12 (incremented by 2)
 		const result2 = await reader.read();
 		expect(result2.done).toBe(false);
 		expect(result2.value?.records).toHaveLength(1);
-		expect(result2.value?.fencingToken).toBe("ft");
-		expect(result2.value?.matchSeqNum).toBe(12);
+		expect(result2.value?.fencing_token).toBe("ft");
+		expect(result2.value?.match_seq_num).toBe(12);
 
 		await writePromise;
 		reader.releaseLock();
@@ -73,9 +74,9 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ body: "a" });
-			await writer.write({ body: "b" });
-			await writer.write({ body: "c" });
+			await writer.write(AppendRecord.string({ body: "a" }));
+			await writer.write(AppendRecord.string({ body: "b" }));
+			await writer.write(AppendRecord.string({ body: "c" }));
 			await writer.close();
 		})();
 
@@ -104,9 +105,9 @@ describe("BatchTransform", () => {
 
 		const writePromise = (async () => {
 			// Each record is ~13 bytes (8 overhead + 5 body)
-			await writer.write({ body: "hello" });
-			await writer.write({ body: "world" });
-			await writer.write({ body: "test!" });
+			await writer.write(AppendRecord.string({ body: "hello" }));
+			await writer.write(AppendRecord.string({ body: "world" }));
+			await writer.write(AppendRecord.string({ body: "test!" }));
 			await writer.close();
 		})();
 

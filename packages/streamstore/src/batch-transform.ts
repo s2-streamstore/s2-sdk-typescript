@@ -1,7 +1,8 @@
 import { S2Error } from "./error.js";
-import { AppendRecord, meteredBytes } from "./utils.js";
+import { AppendInput, type AppendRecord } from "./types.js";
+import { meteredBytes } from "./utils.js";
 
-export interface BatchTransformArgs {
+export interface BatchTransformOptions {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
 	lingerDurationMillis?: number;
 	/** Maximum number of records in a batch (default: 1000, max: 1000) */
@@ -15,11 +16,7 @@ export interface BatchTransformArgs {
 }
 
 /** Batch output type with optional fencing token and matchSeqNum */
-export type BatchOutput = {
-	records: AppendRecord[];
-	fencingToken?: string;
-	matchSeqNum?: number;
-};
+export type BatchOutput = AppendInput;
 
 /**
  * A TransformStream that batches AppendRecords based on time, record count, and byte size.
@@ -41,7 +38,7 @@ export type BatchOutput = {
  *
  * // Or use manually
  * const writer = batcher.writable.getWriter();
- * writer.write(AppendRecord.make("foo"));
+ * writer.write(AppendRecord.string({ body: "foo" }));
  * await writer.close();
  *
  * for await (const batch of batcher.readable) {
@@ -61,7 +58,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	private readonly fencingToken?: string;
 	private nextMatchSeqNum?: number;
 
-	constructor(args?: BatchTransformArgs) {
+	constructor(args?: BatchTransformOptions) {
 		let controller: TransformStreamDefaultController<BatchOutput>;
 
 		super({
@@ -177,15 +174,10 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 		// Emit the batch downstream with optional fencing token and matchSeqNum
 		if (this.controller) {
-			const batch: BatchOutput = {
-				records: [...this.currentBatch],
-			};
-			if (this.fencingToken !== undefined) {
-				batch.fencingToken = this.fencingToken;
-			}
-			if (matchSeqNum !== undefined) {
-				batch.matchSeqNum = matchSeqNum;
-			}
+			const batch = AppendInput.create([...this.currentBatch], {
+				fencingToken: this.fencingToken,
+				matchSeqNum,
+			});
 			this.controller.enqueue(batch);
 		}
 

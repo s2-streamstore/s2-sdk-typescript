@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BatchTransform } from "../batch-transform.js";
-import type { AppendAck } from "../generated/index.js";
+import { AppendInput, AppendRecord } from "../index.js";
 import * as Redacted from "../lib/redacted.js";
 import * as SharedTransport from "../lib/stream/transport/fetch/shared.js";
 import { S2Stream } from "../stream.js";
+import type { AppendAck } from "../types.js";
 
 const fakeClient: any = {};
 const makeStream = () =>
@@ -12,7 +13,8 @@ const makeStream = () =>
 		accessToken: Redacted.make("test-access-token"),
 		forceTransport: "fetch",
 	});
-const makeAck = (n: number): AppendAck => ({
+// streamAppend returns GENERATED AppendAck (seq_num, number), not SDK types
+const makeAck = (n: number): any => ({
 	start: { seq_num: n - 1, timestamp: 0 },
 	end: { seq_num: n, timestamp: 0 },
 	tail: { seq_num: n, timestamp: 0 },
@@ -37,9 +39,10 @@ describe("BatchTransform + AppendSession integration", () => {
 		const session = await stream.appendSession();
 		// Mock returns ack based on number of records submitted
 		let cumulativeSeq = 0;
-		streamAppendSpy.mockImplementation((_0: any, _1: any, records: any[]) => {
+		streamAppendSpy.mockImplementation((_0: any, _1: any, input: any) => {
 			const start = cumulativeSeq;
-			cumulativeSeq += records.length;
+			cumulativeSeq += input.records.length;
+			// streamAppend returns GENERATED types (seq_num, number)
 			return Promise.resolve({
 				start: { seq_num: start, timestamp: 0 },
 				end: { seq_num: cumulativeSeq, timestamp: 0 },
@@ -56,8 +59,8 @@ describe("BatchTransform + AppendSession integration", () => {
 		const pipePromise = batcher.readable.pipeTo(session.writable);
 
 		const writer = batcher.writable.getWriter();
-		await writer.write({ body: "a" });
-		await writer.write({ body: "b" });
+		await writer.write(AppendRecord.string({ body: "a" }));
+		await writer.write(AppendRecord.string({ body: "b" }));
 		await writer.close();
 
 		// Wait for linger to flush and pipe to complete
@@ -65,7 +68,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		await pipePromise;
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(1);
-		expect(streamAppendSpy.mock.calls?.[0]?.[2]).toHaveLength(2);
+		expect(streamAppendSpy.mock.calls?.[0]?.[2]?.records).toHaveLength(2);
 	});
 
 	it("batch overflow increments matchSeqNum across multiple flushes", async () => {
@@ -73,9 +76,10 @@ describe("BatchTransform + AppendSession integration", () => {
 		const session = await stream.appendSession();
 		// Mock returns ack based on number of records submitted
 		let cumulativeSeq = 0;
-		streamAppendSpy.mockImplementation((_0: any, _1: any, records: any[]) => {
+		streamAppendSpy.mockImplementation((_0: any, _1: any, input: any) => {
 			const start = cumulativeSeq;
-			cumulativeSeq += records.length;
+			cumulativeSeq += input.records.length;
+			// streamAppend returns GENERATED types (seq_num, number)
 			return Promise.resolve({
 				start: { seq_num: start, timestamp: 0 },
 				end: { seq_num: cumulativeSeq, timestamp: 0 },
@@ -93,9 +97,9 @@ describe("BatchTransform + AppendSession integration", () => {
 		const pipePromise = batcher.readable.pipeTo(session.writable);
 
 		const writer = batcher.writable.getWriter();
-		await writer.write({ body: "1" });
-		await writer.write({ body: "2" });
-		await writer.write({ body: "3" });
+		await writer.write(AppendRecord.string({ body: "1" }));
+		await writer.write(AppendRecord.string({ body: "2" }));
+		await writer.write(AppendRecord.string({ body: "3" }));
 		await writer.close();
 
 		// Advance timers to allow linger flushes to complete
@@ -103,11 +107,11 @@ describe("BatchTransform + AppendSession integration", () => {
 		await pipePromise;
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
-		expect(streamAppendSpy.mock.calls?.[0]?.[3]).toMatchObject({
-			matchSeqNum: 5,
+		expect(streamAppendSpy.mock.calls?.[0]?.[2]).toMatchObject({
+			match_seq_num: 5,
 		});
-		expect(streamAppendSpy.mock.calls?.[1]?.[3]).toMatchObject({
-			matchSeqNum: 7,
+		expect(streamAppendSpy.mock.calls?.[1]?.[2]).toMatchObject({
+			match_seq_num: 7,
 		});
 	});
 
@@ -116,9 +120,10 @@ describe("BatchTransform + AppendSession integration", () => {
 		const session = await stream.appendSession();
 		// Mock returns ack based on number of records submitted
 		let cumulativeSeq = 0;
-		streamAppendSpy.mockImplementation((_0: any, _1: any, records: any[]) => {
+		streamAppendSpy.mockImplementation((_0: any, _1: any, input: any) => {
 			const start = cumulativeSeq;
-			cumulativeSeq += records.length;
+			cumulativeSeq += input.records.length;
+			// streamAppend returns GENERATED types (seq_num, number)
 			return Promise.resolve({
 				start: { seq_num: start, timestamp: 0 },
 				end: { seq_num: cumulativeSeq, timestamp: 0 },
@@ -143,7 +148,7 @@ describe("BatchTransform + AppendSession integration", () => {
 		const pipePromise = batcher.readable.pipeTo(session.writable);
 
 		const writer = batcher.writable.getWriter();
-		await writer.write({ body: "x" });
+		await writer.write(AppendRecord.string({ body: "x" }));
 		await writer.close();
 
 		// Wait for pipe to complete (which closes the session)
@@ -152,6 +157,6 @@ describe("BatchTransform + AppendSession integration", () => {
 		await acksPromise;
 
 		expect(acks).toHaveLength(1);
-		expect(acks[0]?.end.seq_num).toBe(1); // 1 record written
+		expect(acks[0]?.end.seq_num).toBe(1); // 1 record written (SDK types use bigint)
 	});
 });

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
-import { AppendRecord, S2, type S2Basin } from "../index.js";
+import { AppendInput, AppendRecord, S2, type S2Basin } from "../index.js";
 import { randomToken } from "../lib/base64.js";
 
 const hasEnv = !!process.env.S2_ACCESS_TOKEN;
@@ -184,11 +184,13 @@ describeIf("Basin Management Integration Tests", () => {
 			const stream = basin.stream(anotherStreamName);
 			const session = await stream.appendSession();
 
-			const ticket = await session.submit([
-				AppendRecord.make("test-record-1"),
-				AppendRecord.make("test-record-2"),
-				AppendRecord.make("test-record-3"),
-			]);
+			const ticket = await session.submit(
+				AppendInput.create([
+					AppendRecord.string({ body: "test-record-1" }),
+					AppendRecord.string({ body: "test-record-2" }),
+					AppendRecord.string({ body: "test-record-3" }),
+				]),
+			);
 			const ack = await ticket.ack();
 
 			expect(ack.start.seq_num).toBe(0);
@@ -201,11 +203,13 @@ describeIf("Basin Management Integration Tests", () => {
 			);
 
 			// Step 10: Read back and verify
-			const readResult = await stream.read({
-				seq_num: 0,
-				count: 3,
-				as: "string",
-			});
+			const readResult = await stream.read(
+				{
+					start: { from: { seq_num: 0 } },
+					stop: { limits: { count: 3 } },
+				},
+				{ as: "string" },
+			);
 
 			expect(readResult.records).toHaveLength(3);
 			expect(readResult.records[0]?.body).toBe("test-record-1");
@@ -284,11 +288,13 @@ describeIf("Basin Management Integration Tests", () => {
 			const scopedStream = scopedBasin.stream(
 				String(anotherRandomIndex).padStart(4, "0"),
 			);
-			const scopedReadResult = await scopedStream.read({
-				seq_num: 0,
-				count: 3,
-				as: "string",
-			});
+			const scopedReadResult = await scopedStream.read(
+				{
+					start: { from: { seq_num: 0 } },
+					stop: { limits: { count: 3 } },
+				},
+				{ as: "string" },
+			);
 
 			expect(scopedReadResult.records).toHaveLength(3);
 			expect(scopedReadResult.records[0]?.body).toBe("test-record-1");
@@ -297,7 +303,9 @@ describeIf("Basin Management Integration Tests", () => {
 			// Step 15: Verify read-only access - writing should fail
 			let writeError: Error | undefined;
 			try {
-				await scopedStream.append([AppendRecord.make("should-fail")]);
+				await scopedStream.append(
+					AppendInput.create([AppendRecord.string({ body: "should-fail" })]),
+				);
 			} catch (err) {
 				writeError = err as Error;
 			}

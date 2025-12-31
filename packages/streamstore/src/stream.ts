@@ -1,7 +1,12 @@
 import type { RetryConfig, S2RequestOptions } from "./common.js";
 import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
-import { type AppendAck, checkTail } from "./generated/index.js";
+import { checkTail } from "./generated/index.js";
+import {
+	fromAPIReadBatchBytes,
+	fromAPIReadBatchString,
+	toAPIReadQuery,
+} from "./internal/mappers.js";
 import { isRetryable, withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
@@ -9,16 +14,21 @@ import {
 	streamRead,
 } from "./lib/stream/transport/fetch/shared.js";
 import type {
-	AppendArgs,
 	AppendRecord,
 	AppendSession,
 	AppendSessionOptions,
 	ReadArgs,
-	ReadBatch,
 	ReadSession,
 	SessionTransport,
 	TransportConfig,
 } from "./lib/stream/types.js";
+import type {
+	AppendAck,
+	AppendInput,
+	ReadBatch,
+	ReadInput,
+	TailResponse,
+} from "./types.js";
 
 export class S2Stream {
 	private readonly client: Client;
@@ -64,7 +74,7 @@ export class S2Stream {
 	 *
 	 * Returns the next sequence number and timestamp to be assigned (`tail`).
 	 */
-	public async checkTail(options?: S2RequestOptions) {
+	public async checkTail(options?: S2RequestOptions): Promise<TailResponse> {
 		this.ensureOpen();
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
@@ -88,50 +98,59 @@ export class S2Stream {
 	 * - Use `readSession` for streaming reads
 	 */
 	public async read<Format extends "string" | "bytes" = "string">(
-		args?: ReadArgs<Format>,
-		options?: S2RequestOptions,
+		input?: ReadInput,
+		options?: S2RequestOptions & { as?: Format },
 	): Promise<ReadBatch<Format>> {
 		this.ensureOpen();
 		return await withRetries(this.retryConfig, async () => {
-			return await streamRead(this.name, this.client, args, options);
+			// Convert ReadInput to ReadArgs using mapper
+			const readArgs: ReadArgs<Format> = {
+				...toAPIReadQuery(input),
+				as: options?.as,
+			} as ReadArgs<Format>;
+			const genBatch = await streamRead(
+				this.name,
+				this.client,
+				readArgs,
+				options,
+			);
+			// Convert from API to SDK ReadBatch
+			return (
+				options?.as === "bytes"
+					? fromAPIReadBatchBytes(genBatch as any)
+					: fromAPIReadBatchString(genBatch as any)
+			) as ReadBatch<Format>;
 		});
 	}
 	/**
-	 * Append one or more records to the stream.
+	 * Append a batch of records to the stream.
 	 *
 	 * - Automatically base64-encodes when format is "bytes".
-	 * - Supports conditional appends via `fencingToken` and `matchSeqNum`.
+	 * - Supports conditional appends via `fencingToken` and `matchSeqNum` in the input.
 	 * - Returns the acknowledged range and the stream tail after the append.
+	 * - All records in a batch must use the same format (either all string or all bytes).
 	 *
-	 * All records in a single append call must use the same format (either all string or all bytes).
+	 * Use {@link createAppendInput} to construct a validated AppendInput.
 	 * For high-throughput sequential appends, use `appendSession()` instead.
 	 *
-	 * @param records The record(s) to append
-	 * @param args Optional append arguments (fencingToken, matchSeqNum)
+	 * @param input The append input containing records and optional conditions
 	 * @param options Optional request options
 	 */
 	public async append(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records">,
+		input: AppendInput,
 		options?: S2RequestOptions,
 	): Promise<AppendAck> {
 		this.ensureOpen();
 		return await withRetries(
 			this.retryConfig,
 			async () => {
-				return await streamAppend(
-					this.name,
-					this.client,
-					records,
-					args,
-					options,
-				);
+				return await streamAppend(this.name, this.client, input, options);
 			},
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "all") === "noSideEffects") {
 					// Allow retry only when the append is naturally idempotent by containing
-					// a matchSeqNum condition.
-					return !!args?.matchSeqNum;
+					// a match_seq_num condition.
+					return !!input.match_seq_num;
 				} else {
 					return true;
 				}
@@ -145,12 +164,17 @@ export class S2Stream {
 	 * When `as: "bytes"` is provided, bodies and headers are decoded to `Uint8Array`.
 	 */
 	public async readSession<Format extends "string" | "bytes" = "string">(
-		args?: ReadArgs<Format>,
-		options?: S2RequestOptions,
+		input?: ReadInput,
+		options?: S2RequestOptions & { as?: Format },
 	): Promise<ReadSession<Format>> {
 		this.ensureOpen();
 		const transport = await this.getTransport();
-		return await transport.makeReadSession(this.name, args, options);
+		// Convert ReadInput to ReadArgs using mapper
+		const readArgs: ReadArgs<Format> = {
+			...toAPIReadQuery(input),
+			as: options?.as,
+		} as ReadArgs<Format>;
+		return await transport.makeReadSession(this.name, readArgs, options);
 	}
 	/**
 	 * Create an append session that guarantees ordering of submissions.

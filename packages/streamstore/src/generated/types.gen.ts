@@ -72,7 +72,7 @@ export type AccumulationMetric = {
 export type AppendAck = {
     /**
      * Sequence number of the last record that was appended `+ 1`, and timestamp of the last record that was appended.
-     * The difference between `end.seq_num` and `start.seq_num` will be the number of records appended.
+     * The difference between `end.seqNum` and `start.seqNum` will be the number of records appended.
      */
     end: StreamPosition;
     /**

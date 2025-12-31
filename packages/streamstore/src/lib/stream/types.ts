@@ -1,37 +1,37 @@
 import type { RetryConfig, S2RequestOptions } from "../../common.js";
 import { S2Error } from "../../error.js";
-import type {
-	AppendAck,
-	AppendRecord as GeneratedAppendRecord,
-	ReadBatch as GeneratedReadBatch,
-	SequencedRecord as GeneratedSequencedRecord,
-	ReadData,
-	StreamPosition,
-} from "../../generated/index.js";
+import type * as API from "../../generated/index.js";
+import type * as Types from "../../types.js";
 import type * as Redacted from "../redacted.js";
+import type * as Result from "../result.js";
 
 export type ReadHeaders<Format extends "string" | "bytes" = "string"> =
 	Format extends "string"
 		? Record<string, string>
 		: Array<[Uint8Array, Uint8Array]>;
 
-export type ReadBatch<Format extends "string" | "bytes" = "string"> = Omit<
-	GeneratedReadBatch,
-	"records"
-> & {
+/**
+ * Internal read batch type used by transports.
+ * Records use API-level field names (snake_case).
+ */
+export type ReadBatch<Format extends "string" | "bytes" = "string"> = {
 	records: Array<ReadRecord<Format>>;
+	tail?: API.StreamPosition | null;
 };
 
-export type ReadRecord<Format extends "string" | "bytes" = "string"> = Omit<
-	GeneratedSequencedRecord,
-	"body" | "headers"
-> & {
+/**
+ * Internal read record type used by transports.
+ * Uses API-level field names (snake_case).
+ */
+export type ReadRecord<Format extends "string" | "bytes" = "string"> = {
+	seq_num: number;
+	timestamp: number;
 	body?: Format extends "string" ? string : Uint8Array;
 	headers?: ReadHeaders<Format>;
 };
 
 export type ReadArgs<Format extends "string" | "bytes" = "string"> =
-	ReadData["query"] & {
+	API.ReadData["query"] & {
 		as?: Format;
 	};
 
@@ -42,27 +42,28 @@ export type AppendHeaders<Format extends "string" | "bytes" = "string"> =
 
 export type AppendRecordForFormat<
 	Format extends "string" | "bytes" = "string",
-> = Omit<GeneratedAppendRecord, "body" | "headers"> & {
-	body?: Format extends "string" ? string : Uint8Array;
-	headers?: AppendHeaders<Format>;
-};
+> = Format extends "string"
+	? Types.StringAppendRecord
+	: Types.BytesAppendRecord;
 
-export type AppendRecord =
-	| AppendRecordForFormat<"string">
-	| AppendRecordForFormat<"bytes">;
+// Use SDK AppendRecord type for internal operations
+export type AppendRecord = Types.AppendRecord;
 
-export type AppendArgs = {
-	records: Array<AppendRecord>;
-	fencingToken?: string;
-	matchSeqNum?: number;
+/**
+ * Optional append conditions (fencing token and/or match sequence number).
+ * Used internally by transports when sending append requests.
+ */
+export type AppendOptions = {
+	fencing_token?: string;
+	match_seq_num?: number;
 };
 
 /**
  * Stream of append acknowledgements used by {@link AppendSession}.
  */
 export interface AcksStream
-	extends ReadableStream<AppendAck>,
-		AsyncIterable<AppendAck> {}
+	extends ReadableStream<Types.AppendAck>,
+		AsyncIterable<Types.AppendAck> {}
 
 /**
  * Low-level append session implemented by transports.
@@ -71,16 +72,13 @@ export interface AcksStream
  * - Does not implement retry or backpressure; those are added by {@link AppendSession}.
  */
 export interface TransportAppendSession {
-	submit(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<import("../result.js").AppendResult>;
-	close(): Promise<import("../result.js").CloseResult>;
+	submit(input: Types.AppendInput): Promise<Result.AppendResult>;
+	close(): Promise<Result.CloseResult>;
 }
 
 export class BatchSubmitTicket {
 	constructor(
-		private readonly promise: Promise<AppendAck>,
+		private readonly promise: Promise<Types.AppendAck>,
 		public readonly bytes: number,
 		public readonly numRecords: number,
 	) {}
@@ -88,7 +86,7 @@ export class BatchSubmitTicket {
 	/**
 	 * Returns a promise that resolves with the AppendAck once the batch is durable.
 	 */
-	ack(): Promise<AppendAck> {
+	ack(): Promise<Types.AppendAck> {
 		return this.promise;
 	}
 }
@@ -101,21 +99,18 @@ export interface AppendSession extends AsyncDisposable {
 	/**
 	 * Readable stream of acknowledgements for appends.
 	 */
-	readonly readable: ReadableStream<AppendAck>;
+	readonly readable: ReadableStream<Types.AppendAck>;
 	/**
 	 * Writable stream of append requests.
 	 */
-	readonly writable: WritableStream<AppendArgs>;
+	readonly writable: WritableStream<Types.AppendInput>;
 	/**
 	 * Submit an append request.
 	 * Returns a promise that resolves to a submit ticket once the batch is enqueued (has capacity).
 	 * Call ticket.ack() to get a promise for the AppendAck once the batch is durable.
 	 * This method applies backpressure and will block if capacity limits are reached.
 	 */
-	submit(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<BatchSubmitTicket>;
+	submit(input: Types.AppendInput): Promise<BatchSubmitTicket>;
 	/**
 	 * Close the append session, waiting for all inflight appends to settle.
 	 */
@@ -127,7 +122,7 @@ export interface AppendSession extends AsyncDisposable {
 	/**
 	 * Get the last acknowledged position, if any.
 	 */
-	lastAckedPosition(): AppendAck | undefined;
+	lastAckedPosition(): Types.AppendAck | undefined;
 	/**
 	 * If the session failed, returns the fatal error that caused it to stop.
 	 */
@@ -152,26 +147,27 @@ export interface TransportReadSession<
 > extends ReadableStream<ReadResult<Format>>,
 		AsyncIterable<ReadResult<Format>>,
 		AsyncDisposable {
-	nextReadPosition(): StreamPosition | undefined;
-	lastObservedTail(): StreamPosition | undefined;
+	nextReadPosition(): API.StreamPosition | undefined;
+	lastObservedTail(): API.StreamPosition | undefined;
 }
 
 /**
  * Public-facing read session interface.
  * Yields records directly and propagates errors by throwing (standard stream behavior).
+ * Uses SDK types (camelCase fields, bigint).
  */
 export interface ReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadRecord<Format>>,
-		AsyncIterable<ReadRecord<Format>>,
+	extends ReadableStream<Types.ReadRecord<Format>>,
+		AsyncIterable<Types.ReadRecord<Format>>,
 		AsyncDisposable {
 	/**
 	 * Get the next read position, if known.
 	 */
-	nextReadPosition(): StreamPosition | undefined;
+	nextReadPosition(): Types.StreamPosition | undefined;
 	/**
 	 * Get the last observed tail position, if known.
 	 */
-	lastObservedTail(): StreamPosition | undefined;
+	lastObservedTail(): Types.StreamPosition | undefined;
 }
 
 /**

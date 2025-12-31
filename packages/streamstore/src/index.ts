@@ -1,78 +1,89 @@
-/** Access token management helpers and argument types. */
+// =============================================================================
+// Core Client
+// =============================================================================
 
-export type {
-	IssueAccessTokenArgs,
-	ListAccessTokensArgs,
-	ListAllAccessTokensArgs,
-	RevokeAccessTokenArgs,
-} from "./accessTokens.js";
-export { S2AccessTokens } from "./accessTokens.js";
-/** Basin-scoped stream options. */
-export type { StreamOptions } from "./basin.js";
 export { S2Basin } from "./basin.js";
-/**
- * Basin management argument types.
- * Use these with {@link S2Basins} and {@link S2Basin}.
- */
-export type {
-	CreateBasinArgs,
-	DeleteBasinArgs,
-	GetBasinConfigArgs,
-	ListAllBasinsArgs,
-	ListBasinsArgs,
-	ReconfigureBasinArgs,
-} from "./basins.js";
-/** Basin management helper. */
+/** Top-level entrypoint for the SDK. */
+export { S2 } from "./s2.js";
+export { S2Stream } from "./stream.js";
+
+// =============================================================================
+// Management Classes
+// =============================================================================
+
+export { S2AccessTokens } from "./accessTokens.js";
 export { S2Basins } from "./basins.js";
-/** Types used with {@link BatchTransform}. */
-export type { BatchOutput, BatchTransformArgs } from "./batch-transform.js";
+export { S2Metrics } from "./metrics.js";
+export { S2Streams } from "./streams.js";
+
+// =============================================================================
+// High-Level Helpers
+// =============================================================================
+
 /** High-level helper for transforming streams in batches. */
 export { BatchTransform } from "./batch-transform.js";
-/** Client configuration and retry-related types. */
+/** High-level producer with automatic batching. */
+export { IndexedAppendAck, Producer, RecordSubmitTicket } from "./producer.js";
+
+// =============================================================================
+// SDK Types (Hot Paths)
+// =============================================================================
+
 export type {
-	AppendRetryPolicy,
-	RetryConfig,
-	S2ClientOptions,
-	S2RequestOptions,
-} from "./common.js";
+	AppendAck,
+	AppendSessionOptions,
+	BytesAppendRecord,
+	ReadBatch,
+	ReadFrom,
+	ReadInput,
+	ReadLimits,
+	ReadRecord,
+	ReadStart,
+	ReadStop,
+	StreamPosition,
+	StringAppendRecord,
+	TailResponse,
+} from "./types.js";
 /**
- * Rich error types exposed by the SDK.
+ * Record types and factory functions for append operations.
  *
- * - {@link S2Error} is the base error type.
- * - Other types specialize common protocol errors.
+ * Use `AppendRecord.string()`, `AppendRecord.bytes()` to create records.
+ * Use `AppendInput.create()` to create validated append inputs.
  */
 export {
-	FencingTokenMismatchError,
-	RangeNotSatisfiableError,
-	S2Error,
-	SeqNumMismatchError,
-} from "./error.js";
-/** Low-level generated HTTP client types. */
-export type { Client } from "./generated/client/types.gen.js";
+	AppendInput,
+	AppendRecord,
+	MAX_APPEND_BYTES,
+	MAX_APPEND_RECORDS,
+} from "./types.js";
+
+// =============================================================================
+// Generated Types (Re-exported directly)
+// =============================================================================
+
 /**
- * Generated API types re-exported for convenience.
- *
- * These mirror the server REST resources and payloads.
+ * Generated API types for configs, info, and metrics.
+ * These use snake_case field names matching the wire format.
  */
 export type {
+	// Access token types
 	AccessTokenIdStr,
 	AccessTokenInfo,
 	AccessTokenScope,
 	AccountMetricSet,
 	AccumulationMetric,
-	AppendAck,
-	AppendInput,
-	AppendRecord as GeneratedAppendRecord,
+	// Config types
 	BasinConfig,
+	// Info types
 	BasinInfo,
 	BasinMetricSet,
-	BasinNameStr,
 	BasinReconfiguration,
 	BasinScope,
 	BasinState,
 	CreateStreamRequest,
 	DeleteOnEmptyConfig,
 	DeleteOnEmptyReconfiguration,
+	// Other generated types
 	FencingToken,
 	GaugeMetric,
 	Header,
@@ -83,87 +94,105 @@ export type {
 	ListBasinsResponse,
 	ListStreamsResponse,
 	Metric,
+	// Metric types
 	MetricSetResponse,
 	MetricUnit,
 	Operation,
 	PermittedOperationGroups,
-	ReadBatch as GeneratedReadBatch,
-	ReadData,
 	ReadWritePermissions,
 	ResourceSet,
 	RetentionPolicy,
-	S2Format,
 	ScalarMetric,
 	SequencedRecord,
 	StorageClass,
 	StreamConfig,
 	StreamInfo,
 	StreamMetricSet,
-	StreamNameStr,
-	StreamPosition,
 	StreamReconfiguration,
-	TailResponse,
 	TimeseriesInterval,
 	TimestampingConfig,
 	TimestampingMode,
 	TimestampingReconfiguration,
-	U64,
 } from "./generated/types.gen.js";
-/** Base64 encoding/decoding and random token generation utilities. */
-export { randomToken } from "./lib/base64.js";
-/** Generic pagination helper for async iteration over paginated responses. */
-export type { ListAllArgs, PageFetcher } from "./lib/paginate.js";
-export { paginate } from "./lib/paginate.js";
-/** Redacted access token wrapper type. */
-export type { Redacted } from "./lib/redacted.js";
-/**
- * Streaming types used for reading from streams.
- */
+
+// =============================================================================
+// Client Configuration
+// =============================================================================
+
+export type {
+	AppendRetryPolicy,
+	RetryConfig,
+	S2ClientOptions,
+	S2RequestOptions,
+} from "./common.js";
+
+// =============================================================================
+// Error Types
+// =============================================================================
+
+export {
+	FencingTokenMismatchError,
+	RangeNotSatisfiableError,
+	S2Error,
+	SeqNumMismatchError,
+} from "./error.js";
+
+// =============================================================================
+// Input Types (Management Operations)
+// =============================================================================
+
+export type {
+	IssueAccessTokenInput,
+	ListAccessTokensInput,
+	ListAllAccessTokensInput,
+	RevokeAccessTokenInput,
+} from "./accessTokens.js";
+export type { StreamOptions } from "./basin.js";
+export type {
+	CreateBasinInput,
+	DeleteBasinInput,
+	GetBasinConfigInput,
+	ListAllBasinsInput,
+	ListBasinsInput,
+	ReconfigureBasinInput,
+} from "./basins.js";
+export type { BatchOutput, BatchTransformOptions } from "./batch-transform.js";
+export type {
+	AccountMetricsInput,
+	BasinMetricsInput,
+	StreamMetricsInput,
+} from "./metrics.js";
+export type {
+	CreateStreamInput,
+	DeleteStreamInput,
+	GetStreamConfigInput,
+	ListAllStreamsInput,
+	ListStreamsInput,
+	ReconfigureStreamInput,
+} from "./streams.js";
+
+// =============================================================================
+// Streaming Types
+// =============================================================================
+
 export type {
 	AcksStream,
-	AppendArgs,
 	AppendHeaders,
-	AppendRecord as AppendRecordType,
-	AppendRecordForFormat,
 	AppendSession,
-	AppendSessionOptions,
 	BatchSubmitTicket,
-	ReadArgs,
-	ReadBatch,
 	ReadHeaders,
-	ReadRecord,
-	ReadResult,
 	ReadSession,
 	SessionTransports,
 	TransportConfig,
 } from "./lib/stream/types.js";
-export type {
-	AccountMetricsArgs,
-	BasinMetricsArgs,
-	StreamMetricsArgs,
-} from "./metrics.js";
-/** Metrics helper and argument types. */
-export { S2Metrics } from "./metrics.js";
-/** High-level producer with automatic batching. */
-export { IndexedAppendAck, Producer, RecordSubmitTicket } from "./producer.js";
-/** Top-level entrypoint for the SDK. */
-export { S2 } from "./s2.js";
-export { S2Stream } from "./stream.js";
-export type {
-	CreateStreamArgs,
-	DeleteStreamArgs,
-	GetStreamConfigArgs,
-	ListAllStreamsArgs,
-	ListStreamsArgs,
-	ReconfigureStreamArgs,
-} from "./streams.js";
-/** Stream management helper and argument types. */
-export { S2Streams } from "./streams.js";
 
-/**
- * Low-level utilities for record bodies.
- *
- * - {@link AppendRecord} helps construct appendable records.
- * - {@link meteredBytes} and {@link utf8ByteLength} expose sizing utilities.
- */
-export { AppendRecord, meteredBytes, utf8ByteLength } from "./utils.js";
+// =============================================================================
+// Utilities
+// =============================================================================
+
+export type { Client } from "./generated/client/types.gen.js";
+export { randomToken } from "./lib/base64.js";
+export type { ListAllArgs, Page, PageFetcher } from "./lib/paginate.js";
+export { paginate } from "./lib/paginate.js";
+export type { Redacted } from "./lib/redacted.js";
+export { meteredBytes, utf8ByteLength } from "./utils.js";

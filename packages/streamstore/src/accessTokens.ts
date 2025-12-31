@@ -13,13 +13,13 @@ import {
 import { type ListAllArgs, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 
-export interface ListAccessTokensArgs
+export interface ListAccessTokensInput
 	extends DataToObject<ListAccessTokensData> {}
-export interface ListAllAccessTokensArgs
-	extends ListAllArgs<ListAccessTokensArgs> {}
-export interface IssueAccessTokenArgs
+export interface ListAllAccessTokensInput
+	extends ListAllArgs<ListAccessTokensInput> {}
+export interface IssueAccessTokenInput
 	extends DataToObject<IssueAccessTokenData> {}
-export interface RevokeAccessTokenArgs
+export interface RevokeAccessTokenInput
 	extends DataToObject<RevokeAccessTokenData> {}
 
 export class S2AccessTokens {
@@ -38,7 +38,7 @@ export class S2AccessTokens {
 	 * @param args.start_after Filter to IDs lexicographically after this value
 	 * @param args.limit Max results (up to 1000)
 	 */
-	public async list(args?: ListAccessTokensArgs, options?: S2RequestOptions) {
+	public async list(args?: ListAccessTokensInput, options?: S2RequestOptions) {
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listAccessTokens({
@@ -65,7 +65,7 @@ export class S2AccessTokens {
 	 * ```
 	 */
 	public listAll(
-		args?: ListAllAccessTokensArgs,
+		args?: ListAllAccessTokensInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<AccessTokenInfo> {
 		return paginate(
@@ -87,7 +87,7 @@ export class S2AccessTokens {
 	 * @param args.auto_prefix_streams Namespace stream names by configured prefix scope
 	 * @param args.expires_at Expiration in ISO 8601; defaults to requestor's token expiry
 	 */
-	public async issue(args: IssueAccessTokenArgs, options?: S2RequestOptions) {
+	public async issue(args: IssueAccessTokenInput, options?: S2RequestOptions) {
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				issueAccessToken({
@@ -104,7 +104,10 @@ export class S2AccessTokens {
 	 *
 	 * @param args.id Token ID to revoke
 	 */
-	public async revoke(args: RevokeAccessTokenArgs, options?: S2RequestOptions) {
+	public async revoke(
+		args: RevokeAccessTokenInput,
+		options?: S2RequestOptions,
+	) {
 		return await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				revokeAccessToken({

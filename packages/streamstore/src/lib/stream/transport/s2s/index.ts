@@ -14,12 +14,9 @@ import {
 	RangeNotSatisfiableError,
 	S2Error,
 } from "../../../../error.js";
-import type { AppendAck, StreamPosition } from "../../../../generated/index.js";
-import {
-	AppendAck as ProtoAppendAck,
-	ReadBatch as ProtoReadBatch,
-	type StreamPosition as ProtoStreamPosition,
-} from "../../../../generated/proto/s2.js";
+import type * as API from "../../../../generated/index.js";
+import * as Proto from "../../../../generated/proto/s2.js";
+import type * as Types from "../../../../types.js";
 import { meteredBytes } from "../../../../utils.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
@@ -30,7 +27,7 @@ import {
 } from "../../../retry.js";
 import { DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
-	AppendArgs,
+	AppendOptions,
 	AppendRecord,
 	AppendSession,
 	AppendSessionOptions,
@@ -242,9 +239,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	implements TransportReadSession<Format>
 {
 	private http2Stream?: ClientHttp2Stream;
-	private _lastReadPosition?: StreamPosition;
-	private _nextReadPosition?: StreamPosition;
-	private _lastObservedTail?: StreamPosition;
+	private _lastReadPosition?: API.StreamPosition;
+	private _nextReadPosition?: API.StreamPosition;
+	private _lastObservedTail?: API.StreamPosition;
 	private parser = new S2SFrameParser();
 
 	static async create<Format extends "string" | "bytes" = "string">(
@@ -281,7 +278,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		const parser = new S2SFrameParser();
 		const textDecoder = new TextDecoder();
 		let http2Stream: ClientHttp2Stream | undefined;
-		let lastReadPosition: StreamPosition | undefined;
+		let lastReadPosition: API.StreamPosition | undefined;
 
 		// Track timeout for detecting when server stops sending data
 		const TAIL_TIMEOUT_MS = 20000; // 20 seconds
@@ -467,7 +464,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 								} else {
 									// Parse ReadBatch
 									try {
-										const protoBatch = ProtoReadBatch.fromBinary(frame.body);
+										const protoBatch = Proto.ReadBatch.fromBinary(frame.body);
 
 										resetTimeoutTimer();
 
@@ -645,11 +642,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		};
 	}
 
-	nextReadPosition(): StreamPosition | undefined {
+	nextReadPosition(): API.StreamPosition | undefined {
 		return this._nextReadPosition;
 	}
 
-	lastObservedTail(): StreamPosition | undefined {
+	lastObservedTail(): API.StreamPosition | undefined {
 		return this._lastObservedTail;
 	}
 }
@@ -781,7 +778,7 @@ class S2SAppendSession implements TransportAppendSession {
 					} else {
 						// Parse AppendAck
 						try {
-							const protoAck = ProtoAppendAck.fromBinary(frame.body);
+							const protoAck = Proto.AppendAck.fromBinary(frame.body);
 							const ack = convertAppendAck(protoAck);
 
 							// Resolve the pending ack promise (FIFO)
@@ -835,7 +832,7 @@ class S2SAppendSession implements TransportAppendSession {
 	 */
 	private sendBatch(
 		records: AppendRecord[],
-		args: AppendArgs,
+		args: AppendOptions,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
 		if (!this.http2Stream || this.http2Stream.closed) {
@@ -914,14 +911,7 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Returns AppendResult (never throws).
 	 * Pipelined: multiple submits can be in-flight; acks resolve FIFO.
 	 */
-	async submit(
-		records: AppendRecord | AppendRecord[],
-		args?: {
-			fencingToken?: string;
-			matchSeqNum?: number;
-			precalculatedSize?: number;
-		},
-	): Promise<AppendResult> {
+	async submit(input: Types.AppendInput): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
 			return err(
@@ -944,9 +934,10 @@ class S2SAppendSession implements TransportAppendSession {
 			return err(s2Err);
 		}
 
-		const recordsArray = Array.isArray(records) ? records : [records];
+		const recordsArray = Array.from(input.records);
 
 		// Validate batch size limits (non-retryable 400-level error)
+		// Note: This should already be validated by AppendInput.create(), but we check defensively
 		if (recordsArray.length > 1000) {
 			return err(
 				new S2Error({
@@ -957,13 +948,8 @@ class S2SAppendSession implements TransportAppendSession {
 			);
 		}
 
-		// Calculate metered size (use precalculated if provided)
-		let batchMeteredSize = args?.precalculatedSize ?? 0;
-		if (batchMeteredSize === 0) {
-			for (const record of recordsArray) {
-				batchMeteredSize += meteredBytes(record);
-			}
-		}
+		// Use cached metered size from AppendInput
+		const batchMeteredSize = input.meteredBytes;
 
 		if (batchMeteredSize > 1024 * 1024) {
 			return err(
@@ -978,9 +964,8 @@ class S2SAppendSession implements TransportAppendSession {
 		return this.sendBatch(
 			recordsArray,
 			{
-				records: recordsArray,
-				fencingToken: args?.fencingToken,
-				matchSeqNum: args?.matchSeqNum,
+				fencing_token: input.fencing_token,
+				match_seq_num: input.match_seq_num,
 			},
 			batchMeteredSize,
 		);
@@ -990,13 +975,15 @@ class S2SAppendSession implements TransportAppendSession {
 /**
  * Convert protobuf StreamPosition to OpenAPI StreamPosition
  */
-function convertStreamPosition(proto: ProtoStreamPosition): StreamPosition {
+function convertStreamPosition(
+	proto: Proto.StreamPosition,
+): API.StreamPosition {
 	return {
 		seq_num: Number(proto.seqNum),
 		timestamp: Number(proto.timestamp),
 	};
 }
-function convertAppendAck(proto: ProtoAppendAck): AppendAck {
+function convertAppendAck(proto: Proto.AppendAck): API.AppendAck {
 	if (!proto.start || !proto.end || !proto.tail) {
 		throw new Error(
 			"Invariant violation: AppendAck is missing required fields",

@@ -410,7 +410,7 @@ export function makeAppendPreconditionError(
 ): S2Error {
 	if (json && typeof json === "object") {
 		if ("seq_num_mismatch" in json) {
-			const expected = Number(json.seq_num_mismatch);
+			const expected = Number(json.seqNum_mismatch);
 			return new SeqNumMismatchError({
 				message: "Append condition failed: sequence number mismatch",
 				code: "APPEND_CONDITION_FAILED",

@@ -22,12 +22,12 @@ import { randomToken } from "./lib/base64.js";
 import { type ListAllArgs, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 
-export interface ListBasinsArgs extends DataToObject<ListBasinsData> {}
-export interface ListAllBasinsArgs extends ListAllArgs<ListBasinsArgs> {}
-export interface CreateBasinArgs extends DataToObject<CreateBasinData> {}
-export interface GetBasinConfigArgs extends DataToObject<GetBasinConfigData> {}
-export interface DeleteBasinArgs extends DataToObject<DeleteBasinData> {}
-export interface ReconfigureBasinArgs
+export interface ListBasinsInput extends DataToObject<ListBasinsData> {}
+export interface ListAllBasinsInput extends ListAllArgs<ListBasinsInput> {}
+export interface CreateBasinInput extends DataToObject<CreateBasinData> {}
+export interface GetBasinConfigInput extends DataToObject<GetBasinConfigData> {}
+export interface DeleteBasinInput extends DataToObject<DeleteBasinData> {}
+export interface ReconfigureBasinInput
 	extends DataToObject<ReconfigureBasinData> {}
 
 export class S2Basins {
@@ -47,7 +47,7 @@ export class S2Basins {
 	 * @param args.limit Max results (up to 1000)
 	 */
 	public async list(
-		args?: ListBasinsArgs,
+		args?: ListBasinsInput,
 		options?: S2RequestOptions,
 	): Promise<ListBasinsResponse> {
 		return await withRetries(this.retryConfig, async () => {
@@ -78,7 +78,7 @@ export class S2Basins {
 	 */
 	public listAll(
 		includeDeleted = false,
-		args?: ListAllBasinsArgs,
+		args?: ListAllBasinsInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<BasinInfo> {
 		return paginate(
@@ -102,7 +102,7 @@ export class S2Basins {
 	 * @param args.scope Basin scope
 	 */
 	public async create(
-		args: CreateBasinArgs,
+		args: CreateBasinInput,
 		options?: S2RequestOptions,
 	): Promise<CreateBasinResponse> {
 		const requestToken = randomToken();
@@ -124,7 +124,7 @@ export class S2Basins {
 	 * @param args.basin Basin name
 	 */
 	public async getConfig(
-		args: GetBasinConfigArgs,
+		args: GetBasinConfigInput,
 		options?: S2RequestOptions,
 	): Promise<BasinConfig> {
 		return await withRetries(this.retryConfig, async () => {
@@ -144,7 +144,7 @@ export class S2Basins {
 	 * @param args.basin Basin name
 	 */
 	public async delete(
-		args: DeleteBasinArgs,
+		args: DeleteBasinInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
 		await withRetries(this.retryConfig, async () => {
@@ -164,7 +164,7 @@ export class S2Basins {
 	 * @param args Configuration for the basin to reconfigure (including basin name and fields to change)
 	 */
 	public async reconfigure(
-		args: ReconfigureBasinArgs,
+		args: ReconfigureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<ReconfigureBasinResponse> {
 		return await withRetries(this.retryConfig, async () => {

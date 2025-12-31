@@ -1,19 +1,8 @@
 import { S2Error } from "../../../error.js";
-import type { AppendAck, StreamPosition } from "../../../generated/index.js";
-import {
-	AppendAck as ProtoAppendAck,
-	AppendInput as ProtoAppendInput,
-	type AppendRecord as ProtoAppendRecord,
-	type ReadBatch as ProtoReadBatch,
-	ReadBatch as ProtoReadBatchMessage,
-	type SequencedRecord as ProtoSequencedRecord,
-	type StreamPosition as ProtoStreamPosition,
-} from "../../../generated/proto/s2.js";
-import type {
-	AppendArgs,
-	AppendRecord,
-	ReadBatch as ReadBatchResult,
-} from "../types.js";
+import type * as API from "../../../generated/index.js";
+import * as Proto from "../../../generated/proto/s2.js";
+import type * as Types from "../../../types.js";
+import type { AppendRecord, ReadBatch } from "../types.js";
 
 const textEncoder = new TextEncoder();
 
@@ -26,7 +15,7 @@ const toBytes = (value?: string | Uint8Array | null): Uint8Array => {
 
 const toProtoHeaders = (
 	headers: AppendRecord["headers"],
-): ProtoAppendRecord["headers"] => {
+): Proto.AppendRecord["headers"] => {
 	if (!headers) {
 		return [];
 	}
@@ -38,21 +27,18 @@ const toProtoHeaders = (
 	);
 };
 
-const toProtoAppendRecord = (record: AppendRecord): ProtoAppendRecord => {
-	const timestampValue =
-		record.timestamp === undefined || record.timestamp === null
-			? undefined
-			: BigInt(record.timestamp);
+const toProtoAppendRecord = (record: AppendRecord): Proto.AppendRecord => {
 	return {
-		timestamp: timestampValue,
+		timestamp:
+			record.timestamp !== undefined ? BigInt(record.timestamp) : undefined,
 		headers: toProtoHeaders(record.headers),
 		body: toBytes(record.body),
 	};
 };
 
 const fromProtoPosition = (
-	position: ProtoStreamPosition | undefined,
-): StreamPosition | undefined => {
+	position: Proto.StreamPosition | undefined,
+): API.StreamPosition | undefined => {
 	if (!position) {
 		return undefined;
 	}
@@ -63,8 +49,8 @@ const fromProtoPosition = (
 };
 
 const fromProtoSequencedRecord = (
-	record: ProtoSequencedRecord,
-): ReadBatchResult<"bytes">["records"][number] => {
+	record: Proto.SequencedRecord,
+): ReadBatch<"bytes">["records"][number] => {
 	return {
 		seq_num: Number(record.seqNum),
 		timestamp: Number(record.timestamp),
@@ -78,16 +64,18 @@ const fromProtoSequencedRecord = (
 
 export const buildProtoAppendInput = (
 	records: AppendRecord[],
-	args?: Omit<AppendArgs, "records">,
-): ProtoAppendInput => {
-	return ProtoAppendInput.create({
+	args?: Omit<Types.AppendInput, "records" | "meteredBytes">,
+): Proto.AppendInput => {
+	return Proto.AppendInput.create({
 		records: records.map((record) => toProtoAppendRecord(record)),
 		fencingToken:
-			args?.fencingToken === null
+			args?.fencing_token === null
 				? undefined
-				: (args?.fencingToken ?? undefined),
+				: (args?.fencing_token ?? undefined),
 		matchSeqNum:
-			args?.matchSeqNum === undefined ? undefined : BigInt(args.matchSeqNum),
+			args?.match_seq_num !== undefined
+				? BigInt(args.match_seq_num)
+				: undefined,
 	});
 };
 
@@ -97,18 +85,18 @@ const ensureUint8Array = (data: ArrayBuffer | Uint8Array): Uint8Array => {
 
 export const encodeProtoAppendInput = (
 	records: AppendRecord[],
-	args?: Omit<AppendArgs, "records">,
+	args?: Omit<Types.AppendInput, "records" | "meteredBytes">,
 ): Uint8Array => {
-	return ProtoAppendInput.toBinary(buildProtoAppendInput(records, args));
+	return Proto.AppendInput.toBinary(buildProtoAppendInput(records, args));
 };
 
 export const decodeProtoAppendAck = (
 	data: ArrayBuffer | Uint8Array,
-): ProtoAppendAck => {
-	return ProtoAppendAck.fromBinary(ensureUint8Array(data));
+): Proto.AppendAck => {
+	return Proto.AppendAck.fromBinary(ensureUint8Array(data));
 };
 
-export const protoAppendAckToJson = (ack: ProtoAppendAck): AppendAck => {
+export const protoAppendAckToJson = (ack: Proto.AppendAck): API.AppendAck => {
 	const start = fromProtoPosition(ack.start);
 	const end = fromProtoPosition(ack.end);
 
@@ -130,8 +118,8 @@ export const protoAppendAckToJson = (ack: ProtoAppendAck): AppendAck => {
 
 export const decodeProtoReadBatch = (
 	data: ArrayBuffer | Uint8Array,
-): ReadBatchResult<"bytes"> => {
-	const protoBatch: ProtoReadBatch = ProtoReadBatchMessage.fromBinary(
+): ReadBatch<"bytes"> => {
+	const protoBatch: Proto.ReadBatch = Proto.ReadBatch.fromBinary(
 		ensureUint8Array(data),
 	);
 	return {

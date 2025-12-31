@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
-import { AppendRecord, S2 } from "../index.js";
+import { AppendInput, AppendRecord, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
@@ -20,13 +20,26 @@ describeIf("Mixed format integration tests", () => {
 	];
 
 	const decodeHeaderValue = (
-		headers: Array<[Uint8Array, Uint8Array]> | undefined,
+		headers: ReadonlyArray<readonly [Uint8Array, Uint8Array]> | undefined,
 		name: string,
 	): string | undefined => {
 		if (!headers) return undefined;
 		for (const [rawName, rawValue] of headers) {
 			if (decoder.decode(rawName) === name) {
 				return decoder.decode(rawValue);
+			}
+		}
+		return undefined;
+	};
+
+	const getStringHeaderValue = (
+		headers: ReadonlyArray<readonly [string, string]> | undefined,
+		name: string,
+	): string | undefined => {
+		if (!headers) return undefined;
+		for (const [headerName, headerValue] of headers) {
+			if (headerName === name) {
+				return headerValue;
 			}
 		}
 		return undefined;
@@ -51,43 +64,56 @@ describeIf("Mixed format integration tests", () => {
 			const stream = basin.stream(streamName, { forceTransport: transport });
 
 			// Append a mixed batch via unary append
-			const unaryRecords = [
-				AppendRecord.make("unary-string", [["x-test-format", "string-unary"]]),
-				AppendRecord.make(encoder.encode("unary-bytes"), [
-					bytesHeader("bytes-unary"),
-				]),
-			];
-			await stream.append(unaryRecords);
+			const unaryInput = AppendInput.create([
+				AppendRecord.string({
+					body: "unary-string",
+					headers: [["x-test-format", "string-unary"]],
+				}),
+				AppendRecord.bytes({
+					body: encoder.encode("unary-bytes"),
+					headers: [bytesHeader("bytes-unary")],
+				}),
+			]);
+			await stream.append(unaryInput);
 
 			// Append another mixed batch via append session
 			const sessionRecords = [
-				AppendRecord.make("session-string", [
-					["x-test-format", "string-session"],
-				]),
-				AppendRecord.make(encoder.encode("session-bytes"), [
-					bytesHeader("bytes-session"),
-				]),
+				AppendRecord.string({
+					body: "session-string",
+					headers: [["x-test-format", "string-session"]],
+				}),
+				AppendRecord.bytes({
+					body: encoder.encode("session-bytes"),
+					headers: [bytesHeader("bytes-session")],
+				}),
 			];
 			const session = await stream.appendSession();
-			await session.submit(sessionRecords);
+			await session.submit(AppendInput.create(sessionRecords));
 			await session.close();
 
 			// Unary read as strings
-			const readAsString = await stream.read({ seq_num: 0, count: 10 });
+			const readAsString = await stream.read({
+				start: { from: { seq_num: 0 } },
+				stop: { limits: { count: 10 } },
+			});
 			expect(readAsString.records.length).toBe(4);
 			const stringRecords = readAsString.records.filter((record) =>
-				record.headers?.["x-test-format"]?.startsWith("string"),
+				getStringHeaderValue(record.headers, "x-test-format")?.startsWith(
+					"string",
+				),
 			);
 			expect(stringRecords.map((record) => record.body)).toEqual(
 				expect.arrayContaining(["unary-string", "session-string"]),
 			);
 
 			// Unary read as bytes
-			const readAsBytes = await stream.read({
-				seq_num: 0,
-				count: 10,
-				as: "bytes",
-			});
+			const readAsBytes = await stream.read(
+				{
+					start: { from: { seq_num: 0 } },
+					stop: { limits: { count: 10 } },
+				},
+				{ as: "bytes" },
+			);
 			expect(readAsBytes.records.length).toBe(4);
 			const unaryBytesMap = new Map<string, string>();
 			for (const record of readAsBytes.records) {
@@ -103,13 +129,13 @@ describeIf("Mixed format integration tests", () => {
 
 			// Streaming read session (strings)
 			const readSessionStrings = await stream.readSession({
-				seq_num: 0,
-				count: 4,
+				start: { from: { seq_num: 0 } },
+				stop: { limits: { count: 4 } },
 			});
 			const sessionStringMap = new Map<string, string>();
 			let seen = 0;
 			for await (const record of readSessionStrings) {
-				const label = record.headers?.["x-test-format"];
+				const label = getStringHeaderValue(record.headers, "x-test-format");
 				if (label?.startsWith("string") && record.body) {
 					sessionStringMap.set(label, record.body);
 				}
@@ -123,11 +149,13 @@ describeIf("Mixed format integration tests", () => {
 			expect(sessionStringMap.get("string-session")).toBe("session-string");
 
 			// Streaming read session (bytes)
-			const readSessionBytes = await stream.readSession({
-				seq_num: 0,
-				count: 4,
-				as: "bytes",
-			});
+			const readSessionBytes = await stream.readSession(
+				{
+					start: { from: { seq_num: 0 } },
+					stop: { limits: { count: 4 } },
+				},
+				{ as: "bytes" },
+			);
 			const sessionBytesMap = new Map<string, string>();
 			let bytesSeen = 0;
 			for await (const record of readSessionBytes) {

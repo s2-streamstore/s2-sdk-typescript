@@ -94,7 +94,9 @@ describeIf("Producer Integration Tests", () => {
 					[];
 				for (let i = 0; i < TOTAL_RECORDS; i++) {
 					// TODO, having concurrent submits could lead to issues with matchSeqNum, if order assigned msn != order serialized to session
-					const submission = producer.submit(AppendRecord.make(buildChunk(i)));
+					const submission = producer.submit(
+						AppendRecord.bytes({ body: buildChunk(i) }),
+					);
 					pending.push(submission);
 					if (pending.length >= MAX_PARALLEL_SUBMITS) {
 						const settled = await Promise.all(pending.splice(0));
@@ -111,11 +113,13 @@ describeIf("Producer Integration Tests", () => {
 					const ack = await tickets[index]!.ack();
 					const seqNum = ack.seqNum();
 
-					const batch = await stream.read({
-						seq_num: seqNum,
-						count: 1,
-						as: "bytes" as const,
-					});
+					const batch = await stream.read(
+						{
+							start: { from: { seq_num: seqNum } },
+							stop: { limits: { count: 1 } },
+						},
+						{ as: "bytes" as const },
+					);
 					expect(batch.records).toHaveLength(1);
 					const body = batch.records[0]?.body;
 					expect(body).toBeDefined();
@@ -165,9 +169,9 @@ describeIf("Producer Integration Tests", () => {
 			const readable = new ReadableStream<AppendRecord>({
 				start(controller) {
 					for (let i = 0; i < 4; i++) {
-						controller.enqueue(AppendRecord.make(`ok-${i}`));
+						controller.enqueue(AppendRecord.string({ body: `ok-${i}` }));
 					}
-					controller.enqueue(AppendRecord.make(oversized));
+					controller.enqueue(AppendRecord.bytes({ body: oversized }));
 					controller.close();
 				},
 			});

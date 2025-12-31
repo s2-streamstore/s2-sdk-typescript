@@ -22,13 +22,13 @@ import { randomToken } from "./lib/base64.js";
 import { type ListAllArgs, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 
-export interface ListStreamsArgs extends DataToObject<ListStreamsData> {}
-export interface ListAllStreamsArgs extends ListAllArgs<ListStreamsArgs> {}
-export interface CreateStreamArgs extends DataToObject<CreateStreamData> {}
-export interface GetStreamConfigArgs
+export interface ListStreamsInput extends DataToObject<ListStreamsData> {}
+export interface ListAllStreamsInput extends ListAllArgs<ListStreamsInput> {}
+export interface CreateStreamInput extends DataToObject<CreateStreamData> {}
+export interface GetStreamConfigInput
 	extends DataToObject<GetStreamConfigData> {}
-export interface DeleteStreamArgs extends DataToObject<DeleteStreamData> {}
-export interface ReconfigureStreamArgs
+export interface DeleteStreamInput extends DataToObject<DeleteStreamData> {}
+export interface ReconfigureStreamInput
 	extends DataToObject<ReconfigureStreamData> {}
 
 export class S2Streams {
@@ -48,7 +48,7 @@ export class S2Streams {
 	 * @param args.limit Max results (up to 1000)
 	 */
 	public async list(
-		args?: ListStreamsArgs,
+		args?: ListStreamsInput,
 		options?: S2RequestOptions,
 	): Promise<ListStreamsResponse> {
 		return await withRetries(this.retryConfig, async () => {
@@ -78,7 +78,7 @@ export class S2Streams {
 	 */
 	public listAll(
 		includeDeleted = false,
-		args?: ListAllStreamsArgs,
+		args?: ListAllStreamsInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<StreamInfo> {
 		return paginate(
@@ -99,7 +99,7 @@ export class S2Streams {
 	 * @param args.config Stream configuration (retention, storage class, timestamping, delete-on-empty)
 	 */
 	public async create(
-		args: CreateStreamArgs,
+		args: CreateStreamInput,
 		options?: S2RequestOptions,
 	): Promise<CreateStreamResponse> {
 		const requestToken = randomToken();
@@ -121,7 +121,7 @@ export class S2Streams {
 	 * @param args.stream Stream name
 	 */
 	public async getConfig(
-		args: GetStreamConfigArgs,
+		args: GetStreamConfigInput,
 		options?: S2RequestOptions,
 	): Promise<StreamConfig> {
 		return await withRetries(this.retryConfig, async () => {
@@ -141,7 +141,7 @@ export class S2Streams {
 	 * @param args.stream Stream name
 	 */
 	public async delete(
-		args: DeleteStreamArgs,
+		args: DeleteStreamInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
 		await withRetries(this.retryConfig, async () => {
@@ -161,7 +161,7 @@ export class S2Streams {
 	 * @param args Configuration for the stream to reconfigure (including stream name and fields to change)
 	 */
 	public async reconfigure(
-		args: ReconfigureStreamArgs,
+		args: ReconfigureStreamInput,
 		options?: S2RequestOptions,
 	): Promise<ReconfigureStreamResponse> {
 		return await withRetries(this.retryConfig, async () => {

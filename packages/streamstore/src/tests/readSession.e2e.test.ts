@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
-import { AppendRecord, S2 } from "../index.js";
+import { AppendInput, AppendRecord, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
@@ -32,9 +32,15 @@ describeIf("ReadSession Integration Tests", () => {
 
 		// Pre-populate the stream with some records for testing
 		const stream = basin.stream(streamName);
-		await stream.append([AppendRecord.make("read-test-1")]);
-		await stream.append([AppendRecord.make("read-test-2")]);
-		await stream.append([AppendRecord.make("read-test-3")]);
+		await stream.append(
+			AppendInput.create([AppendRecord.string({ body: "read-test-1" })]),
+		);
+		await stream.append(
+			AppendInput.create([AppendRecord.string({ body: "read-test-2" })]),
+		);
+		await stream.append(
+			AppendInput.create([AppendRecord.string({ body: "read-test-3" })]),
+		);
 	});
 
 	it.each(transports)(
@@ -45,13 +51,13 @@ describeIf("ReadSession Integration Tests", () => {
 
 			// Use tail_offset to read from a known valid position
 			const session = await stream.readSession({
-				seq_num: 0,
-				count: 3,
+				start: { from: { seq_num: 0 } },
+				stop: { limits: { count: 3 } },
 			});
 
-			const records: Array<{ seq_num: number; body?: string }> = [];
+			const records: Array<{ seqNum: number; body?: string }> = [];
 			for await (const record of session) {
-				records.push({ seq_num: record.seq_num, body: record.body });
+				records.push({ seqNum: record.seq_num, body: record.body });
 				// Stop after reading 3 records
 				if (records.length >= 3) {
 					break;
@@ -65,7 +71,7 @@ describeIf("ReadSession Integration Tests", () => {
 
 			// Verify sequence numbers are sequential
 			for (let i = 1; i < records.length; i++) {
-				expect(records[i]?.seq_num).toBe((records[i - 1]?.seq_num ?? 0) + 1);
+				expect(records[i]?.seqNum).toBe((records[i - 1]?.seqNum ?? 0) + 1);
 			}
 		},
 	);
@@ -78,16 +84,16 @@ describeIf("ReadSession Integration Tests", () => {
 
 			// Use tail_offset to read from a known valid position
 			const session = await stream.readSession({
-				seq_num: 0,
-				count: 2,
+				start: { from: { seq_num: 0 } },
+				stop: { limits: { count: 2 } },
 			});
 
 			// Initially streamPosition should be undefined
 			expect(session.nextReadPosition()).toBeUndefined();
 
-			const records: Array<{ seq_num: number }> = [];
+			const records: Array<{ seqNum: number }> = [];
 			for await (const record of session) {
-				records.push({ seq_num: record.seq_num });
+				records.push({ seqNum: record.seq_num });
 				// streamPosition should be updated after reading
 				if (session.nextReadPosition()) {
 					expect(session.nextReadPosition()?.seq_num).toBeGreaterThanOrEqual(
@@ -111,15 +117,17 @@ describeIf("ReadSession Integration Tests", () => {
 			const basin = s2.basin(basinName);
 			const stream = basin.stream(streamName, { forceTransport: transport });
 
-			const session = await stream.readSession({
-				seq_num: 0,
-				count: 1,
-				as: "bytes",
-			});
+			const session = await stream.readSession(
+				{
+					start: { from: { seq_num: 0 } },
+					stop: { limits: { count: 1 } },
+				},
+				{ as: "bytes" },
+			);
 
-			const records: Array<{ seq_num: number; body?: Uint8Array }> = [];
+			const records: Array<{ seqNum: number; body?: Uint8Array }> = [];
 			for await (const record of session) {
-				records.push({ seq_num: record.seq_num, body: record.body });
+				records.push({ seqNum: record.seq_num, body: record.body });
 				break;
 			}
 

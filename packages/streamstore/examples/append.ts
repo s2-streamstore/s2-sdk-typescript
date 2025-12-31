@@ -1,4 +1,4 @@
-import { AppendRecord, BatchTransform, S2 } from "../src/index.js";
+import { AppendInput, AppendRecord, S2 } from "../src/index.js";
 
 const s2 = new S2({
 	accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -12,50 +12,28 @@ const basin = s2.basin(basins.basins[0].name);
 const streams = await basin.streams.list();
 if (streams.streams[0]) {
 	const stream = basin.stream(streams.streams[0].name);
-	// Create an append session
-	const session = await stream.appendSession();
 
-	// You can submit directly to the session and get acknowledgement promises
-	const ack1 = await session.submit([AppendRecord.make("record 1")]);
-	const ack2 = await session.submit([AppendRecord.make("record 2")]);
-	console.log("Direct submits acknowledged:", ack1, ack2);
+	// Append records using the new structured API
+	const input1 = AppendInput.create([
+		AppendRecord.string({ body: "record 1" }),
+		AppendRecord.string({ body: "record 2" }),
+	]);
 
-	// Close the session (waits for all appends to complete)
-	await session.close();
+	const ack1 = await stream.append(input1);
+	console.log("Batch appended:", ack1);
 
-	// Example: Using BatchTransform with streaming pipeline
-	const session2 = await stream.appendSession();
+	// Append with conditional parameters
+	const input2 = AppendInput.create(
+		[
+			AppendRecord.string({ body: "record 3" }),
+			AppendRecord.string({ body: "record 4" }),
+		],
+		{
+			matchSeqNum: ack1.tail.seq_num,
+			fencingToken: "my-fence-token",
+		},
+	);
 
-	// Create a batcher that will batch records
-	const batcher = new BatchTransform({
-		lingerDurationMillis: 20,
-		maxBatchRecords: 10,
-	});
-
-	// Pipe batches directly to the session
-	const pipePromise = batcher.readable.pipeTo(session2.writable);
-
-	// Collect acks in the background using pipeThrough
-	const acksPromise = (async () => {
-		const collectedAcks = [];
-		for await (const ack of session2.acks()) {
-			console.log("Received ack:", ack);
-			collectedAcks.push(ack);
-		}
-		return collectedAcks;
-	})();
-
-	// Write records to the batcher
-	const writer = batcher.writable.getWriter();
-	await writer.write(AppendRecord.make("batched record 1"));
-	await writer.write(AppendRecord.make("batched record 2"));
-	await writer.write(AppendRecord.make("batched record 3"));
-	await writer.close();
-
-	// Wait for pipeline to complete
-	await pipePromise;
-
-	// Get all the acks
-	const allAcks = await acksPromise;
-	console.log("All batched records acknowledged:", allAcks);
+	const ack2 = await stream.append(input2);
+	console.log("Conditional batch appended:", ack2);
 }

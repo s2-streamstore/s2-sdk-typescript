@@ -1,9 +1,8 @@
 import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
 import { S2Error } from "./error.js";
-import type { AppendAck } from "./generated/index.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
-import { AppendRecord } from "./utils.js";
+import { type AppendAck, AppendInput, type AppendRecord } from "./types.js";
 
 const debugProducer = createDebug("s2:producer");
 
@@ -143,10 +142,10 @@ export class Producer implements AsyncDisposable {
 				}
 
 				debugProducer(
-					"[%s] pump got batch: records=%d, matchSeqNum=%s, inflightRecords=%d",
+					"[%s] pump got batch: records=%d, match_seq_num=%s, inflightRecords=%d",
 					this.debugName,
 					batch.records.length,
-					batch.matchSeqNum ?? "none",
+					batch.match_seq_num ?? "none",
 					this.inflightRecords.length,
 				);
 
@@ -166,16 +165,17 @@ export class Producer implements AsyncDisposable {
 				let ticket: BatchSubmitTicket;
 				try {
 					debugProducer(
-						"[%s] pump submitting to session: records=%d, matchSeqNum=%s",
+						"[%s] pump submitting to session: records=%d, match_seq_num=%s",
 						this.debugName,
 						batch.records.length,
-						batch.matchSeqNum ?? "none",
+						batch.match_seq_num ?? "none",
 					);
 
-					ticket = await this.appendSession.submit(batch.records, {
-						fencingToken: batch.fencingToken,
-						matchSeqNum: batch.matchSeqNum,
+					const input = AppendInput.create(batch.records, {
+						fencingToken: batch.fencing_token,
+						matchSeqNum: batch.match_seq_num,
 					});
+					ticket = await this.appendSession.submit(input);
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {

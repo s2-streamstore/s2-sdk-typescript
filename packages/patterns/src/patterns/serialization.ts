@@ -20,11 +20,11 @@
  * low-level helpers remain available via the serialization namespace for advanced use.
  */
 import {
+	AppendInput,
 	AppendRecord,
 	AppendSession,
 	BatchSubmitTicket,
 	ReadSession,
-	U64,
 } from "@s2-dev/streamstore";
 import { nanoid } from "nanoid";
 import { chunkBytes, MAX_CHUNK_BODY_BYTES } from "./chunking.js";
@@ -38,12 +38,12 @@ import {
 export interface SerializingAppendSessionOptions {
 	chunkSize?: number;
 	matchSeqNum?: number;
-	dedupeSeq?: bigint | number;
+	dedupeSeq?: number;
 }
 
 type MessageRange = {
-	start: U64;
-	end: U64;
+	start: number;
+	end: number;
 };
 
 // TODO: rework to use the Producer API
@@ -53,7 +53,7 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 	private readonly chunkSize: number;
 
 	private matchSeqNum?: number;
-	private dedupeSeq?: bigint;
+	private dedupeSeq?: number;
 	private writerId: string;
 	private writer?: WritableStreamDefaultWriter<any>;
 
@@ -105,15 +105,14 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 		this.serializer = serializer;
 		this.chunkSize = options?.chunkSize ?? MAX_CHUNK_BODY_BYTES;
 		this.matchSeqNum = options?.matchSeqNum;
-		this.dedupeSeq =
-			options?.dedupeSeq !== undefined ? BigInt(options.dedupeSeq) : undefined;
+		this.dedupeSeq = options?.dedupeSeq;
 		this.writerId = nanoid(12);
 	}
 
-	private nextDedupeSeq(): bigint | undefined {
+	private nextDedupeSeq(): number | undefined {
 		if (this.dedupeSeq === undefined) return undefined;
 		const current = this.dedupeSeq;
-		this.dedupeSeq = this.dedupeSeq + 1n;
+		this.dedupeSeq = this.dedupeSeq + 1;
 		return current;
 	}
 
@@ -134,12 +133,18 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 		const records = this.toRecords(message);
 		const tickets: BatchSubmitTicket[] = [];
 		for (const record of records) {
+			const currentMatchSeqNum = this.matchSeqNum;
+			if (this.matchSeqNum !== undefined) {
+				this.matchSeqNum = this.matchSeqNum + 1;
+			}
 			tickets.push(
-				await this.session.submit(record, {
-					...(this.matchSeqNum !== undefined
-						? { matchSeqNum: this.matchSeqNum++ }
-						: {}),
-				}),
+				await this.session.submit(
+					AppendInput.create([record], {
+						...(currentMatchSeqNum !== undefined
+							? { matchSeqNum: currentMatchSeqNum }
+							: {}),
+					}),
+				),
 			);
 		}
 
@@ -147,8 +152,8 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 		const start = durable[0]!.start.seq_num;
 		const end = durable.at(-1)!.end.seq_num;
 		return {
-			start: start,
-			end: end,
+			start,
+			end,
 		};
 	}
 }

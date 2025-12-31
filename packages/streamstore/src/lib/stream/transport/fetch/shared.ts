@@ -7,22 +7,12 @@ import {
 	s2Error,
 } from "../../../../error.js";
 import type { Client } from "../../../../generated/client/index.js";
-import {
-	type AppendAck,
-	append,
-	checkTail,
-	type AppendInput as GeneratedAppendInput,
-	type AppendRecord as GeneratedAppendRecord,
-	type ReadBatch as GeneratedReadBatch,
-	type SequencedRecord as GeneratedSequencedRecord,
-	type ReadData,
-	read,
-	type StreamPosition,
-} from "../../../../generated/index.js";
-import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
+import type * as API from "../../../../generated/index.js";
+import { append, read } from "../../../../generated/index.js";
+import { toAPIAppendRecord } from "../../../../internal/mappers.js";
+import type * as Types from "../../../../types.js";
+import { computeAppendRecordFormat } from "../../../../utils.js";
 import type {
-	AppendArgs,
-	AppendRecord,
 	AppendRecordForFormat,
 	ReadArgs,
 	ReadBatch,
@@ -76,7 +66,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	const res: ReadBatch<"string"> = {
 		...response.data,
 		records:
-			response.data.records?.map((record: GeneratedSequencedRecord) => ({
+			response.data.records?.map((record: API.SequencedRecord) => ({
 				...record,
 				headers: record.headers
 					? Object.fromEntries(record.headers)
@@ -93,44 +83,21 @@ type FetchAppendOptions = S2RequestOptions & {
 export async function streamAppend(
 	stream: string,
 	client: Client,
-	records: AppendRecord | AppendRecord[],
-	args?: Omit<AppendArgs, "records">,
+	input: Types.AppendInput,
 	options?: FetchAppendOptions,
 ) {
-	const recordsArray = Array.isArray(records) ? records : [records];
 	const { preferProtobuf, ...requestOptions } = options ?? {};
-
-	if (recordsArray.length === 0) {
-		throw new S2Error({ message: "Cannot append empty array of records" });
-	}
-
-	let batchMeteredSize = 0;
-
-	for (const record of recordsArray) {
-		batchMeteredSize += meteredBytes(record);
-	}
-
-	if (batchMeteredSize > 1024 * 1024) {
-		throw new S2Error({
-			message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
-		});
-	}
-	if (recordsArray.length > 1000) {
-		throw new S2Error({
-			message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
-		});
-	}
 
 	const hasAnyBytesRecords =
 		preferProtobuf ??
-		recordsArray.some(
+		input.records.some(
 			(record) => computeAppendRecordFormat(record) === "bytes",
 		);
 
 	let response: any;
 
 	if (hasAnyBytesRecords) {
-		const protoBody = encodeProtoAppendInput(recordsArray, args);
+		const protoBody = encodeProtoAppendInput([...input.records], input);
 
 		const headers = {
 			Accept: "application/protobuf",
@@ -143,7 +110,7 @@ export async function streamAppend(
 				path: {
 					stream,
 				},
-				body: protoBody as unknown as GeneratedAppendInput,
+				body: protoBody as unknown as API.AppendInput,
 				bodySerializer: null,
 				parseAs: "arrayBuffer",
 				headers,
@@ -167,12 +134,9 @@ export async function streamAppend(
 		return protoAppendAckToJson(ack);
 	}
 
-	const encodedRecords: GeneratedAppendRecord[] = recordsArray.map((record) => {
-		const formattedRecord = record as AppendRecordForFormat<"string">;
-		return {
-			...formattedRecord,
-		};
-	});
+	const encodedRecords: API.AppendRecord[] = [...input.records].map(
+		toAPIAppendRecord,
+	);
 
 	try {
 		response = await append({
@@ -181,8 +145,8 @@ export async function streamAppend(
 				stream,
 			},
 			body: {
-				fencing_token: args?.fencingToken,
-				match_seq_num: args?.matchSeqNum,
+				fencing_token: input.fencing_token,
+				match_seq_num: input.match_seq_num,
 				records: encodedRecords,
 			},
 			...requestOptions,

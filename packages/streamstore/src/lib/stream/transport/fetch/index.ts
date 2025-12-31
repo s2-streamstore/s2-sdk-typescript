@@ -6,12 +6,9 @@ import {
 	createClient,
 	createConfig,
 } from "../../../../generated/client/index.js";
-import type {
-	AppendAck,
-	ReadBatch as GeneratedReadBatch,
-	StreamPosition,
-} from "../../../../generated/index.js";
+import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
+import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { EventStream } from "../../../event-stream.js";
@@ -24,7 +21,6 @@ import {
 } from "../../../retry.js";
 import { canSetUserAgentHeader, DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
-	AppendArgs,
 	AppendRecord,
 	AppendSession,
 	AppendSessionOptions,
@@ -100,8 +96,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		return new FetchReadSession(response.response.body, format);
 	}
 
-	private _nextReadPosition: StreamPosition | undefined = undefined;
-	private _lastObservedTail: StreamPosition | undefined = undefined;
+	private _nextReadPosition: API.StreamPosition | undefined = undefined;
+	private _lastObservedTail: API.StreamPosition | undefined = undefined;
 
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
 		// Track error from parser
@@ -118,7 +114,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 			// Parse SSE events according to the S2 protocol
 			if (msg.event === "batch" && msg.data) {
-				const rawBatch: GeneratedReadBatch = JSON.parse(msg.data);
+				const rawBatch: API.ReadBatch = JSON.parse(msg.data);
 				const batch = (() => {
 					// If format is bytes, decode base64 to Uint8Array
 					if (format === "bytes") {
@@ -298,11 +294,11 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		});
 	}
 
-	public nextReadPosition(): StreamPosition | undefined {
+	public nextReadPosition(): API.StreamPosition | undefined {
 		return this._nextReadPosition;
 	}
 
-	public lastObservedTail(): StreamPosition | undefined {
+	public lastObservedTail(): API.StreamPosition | undefined {
 		return this._lastObservedTail;
 	}
 
@@ -352,11 +348,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
 export class FetchAppendSession implements TransportAppendSession {
-	private queue: Array<{
-		records: AppendRecord[];
-		fencingToken?: string;
-		matchSeqNum?: number;
-	}> = [];
+	private queue: Array<Types.AppendInput> = [];
 	private pendingResolvers: Array<{
 		resolve: (result: AppendResult) => void;
 	}> = [];
@@ -437,19 +429,12 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * The request will be queued and sent when no other request is in-flight.
 	 * Never throws - returns AppendResult discriminated union.
 	 */
-	submit(
-		records: AppendRecord | AppendRecord[],
-		args?: {
-			fencingToken?: string;
-			matchSeqNum?: number;
-			precalculatedSize?: number;
-		},
-	): Promise<AppendResult> {
+	submit(input: Types.AppendInput): Promise<AppendResult> {
 		debug(
-			"[%s] FetchAppendSession.submit: records=%d, matchSeqNum=%s, queueLen=%d",
+			"[%s] FetchAppendSession.submit: records=%d, match_seq_num=%s, queueLen=%d",
 			this.stream,
-			Array.isArray(records) ? records.length : 1,
-			args?.matchSeqNum ?? "none",
+			input.records.length,
+			input.match_seq_num ?? "none",
 			this.queue.length,
 		);
 
@@ -464,19 +449,18 @@ export class FetchAppendSession implements TransportAppendSession {
 			);
 		}
 
-		const recordsArray = Array.isArray(records) ? records : [records];
-
 		// Validate batch size limits (non-retryable 400-level error)
-		if (recordsArray.length > 1000) {
+		// Note: This should already be validated by AppendInput.create(), but we check defensively
+		if (input.records.length > 1000) {
 			debug(
 				"[%s] FetchAppendSession.submit: batch too large (%d records)",
 				this.stream,
-				recordsArray.length,
+				input.records.length,
 			);
 			return Promise.resolve(
 				err(
 					new S2Error({
-						message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
+						message: `Batch of ${input.records.length} exceeds maximum batch size of 1000 records`,
 						status: 400,
 						code: "INVALID_ARGUMENT",
 					}),
@@ -484,13 +468,8 @@ export class FetchAppendSession implements TransportAppendSession {
 			);
 		}
 
-		// Validate metered size (use precalculated if provided)
-		let batchMeteredSize = args?.precalculatedSize ?? 0;
-		if (batchMeteredSize === 0) {
-			for (const record of recordsArray) {
-				batchMeteredSize += meteredBytes(record);
-			}
-		}
+		// Validate metered size (use cached value from AppendInput)
+		const batchMeteredSize = input.meteredBytes;
 
 		if (batchMeteredSize > 1024 * 1024) {
 			debug(
@@ -510,11 +489,7 @@ export class FetchAppendSession implements TransportAppendSession {
 		}
 
 		return new Promise((resolve) => {
-			this.queue.push({
-				records: recordsArray,
-				fencingToken: args?.fencingToken,
-				matchSeqNum: args?.matchSeqNum,
-			});
+			this.queue.push(input);
 			this.pendingResolvers.push({ resolve });
 			debug(
 				"[%s] FetchAppendSession.submit: queued, queueLen=%d",
@@ -538,18 +513,18 @@ export class FetchAppendSession implements TransportAppendSession {
 		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
 		while (this.queue.length > 0) {
 			this.inFlight = true;
-			const args = this.queue.shift()!;
+			const input = this.queue.shift()!;
 			const resolver = this.pendingResolvers.shift()!;
 
 			debug(
-				"[%s] FetchAppendSession.processLoop: sending %d records, matchSeqNum=%s",
+				"[%s] FetchAppendSession.processLoop: sending %d records, match_seq_num=%s",
 				this.stream,
-				args.records.length,
-				args.matchSeqNum ?? "none",
+				input.records.length,
+				input.match_seq_num ?? "none",
 			);
 
 			try {
-				const preferProtobuf = args.records.some(
+				const preferProtobuf = input.records.some(
 					(record) => computeAppendRecordFormat(record) === "bytes",
 				);
 				const appendOptions = this.options
@@ -559,11 +534,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				const ack = await streamAppend(
 					this.stream,
 					this.client,
-					args.records,
-					{
-						fencingToken: args.fencingToken,
-						matchSeqNum: args.matchSeqNum,
-					},
+					input,
 					appendOptions,
 				);
 
