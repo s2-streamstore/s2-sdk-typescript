@@ -83,7 +83,7 @@ describeIf("Producer Integration Tests", () => {
 					lingerDurationMillis: 10,
 					maxBatchRecords: 1000,
 					maxBatchBytes: 1024 * 1024,
-					matchSeqNum: startTail.tail.seq_num,
+					matchSeqNum: startTail.tail.seqNum,
 				}),
 				appendSession,
 			);
@@ -157,7 +157,7 @@ describeIf("Producer Integration Tests", () => {
 				new BatchTransform({
 					lingerDurationMillis: 0,
 					maxBatchRecords: 1,
-					matchSeqNum: (await stream.checkTail()).tail.seq_num,
+					matchSeqNum: (await stream.checkTail()).tail.seqNum,
 				}),
 				appendSession,
 			);

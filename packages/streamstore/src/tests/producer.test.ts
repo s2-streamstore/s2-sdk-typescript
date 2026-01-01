@@ -36,9 +36,9 @@ class MockAppendSession implements AppendSession {
 		}
 
 		const ack: AppendAck = {
-			start: { seq_num: this.seq, timestamp: 0 },
-			end: { seq_num: this.seq + batch.length, timestamp: 0 },
-			tail: { seq_num: this.seq + batch.length, timestamp: 0 },
+			start: { seqNum: this.seq, timestamp: 0 },
+			end: { seqNum: this.seq + batch.length, timestamp: 0 },
+			tail: { seqNum: this.seq + batch.length, timestamp: 0 },
 		};
 
 		this.seq += batch.length;
@@ -110,9 +110,9 @@ class AsyncMockAppendSession implements AppendSession {
 				const ackPromise = new Promise<AppendAck>((ackResolve) => {
 					setTimeout(() => {
 						ackResolve({
-							start: { seq_num: start, timestamp: 0 },
-							end: { seq_num: this.seq, timestamp: 0 },
-							tail: { seq_num: this.seq, timestamp: 0 },
+							start: { seqNum: start, timestamp: 0 },
+							end: { seqNum: this.seq, timestamp: 0 },
+							tail: { seqNum: this.seq, timestamp: 0 },
 						});
 					}, ackDelay);
 				});

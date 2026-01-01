@@ -9,7 +9,10 @@ import {
 import type { Client } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
 import { append, read } from "../../../../generated/index.js";
-import { toAPIAppendRecord } from "../../../../internal/mappers.js";
+import {
+	fromAPIAppendAck,
+	toAPIAppendRecord,
+} from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat } from "../../../../utils.js";
 import type {
@@ -97,7 +100,7 @@ export async function streamAppend(
 	let response: any;
 
 	if (hasAnyBytesRecords) {
-		const protoBody = encodeProtoAppendInput([...input.records], input);
+		const protoBody = encodeProtoAppendInput(input);
 
 		const headers = {
 			Accept: "application/protobuf",
@@ -145,8 +148,8 @@ export async function streamAppend(
 				stream,
 			},
 			body: {
-				fencing_token: input.fencing_token,
-				match_seq_num: input.match_seq_num,
+				fencing_token: input.fencingToken,
+				match_seq_num: input.matchSeqNum,
 				records: encodedRecords,
 			},
 			...requestOptions,
@@ -164,5 +167,5 @@ export async function streamAppend(
 			response.error,
 		);
 	}
-	return response.data;
+	return fromAPIAppendAck(response.data);
 }

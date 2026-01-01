@@ -23,7 +23,7 @@ import {
 import { decodeU64 } from "../patterns/u64.js";
 
 class FakeAppendSession {
-	submitted: { record: AppendRecord; match_seq_num?: number }[] = [];
+	submitted: { record: AppendRecord; matchSeqNum?: number }[] = [];
 	private nextSeqNum = 0;
 
 	async submit(input: AppendInput): Promise<any> {
@@ -34,7 +34,7 @@ class FakeAppendSession {
 		for (const r of batch) {
 			this.submitted.push({
 				record: r,
-				match_seq_num: input.match_seq_num,
+				matchSeqNum: input.matchSeqNum,
 			});
 		}
 
@@ -145,7 +145,7 @@ async function runTests(): Promise<void> {
 	expect(submitted.length).toBe(totalChunks);
 
 	// matchSeqNum should start at 10 and increment per record.
-	const matchSeqNums = submitted.map((s) => s.match_seq_num);
+	const matchSeqNums = submitted.map((s) => s.matchSeqNum);
 	expect(matchSeqNums).toEqual(
 		Array.from({ length: totalChunks }, (_v, i) => 10 + i),
 	);

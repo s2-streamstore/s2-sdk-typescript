@@ -193,13 +193,13 @@ describeIf("Basin Management Integration Tests", () => {
 			);
 			const ack = await ticket.ack();
 
-			expect(ack.start.seq_num).toBe(0);
-			expect(ack.end.seq_num).toBe(3);
+			expect(ack.start.seqNum).toBe(0);
+			expect(ack.end.seqNum).toBe(3);
 			expect(ack.end.timestamp).toBeGreaterThan(0);
 
 			await session.close();
 			console.log(
-				`Append successful: seq_num ${ack.start.seq_num}-${ack.end.seq_num}`,
+				`Append successful: seq_num ${ack.start.seqNum}-${ack.end.seqNum}`,
 			);
 
 			// Step 10: Read back and verify

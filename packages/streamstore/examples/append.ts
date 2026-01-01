@@ -29,7 +29,7 @@ if (streams.streams[0]) {
 			AppendRecord.string({ body: "record 4" }),
 		],
 		{
-			matchSeqNum: ack1.tail.seq_num,
+			matchSeqNum: ack1.tail.seqNum,
 			fencingToken: "my-fence-token",
 		},
 	);

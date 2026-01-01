@@ -110,7 +110,7 @@ document.getElementById("btnCheckTail")!.addEventListener("click", async () => {
 		log("Checking tail...", "info");
 		const result = await ctx.stream.checkTail();
 		log(
-			`Tail: seq_num=${result.tail.seq_num}, timestamp=${result.tail.timestamp}`,
+			`Tail: seq_num=${result.tail.seqNum}, timestamp=${result.tail.timestamp}`,
 			"success",
 		);
 	} catch (err) {
@@ -160,13 +160,13 @@ document.getElementById("btnReadUnary")!.addEventListener("click", async () => {
 				const body = record.body as Uint8Array;
 				const hash = await hashBytes(body);
 				log(
-					`  [${record.seq_num}] len=${body.length}, sha256=${hash}...`,
+					`  [${record.seqNum}] len=${body.length}, sha256=${hash}...`,
 					"data",
 				);
 			} else {
 				const body = record.body as string;
 				const preview = body.length > 80 ? body.slice(0, 80) + "..." : body;
-				log(`  [${record.seq_num}] ${preview}`, "data");
+				log(`  [${record.seqNum}] ${preview}`, "data");
 			}
 		}
 	} catch (err) {
@@ -233,13 +233,13 @@ document
 					const body = record.body as Uint8Array;
 					const hash = await hashBytes(body);
 					log(
-						`  [${record.seq_num}] len=${body.length}, sha256=${hash}...`,
+						`  [${record.seqNum}] len=${body.length}, sha256=${hash}...`,
 						"data",
 					);
 				} else {
 					const body = record.body as string;
 					const preview = body.length > 80 ? body.slice(0, 80) + "..." : body;
-					log(`  [${record.seq_num}] ${preview}`, "data");
+					log(`  [${record.seqNum}] ${preview}`, "data");
 				}
 			}
 
@@ -337,7 +337,7 @@ document
 				const ack = await ticket.ack();
 				if (i === 0 || i === count - 1 || count <= 10) {
 					log(
-						`  [${i}] ack: seq_num=${ack.start.seq_num}-${ack.end.seq_num}`,
+						`  [${i}] ack: seq_num=${ack.start.seqNum}-${ack.end.seqNum}`,
 						"data",
 					);
 				} else if (i === 1 && count > 10) {

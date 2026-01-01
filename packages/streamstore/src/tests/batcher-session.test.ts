@@ -15,9 +15,9 @@ const makeStream = () =>
 	});
 // streamAppend returns GENERATED AppendAck (seq_num, number), not SDK types
 const makeAck = (n: number): any => ({
-	start: { seq_num: n - 1, timestamp: 0 },
-	end: { seq_num: n, timestamp: 0 },
-	tail: { seq_num: n, timestamp: 0 },
+	start: { seqNum: n - 1, timestamp: 0 },
+	end: { seqNum: n, timestamp: 0 },
+	tail: { seqNum: n, timestamp: 0 },
 });
 
 describe("BatchTransform + AppendSession integration", () => {
@@ -44,9 +44,9 @@ describe("BatchTransform + AppendSession integration", () => {
 			cumulativeSeq += input.records.length;
 			// streamAppend returns GENERATED types (seq_num, number)
 			return Promise.resolve({
-				start: { seq_num: start, timestamp: 0 },
-				end: { seq_num: cumulativeSeq, timestamp: 0 },
-				tail: { seq_num: cumulativeSeq, timestamp: 0 },
+				start: { seqNum: start, timestamp: 0 },
+				end: { seqNum: cumulativeSeq, timestamp: 0 },
+				tail: { seqNum: cumulativeSeq, timestamp: 0 },
 			});
 		});
 
@@ -81,9 +81,9 @@ describe("BatchTransform + AppendSession integration", () => {
 			cumulativeSeq += input.records.length;
 			// streamAppend returns GENERATED types (seq_num, number)
 			return Promise.resolve({
-				start: { seq_num: start, timestamp: 0 },
-				end: { seq_num: cumulativeSeq, timestamp: 0 },
-				tail: { seq_num: cumulativeSeq, timestamp: 0 },
+				start: { seqNum: start, timestamp: 0 },
+				end: { seqNum: cumulativeSeq, timestamp: 0 },
+				tail: { seqNum: cumulativeSeq, timestamp: 0 },
 			});
 		});
 
@@ -108,10 +108,10 @@ describe("BatchTransform + AppendSession integration", () => {
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
 		expect(streamAppendSpy.mock.calls?.[0]?.[2]).toMatchObject({
-			match_seq_num: 5,
+			matchSeqNum: 5,
 		});
 		expect(streamAppendSpy.mock.calls?.[1]?.[2]).toMatchObject({
-			match_seq_num: 7,
+			matchSeqNum: 7,
 		});
 	});
 
@@ -125,9 +125,9 @@ describe("BatchTransform + AppendSession integration", () => {
 			cumulativeSeq += input.records.length;
 			// streamAppend returns GENERATED types (seq_num, number)
 			return Promise.resolve({
-				start: { seq_num: start, timestamp: 0 },
-				end: { seq_num: cumulativeSeq, timestamp: 0 },
-				tail: { seq_num: cumulativeSeq, timestamp: 0 },
+				start: { seqNum: start, timestamp: 0 },
+				end: { seqNum: cumulativeSeq, timestamp: 0 },
+				tail: { seqNum: cumulativeSeq, timestamp: 0 },
 			});
 		});
 
@@ -157,6 +157,6 @@ describe("BatchTransform + AppendSession integration", () => {
 		await acksPromise;
 
 		expect(acks).toHaveLength(1);
-		expect(acks[0]?.end.seq_num).toBe(1); // 1 record written (SDK types use bigint)
+		expect(acks[0]?.end.seqNum).toBe(1); // 1 record written (SDK types use bigint)
 	});
 });

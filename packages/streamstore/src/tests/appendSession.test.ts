@@ -17,11 +17,11 @@ const makeStream = (retry?: { maxAttempts?: number }) =>
 		retry,
 	});
 
-// streamAppendSpy returns generated types (not SDK types)
-const makeAck = (n: number): API.AppendAck => ({
-	start: { seq_num: n - 1, timestamp: 0 },
-	end: { seq_num: n, timestamp: 0 },
-	tail: { seq_num: n, timestamp: 0 },
+// streamAppendSpy returns SDK types (camelCase)
+const makeAck = (n: number): Types.AppendAck => ({
+	start: { seqNum: n - 1, timestamp: 0 },
+	end: { seqNum: n, timestamp: 0 },
+	tail: { seqNum: n, timestamp: 0 },
 });
 
 describe("AppendSession", () => {
@@ -71,8 +71,8 @@ describe("AppendSession", () => {
 		const ack2 = await ticket2.ack();
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
-		expect(ack1.end.seq_num).toBe(1);
-		expect(ack2.end.seq_num).toBe(2);
+		expect(ack1.end.seqNum).toBe(1);
+		expect(ack2.end.seqNum).toBe(2);
 	});
 
 	it("acks() stream receives emitted acks and closes on session.close()", async () => {
@@ -107,7 +107,7 @@ describe("AppendSession", () => {
 		await consumer;
 
 		expect(streamAppendSpy).toHaveBeenCalledTimes(2);
-		expect(received.map((a) => a.end.seq_num)).toEqual([1, 2]);
+		expect(received.map((a) => a.end.seqNum)).toEqual([1, 2]);
 	});
 
 	it("close() waits for drain before resolving", async () => {
@@ -203,7 +203,7 @@ describe("AppendSession", () => {
 			AppendInput.create([AppendRecord.string({ body: "z" })]),
 		);
 		await ticket.ack();
-		expect(session.lastAckedPosition()?.end.seq_num).toBe(42);
+		expect(session.lastAckedPosition()?.end.seqNum).toBe(42);
 	});
 
 	it("applies backpressure when queue exceeds maxQueuedBytes", async () => {
@@ -216,7 +216,7 @@ describe("AppendSession", () => {
 
 		// Control when appends resolve
 		let resolveFirst: any;
-		const firstPromise = new Promise<API.AppendAck>((resolve) => {
+		const firstPromise = new Promise<Types.AppendAck>((resolve) => {
 			resolveFirst = () => resolve(makeAck(1));
 		});
 

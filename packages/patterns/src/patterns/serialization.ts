@@ -149,8 +149,8 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 		}
 
 		const durable = await Promise.all(tickets.map((ticket) => ticket.ack()));
-		const start = durable[0]!.start.seq_num;
-		const end = durable.at(-1)!.end.seq_num;
+		const start = durable[0]!.start.seqNum;
+		const end = durable.at(-1)!.end.seqNum;
 		return {
 			start,
 			end,

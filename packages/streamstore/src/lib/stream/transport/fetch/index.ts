@@ -434,7 +434,7 @@ export class FetchAppendSession implements TransportAppendSession {
 			"[%s] FetchAppendSession.submit: records=%d, match_seq_num=%s, queueLen=%d",
 			this.stream,
 			input.records.length,
-			input.match_seq_num ?? "none",
+			input.matchSeqNum ?? "none",
 			this.queue.length,
 		);
 
@@ -520,7 +520,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				"[%s] FetchAppendSession.processLoop: sending %d records, match_seq_num=%s",
 				this.stream,
 				input.records.length,
-				input.match_seq_num ?? "none",
+				input.matchSeqNum ?? "none",
 			);
 
 			try {
@@ -541,8 +541,8 @@ export class FetchAppendSession implements TransportAppendSession {
 				debug(
 					"[%s] FetchAppendSession.processLoop: success, seq_num=%d-%d",
 					this.stream,
-					ack.start.seq_num,
-					ack.end.seq_num,
+					ack.start.seqNum,
+					ack.end.seqNum,
 				);
 
 				// Resolve with success result

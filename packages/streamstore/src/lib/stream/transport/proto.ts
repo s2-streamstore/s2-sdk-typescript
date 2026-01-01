@@ -48,6 +48,13 @@ const fromProtoPosition = (
 	};
 };
 
+const toSDKStreamPosition = (pos: API.StreamPosition): Types.StreamPosition => {
+	return {
+		seqNum: pos.seq_num,
+		timestamp: pos.timestamp,
+	};
+};
+
 const fromProtoSequencedRecord = (
 	record: Proto.SequencedRecord,
 ): ReadBatch<"bytes">["records"][number] => {
@@ -63,19 +70,16 @@ const fromProtoSequencedRecord = (
 };
 
 export const buildProtoAppendInput = (
-	records: AppendRecord[],
-	args?: Omit<Types.AppendInput, "records" | "meteredBytes">,
+	input: Types.AppendInput,
 ): Proto.AppendInput => {
 	return Proto.AppendInput.create({
-		records: records.map((record) => toProtoAppendRecord(record)),
+		records: [...input.records].map((record) => toProtoAppendRecord(record)),
 		fencingToken:
-			args?.fencing_token === null
+			input.fencingToken === null
 				? undefined
-				: (args?.fencing_token ?? undefined),
+				: (input.fencingToken ?? undefined),
 		matchSeqNum:
-			args?.match_seq_num !== undefined
-				? BigInt(args.match_seq_num)
-				: undefined,
+			input.matchSeqNum !== undefined ? BigInt(input.matchSeqNum) : undefined,
 	});
 };
 
@@ -84,10 +88,9 @@ const ensureUint8Array = (data: ArrayBuffer | Uint8Array): Uint8Array => {
 };
 
 export const encodeProtoAppendInput = (
-	records: AppendRecord[],
-	args?: Omit<Types.AppendInput, "records" | "meteredBytes">,
+	input: Types.AppendInput,
 ): Uint8Array => {
-	return Proto.AppendInput.toBinary(buildProtoAppendInput(records, args));
+	return Proto.AppendInput.toBinary(buildProtoAppendInput(input));
 };
 
 export const decodeProtoAppendAck = (
@@ -96,7 +99,7 @@ export const decodeProtoAppendAck = (
 	return Proto.AppendAck.fromBinary(ensureUint8Array(data));
 };
 
-export const protoAppendAckToJson = (ack: Proto.AppendAck): API.AppendAck => {
+export const protoAppendAckToJson = (ack: Proto.AppendAck): Types.AppendAck => {
 	const start = fromProtoPosition(ack.start);
 	const end = fromProtoPosition(ack.end);
 
@@ -110,9 +113,9 @@ export const protoAppendAckToJson = (ack: Proto.AppendAck): API.AppendAck => {
 
 	const tail = fromProtoPosition(ack.tail) ?? end;
 	return {
-		start,
-		end,
-		tail,
+		start: toSDKStreamPosition(start),
+		end: toSDKStreamPosition(end),
+		tail: toSDKStreamPosition(tail),
 	};
 };
 

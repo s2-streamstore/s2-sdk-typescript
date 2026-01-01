@@ -7,23 +7,21 @@ const makeRecords = (): AppendRecord[] => [
 ];
 
 describe("S2S transport proto serialization", () => {
-	it("encodes match_seq_num = 0 instead of dropping it", () => {
+	it("encodes matchSeqNum = 0 instead of dropping it", () => {
 		const records = makeRecords();
-		const args: Omit<AppendInput, "records" | "meteredBytes"> = {
-			match_seq_num: 0,
-		};
+		const input = AppendInput.create(records, { matchSeqNum: 0 });
 
-		const proto = buildProtoAppendInput(records, args);
+		const proto = buildProtoAppendInput(input);
 
 		// Proto stores as bigint internally
 		expect(proto.matchSeqNum).toBe(0n);
 	});
 
-	it("omits match_seq_num when it is undefined", () => {
+	it("omits matchSeqNum when it is undefined", () => {
 		const records = makeRecords();
-		const args: Omit<AppendInput, "records" | "meteredBytes"> = {};
+		const input = AppendInput.create(records);
 
-		const proto = buildProtoAppendInput(records, args);
+		const proto = buildProtoAppendInput(input);
 
 		expect(proto.matchSeqNum).toBeUndefined();
 	});

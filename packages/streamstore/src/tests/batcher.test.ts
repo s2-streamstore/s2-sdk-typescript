@@ -50,15 +50,15 @@ describe("BatchTransform", () => {
 		const result1 = await reader.read();
 		expect(result1.done).toBe(false);
 		expect(result1.value?.records).toHaveLength(2);
-		expect(result1.value?.fencing_token).toBe("ft");
-		expect(result1.value?.match_seq_num).toBe(10);
+		expect(result1.value?.fencingToken).toBe("ft");
+		expect(result1.value?.matchSeqNum).toBe(10);
 
 		// Second batch should have matchSeqNum: 12 (incremented by 2)
 		const result2 = await reader.read();
 		expect(result2.done).toBe(false);
 		expect(result2.value?.records).toHaveLength(1);
-		expect(result2.value?.fencing_token).toBe("ft");
-		expect(result2.value?.match_seq_num).toBe(12);
+		expect(result2.value?.fencingToken).toBe("ft");
+		expect(result2.value?.matchSeqNum).toBe(12);
 
 		await writePromise;
 		reader.releaseLock();

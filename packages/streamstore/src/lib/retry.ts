@@ -34,7 +34,7 @@ const debugSession = createDebug("s2:retry:session");
  */
 function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
 	return {
-		seq_num: pos.seq_num,
+		seqNum: pos.seq_num,
 		timestamp: pos.timestamp,
 	};
 }
@@ -52,7 +52,7 @@ function toSDKReadRecord<Format extends "string" | "bytes">(
 	) {
 		// String format: headers is an object, convert to array of tuples
 		return {
-			seq_num: record.seq_num,
+			seqNum: record.seq_num,
 			timestamp: record.timestamp,
 			body: record.body as any,
 			headers: Object.entries(record.headers) as any,
@@ -60,7 +60,7 @@ function toSDKReadRecord<Format extends "string" | "bytes">(
 	} else {
 		// Bytes format: headers is already an array
 		return {
-			seq_num: record.seq_num,
+			seqNum: record.seq_num,
 			timestamp: record.timestamp,
 			body: record.body as any,
 			headers: (record.headers ?? []) as any,
@@ -824,7 +824,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.streamName,
 				input.records.length,
 				batchMeteredSize,
-				input.match_seq_num ?? "none",
+				input.matchSeqNum ?? "none",
 				this.inflight.length,
 				this.inflight.length + 1,
 				this.queuedBytes,
@@ -985,7 +985,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.streamName,
 				head.expectedCount,
 				head.input.meteredBytes,
-				head.input.match_seq_num ?? "none",
+				head.input.matchSeqNum ?? "none",
 			);
 
 			// Ensure session exists
@@ -1016,7 +1016,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						this.streamName,
 						entry.expectedCount,
 						entry.input.meteredBytes,
-						entry.input.match_seq_num ?? "none",
+						entry.input.matchSeqNum ?? "none",
 					);
 					const attemptStarted = performance.now();
 					entry.attemptStartedMonotonicMs = attemptStarted;
@@ -1067,12 +1067,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				debugSession(
 					"[%s] [PUMP] success, got ack: seq_num=%d-%d",
 					this.streamName,
-					ack.start.seq_num,
-					ack.end.seq_num,
+					ack.start.seqNum,
+					ack.end.seqNum,
 				);
 
 				// Invariant check: ack count matches batch count
-				const ackCount = ack.end.seq_num - ack.start.seq_num;
+				const ackCount = ack.end.seqNum - ack.start.seqNum;
 				if (ackCount !== head.expectedCount) {
 					const error = invariantViolation(
 						`Ack count mismatch: expected ${head.expectedCount}, got ${ackCount}`,
@@ -1088,8 +1088,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 				// Invariant check: sequence numbers must be strictly increasing
 				if (this._lastAckedPosition) {
-					const prevEnd = this._lastAckedPosition.end.seq_num;
-					const currentEnd = ack.end.seq_num;
+					const prevEnd = this._lastAckedPosition.end.seqNum;
+					const currentEnd = ack.end.seqNum;
 					if (currentEnd <= prevEnd) {
 						const error = invariantViolation(
 							`Sequence number not strictly increasing: previous=${prevEnd}, current=${currentEnd}`,
@@ -1300,7 +1300,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.streamName,
 				entry.expectedCount,
 				entry.input.meteredBytes,
-				entry.input.match_seq_num ?? "none",
+				entry.input.matchSeqNum ?? "none",
 			);
 		}
 
@@ -1312,7 +1312,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * For appends, idempotency requires match_seq_num.
 	 */
 	private isIdempotent(entry: InflightEntry): boolean {
-		return entry.input.match_seq_num !== undefined;
+		return entry.input.matchSeqNum !== undefined;
 	}
 
 	/**

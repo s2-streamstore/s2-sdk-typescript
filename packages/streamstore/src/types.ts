@@ -17,7 +17,7 @@ import { meteredBytes as calculateMeteredBytes } from "./utils.js";
  */
 export interface StreamPosition {
 	/** Sequence number assigned by the service. */
-	readonly seq_num: number;
+	readonly seqNum: number;
 	/** Timestamp in milliseconds since Unix epoch. */
 	readonly timestamp: number;
 }
@@ -137,7 +137,7 @@ export namespace AppendRecord {
  * The Format type parameter controls whether body and headers are decoded as strings or kept as binary.
  */
 export interface ReadRecord<Format extends "string" | "bytes" = "string"> {
-	readonly seq_num: number;
+	readonly seqNum: number;
 	readonly body: Format extends "string" ? string : Uint8Array;
 	readonly headers: Format extends "string"
 		? ReadonlyArray<readonly [string, string]>
@@ -161,8 +161,8 @@ export const MAX_APPEND_BYTES = 1024 * 1024;
  */
 export interface AppendInput {
 	readonly records: ReadonlyArray<AppendRecord>;
-	readonly match_seq_num?: number;
-	readonly fencing_token?: string;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
 	/** Pre-calculated total metered size in bytes. */
 	readonly meteredBytes: number;
 }
@@ -207,8 +207,8 @@ export namespace AppendInput {
 
 		return {
 			records,
-			match_seq_num: options?.matchSeqNum,
-			fencing_token: options?.fencingToken,
+			matchSeqNum: options?.matchSeqNum,
+			fencingToken: options?.fencingToken,
 			meteredBytes: totalBytes,
 		};
 	}

@@ -57,9 +57,9 @@ describeIf("AppendSession Integration Tests", () => {
 			const ack3 = await ticket3.ack();
 
 			// Verify acks are sequential
-			expect(ack1.end.seq_num).toBeGreaterThan(0);
-			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
-			expect(ack3.end.seq_num).toBe(ack2.end.seq_num + 1);
+			expect(ack1.end.seqNum).toBeGreaterThan(0);
+			expect(ack2.end.seqNum).toBe(ack1.end.seqNum + 1);
+			expect(ack3.end.seqNum).toBe(ack2.end.seqNum + 1);
 
 			// Verify timestamps are present
 			expect(ack1.end.timestamp).toBeGreaterThan(0);
@@ -88,8 +88,8 @@ describeIf("AppendSession Integration Tests", () => {
 			const ack = await ticket.ack();
 
 			// Verify all records were appended
-			expect(ack.end.seq_num - ack.start.seq_num).toBe(3);
-			expect(ack.end.seq_num).toBeGreaterThan(0);
+			expect(ack.end.seqNum - ack.start.seqNum).toBe(3);
+			expect(ack.end.seqNum).toBeGreaterThan(0);
 
 			await session.close();
 		},
@@ -107,7 +107,7 @@ describeIf("AppendSession Integration Tests", () => {
 			const collectedAcks: Array<{ seq_num: number }> = [];
 			const acksPromise = (async () => {
 				for await (const ack of session.acks()) {
-					collectedAcks.push({ seq_num: Number(ack.end.seq_num) });
+					collectedAcks.push({ seq_num: Number(ack.end.seqNum) });
 					// Collect all acks until stream closes
 				}
 			})();
@@ -158,7 +158,7 @@ describeIf("AppendSession Integration Tests", () => {
 
 			// Verify lastSeenPosition is updated
 			expect(session.lastAckedPosition()).toBeDefined();
-			expect(session.lastAckedPosition()?.end.seq_num).toBe(ack.end.seq_num);
+			expect(session.lastAckedPosition()?.end.seqNum).toBe(ack.end.seqNum);
 			expect(session.lastAckedPosition()?.end.timestamp).toBe(
 				ack.end.timestamp,
 			);
@@ -186,7 +186,7 @@ describeIf("AppendSession Integration Tests", () => {
 			const ticket = await session.submit(AppendInput.create([record]));
 			const ack = await ticket.ack();
 
-			expect(ack.end.seq_num).toBeGreaterThan(0);
+			expect(ack.end.seqNum).toBeGreaterThan(0);
 
 			await session.close();
 		},
@@ -206,7 +206,7 @@ describeIf("AppendSession Integration Tests", () => {
 			const ticket = await session.submit(AppendInput.create([record]));
 			const ack = await ticket.ack();
 
-			expect(ack.end.seq_num).toBeGreaterThan(0);
+			expect(ack.end.seqNum).toBeGreaterThan(0);
 
 			await session.close();
 		},
@@ -267,7 +267,7 @@ describeIf("AppendSession Integration Tests", () => {
 			const acksPromise = (async () => {
 				try {
 					for await (const ack of session.acks()) {
-						ackSeqs.push(Number(ack.end.seq_num));
+						ackSeqs.push(Number(ack.end.seqNum));
 					}
 				} catch (err) {
 					throw err;
@@ -329,7 +329,7 @@ describeIf("AppendSession Integration Tests", () => {
 
 			// Verify all acks are sequential (session should serialize them)
 			for (let i = 1; i < acks.length; i++) {
-				expect(acks[i]?.end.seq_num).toBe((acks[i - 1]?.end.seq_num ?? 0) + 1);
+				expect(acks[i]?.end.seqNum).toBe((acks[i - 1]?.end.seqNum ?? 0) + 1);
 			}
 
 			await session.close();
@@ -380,8 +380,8 @@ describeIf("AppendSession Integration Tests", () => {
 			const ack1 = await ticket1.ack();
 			const ack2 = await ticket2.ack();
 
-			expect(ack1.end.seq_num).toBeGreaterThan(0);
-			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
+			expect(ack1.end.seqNum).toBeGreaterThan(0);
+			expect(ack2.end.seqNum).toBe(ack1.end.seqNum + 1);
 		},
 	);
 
@@ -422,9 +422,9 @@ describeIf("AppendSession Integration Tests", () => {
 			const ack2 = await ticket2.ack();
 			const ack3 = await ticket3.ack();
 
-			expect(ack1.end.seq_num).toBeGreaterThan(0);
-			expect(ack2.end.seq_num).toBe(ack1.end.seq_num + 1);
-			expect(ack3.end.seq_num).toBe(ack2.end.seq_num + 1);
+			expect(ack1.end.seqNum).toBeGreaterThan(0);
+			expect(ack2.end.seqNum).toBe(ack1.end.seqNum + 1);
+			expect(ack3.end.seqNum).toBe(ack2.end.seqNum + 1);
 		},
 	);
 

@@ -5,6 +5,7 @@ import { checkTail } from "./generated/index.js";
 import {
 	fromAPIReadBatchBytes,
 	fromAPIReadBatchString,
+	fromAPITailResponse,
 	toAPIReadQuery,
 } from "./internal/mappers.js";
 import { isRetryable, withRetries } from "./lib/retry.js";
@@ -77,7 +78,7 @@ export class S2Stream {
 	public async checkTail(options?: S2RequestOptions): Promise<TailResponse> {
 		this.ensureOpen();
 		return await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
+			const response = await withS2Data(() =>
 				checkTail({
 					client: this.client,
 					path: {
@@ -86,6 +87,7 @@ export class S2Stream {
 					...options,
 				}),
 			);
+			return fromAPITailResponse(response);
 		});
 	}
 
@@ -150,7 +152,7 @@ export class S2Stream {
 				if ((config.appendRetryPolicy ?? "all") === "noSideEffects") {
 					// Allow retry only when the append is naturally idempotent by containing
 					// a match_seq_num condition.
-					return !!input.match_seq_num;
+					return !!input.matchSeqNum;
 				} else {
 					return true;
 				}

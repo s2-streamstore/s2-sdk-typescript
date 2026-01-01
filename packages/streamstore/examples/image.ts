@@ -58,7 +58,7 @@ const startAt = await stream.checkTail();
 const producer = new Producer(
 	new BatchTransform({
 		lingerDurationMillis: 10,
-		matchSeqNum: startAt.tail.seq_num,
+		matchSeqNum: startAt.tail.seqNum,
 	}),
 	await stream.appendSession({
 		maxInflightBytes: 2 * 1024 * 1024, // 1MiB
@@ -84,17 +84,17 @@ let append = await image
 	.pipeTo(producer.writable);
 
 console.log(
-	`image written to S2 over ${producer.appendSession.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num} records, starting at seq_num=${startAt.tail.seq_num}`,
+	`image written to S2 over ${producer.appendSession.lastAckedPosition()!.end!.seqNum - startAt.tail.seqNum} records, starting at seq_num=${startAt.tail.seqNum}`,
 );
 
 let readSession = await stream.readSession(
 	{
-		start: { from: { seq_num: startAt.tail.seq_num } },
+		start: { from: { seq_num: startAt.tail.seqNum } },
 		stop: {
 			limits: {
 				count:
-					producer.appendSession.lastAckedPosition()!.end.seq_num -
-					startAt.tail.seq_num,
+					producer.appendSession.lastAckedPosition()!.end.seqNum -
+					startAt.tail.seqNum,
 			},
 		},
 	},

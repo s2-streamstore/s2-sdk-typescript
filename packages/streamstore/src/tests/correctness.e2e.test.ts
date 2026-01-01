@@ -107,7 +107,7 @@ describeIf("Correctness Integration Tests", () => {
 
 					try {
 						for await (const record of readSession) {
-							const seqNum = record.seq_num;
+							const seqNum = record.seqNum;
 							if (lastSeqNum === undefined) {
 								expect(seqNum).toBe(0);
 							} else {

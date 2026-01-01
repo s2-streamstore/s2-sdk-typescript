@@ -26,7 +26,7 @@ export class IndexedAppendAck {
 	}
 
 	seqNum(): number {
-		return this.ack.start.seq_num + this.index;
+		return this.ack.start.seqNum + this.index;
 	}
 }
 
@@ -145,7 +145,7 @@ export class Producer implements AsyncDisposable {
 					"[%s] pump got batch: records=%d, match_seq_num=%s, inflightRecords=%d",
 					this.debugName,
 					batch.records.length,
-					batch.match_seq_num ?? "none",
+					batch.matchSeqNum ?? "none",
 					this.inflightRecords.length,
 				);
 
@@ -168,12 +168,12 @@ export class Producer implements AsyncDisposable {
 						"[%s] pump submitting to session: records=%d, match_seq_num=%s",
 						this.debugName,
 						batch.records.length,
-						batch.match_seq_num ?? "none",
+						batch.matchSeqNum ?? "none",
 					);
 
 					const input = AppendInput.create(batch.records, {
-						fencingToken: batch.fencing_token,
-						matchSeqNum: batch.match_seq_num,
+						fencingToken: batch.fencingToken,
+						matchSeqNum: batch.matchSeqNum,
 					});
 					ticket = await this.appendSession.submit(input);
 
@@ -209,8 +209,8 @@ export class Producer implements AsyncDisposable {
 						debugProducer(
 							"[%s] pump ack received: seq_num=%d-%d",
 							this.debugName,
-							ack.start.seq_num,
-							ack.end.seq_num,
+							ack.start.seqNum,
+							ack.end.seqNum,
 						);
 
 						for (const [i, record] of associatedRecords.entries()) {

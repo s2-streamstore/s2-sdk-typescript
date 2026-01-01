@@ -62,9 +62,9 @@ class FakeAppendSession {
 						? input.records
 						: [input.records];
 					const count = batch.length;
-					const start: StreamPosition = { seq_num: 0, timestamp: 0 };
-					const end: StreamPosition = { seq_num: count, timestamp: 0 };
-					const tail: StreamPosition = { seq_num: count, timestamp: 0 };
+					const start: StreamPosition = { seqNum: 0, timestamp: 0 };
+					const end: StreamPosition = { seqNum: count, timestamp: 0 };
+					const tail: StreamPosition = { seqNum: count, timestamp: 0 };
 					const ack: AppendAck = { start, end, tail };
 					this.acksController.enqueue(ack);
 				}
@@ -148,8 +148,8 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		this.writes.push({
 			records: batch,
 			args: {
-				matchSeqNum: input.match_seq_num,
-				fencingToken: input.fencing_token,
+				matchSeqNum: input.matchSeqNum,
+				fencingToken: input.fencingToken,
 			},
 		});
 
@@ -164,9 +164,9 @@ class FakeTransportAppendSession implements TransportAppendSession {
 
 		// Return default successful ack
 		const count = batch.length;
-		const start: StreamPosition = { seq_num: 0, timestamp: 0 };
-		const end: StreamPosition = { seq_num: count, timestamp: 0 };
-		const tail: StreamPosition = { seq_num: count, timestamp: 0 };
+		const start: StreamPosition = { seqNum: 0, timestamp: 0 };
+		const end: StreamPosition = { seqNum: count, timestamp: 0 };
+		const tail: StreamPosition = { seqNum: count, timestamp: 0 };
 		const ack: AppendAck = { start, end, tail };
 		return ok(ack);
 	}
@@ -250,7 +250,7 @@ describe("AppendSessionImpl (unit)", () => {
 		await Promise.resolve();
 		const ticket = await p;
 		const ack = await ticket.ack();
-		expect(ack.end.seq_num - ack.start.seq_num).toBe(1);
+		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
 	});
 
 	it("fails immediately when retries are disabled and send-phase errors persist", async () => {
@@ -322,14 +322,14 @@ describe("AppendSessionImpl (unit)", () => {
 		// Create acks with non-monotonic sequence numbers
 		// Each ack must have correct count (end - start = 1 for single record batches)
 		const ack1: AppendAck = {
-			start: { seq_num: 0, timestamp: 0 },
-			end: { seq_num: 1, timestamp: 0 }, // count = 1
-			tail: { seq_num: 1, timestamp: 0 },
+			start: { seqNum: 0, timestamp: 0 },
+			end: { seqNum: 1, timestamp: 0 }, // count = 1
+			tail: { seqNum: 1, timestamp: 0 },
 		};
 		const ack2: AppendAck = {
-			start: { seq_num: 0, timestamp: 0 }, // Decreasing!
-			end: { seq_num: 1, timestamp: 0 },
-			tail: { seq_num: 1, timestamp: 0 },
+			start: { seqNum: 0, timestamp: 0 }, // Decreasing!
+			end: { seqNum: 1, timestamp: 0 },
+			tail: { seqNum: 1, timestamp: 0 },
 		};
 
 		const session = await AppendSessionImpl.create(
@@ -343,7 +343,7 @@ describe("AppendSessionImpl (unit)", () => {
 			AppendInput.create([AppendRecord.string({ body: "a" })]),
 		);
 		await expect(ticket1.ack()).resolves.toMatchObject({
-			end: { seq_num: 1 },
+			end: { seqNum: 1 },
 		});
 
 		// Second submit should trigger invariant violation
@@ -378,14 +378,14 @@ describe("AppendSessionImpl (unit)", () => {
 		// Create acks with equal sequence numbers
 		// Each ack must have correct count (end - start = 1 for single record batches)
 		const ack1: AppendAck = {
-			start: { seq_num: 9, timestamp: 0 },
-			end: { seq_num: 10, timestamp: 0 }, // count = 1
-			tail: { seq_num: 10, timestamp: 0 },
+			start: { seqNum: 9, timestamp: 0 },
+			end: { seqNum: 10, timestamp: 0 }, // count = 1
+			tail: { seqNum: 10, timestamp: 0 },
 		};
 		const ack2: AppendAck = {
-			start: { seq_num: 9, timestamp: 0 },
-			end: { seq_num: 10, timestamp: 0 }, // Equal end, not increasing!
-			tail: { seq_num: 10, timestamp: 0 },
+			start: { seqNum: 9, timestamp: 0 },
+			end: { seqNum: 10, timestamp: 0 }, // Equal end, not increasing!
+			tail: { seqNum: 10, timestamp: 0 },
 		};
 
 		const session = await AppendSessionImpl.create(
@@ -399,7 +399,7 @@ describe("AppendSessionImpl (unit)", () => {
 			AppendInput.create([AppendRecord.string({ body: "a" })]),
 		);
 		await expect(ticket1.ack()).resolves.toMatchObject({
-			end: { seq_num: 10 },
+			end: { seqNum: 10 },
 		});
 
 		// Second submit should trigger invariant violation

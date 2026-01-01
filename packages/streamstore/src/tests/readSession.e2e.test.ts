@@ -57,7 +57,7 @@ describeIf("ReadSession Integration Tests", () => {
 
 			const records: Array<{ seqNum: number; body?: string }> = [];
 			for await (const record of session) {
-				records.push({ seqNum: record.seq_num, body: record.body });
+				records.push({ seqNum: record.seqNum, body: record.body });
 				// Stop after reading 3 records
 				if (records.length >= 3) {
 					break;
@@ -93,11 +93,11 @@ describeIf("ReadSession Integration Tests", () => {
 
 			const records: Array<{ seqNum: number }> = [];
 			for await (const record of session) {
-				records.push({ seqNum: record.seq_num });
+				records.push({ seqNum: record.seqNum });
 				// streamPosition should be updated after reading
 				if (session.nextReadPosition()) {
-					expect(session.nextReadPosition()?.seq_num).toBeGreaterThanOrEqual(
-						record.seq_num,
+					expect(session.nextReadPosition()?.seqNum).toBeGreaterThanOrEqual(
+						record.seqNum,
 					);
 				}
 				if (records.length >= 2) {
@@ -107,7 +107,7 @@ describeIf("ReadSession Integration Tests", () => {
 
 			// After reading, streamPosition should be set
 			expect(session.nextReadPosition()).toBeDefined();
-			expect(session.nextReadPosition()?.seq_num).toBeGreaterThan(0);
+			expect(session.nextReadPosition()?.seqNum).toBeGreaterThan(0);
 		},
 	);
 
@@ -127,7 +127,7 @@ describeIf("ReadSession Integration Tests", () => {
 
 			const records: Array<{ seqNum: number; body?: Uint8Array }> = [];
 			for await (const record of session) {
-				records.push({ seqNum: record.seq_num, body: record.body });
+				records.push({ seqNum: record.seqNum, body: record.body });
 				break;
 			}
 

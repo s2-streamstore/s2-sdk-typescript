@@ -39,6 +39,42 @@ function fromBase64(value: string): Uint8Array {
 }
 
 // =============================================================================
+// Stream Position Mapper
+// =============================================================================
+
+/**
+ * Convert API StreamPosition to SDK StreamPosition.
+ */
+export function fromAPIStreamPosition(
+	pos: API.StreamPosition,
+): Types.StreamPosition {
+	return {
+		seqNum: pos.seq_num,
+		timestamp: pos.timestamp,
+	};
+}
+
+/**
+ * Convert API AppendAck to SDK AppendAck.
+ */
+export function fromAPIAppendAck(ack: API.AppendAck): Types.AppendAck {
+	return {
+		start: fromAPIStreamPosition(ack.start),
+		end: fromAPIStreamPosition(ack.end),
+		tail: fromAPIStreamPosition(ack.tail),
+	};
+}
+
+/**
+ * Convert API TailResponse to SDK TailResponse.
+ */
+export function fromAPITailResponse(res: API.TailResponse): Types.TailResponse {
+	return {
+		tail: fromAPIStreamPosition(res.tail),
+	};
+}
+
+// =============================================================================
 // Record Mappers - Append
 // =============================================================================
 
@@ -90,7 +126,7 @@ function fromAPISequencedRecordString(
 	}
 
 	return {
-		seq_num: record.seq_num,
+		seqNum: record.seq_num,
 		timestamp: record.timestamp,
 		body: record.body ?? "",
 		headers,
@@ -130,7 +166,7 @@ function fromAPISequencedRecordBytes(
 	}
 
 	return {
-		seq_num: record.seq_num,
+		seqNum: record.seq_num,
 		timestamp: record.timestamp,
 		body,
 		headers,
@@ -149,7 +185,7 @@ export function fromAPIReadBatchString(
 ): Types.ReadBatch<"string"> {
 	return {
 		records: batch.records.map(fromAPISequencedRecordString),
-		tail: batch.tail ?? undefined,
+		tail: batch.tail ? fromAPIStreamPosition(batch.tail) : undefined,
 	};
 }
 
@@ -161,7 +197,7 @@ export function fromAPIReadBatchBytes(
 ): Types.ReadBatch<"bytes"> {
 	return {
 		records: batch.records.map(fromAPISequencedRecordBytes),
-		tail: batch.tail ?? undefined,
+		tail: batch.tail ? fromAPIStreamPosition(batch.tail) : undefined,
 	};
 }
 

@@ -27,7 +27,6 @@ import {
 } from "../../../retry.js";
 import { DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
-	AppendOptions,
 	AppendRecord,
 	AppendSession,
 	AppendSessionOptions,
@@ -830,11 +829,7 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Send a batch and wait for ack. Returns AppendResult (never throws).
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
-	private sendBatch(
-		records: AppendRecord[],
-		args: AppendOptions,
-		batchMeteredSize: number,
-	): Promise<AppendResult> {
+	private sendBatch(input: Types.AppendInput): Promise<AppendResult> {
 		if (!this.http2Stream || this.http2Stream.closed) {
 			return Promise.resolve(
 				err(new S2Error({ message: "HTTP/2 stream is not open", status: 502 })),
@@ -842,7 +837,7 @@ class S2SAppendSession implements TransportAppendSession {
 		}
 
 		// Convert to protobuf AppendInput
-		const bodyBytes = encodeProtoAppendInput(records, args);
+		const bodyBytes = encodeProtoAppendInput(input);
 
 		// Frame the message
 		const frame = frameMessage({
@@ -854,7 +849,7 @@ class S2SAppendSession implements TransportAppendSession {
 		return new Promise((resolve) => {
 			this.pendingAcks.push({
 				resolve,
-				batchSize: batchMeteredSize,
+				batchSize: input.meteredBytes,
 			});
 
 			// Send the frame (pipelined - non-blocking)
@@ -948,32 +943,22 @@ class S2SAppendSession implements TransportAppendSession {
 			);
 		}
 
-		// Use cached metered size from AppendInput
-		const batchMeteredSize = input.meteredBytes;
-
-		if (batchMeteredSize > 1024 * 1024) {
+		if (input.meteredBytes > 1024 * 1024) {
 			return err(
 				new S2Error({
-					message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
+					message: `Batch size ${input.meteredBytes} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
 					status: 400,
 					code: "INVALID_ARGUMENT",
 				}),
 			);
 		}
 
-		return this.sendBatch(
-			recordsArray,
-			{
-				fencing_token: input.fencing_token,
-				match_seq_num: input.match_seq_num,
-			},
-			batchMeteredSize,
-		);
+		return this.sendBatch(input);
 	}
 }
 
 /**
- * Convert protobuf StreamPosition to OpenAPI StreamPosition
+ * Convert protobuf StreamPosition to API StreamPosition (internal use)
  */
 function convertStreamPosition(
 	proto: Proto.StreamPosition,
@@ -983,15 +968,25 @@ function convertStreamPosition(
 		timestamp: Number(proto.timestamp),
 	};
 }
-function convertAppendAck(proto: Proto.AppendAck): API.AppendAck {
+
+/**
+ * Convert API StreamPosition to SDK StreamPosition (public interface)
+ */
+function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
+	return {
+		seqNum: pos.seq_num,
+		timestamp: pos.timestamp,
+	};
+}
+function convertAppendAck(proto: Proto.AppendAck): Types.AppendAck {
 	if (!proto.start || !proto.end || !proto.tail) {
 		throw new Error(
 			"Invariant violation: AppendAck is missing required fields",
 		);
 	}
 	return {
-		start: convertStreamPosition(proto.start),
-		end: convertStreamPosition(proto.end),
-		tail: convertStreamPosition(proto.tail),
+		start: toSDKStreamPosition(convertStreamPosition(proto.start)),
+		end: toSDKStreamPosition(convertStreamPosition(proto.end)),
+		tail: toSDKStreamPosition(convertStreamPosition(proto.tail)),
 	};
 }

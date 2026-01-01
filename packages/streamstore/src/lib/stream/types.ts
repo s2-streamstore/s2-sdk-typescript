@@ -50,15 +50,6 @@ export type AppendRecordForFormat<
 export type AppendRecord = Types.AppendRecord;
 
 /**
- * Optional append conditions (fencing token and/or match sequence number).
- * Used internally by transports when sending append requests.
- */
-export type AppendOptions = {
-	fencing_token?: string;
-	match_seq_num?: number;
-};
-
-/**
  * Stream of append acknowledgements used by {@link AppendSession}.
  */
 export interface AcksStream
