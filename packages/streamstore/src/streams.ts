@@ -8,12 +8,59 @@ import {
 	listStreams,
 	reconfigureStream,
 } from "./generated/index.js";
+import type * as API from "./generated/types.gen.js";
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { randomToken } from "./lib/base64.js";
 import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
+/** Convert SDK RetentionPolicy (ageSecs) to API RetentionPolicy (age). */
+function toAPIRetentionPolicy(
+	policy: Types.RetentionPolicy | null | undefined,
+): API.RetentionPolicy | null | undefined {
+	if (policy === null) return null;
+	if (policy === undefined) return undefined;
+	if ("ageSecs" in policy) {
+		return { age: policy.ageSecs };
+	}
+	return policy; // { infinite: ... } passes through
+}
+
+/** Convert API RetentionPolicy (age) to SDK RetentionPolicy (ageSecs). */
+function toSDKRetentionPolicy(
+	policy: API.RetentionPolicy | null | undefined,
+): Types.RetentionPolicy | null | undefined {
+	if (policy === null) return null;
+	if (policy === undefined) return undefined;
+	if ("age" in policy) {
+		return { ageSecs: policy.age };
+	}
+	return policy; // { infinite: ... } passes through
+}
+
+/** Convert SDK StreamConfig to API format (handles retentionPolicy.ageSecs → age). */
+function toAPIStreamConfig(config: Types.StreamConfig | null | undefined): any {
+	if (config === null || config === undefined) return config;
+	return {
+		...config,
+		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
+	};
+}
+
+/** Convert API StreamConfig to SDK format (handles retentionPolicy.age → ageSecs). */
+function toSDKStreamConfig(config: any): Types.StreamConfig {
+	return {
+		...config,
+		retentionPolicy: toSDKRetentionPolicy(config?.retentionPolicy),
+	};
+}
+
+/**
+ * Basin-scoped helper for listing and configuring streams.
+ *
+ * Access via {@link S2Basin.streams}. Methods inherit the basin's retry configuration.
+ */
 export class S2Streams {
 	private readonly client: Client;
 	private readonly retryConfig?: RetryConfig;
@@ -87,11 +134,16 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): Promise<Types.CreateStreamResponse> {
 		const requestToken = randomToken();
+		// Convert SDK config to API format (ageSecs → age)
+		const apiArgs = {
+			...args,
+			config: toAPIStreamConfig(args.config),
+		};
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createStream({
 					client: this.client,
-					body: toSnakeCase(args),
+					body: toSnakeCase(apiArgs),
 					headers: { "s2-request-token": requestToken },
 					...options,
 				}),
@@ -118,7 +170,8 @@ export class S2Streams {
 				}),
 			);
 		});
-		return toCamelCase<Types.StreamConfig>(response);
+		// Convert API format to SDK (age → ageSecs)
+		return toSDKStreamConfig(toCamelCase(response));
 	}
 
 	/**
@@ -150,16 +203,23 @@ export class S2Streams {
 		args: Types.ReconfigureStreamInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureStreamResponse> {
+		// Convert SDK config to API format (ageSecs → age)
+		const apiArgs = {
+			...args,
+			retentionPolicy: toAPIRetentionPolicy(args.retentionPolicy),
+		};
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureStream({
 					client: this.client,
 					path: args,
-					body: toSnakeCase(args),
+					body: toSnakeCase(apiArgs),
 					...options,
 				}),
 			);
 		});
-		return toCamelCase<Types.ReconfigureStreamResponse>(response);
+		// Convert API format to SDK (age → ageSecs)
+		const camelCased = toCamelCase<any>(response);
+		return toSDKStreamConfig(camelCased);
 	}
 }

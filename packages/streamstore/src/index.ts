@@ -3,6 +3,7 @@
 // =============================================================================
 
 export { S2Basin } from "./basin.js";
+export { S2Environment } from "./common.js";
 /** Top-level entrypoint for the SDK. */
 export { S2 } from "./s2.js";
 export { S2Stream } from "./stream.js";
@@ -80,6 +81,7 @@ export type {
 	ReconfigureBasinResponse,
 	ReconfigureStreamInput,
 	ReconfigureStreamResponse,
+	RetentionPolicy,
 	RevokeAccessTokenInput,
 	ScalarMetric,
 	StreamConfig,
@@ -121,7 +123,7 @@ export type {
 	// Scope configuration
 	PermittedOperationGroups,
 	ResourceSet,
-	RetentionPolicy,
+	// RetentionPolicy - exported from types.ts with ageSecs field
 	StorageClass,
 	StreamMetricSet,
 	TimeseriesInterval,

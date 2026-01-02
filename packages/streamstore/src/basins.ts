@@ -8,12 +8,77 @@ import {
 	listBasins,
 	reconfigureBasin,
 } from "./generated/index.js";
+import type * as API from "./generated/types.gen.js";
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { randomToken } from "./lib/base64.js";
 import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
+/** Convert SDK RetentionPolicy (ageSecs) to API RetentionPolicy (age). */
+function toAPIRetentionPolicy(
+	policy: Types.RetentionPolicy | null | undefined,
+): API.RetentionPolicy | null | undefined {
+	if (policy === null) return null;
+	if (policy === undefined) return undefined;
+	if ("ageSecs" in policy) {
+		return { age: policy.ageSecs };
+	}
+	return policy; // { infinite: ... } passes through
+}
+
+/** Convert API RetentionPolicy (age) to SDK RetentionPolicy (ageSecs). */
+function toSDKRetentionPolicy(
+	policy: API.RetentionPolicy | null | undefined,
+): Types.RetentionPolicy | null | undefined {
+	if (policy === null) return null;
+	if (policy === undefined) return undefined;
+	if ("age" in policy) {
+		return { ageSecs: policy.age };
+	}
+	return policy; // { infinite: ... } passes through
+}
+
+/** Convert SDK StreamConfig to API format (handles retentionPolicy.ageSecs → age). */
+function toAPIStreamConfig(config: Types.StreamConfig | null | undefined): any {
+	if (config === null || config === undefined) return config;
+	return {
+		...config,
+		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
+	};
+}
+
+/** Convert API StreamConfig to SDK format (handles retentionPolicy.age → ageSecs). */
+function toSDKStreamConfig(config: any): Types.StreamConfig | null | undefined {
+	if (config === null || config === undefined) return config;
+	return {
+		...config,
+		retentionPolicy: toSDKRetentionPolicy(config?.retentionPolicy),
+	};
+}
+
+/** Convert SDK BasinConfig to API format. */
+function toAPIBasinConfig(config: Types.BasinConfig | null | undefined): any {
+	if (config === null || config === undefined) return config;
+	return {
+		...config,
+		defaultStreamConfig: toAPIStreamConfig(config.defaultStreamConfig),
+	};
+}
+
+/** Convert API BasinConfig to SDK format. */
+function toSDKBasinConfig(config: any): Types.BasinConfig {
+	return {
+		...config,
+		defaultStreamConfig: toSDKStreamConfig(config?.defaultStreamConfig),
+	};
+}
+
+/**
+ * Account-scoped helper for listing, creating, deleting, and reconfiguring basins.
+ *
+ * Retrieve this via {@link S2.basins}. Each method retries according to the client-level retry config.
+ */
 export class S2Basins {
 	private readonly client: Client;
 	private readonly retryConfig: RetryConfig;
@@ -90,11 +155,16 @@ export class S2Basins {
 		options?: S2RequestOptions,
 	): Promise<Types.CreateBasinResponse> {
 		const requestToken = randomToken();
+		// Convert SDK config to API format (ageSecs → age)
+		const apiArgs = {
+			...args,
+			config: toAPIBasinConfig(args.config),
+		};
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createBasin({
 					client: this.client,
-					body: toSnakeCase(args),
+					body: toSnakeCase(apiArgs),
 					headers: { "s2-request-token": requestToken },
 					...options,
 				}),
@@ -121,7 +191,8 @@ export class S2Basins {
 				}),
 			);
 		});
-		return toCamelCase<Types.BasinConfig>(response);
+		// Convert API format to SDK (age → ageSecs)
+		return toSDKBasinConfig(toCamelCase(response));
 	}
 
 	/**
@@ -153,16 +224,22 @@ export class S2Basins {
 		args: Types.ReconfigureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureBasinResponse> {
+		// Convert SDK config to API format (ageSecs → age)
+		const apiArgs = {
+			...args,
+			defaultStreamConfig: toAPIStreamConfig(args.defaultStreamConfig),
+		};
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureBasin({
 					client: this.client,
 					path: args,
-					body: toSnakeCase(args),
+					body: toSnakeCase(apiArgs),
 					...options,
 				}),
 			);
 		});
-		return toCamelCase<Types.ReconfigureBasinResponse>(response);
+		// Convert API format to SDK (age → ageSecs)
+		return toSDKBasinConfig(toCamelCase(response));
 	}
 }

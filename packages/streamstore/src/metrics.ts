@@ -57,6 +57,11 @@ function fromAPIMetricSetResponse(response: unknown): Types.MetricSetResponse {
 	};
 }
 
+/**
+ * Helper for querying account, basin, and stream level metrics.
+ *
+ * Access via {@link S2.metrics}. Responses are automatically converted to Date-friendly SDK types.
+ */
 export class S2Metrics {
 	readonly client: Client;
 	private readonly retryConfig?: RetryConfig;

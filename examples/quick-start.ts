@@ -1,25 +1,3 @@
-# @s2-dev/streamstore
-
-TypeScript SDK for [S2](https://s2.dev), a serverless data store for streams.
-
-This package is the core client for S2's [REST API](https://s2.dev/docs/rest/protocol), providing an ergonomic interface for appending to streams and reading data from them.
-
-## Installation
-
-```bash
-npm add @s2-dev/streamstore
-# or
-yarn add @s2-dev/streamstore
-# or
-bun add @s2-dev/streamstore
-```
-
-## Quick start
-
-Generate an access token from the S2 console at <https://s2.dev/dashboard>, then:
-
-<!-- snippet:start quick-start -->
-```ts
 import {
 	AppendInput,
 	AppendRecord,
@@ -83,12 +61,3 @@ const batch = await stream.read(
 for (const record of batch.records) {
 	console.log(`[read] ${record.seqNum}:`, record.body);
 }
-```
-<!-- snippet:end quick-start -->
-
-> Tip: snippets look for `S2_ACCESS_TOKEN`, `S2_BASIN`, and `S2_STREAM` so you can run them with `npx tsx examples/<file>.ts`.
-
-## More documentation
-
-- Full SDK overview and additional examples: see the root repo README at <https://github.com/s2-streamstore/s2-sdk-typescript>.
-- S2 service docs: <https://s2.dev/docs>.

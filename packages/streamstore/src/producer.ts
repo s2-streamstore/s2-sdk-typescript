@@ -61,7 +61,23 @@ type InflightRecord = {
  *   automatically via the transform stream when the AppendSession is at capacity.
  * - ticket.ack() returns a Promise<IndexedAppendAck> that resolves once the record is durable.
  *
- * See docs/producer-spec.md for detailed specification.
+ * See the "Producer API" section of the root README for guidance on sizing batches,
+ * wiring transforms, and handling application-level ids.
+ *
+ * @example
+ * ```ts
+ * const appendSession = await stream.appendSession();
+ * const producer = new Producer(new BatchTransform(), appendSession);
+ * const writer = producer.writable.getWriter();
+ * await writer.write(AppendRecord.string({ body: "hello" }));
+ * await writer.close();
+ *
+ * for await (const ack of producer.readable) {
+ *   console.log("record durable at seq", ack.seqNum());
+ * }
+ *
+ * await producer.close();
+ * ```
  */
 export class Producer implements AsyncDisposable {
 	readonly batchTransform: BatchTransform;

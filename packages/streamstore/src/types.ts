@@ -380,7 +380,7 @@ export interface ReconfigureStreamInput {
 	/** Delete-on-empty configuration. */
 	deleteOnEmpty?: DeleteOnEmptyConfig | null;
 	/** Retention policy. */
-	retentionPolicy?: API.RetentionPolicy | null;
+	retentionPolicy?: RetentionPolicy | null;
 	/** Storage class. */
 	storageClass?: API.StorageClass | null;
 	/** Timestamping configuration. */
@@ -426,13 +426,28 @@ export interface TimestampingConfig {
 }
 
 /**
+ * Retention policy for automatic trimming.
+ *
+ * Either specify `ageSecs` for time-based retention, or `infinite` for unlimited retention.
+ */
+export type RetentionPolicy =
+	| {
+			/** Age in seconds for automatic trimming of records older than this threshold. Must be > 0. */
+			ageSecs: number;
+	  }
+	| {
+			/** Retain records unless explicitly trimmed. */
+			infinite: API.InfiniteRetention;
+	  };
+
+/**
  * Stream configuration.
  */
 export interface StreamConfig {
 	/** Delete-on-empty configuration. */
 	deleteOnEmpty?: DeleteOnEmptyConfig | null;
 	/** Retention policy. */
-	retentionPolicy?: API.RetentionPolicy | null;
+	retentionPolicy?: RetentionPolicy | null;
 	/** Storage class. */
 	storageClass?: API.StorageClass | null;
 	/** Timestamping configuration. */
@@ -628,10 +643,10 @@ export interface IssueAccessTokenInput {
 	 */
 	autoPrefixStreams?: boolean;
 	/**
-	 * Expiration time in ISO 8601 format.
+	 * Expiration time (Date or ISO 8601 string).
 	 * If not set, the expiration will be set to that of the requestor's token.
 	 */
-	expiresAt?: string | null;
+	expiresAt?: Date | string | null;
 }
 
 /**
@@ -654,8 +669,8 @@ export interface AccessTokenInfo {
 	scope: AccessTokenScope;
 	/** Whether streams are auto-prefixed. */
 	autoPrefixStreams?: boolean;
-	/** Expiration time in ISO 8601 format. */
-	expiresAt?: string | null;
+	/** Expiration time. */
+	expiresAt?: Date | null;
 }
 
 /**

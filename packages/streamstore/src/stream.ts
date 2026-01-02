@@ -23,6 +23,11 @@ import type {
 } from "./lib/stream/types.js";
 import type * as Types from "./types.js";
 
+/**
+ * Basin-scoped stream helper for append/read operations.
+ *
+ * Created via {@link S2Basin.stream}. Provides direct methods plus factories for read/append sessions.
+ */
 export class S2Stream {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;

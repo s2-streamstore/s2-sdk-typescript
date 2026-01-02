@@ -11,6 +11,36 @@ import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
+/** Convert expiresAt input (Date or string) to ISO 8601 string for API. */
+function toISOString(
+	value: Date | string | null | undefined,
+): string | null | undefined {
+	if (value === null) return null;
+	if (value === undefined) return undefined;
+	if (value instanceof Date) return value.toISOString();
+	return value;
+}
+
+/** Convert expiresAt from API (ISO string) to Date. */
+function toDate(value: string | null | undefined): Date | null | undefined {
+	if (value === null) return null;
+	if (value === undefined) return undefined;
+	return new Date(value);
+}
+
+/** Transform AccessTokenInfo response: convert expiresAt to Date. */
+function transformTokenInfo(token: any): Types.AccessTokenInfo {
+	return {
+		...token,
+		expiresAt: toDate(token.expiresAt),
+	};
+}
+
+/**
+ * Account-scoped helper for listing, issuing, and revoking access tokens.
+ *
+ * Acquire via {@link S2.accessTokens}. Use {@link S2AccessTokens.listAll} for async iteration.
+ */
 export class S2AccessTokens {
 	readonly client: Client;
 	private readonly retryConfig?: RetryConfig;
@@ -40,7 +70,11 @@ export class S2AccessTokens {
 				}),
 			);
 		});
-		return toCamelCase<Types.ListAccessTokensResponse>(response);
+		const camelCased = toCamelCase<any>(response);
+		return {
+			...camelCased,
+			accessTokens: camelCased.accessTokens.map(transformTokenInfo),
+		};
 	}
 
 	/**
@@ -77,17 +111,22 @@ export class S2AccessTokens {
 	 * @param args.id Unique token ID (1-96 bytes)
 	 * @param args.scope Token scope (operations and resource sets)
 	 * @param args.autoPrefixStreams Namespace stream names by configured prefix scope
-	 * @param args.expiresAt Expiration in ISO 8601; defaults to requestor's token expiry
+	 * @param args.expiresAt Expiration time (Date or ISO 8601 string); defaults to requestor's token expiry
 	 */
 	public async issue(
 		args: Types.IssueAccessTokenInput,
 		options?: S2RequestOptions,
 	): Promise<Types.IssueAccessTokenResponse> {
+		// Convert Date to ISO string for API
+		const apiArgs = {
+			...args,
+			expiresAt: toISOString(args.expiresAt),
+		};
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				issueAccessToken({
 					client: this.client,
-					body: toSnakeCase(args),
+					body: toSnakeCase(apiArgs),
 					...options,
 				}),
 			);

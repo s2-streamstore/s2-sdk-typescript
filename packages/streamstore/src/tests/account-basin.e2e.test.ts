@@ -75,7 +75,7 @@ describeIf("Basin Management Integration Tests", () => {
 				basin: basinName,
 				config: {
 					defaultStreamConfig: {
-						retentionPolicy: { age: RETENTION_AGE_SECS },
+						retentionPolicy: { ageSecs: RETENTION_AGE_SECS },
 						deleteOnEmpty: { minAgeSecs: DELETE_ON_EMPTY_MIN_AGE_SECS },
 					},
 				},
@@ -92,7 +92,7 @@ describeIf("Basin Management Integration Tests", () => {
 
 			expect(basinConfig.defaultStreamConfig).toBeDefined();
 			expect(basinConfig.defaultStreamConfig?.retentionPolicy).toEqual({
-				age: RETENTION_AGE_SECS,
+				ageSecs: RETENTION_AGE_SECS,
 			});
 			expect(basinConfig.defaultStreamConfig?.deleteOnEmpty).toEqual({
 				minAgeSecs: DELETE_ON_EMPTY_MIN_AGE_SECS,
@@ -148,7 +148,7 @@ describeIf("Basin Management Integration Tests", () => {
 
 			// Stream should inherit basin's default config
 			expect(streamConfig.retentionPolicy).toEqual({
-				age: RETENTION_AGE_SECS,
+				ageSecs: RETENTION_AGE_SECS,
 			});
 			expect(streamConfig.deleteOnEmpty).toEqual({
 				minAgeSecs: DELETE_ON_EMPTY_MIN_AGE_SECS,
@@ -169,7 +169,7 @@ describeIf("Basin Management Integration Tests", () => {
 			expect(reconfiguredStream.storageClass).toBe("standard");
 			// Other config should remain unchanged
 			expect(reconfiguredStream.retentionPolicy).toEqual({
-				age: RETENTION_AGE_SECS,
+				ageSecs: RETENTION_AGE_SECS,
 			});
 
 			// Read back to confirm
@@ -225,12 +225,12 @@ describeIf("Basin Management Integration Tests", () => {
 				.toLowerCase()}`;
 
 			// Token expires 1 hour from now
-			const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+			const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
 
 			const tokenResponse = await s2.accessTokens.issue({
 				id: tokenId,
 				autoPrefixStreams: true,
-				expiresAt: expiresAt,
+				expiresAt,
 				scope: {
 					// Basin scope: only basins starting with "typescript"
 					basins: { prefix: "typescript" },

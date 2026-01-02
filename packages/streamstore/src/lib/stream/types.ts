@@ -83,8 +83,23 @@ export class BatchSubmitTicket {
 }
 
 /**
- * Public AppendSession interface with retry, backpressure, and streams.
- * This is what users interact with - implemented by AppendSession in ../retry.ts.
+ * Public AppendSession interface with retry, backpressure, and readable/writable streams.
+ *
+ * Typical lifecycle:
+ * 1. Call {@link S2Stream.appendSession} to create a session (optionally tuning {@link AppendSessionOptions}).
+ * 2. Submit batches with {@link AppendSession.submit} or pipe `AppendInput` objects into {@link AppendSession.writable}.
+ * 3. Observe acknowledgements via {@link AppendSession.readable} / {@link AppendSession.acks}.
+ * 4. Call {@link AppendSession.close} to flush and surface any fatal errors.
+ *
+ * @example
+ * ```ts
+ * const session = await stream.appendSession();
+ * const ackTicket = await session.submit(
+ *   AppendInput.create([AppendRecord.string({ body: "event" })]),
+ * );
+ * await ackTicket.ack();
+ * await session.close();
+ * ```
  */
 export interface AppendSession extends AsyncDisposable {
 	/**
@@ -144,8 +159,21 @@ export interface TransportReadSession<
 
 /**
  * Public-facing read session interface.
- * Yields records directly and propagates errors by throwing (standard stream behavior).
- * Uses SDK types (camelCase fields, bigint).
+ *
+ * Yields records directly (as an async iterable or `ReadableStream`) and translates transport errors into thrown exceptions.
+ * Track progress using {@link ReadSession.nextReadPosition} / {@link ReadSession.lastObservedTail}.
+ *
+ * @example
+ * ```ts
+ * const session = await stream.readSession({
+ *   start: { from: { tailOffset: 50 } },
+ *   stop: { wait: 15 },
+ * });
+ *
+ * for await (const record of session) {
+ *   console.log(record.seqNum, record.body);
+ * }
+ * ```
  */
 export interface ReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<Types.ReadRecord<Format>>,

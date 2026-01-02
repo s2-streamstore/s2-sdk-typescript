@@ -1,15 +1,28 @@
 import { createWriteStream } from "node:fs";
-import { S2Environment } from "../src/common.js";
+
 import {
 	AppendRecord,
 	BatchTransform,
+	Producer,
 	type ReadRecord,
 	S2,
-	type S2ClientOptions,
-} from "../src/index.js";
-import { sleep } from "../src/lib/retry.js";
-import { Producer } from "../src/producer.js";
+	S2Environment,
+	S2Error,
+} from "@s2-dev/streamstore";
 
+const accessToken = process.env.S2_ACCESS_TOKEN;
+if (!accessToken) {
+	throw new Error("Set S2_ACCESS_TOKEN to a valid access token.");
+}
+
+const basinName = process.env.S2_BASIN;
+if (!basinName) {
+	throw new Error("Set S2_BASIN so we know where to work.");
+}
+
+const streamName = process.env.S2_STREAM ?? "image/demo";
+
+// Stream transformation for chunking large binary arrays into ones of no larger than `desiredChunkSize`.
 function rechunkStream(
 	desiredChunkSize: number,
 ): TransformStream<Uint8Array, Uint8Array> {
@@ -35,24 +48,27 @@ function rechunkStream(
 
 const s2 = new S2({
 	...S2Environment.parse(),
-	accessToken: process.env.S2_ACCESS_TOKEN!,
+	accessToken,
 	retry: {
-		maxAttempts: 10,
+		maxAttempts: 3,
 		minDelayMillis: 100,
-		maxDelayMillis: 100,
+		maxDelayMillis: 1000,
 		appendRetryPolicy: "noSideEffects",
 	},
 });
 
-const basinName = process.env.S2_BASIN;
-if (!basinName) {
-	console.error("S2_BASIN environment variable is not set");
-	process.exit(1);
-}
+const basin = s2.basin(basinName);
 
-const basin = s2.basin(process.env.S2_BASIN!);
-const stream = basin.stream("image");
+// Create the image stream if it doesn't already exist.
+await basin.streams.create({ stream: streamName }).catch((error: unknown) => {
+	if (error instanceof S2Error && error.status === 409) {
+		console.log(`Stream ${streamName} already exists.`);
+		return undefined;
+	}
+	throw error;
+});
 
+const stream = basin.stream(streamName);
 const startAt = await stream.checkTail();
 
 const producer = new Producer(
@@ -64,12 +80,14 @@ const producer = new Producer(
 		maxInflightBytes: 5 * 1024 * 1024,
 	}),
 );
+
+// Fetch an image stream from the web.
 let image = await fetch(
 	"https://upload.wikimedia.org/wikipedia/commons/2/24/Peter_Paul_Rubens_-_Self-portrait_-_RH.S.180_-_Rubenshuis_%28after_restoration%29.jpg",
 );
 
 // Write directly from fetch response to S2 stream
-let append = await image
+await image
 	.body! // Ensure each chunk is at most 128KiB. S2 has a maximum individual record size of 1MiB.
 	.pipeThrough(rechunkStream(1024 * 128))
 	// Convert each chunk to an AppendRecord.

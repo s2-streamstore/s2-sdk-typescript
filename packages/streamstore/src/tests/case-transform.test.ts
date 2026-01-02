@@ -176,7 +176,7 @@ describe("case-transform", () => {
 				createStreamOnRead: false,
 				defaultStreamConfig: {
 					deleteOnEmpty: { minAgeSecs: 3600 },
-					retentionPolicy: { age: 86400 },
+					retentionPolicy: { age: 86400 }, // Uses API field name; SDK types use ageSecs
 					storageClass: "standard",
 					timestamping: { mode: "arrival" },
 				},
