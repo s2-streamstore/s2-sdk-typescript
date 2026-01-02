@@ -52,8 +52,21 @@ export function s2Error(error: any): S2Error {
 	// Connection error?
 	if (isConnectionError(error)) {
 		const code = getErrorCode(error) ?? "NETWORK_ERROR";
+
+		// DNS failures are typically not transient - don't retry
+		if (code === "ENOTFOUND") {
+			return new S2Error({
+				message: `DNS resolution failed (ENOTFOUND)`,
+				code,
+				status: 400, // Client error - not retryable
+				origin: "sdk",
+			});
+		}
+
+		// Other connection errors are transient - retryable
 		return new S2Error({
 			message: `Connection failed: ${code}`,
+			code,
 			status: 502, // Bad Gateway for upstream/network issues
 			origin: "sdk",
 		});

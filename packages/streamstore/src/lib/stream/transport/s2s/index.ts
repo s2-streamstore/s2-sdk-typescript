@@ -19,6 +19,7 @@ import {
 	makeServerError,
 	RangeNotSatisfiableError,
 	S2Error,
+	s2Error,
 } from "../../../../error.js";
 import type * as API from "../../../../generated/index.js";
 import * as Proto from "../../../../generated/proto/s2.js";
@@ -317,11 +318,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 							timeoutTimer = undefined;
 						}
 						// Convert error to S2Error and enqueue as error result
-						const s2Err =
-							err instanceof S2Error
-								? err
-								: new S2Error({ message: String(err), status: 500 });
-						controller.enqueue({ ok: false, error: s2Err });
+						controller.enqueue({ ok: false, error: s2Error(err) });
 						controller.close();
 					}
 				};
@@ -741,23 +738,49 @@ class S2SAppendSession implements TransportAppendSession {
 		});
 
 		const textDecoder = new TextDecoder();
+		let responseCode: number | undefined;
 
 		const safeError = (error: unknown) => {
-			const s2Err =
-				error instanceof S2Error
-					? error
-					: new S2Error({ message: String(error), status: 502 });
-
 			// Resolve all pending acks with error result
 			for (const pending of this.pendingAcks) {
-				pending.resolve(err(s2Err));
+				pending.resolve(err(s2Error(error)));
 			}
 			this.pendingAcks = [];
 		};
 
-		// Handle incoming data (acks)
+		// Capture HTTP response status
+		stream.on("response", (headers) => {
+			responseCode = headers[":status"] ?? 500;
+		});
+
+		// Handle incoming data (acks or error response)
 		stream.on("data", (chunk: Buffer) => {
 			try {
+				// Check for HTTP-level errors first (before s2s frame parsing)
+				if ((responseCode ?? 200) >= 400) {
+					const errorText = textDecoder.decode(chunk);
+					try {
+						const errorJson = JSON.parse(errorText);
+						safeError(
+							new S2Error({
+								message: errorJson.message ?? "Unknown error",
+								code: errorJson.code,
+								status: responseCode,
+								origin: "server",
+							}),
+						);
+					} catch {
+						safeError(
+							new S2Error({
+								message: errorText || "Unknown error",
+								status: responseCode,
+								origin: "server",
+							}),
+						);
+					}
+					return;
+				}
+
 				this.parser.push(chunk);
 
 				let frame = this.parser.parseFrame();
@@ -872,11 +895,7 @@ class S2SAppendSession implements TransportAppendSession {
 						this.pendingAcks.splice(idx, 1);
 					}
 					// Resolve with error result
-					const s2Err =
-						writeErr instanceof S2Error
-							? writeErr
-							: new S2Error({ message: String(writeErr), status: 502 });
-					resolve(err(s2Err));
+					resolve(err(s2Error(writeErr)));
 				}
 				// Write completed successfully - promise resolves later when ack is received
 			});
@@ -904,11 +923,7 @@ class S2SAppendSession implements TransportAppendSession {
 
 			return okClose();
 		} catch (error) {
-			const s2Err =
-				error instanceof S2Error
-					? error
-					: new S2Error({ message: String(error), status: 500 });
-			return errClose(s2Err);
+			return errClose(s2Error(error));
 		}
 	}
 
@@ -933,11 +948,7 @@ class S2SAppendSession implements TransportAppendSession {
 		try {
 			await this.initPromise;
 		} catch (initErr) {
-			const s2Err =
-				initErr instanceof S2Error
-					? initErr
-					: new S2Error({ message: String(initErr), status: 502 });
-			return err(s2Err);
+			return err(s2Error(initErr));
 		}
 
 		const recordsArray = Array.from(input.records);

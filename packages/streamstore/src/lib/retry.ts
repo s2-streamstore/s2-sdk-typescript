@@ -267,13 +267,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				// Connection succeeded - return the retry wrapper
 				return new RetryReadSession<Format>(args, generator, config, session);
 			} catch (err) {
-				const error =
-					err instanceof S2Error
-						? err
-						: new S2Error({
-								message: String(err),
-								status: 502,
-							});
+				const error = s2Error(err);
 				lastError = error;
 
 				const effectiveMax = Math.max(1, retryConfig.maxAttempts);
@@ -332,13 +326,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							session = await generator(nextArgs);
 						} catch (err) {
 							// Convert to S2Error if needed
-							const error =
-								err instanceof S2Error
-									? err
-									: new S2Error({
-											message: String(err),
-											status: 502, // Bad Gateway - connection failure
-										});
+							const error = s2Error(err);
 
 							// Check if we can retry connection errors
 							const effectiveMax = Math.max(1, retryConfig.maxAttempts);

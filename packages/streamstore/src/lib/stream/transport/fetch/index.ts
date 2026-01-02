@@ -6,7 +6,11 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 };
 
 import type { S2RequestOptions } from "../../../../common.js";
-import { RangeNotSatisfiableError, S2Error } from "../../../../error.js";
+import {
+	RangeNotSatisfiableError,
+	S2Error,
+	s2Error,
+} from "../../../../error.js";
 import {
 	type Client,
 	createClient,
@@ -282,11 +286,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 						return;
 					} catch (error) {
 						// Convert unexpected errors to S2Error and emit as error result
-						const s2Err =
-							error instanceof S2Error
-								? error
-								: new S2Error({ message: String(error), status: 500 });
-						controller.enqueue({ ok: false, error: s2Err });
+						controller.enqueue({ ok: false, error: s2Error(error) });
 						done = true;
 						await reader.cancel();
 						controller.close();
@@ -420,10 +420,7 @@ export class FetchAppendSession implements TransportAppendSession {
 			debug("[%s] FetchAppendSession close complete", this.stream);
 			return okClose();
 		} catch (error) {
-			const s2Err =
-				error instanceof S2Error
-					? error
-					: new S2Error({ message: String(error), status: 500 });
+			const s2Err = s2Error(error);
 			debug(
 				"[%s] FetchAppendSession close error: %s",
 				this.stream,
@@ -558,10 +555,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				resolver.resolve(ok(ack));
 			} catch (error) {
 				// Convert error to S2Error and resolve with error result
-				const s2Err =
-					error instanceof S2Error
-						? error
-						: new S2Error({ message: String(error), status: 502 });
+				const s2Err = s2Error(error);
 
 				debug(
 					"[%s] FetchAppendSession.processLoop: error, status=%s, message=%s",

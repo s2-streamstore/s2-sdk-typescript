@@ -57,11 +57,11 @@ const startAt = await stream.checkTail();
 
 const producer = new Producer(
 	new BatchTransform({
-		lingerDurationMillis: 10,
+		lingerDurationMillis: 100,
 		matchSeqNum: startAt.tail.seqNum,
 	}),
 	await stream.appendSession({
-		maxInflightBytes: 2 * 1024 * 1024, // 1MiB
+		maxInflightBytes: 5 * 1024 * 1024, // 1MiB
 	}),
 );
 let image = await fetch(
