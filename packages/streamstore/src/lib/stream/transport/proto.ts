@@ -28,9 +28,16 @@ const toProtoHeaders = (
 };
 
 const toProtoAppendRecord = (record: AppendRecord): Proto.AppendRecord => {
+	let timestamp: bigint | undefined;
+	if (record.timestamp !== undefined) {
+		const ms =
+			typeof record.timestamp === "number"
+				? record.timestamp
+				: record.timestamp.getTime();
+		timestamp = BigInt(ms);
+	}
 	return {
-		timestamp:
-			record.timestamp !== undefined ? BigInt(record.timestamp) : undefined,
+		timestamp,
 		headers: toProtoHeaders(record.headers),
 		body: toBytes(record.body),
 	};
@@ -51,7 +58,7 @@ const fromProtoPosition = (
 const toSDKStreamPosition = (pos: API.StreamPosition): Types.StreamPosition => {
 	return {
 		seqNum: pos.seq_num,
-		timestamp: pos.timestamp,
+		timestamp: new Date(pos.timestamp),
 	};
 };
 

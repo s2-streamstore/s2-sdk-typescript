@@ -23,8 +23,8 @@ import { meteredBytes as calculateMeteredBytes } from "./utils.js";
 export interface StreamPosition {
 	/** Sequence number assigned by the service. */
 	readonly seqNum: number;
-	/** Timestamp in milliseconds since Unix epoch. */
-	readonly timestamp: number;
+	/** Timestamp of the record. */
+	readonly timestamp: Date;
 }
 
 // =============================================================================
@@ -38,7 +38,8 @@ export interface StreamPosition {
 export interface StringAppendRecord {
 	readonly body: string;
 	readonly headers?: ReadonlyArray<readonly [string, string]>;
-	readonly timestamp?: number;
+	/** Optional timestamp (Date or milliseconds since Unix epoch). */
+	readonly timestamp?: number | Date;
 	/** Pre-calculated metered size in bytes. */
 	readonly meteredBytes: number;
 }
@@ -50,7 +51,8 @@ export interface StringAppendRecord {
 export interface BytesAppendRecord {
 	readonly body: Uint8Array;
 	readonly headers?: ReadonlyArray<readonly [Uint8Array, Uint8Array]>;
-	readonly timestamp?: number;
+	/** Optional timestamp (Date or milliseconds since Unix epoch). */
+	readonly timestamp?: number | Date;
 	/** Pre-calculated metered size in bytes. */
 	readonly meteredBytes: number;
 }
@@ -73,7 +75,7 @@ export namespace AppendRecord {
 	export function string(params: {
 		readonly body: string;
 		readonly headers?: ReadonlyArray<readonly [string, string]>;
-		readonly timestamp?: number;
+		readonly timestamp?: number | Date;
 	}): StringAppendRecord {
 		// Create record with placeholder, then calculate actual size
 		const record: StringAppendRecord = {
@@ -94,7 +96,7 @@ export namespace AppendRecord {
 	export function bytes(params: {
 		readonly body: Uint8Array;
 		readonly headers?: ReadonlyArray<readonly [Uint8Array, Uint8Array]>;
-		readonly timestamp?: number;
+		readonly timestamp?: number | Date;
 	}): BytesAppendRecord {
 		// Create record with placeholder, then calculate actual size
 		const record: BytesAppendRecord = {
@@ -114,7 +116,7 @@ export namespace AppendRecord {
 	 */
 	export function fence(
 		fencingToken: string,
-		timestamp?: number,
+		timestamp?: number | Date,
 	): StringAppendRecord {
 		return string({
 			body: fencingToken,
@@ -126,7 +128,10 @@ export namespace AppendRecord {
 	/**
 	 * Create a trim command record.
 	 */
-	export function trim(seqNum: number, timestamp?: number): BytesAppendRecord {
+	export function trim(
+		seqNum: number,
+		timestamp?: number | Date,
+	): BytesAppendRecord {
 		const buffer = new Uint8Array(8);
 		const view = new DataView(buffer.buffer);
 		view.setBigUint64(0, BigInt(seqNum), false);
@@ -153,7 +158,8 @@ export interface ReadRecord<Format extends "string" | "bytes" = "string"> {
 	readonly headers: Format extends "string"
 		? ReadonlyArray<readonly [string, string]>
 		: ReadonlyArray<readonly [Uint8Array, Uint8Array]>;
-	readonly timestamp: number;
+	/** Timestamp of the record. */
+	readonly timestamp: Date;
 }
 
 // =============================================================================
@@ -234,7 +240,7 @@ export namespace AppendInput {
  */
 export type ReadFrom =
 	| { readonly seqNum: number }
-	| { readonly timestamp: number }
+	| { readonly timestamp: number | Date }
 	| { readonly tailOffset: number };
 
 /**
@@ -682,10 +688,10 @@ export interface IssueAccessTokenResponse {
 export interface AccountMetricsInput {
 	/** Metric set to return. */
 	set: API.AccountMetricSet;
-	/** Start timestamp as Unix epoch seconds, if applicable for the metric set. */
-	start?: number;
-	/** End timestamp as Unix epoch seconds, if applicable for the metric set. */
-	end?: number;
+	/** Start timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
+	start?: number | Date;
+	/** End timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
+	end?: number | Date;
 	/** Interval to aggregate over for timeseries metric sets. */
 	interval?: API.TimeseriesInterval;
 }
@@ -698,10 +704,10 @@ export interface BasinMetricsInput {
 	basin: string;
 	/** Metric set to return. */
 	set: API.BasinMetricSet;
-	/** Start timestamp as Unix epoch seconds, if applicable for the metric set. */
-	start?: number;
-	/** End timestamp as Unix epoch seconds, if applicable for the metric set. */
-	end?: number;
+	/** Start timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
+	start?: number | Date;
+	/** End timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
+	end?: number | Date;
 	/** Interval to aggregate over for timeseries metric sets. */
 	interval?: API.TimeseriesInterval;
 }
@@ -716,10 +722,10 @@ export interface StreamMetricsInput {
 	stream: string;
 	/** Metric set to return. */
 	set: API.StreamMetricSet;
-	/** Start timestamp as Unix epoch seconds, if applicable for the metric set. */
-	start?: number;
-	/** End timestamp as Unix epoch seconds, if applicable for the metric set. */
-	end?: number;
+	/** Start timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
+	start?: number | Date;
+	/** End timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
+	end?: number | Date;
 	/** Interval to aggregate over for timeseries metric sets. */
 	interval?: API.TimeseriesInterval;
 }
@@ -752,9 +758,9 @@ export interface AccumulationMetric {
 	unit: API.MetricUnit;
 	/**
 	 * Timeseries values.
-	 * Each element is a pair `[timestamp, value]` where timestamp is Unix epoch seconds.
+	 * Each element is a pair `[timestamp, value]`.
 	 */
-	values: number[][];
+	values: Array<[Date, number]>;
 }
 
 /**
@@ -767,10 +773,10 @@ export interface GaugeMetric {
 	unit: API.MetricUnit;
 	/**
 	 * Timeseries values.
-	 * Each element is a pair `[timestamp, value]` where timestamp is Unix epoch seconds.
+	 * Each element is a pair `[timestamp, value]`.
 	 * The value represents the measurement at the instant of the timestamp.
 	 */
-	values: number[][];
+	values: Array<[Date, number]>;
 }
 
 /**

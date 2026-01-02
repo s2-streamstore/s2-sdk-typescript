@@ -39,6 +39,17 @@ function fromBase64(value: string): Uint8Array {
 	return new Uint8Array(Buffer.from(value, "base64"));
 }
 
+/** Convert milliseconds to Date. */
+function toDate(ms: number): Date {
+	return new Date(ms);
+}
+
+/** Convert Date or milliseconds to milliseconds. */
+function toEpochMs(value: number | Date | undefined | null): number | null {
+	if (value === undefined || value === null) return null;
+	return typeof value === "number" ? value : value.getTime();
+}
+
 // =============================================================================
 // Stream Position Mapper
 // =============================================================================
@@ -51,7 +62,7 @@ export function fromAPIStreamPosition(
 ): Types.StreamPosition {
 	return {
 		seqNum: pos.seq_num,
-		timestamp: pos.timestamp,
+		timestamp: toDate(pos.timestamp),
 	};
 }
 
@@ -92,7 +103,7 @@ export function toAPIAppendRecord(
 		return {
 			body: stringRecord.body,
 			headers: stringRecord.headers?.map(([name, value]) => [name, value]),
-			timestamp: stringRecord.timestamp ?? null,
+			timestamp: toEpochMs(stringRecord.timestamp),
 		};
 	} else {
 		const bytesRecord = record as Types.BytesAppendRecord;
@@ -102,7 +113,7 @@ export function toAPIAppendRecord(
 				toBase64(name),
 				toBase64(value),
 			]),
-			timestamp: bytesRecord.timestamp ?? null,
+			timestamp: toEpochMs(bytesRecord.timestamp),
 		};
 	}
 }
@@ -128,7 +139,7 @@ function fromAPISequencedRecordString(
 
 	return {
 		seqNum: record.seq_num,
-		timestamp: record.timestamp,
+		timestamp: toDate(record.timestamp),
 		body: record.body ?? "",
 		headers,
 	};
@@ -168,7 +179,7 @@ function fromAPISequencedRecordBytes(
 
 	return {
 		seqNum: record.seq_num,
-		timestamp: record.timestamp,
+		timestamp: toDate(record.timestamp),
 		body,
 		headers,
 	};
@@ -240,7 +251,11 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 		if ("seqNum" in from) {
 			query.seq_num = from.seqNum;
 		} else if ("timestamp" in from) {
-			query.timestamp = from.timestamp;
+			// Convert Date to milliseconds if needed
+			query.timestamp =
+				typeof from.timestamp === "number"
+					? from.timestamp
+					: from.timestamp.getTime();
 		} else if ("tailOffset" in from) {
 			query.tail_offset = from.tailOffset;
 		}

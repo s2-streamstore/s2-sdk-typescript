@@ -19,9 +19,9 @@ const makeStream = (retry?: { maxAttempts?: number }) =>
 
 // streamAppendSpy returns SDK types (camelCase)
 const makeAck = (n: number): Types.AppendAck => ({
-	start: { seqNum: n - 1, timestamp: 0 },
-	end: { seqNum: n, timestamp: 0 },
-	tail: { seqNum: n, timestamp: 0 },
+	start: { seqNum: n - 1, timestamp: new Date(0) },
+	end: { seqNum: n, timestamp: new Date(0) },
+	tail: { seqNum: n, timestamp: new Date(0) },
 });
 
 describe("AppendSession", () => {

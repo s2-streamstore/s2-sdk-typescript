@@ -62,9 +62,12 @@ class FakeAppendSession {
 						? input.records
 						: [input.records];
 					const count = batch.length;
-					const start: StreamPosition = { seqNum: 0, timestamp: 0 };
-					const end: StreamPosition = { seqNum: count, timestamp: 0 };
-					const tail: StreamPosition = { seqNum: count, timestamp: 0 };
+					const start: StreamPosition = { seqNum: 0, timestamp: new Date(0) };
+					const end: StreamPosition = { seqNum: count, timestamp: new Date(0) };
+					const tail: StreamPosition = {
+						seqNum: count,
+						timestamp: new Date(0),
+					};
 					const ack: AppendAck = { start, end, tail };
 					this.acksController.enqueue(ack);
 				}
@@ -164,9 +167,9 @@ class FakeTransportAppendSession implements TransportAppendSession {
 
 		// Return default successful ack
 		const count = batch.length;
-		const start: StreamPosition = { seqNum: 0, timestamp: 0 };
-		const end: StreamPosition = { seqNum: count, timestamp: 0 };
-		const tail: StreamPosition = { seqNum: count, timestamp: 0 };
+		const start: StreamPosition = { seqNum: 0, timestamp: new Date(0) };
+		const end: StreamPosition = { seqNum: count, timestamp: new Date(0) };
+		const tail: StreamPosition = { seqNum: count, timestamp: new Date(0) };
 		const ack: AppendAck = { start, end, tail };
 		return ok(ack);
 	}
@@ -322,14 +325,14 @@ describe("AppendSessionImpl (unit)", () => {
 		// Create acks with non-monotonic sequence numbers
 		// Each ack must have correct count (end - start = 1 for single record batches)
 		const ack1: AppendAck = {
-			start: { seqNum: 0, timestamp: 0 },
-			end: { seqNum: 1, timestamp: 0 }, // count = 1
-			tail: { seqNum: 1, timestamp: 0 },
+			start: { seqNum: 0, timestamp: new Date(0) },
+			end: { seqNum: 1, timestamp: new Date(0) }, // count = 1
+			tail: { seqNum: 1, timestamp: new Date(0) },
 		};
 		const ack2: AppendAck = {
-			start: { seqNum: 0, timestamp: 0 }, // Decreasing!
-			end: { seqNum: 1, timestamp: 0 },
-			tail: { seqNum: 1, timestamp: 0 },
+			start: { seqNum: 0, timestamp: new Date(0) }, // Decreasing!
+			end: { seqNum: 1, timestamp: new Date(0) },
+			tail: { seqNum: 1, timestamp: new Date(0) },
 		};
 
 		const session = await AppendSessionImpl.create(
@@ -378,14 +381,14 @@ describe("AppendSessionImpl (unit)", () => {
 		// Create acks with equal sequence numbers
 		// Each ack must have correct count (end - start = 1 for single record batches)
 		const ack1: AppendAck = {
-			start: { seqNum: 9, timestamp: 0 },
-			end: { seqNum: 10, timestamp: 0 }, // count = 1
-			tail: { seqNum: 10, timestamp: 0 },
+			start: { seqNum: 9, timestamp: new Date(0) },
+			end: { seqNum: 10, timestamp: new Date(0) }, // count = 1
+			tail: { seqNum: 10, timestamp: new Date(0) },
 		};
 		const ack2: AppendAck = {
-			start: { seqNum: 9, timestamp: 0 },
-			end: { seqNum: 10, timestamp: 0 }, // Equal end, not increasing!
-			tail: { seqNum: 10, timestamp: 0 },
+			start: { seqNum: 9, timestamp: new Date(0) },
+			end: { seqNum: 10, timestamp: new Date(0) }, // Equal end, not increasing!
+			tail: { seqNum: 10, timestamp: new Date(0) },
 		};
 
 		const session = await AppendSessionImpl.create(

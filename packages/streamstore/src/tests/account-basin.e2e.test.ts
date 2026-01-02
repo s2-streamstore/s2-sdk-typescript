@@ -195,7 +195,8 @@ describeIf("Basin Management Integration Tests", () => {
 
 			expect(ack.start.seqNum).toBe(0);
 			expect(ack.end.seqNum).toBe(3);
-			expect(ack.end.timestamp).toBeGreaterThan(0);
+			expect(ack.end.timestamp).toBeInstanceOf(Date);
+			expect(ack.end.timestamp.getTime()).toBeGreaterThan(0);
 
 			await session.close();
 			console.log(

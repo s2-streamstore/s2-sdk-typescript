@@ -50,7 +50,7 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
 	return {
 		seqNum: pos.seq_num,
-		timestamp: pos.timestamp,
+		timestamp: new Date(pos.timestamp),
 	};
 }
 
@@ -68,7 +68,7 @@ function toSDKReadRecord<Format extends "string" | "bytes">(
 		// String format: headers is an object, convert to array of tuples
 		const result: Types.ReadRecord<"string"> = {
 			seqNum: record.seq_num,
-			timestamp: record.timestamp,
+			timestamp: new Date(record.timestamp),
 			body: (record.body as string) ?? "",
 			headers: Object.entries(record.headers as Record<string, string>),
 		};
@@ -77,7 +77,7 @@ function toSDKReadRecord<Format extends "string" | "bytes">(
 		// Bytes format: headers is already an array
 		const result: Types.ReadRecord<"bytes"> = {
 			seqNum: record.seq_num,
-			timestamp: record.timestamp,
+			timestamp: new Date(record.timestamp),
 			body: (record.body as Uint8Array) ?? new Uint8Array(),
 			headers: (record.headers as Array<[Uint8Array, Uint8Array]>) ?? [],
 		};

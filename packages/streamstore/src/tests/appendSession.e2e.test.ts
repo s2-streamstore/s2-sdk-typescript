@@ -62,9 +62,13 @@ describeIf("AppendSession Integration Tests", () => {
 			expect(ack3.end.seqNum).toBe(ack2.end.seqNum + 1);
 
 			// Verify timestamps are present
-			expect(ack1.end.timestamp).toBeGreaterThan(0);
-			expect(ack2.end.timestamp).toBeGreaterThanOrEqual(ack1.end.timestamp);
-			expect(ack3.end.timestamp).toBeGreaterThanOrEqual(ack2.end.timestamp);
+			expect(ack1.end.timestamp.getTime()).toBeGreaterThan(0);
+			expect(ack2.end.timestamp.getTime()).toBeGreaterThanOrEqual(
+				ack1.end.timestamp.getTime(),
+			);
+			expect(ack3.end.timestamp.getTime()).toBeGreaterThanOrEqual(
+				ack2.end.timestamp.getTime(),
+			);
 
 			await session.close();
 		},

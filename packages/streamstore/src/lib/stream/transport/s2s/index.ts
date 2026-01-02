@@ -986,7 +986,7 @@ function convertStreamPosition(
 function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
 	return {
 		seqNum: pos.seq_num,
-		timestamp: pos.timestamp,
+		timestamp: new Date(pos.timestamp),
 	};
 }
 function convertAppendAck(proto: Proto.AppendAck): Types.AppendAck {
