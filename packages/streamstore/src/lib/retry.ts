@@ -691,7 +691,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	async waitForCapacity(bytes: number, numBatches = 1): Promise<void> {
 		debugSession(
-			"[%s] [CAPACITY] checking for %d bytes, %d batches: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d, pendingBatches=%d",
+			"[%s] [CAPACITY] checking for %d bytes, %d batches: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d, pendingBatches=%d, maxInflightBatches=%s",
 			this.streamName,
 			bytes,
 			numBatches,
@@ -700,6 +700,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			this.maxQueuedBytes,
 			this.inflight.length,
 			this.pendingBatches,
+			this.maxInflightBatches ?? "unlimited",
 		);
 
 		// Check if we have capacity

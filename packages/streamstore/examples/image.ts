@@ -61,7 +61,7 @@ const producer = new Producer(
 		matchSeqNum: startAt.tail.seqNum,
 	}),
 	await stream.appendSession({
-		maxInflightBytes: 5 * 1024 * 1024, // 1MiB
+		maxInflightBytes: 5 * 1024 * 1024,
 	}),
 );
 let image = await fetch(
