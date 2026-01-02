@@ -173,10 +173,9 @@ describeIf("Correctness Integration Tests", () => {
 				const [readResult] = await Promise.all([readPromise, appendPromise]);
 				expect(readResult.highestIndex).toBe(TOTAL_RECORDS - 1);
 			} finally {
-				await Promise.allSettled([
-					stream.close(),
-					basin.streams.delete({ stream: streamName }),
-				]);
+				// Close first, then delete - racing these can cause errors
+				await stream.close();
+				await basin.streams.delete({ stream: streamName });
 			}
 		},
 		TEST_TIMEOUT_MS,

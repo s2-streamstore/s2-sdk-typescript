@@ -160,6 +160,8 @@ export class S2STransport implements SessionTransport {
 		const connectPromise = new Promise<ClientHttp2Session>(
 			(resolve, reject) => {
 				client.once("connect", () => {
+					// Guard against session being destroyed before connect fires
+					if (client.destroyed) return;
 					client.setLocalWindowSize(10 * 1024 * 1024);
 					resolve(client);
 				});
