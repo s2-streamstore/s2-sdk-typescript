@@ -110,7 +110,7 @@ document.getElementById("btnCheckTail")!.addEventListener("click", async () => {
 		log("Checking tail...", "info");
 		const result = await ctx.stream.checkTail();
 		log(
-			`Tail: seq_num=${result.tail.seqNum}, timestamp=${result.tail.timestamp}`,
+			`Tail: seqNum=${result.tail.seqNum}, timestamp=${result.tail.timestamp}`,
 			"success",
 		);
 	} catch (err) {
@@ -139,14 +139,14 @@ document.getElementById("btnReadUnary")!.addEventListener("click", async () => {
 
 	try {
 		log(
-			`Unary read: seq_num=${seqNum}, count=${count}, format=${format}`,
+			`Unary read: seqNum=${seqNum}, count=${count}, format=${format}`,
 			"info",
 		);
 		const startTime = performance.now();
 
 		const result = await ctx.stream.read(
 			{
-				start: { from: { seq_num: seqNum } },
+				start: { from: { seqNum: seqNum } },
 				stop: { limits: { count } },
 			},
 			{ as: format },
@@ -206,7 +206,7 @@ document
 
 		try {
 			log(
-				`Starting read session: seq_num=${seqNum}, count=${count}, format=${format}`,
+				`Starting read session: seqNum=${seqNum}, count=${count}, format=${format}`,
 				"info",
 			);
 			btnStart.disabled = true;
@@ -214,7 +214,7 @@ document
 
 			const session = await ctx.stream.readSession(
 				{
-					start: { from: { seq_num: seqNum } },
+					start: { from: { seqNum: seqNum } },
 					stop: { limits: { count } },
 				},
 				{ as: format },
@@ -337,7 +337,7 @@ document
 				const ack = await ticket.ack();
 				if (i === 0 || i === count - 1 || count <= 10) {
 					log(
-						`  [${i}] ack: seq_num=${ack.start.seqNum}-${ack.end.seqNum}`,
+						`  [${i}] ack: seqNum=${ack.start.seqNum}-${ack.end.seqNum}`,
 						"data",
 					);
 				} else if (i === 1 && count > 10) {
@@ -448,7 +448,7 @@ document.getElementById("btnProducer")!.addEventListener("click", async () => {
 			(parseFloat(elapsed) / 1000)
 		).toFixed(1);
 		log(
-			`Producer complete: ${ackedCount} records in ${elapsed}ms (${throughput} KB/s), seq_num=${firstSeqNum}-${lastSeqNum}`,
+			`Producer complete: ${ackedCount} records in ${elapsed}ms (${throughput} KB/s), seqNum=${firstSeqNum}-${lastSeqNum}`,
 			"success",
 		);
 	} catch (err) {

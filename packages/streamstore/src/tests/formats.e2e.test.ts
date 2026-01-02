@@ -93,7 +93,7 @@ describeIf("Mixed format integration tests", () => {
 
 			// Unary read as strings
 			const readAsString = await stream.read({
-				start: { from: { seq_num: 0 } },
+				start: { from: { seqNum: 0 } },
 				stop: { limits: { count: 10 } },
 			});
 			expect(readAsString.records.length).toBe(4);
@@ -109,7 +109,7 @@ describeIf("Mixed format integration tests", () => {
 			// Unary read as bytes
 			const readAsBytes = await stream.read(
 				{
-					start: { from: { seq_num: 0 } },
+					start: { from: { seqNum: 0 } },
 					stop: { limits: { count: 10 } },
 				},
 				{ as: "bytes" },
@@ -129,7 +129,7 @@ describeIf("Mixed format integration tests", () => {
 
 			// Streaming read session (strings)
 			const readSessionStrings = await stream.readSession({
-				start: { from: { seq_num: 0 } },
+				start: { from: { seqNum: 0 } },
 				stop: { limits: { count: 4 } },
 			});
 			const sessionStringMap = new Map<string, string>();
@@ -151,7 +151,7 @@ describeIf("Mixed format integration tests", () => {
 			// Streaming read session (bytes)
 			const readSessionBytes = await stream.readSession(
 				{
-					start: { from: { seq_num: 0 } },
+					start: { from: { seqNum: 0 } },
 					stop: { limits: { count: 4 } },
 				},
 				{ as: "bytes" },

@@ -1,35 +1,18 @@
-import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
+import type { RetryConfig, S2RequestOptions } from "./common.js";
 import { withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
-	type CreateStreamData,
-	type CreateStreamResponse,
 	createStream,
-	type DeleteStreamData,
 	deleteStream,
-	type GetStreamConfigData,
 	getStreamConfig,
-	type ListStreamsData,
-	type ListStreamsResponse,
 	listStreams,
-	type ReconfigureStreamData,
-	type ReconfigureStreamResponse,
 	reconfigureStream,
-	type StreamConfig,
-	type StreamInfo,
 } from "./generated/index.js";
+import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { randomToken } from "./lib/base64.js";
-import { type ListAllArgs, paginate } from "./lib/paginate.js";
+import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
-
-export interface ListStreamsInput extends DataToObject<ListStreamsData> {}
-export interface ListAllStreamsInput extends ListAllArgs<ListStreamsInput> {}
-export interface CreateStreamInput extends DataToObject<CreateStreamData> {}
-export interface GetStreamConfigInput
-	extends DataToObject<GetStreamConfigData> {}
-export interface DeleteStreamInput extends DataToObject<DeleteStreamData> {}
-export interface ReconfigureStreamInput
-	extends DataToObject<ReconfigureStreamData> {}
+import type * as Types from "./types.js";
 
 export class S2Streams {
 	private readonly client: Client;
@@ -44,30 +27,31 @@ export class S2Streams {
 	 * List streams in the basin.
 	 *
 	 * @param args.prefix Return streams whose names start with the given prefix
-	 * @param args.start_after Name to start after (for pagination)
+	 * @param args.startAfter Name to start after (for pagination)
 	 * @param args.limit Max results (up to 1000)
 	 */
 	public async list(
-		args?: ListStreamsInput,
+		args?: Types.ListStreamsInput,
 		options?: S2RequestOptions,
-	): Promise<ListStreamsResponse> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.ListStreamsResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listStreams({
 					client: this.client,
-					query: args,
+					query: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.ListStreamsResponse>(response);
 	}
 
 	/**
 	 * List all streams in the basin with automatic pagination.
 	 * Returns a lazy async iterable that fetches pages as needed.
 	 *
-	 * @param args.prefix Return streams whose names start with the given prefix
-	 * @param args.limit Max results per page (up to 1000)
+	 * @param includeDeleted - Include deleted streams (default: false)
+	 * @param args - Optional filtering options: `prefix` to filter by name prefix, `limit` for max results per page
 	 *
 	 * @example
 	 * ```ts
@@ -78,14 +62,14 @@ export class S2Streams {
 	 */
 	public listAll(
 		includeDeleted = false,
-		args?: ListAllStreamsInput,
+		args?: Types.ListAllStreamsInput,
 		options?: S2RequestOptions,
-	): AsyncIterable<StreamInfo> {
+	): AsyncIterable<Types.StreamInfo> {
 		return paginate(
 			(a) =>
 				this.list(a, options).then((r) => ({
-					items: r.streams.filter((s) => includeDeleted || !s.deleted_at),
-					has_more: r.has_more,
+					items: r.streams.filter((s) => includeDeleted || !s.deletedAt),
+					hasMore: r.hasMore,
 				})),
 			args ?? {},
 			(stream) => stream.name,
@@ -96,23 +80,24 @@ export class S2Streams {
 	 * Create a stream.
 	 *
 	 * @param args.stream Stream name (1-512 bytes, unique within the basin)
-	 * @param args.config Stream configuration (retention, storage class, timestamping, delete-on-empty)
+	 * @param args.config Stream configuration (retentionPolicy, storageClass, timestamping, deleteOnEmpty)
 	 */
 	public async create(
-		args: CreateStreamInput,
+		args: Types.CreateStreamInput,
 		options?: S2RequestOptions,
-	): Promise<CreateStreamResponse> {
+	): Promise<Types.CreateStreamResponse> {
 		const requestToken = randomToken();
-		return await withRetries(this.retryConfig, async () => {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createStream({
 					client: this.client,
-					body: args,
+					body: toSnakeCase(args),
 					headers: { "s2-request-token": requestToken },
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.CreateStreamResponse>(response);
 	}
 
 	/**
@@ -121,10 +106,10 @@ export class S2Streams {
 	 * @param args.stream Stream name
 	 */
 	public async getConfig(
-		args: GetStreamConfigInput,
+		args: Types.GetStreamConfigInput,
 		options?: S2RequestOptions,
-	): Promise<StreamConfig> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.StreamConfig> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getStreamConfig({
 					client: this.client,
@@ -133,6 +118,7 @@ export class S2Streams {
 				}),
 			);
 		});
+		return toCamelCase<Types.StreamConfig>(response);
 	}
 
 	/**
@@ -141,7 +127,7 @@ export class S2Streams {
 	 * @param args.stream Stream name
 	 */
 	public async delete(
-		args: DeleteStreamInput,
+		args: Types.DeleteStreamInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
 		await withRetries(this.retryConfig, async () => {
@@ -161,18 +147,19 @@ export class S2Streams {
 	 * @param args Configuration for the stream to reconfigure (including stream name and fields to change)
 	 */
 	public async reconfigure(
-		args: ReconfigureStreamInput,
+		args: Types.ReconfigureStreamInput,
 		options?: S2RequestOptions,
-	): Promise<ReconfigureStreamResponse> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.ReconfigureStreamResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureStream({
 					client: this.client,
 					path: args,
-					body: args,
+					body: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.ReconfigureStreamResponse>(response);
 	}
 }

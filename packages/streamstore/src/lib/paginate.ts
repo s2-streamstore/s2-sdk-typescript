@@ -22,17 +22,17 @@ export interface Page<T> {
 /**
  * A function that fetches a single page of results.
  * @template TItem The type of items in the page
- * @template TArgs The query arguments type (excluding start_after)
+ * @template TArgs The query arguments type (excluding startAfter)
  */
 export type PageFetcher<TItem, TArgs> = (
-	args: TArgs & { start_after?: string },
-) => Promise<{ items: TItem[]; has_more: boolean }>;
+	args: TArgs & { startAfter?: string },
+) => Promise<{ items: TItem[]; hasMore: boolean }>;
 
 /**
  * Arguments for listAll pagination methods.
- * Omits start_after since pagination is handled automatically.
+ * Omits startAfter since pagination is handled automatically.
  */
-export type ListAllArgs<TArgs> = Omit<TArgs, "start_after">;
+export type ListAllArgs<TArgs> = Omit<TArgs, "startAfter">;
 
 /**
  * Creates a lazy async iterable that automatically paginates through all results.
@@ -40,14 +40,14 @@ export type ListAllArgs<TArgs> = Omit<TArgs, "start_after">;
  * @template TItem The type of items being paginated
  * @template TArgs The query arguments type
  * @param fetcher Function that fetches a single page of results
- * @param args Query arguments (start_after is managed internally)
+ * @param args Query arguments (startAfter is managed internally)
  * @param getCursor Function to extract the cursor value from an item for the next page
  * @returns An async iterable that yields items one at a time, fetching pages as needed
  *
  * @example
  * ```ts
  * const allBasins = paginate(
- *   (args) => this.list(args).then(r => ({ items: r.basins, has_more: r.has_more })),
+ *   (args) => this.list(args).then(r => ({ items: r.basins, hasMore: r.hasMore })),
  *   { prefix: "my-" },
  *   (basin) => basin.name
  * );
@@ -68,16 +68,16 @@ export function paginate<TItem, TArgs>(
 
 			while (true) {
 				debug({ args, cursor });
-				const { items, has_more } = await fetcher({
+				const { items, hasMore } = await fetcher({
 					...args,
-					start_after: cursor,
+					startAfter: cursor,
 				});
 
 				for (const item of items) {
 					yield item;
 				}
 
-				if (!has_more || items.length === 0) {
+				if (!hasMore || items.length === 0) {
 					break;
 				}
 

@@ -8,28 +8,20 @@ import {
 	fromAPITailResponse,
 	toAPIReadQuery,
 } from "./internal/mappers.js";
-import { isRetryable, withRetries } from "./lib/retry.js";
+import { withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
 	streamAppend,
 	streamRead,
 } from "./lib/stream/transport/fetch/shared.js";
 import type {
-	AppendRecord,
 	AppendSession,
-	AppendSessionOptions,
 	ReadArgs,
 	ReadSession,
 	SessionTransport,
 	TransportConfig,
 } from "./lib/stream/types.js";
-import type {
-	AppendAck,
-	AppendInput,
-	ReadBatch,
-	ReadInput,
-	TailResponse,
-} from "./types.js";
+import type * as Types from "./types.js";
 
 export class S2Stream {
 	private readonly client: Client;
@@ -75,7 +67,9 @@ export class S2Stream {
 	 *
 	 * Returns the next sequence number and timestamp to be assigned (`tail`).
 	 */
-	public async checkTail(options?: S2RequestOptions): Promise<TailResponse> {
+	public async checkTail(
+		options?: S2RequestOptions,
+	): Promise<Types.TailResponse> {
 		this.ensureOpen();
 		return await withRetries(this.retryConfig, async () => {
 			const response = await withS2Data(() =>
@@ -100,9 +94,9 @@ export class S2Stream {
 	 * - Use `readSession` for streaming reads
 	 */
 	public async read<Format extends "string" | "bytes" = "string">(
-		input?: ReadInput,
+		input?: Types.ReadInput,
 		options?: S2RequestOptions & { as?: Format },
-	): Promise<ReadBatch<Format>> {
+	): Promise<Types.ReadBatch<Format>> {
 		this.ensureOpen();
 		return await withRetries(this.retryConfig, async () => {
 			// Convert ReadInput to ReadArgs using mapper
@@ -119,9 +113,9 @@ export class S2Stream {
 			// Convert from API to SDK ReadBatch
 			return (
 				options?.as === "bytes"
-					? fromAPIReadBatchBytes(genBatch as any)
-					: fromAPIReadBatchString(genBatch as any)
-			) as ReadBatch<Format>;
+					? fromAPIReadBatchBytes(genBatch)
+					: fromAPIReadBatchString(genBatch)
+			) as Types.ReadBatch<Format>;
 		});
 	}
 	/**
@@ -132,16 +126,16 @@ export class S2Stream {
 	 * - Returns the acknowledged range and the stream tail after the append.
 	 * - All records in a batch must use the same format (either all string or all bytes).
 	 *
-	 * Use {@link createAppendInput} to construct a validated AppendInput.
+	 * Use {@link AppendInput.create} to construct a validated AppendInput.
 	 * For high-throughput sequential appends, use `appendSession()` instead.
 	 *
 	 * @param input The append input containing records and optional conditions
 	 * @param options Optional request options
 	 */
 	public async append(
-		input: AppendInput,
+		input: Types.AppendInput,
 		options?: S2RequestOptions,
-	): Promise<AppendAck> {
+	): Promise<Types.AppendAck> {
 		this.ensureOpen();
 		return await withRetries(
 			this.retryConfig,
@@ -166,7 +160,7 @@ export class S2Stream {
 	 * When `as: "bytes"` is provided, bodies and headers are decoded to `Uint8Array`.
 	 */
 	public async readSession<Format extends "string" | "bytes" = "string">(
-		input?: ReadInput,
+		input?: Types.ReadInput,
 		options?: S2RequestOptions & { as?: Format },
 	): Promise<ReadSession<Format>> {
 		this.ensureOpen();
@@ -188,7 +182,7 @@ export class S2Stream {
 	 * @param requestOptions Optional request options
 	 */
 	public async appendSession(
-		sessionOptions?: AppendSessionOptions,
+		sessionOptions?: Types.AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
 		this.ensureOpen();

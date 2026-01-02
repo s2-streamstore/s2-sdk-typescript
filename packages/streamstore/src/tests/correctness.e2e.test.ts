@@ -97,7 +97,7 @@ describeIf("Correctness Integration Tests", () => {
 				);
 
 				const readSession = await stream.readSession({
-					start: { from: { seq_num: 0 } },
+					start: { from: { seqNum: 0 } },
 				});
 
 				const readPromise = (async () => {

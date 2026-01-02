@@ -1,4 +1,10 @@
 import createDebug from "debug";
+
+/** Type for ReadableStream with optional async iterator support. */
+type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
+	[Symbol.asyncIterator]?: () => AsyncIterableIterator<T>;
+};
+
 import type { S2RequestOptions } from "../../../../common.js";
 import { RangeNotSatisfiableError, S2Error } from "../../../../error.js";
 import {
@@ -304,7 +310,10 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 	// Implement AsyncIterable (for await...of support)
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
-		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		const proto = ReadableStream.prototype as ReadableStreamWithAsyncIterator<
+			ReadResult<Format>
+		>;
+		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") {
 			try {
 				return fn.call(this);

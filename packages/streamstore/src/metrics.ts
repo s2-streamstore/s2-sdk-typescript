@@ -1,20 +1,14 @@
-import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
+import type { RetryConfig, S2RequestOptions } from "./common.js";
 import { withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
-	type AccountMetricsData,
 	accountMetrics,
-	type BasinMetricsData,
 	basinMetrics,
-	type MetricSetResponse,
-	type StreamMetricsData,
 	streamMetrics,
 } from "./generated/index.js";
+import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { withRetries } from "./lib/retry.js";
-
-export interface AccountMetricsInput extends DataToObject<AccountMetricsData> {}
-export interface BasinMetricsInput extends DataToObject<BasinMetricsData> {}
-export interface StreamMetricsInput extends DataToObject<StreamMetricsData> {}
+import type * as Types from "./types.js";
 
 export class S2Metrics {
 	readonly client: Client;
@@ -34,18 +28,19 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async account(
-		args: AccountMetricsInput,
+		args: Types.AccountMetricsInput,
 		options?: S2RequestOptions,
-	): Promise<MetricSetResponse> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.MetricSetResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				accountMetrics({
 					client: this.client,
-					query: args,
+					query: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.MetricSetResponse>(response);
 	}
 
 	/**
@@ -58,19 +53,20 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async basin(
-		args: BasinMetricsInput,
+		args: Types.BasinMetricsInput,
 		options?: S2RequestOptions,
-	): Promise<MetricSetResponse> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.MetricSetResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				basinMetrics({
 					client: this.client,
 					path: args,
-					query: args,
+					query: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.MetricSetResponse>(response);
 	}
 
 	/**
@@ -84,18 +80,19 @@ export class S2Metrics {
 	 * @param args.interval Optional aggregation interval for timeseries sets
 	 */
 	public async stream(
-		args: StreamMetricsInput,
+		args: Types.StreamMetricsInput,
 		options?: S2RequestOptions,
-	): Promise<MetricSetResponse> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.MetricSetResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				streamMetrics({
 					client: this.client,
 					path: args,
-					query: args,
+					query: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.MetricSetResponse>(response);
 	}
 }

@@ -25,7 +25,7 @@ if (streams.streams[0]) {
 	console.log("reading stream", streams.streams[0].name);
 	const stream = basin.stream(streams.streams[0].name);
 	const stringRead = await stream.read({
-		start: { from: { seq_num: 0 } },
+		start: { from: { seqNum: 0 } },
 		stop: { limits: { count: 5 } },
 	});
 	console.log(
@@ -35,7 +35,7 @@ if (streams.streams[0]) {
 	);
 	const bytesRead = await stream.read(
 		{
-			start: { from: { seq_num: 0 } },
+			start: { from: { seqNum: 0 } },
 			stop: { limits: { count: 5 } },
 		},
 		{ as: "bytes" },
@@ -85,7 +85,7 @@ if (streams.streams[0]) {
 	console.log("bytes append", bytesAppend);
 	const readSession = await stream.readSession({
 		start: {
-			from: { tail_offset: 10 },
+			from: { tailOffset: 10 },
 			clamp: true,
 		},
 	});

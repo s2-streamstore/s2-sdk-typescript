@@ -89,7 +89,7 @@ console.log(
 
 let readSession = await stream.readSession(
 	{
-		start: { from: { seq_num: startAt.tail.seqNum } },
+		start: { from: { seqNum: startAt.tail.seqNum } },
 		stop: {
 			limits: {
 				count:

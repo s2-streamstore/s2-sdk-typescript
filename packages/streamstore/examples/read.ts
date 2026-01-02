@@ -18,7 +18,7 @@ if (streams.streams[0]) {
 
 	const readSession = await stream.readSession(
 		{
-			start: { from: { tail_offset: 5 } },
+			start: { from: { tailOffset: 5 } },
 			stop: { wait: 10 }, // wait up to 10 seconds for new records
 		},
 		{ as: "bytes" },

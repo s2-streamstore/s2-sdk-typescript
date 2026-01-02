@@ -7,6 +7,12 @@
 
 import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
 import createDebug from "debug";
+
+/** Type for ReadableStream with optional async iterator support. */
+type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
+	[Symbol.asyncIterator]?: () => AsyncIterableIterator<T>;
+};
+
 import type { S2RequestOptions } from "../../../../common.js";
 import {
 	makeAppendPreconditionError,
@@ -615,7 +621,10 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 	// Polyfill for older browsers / Node.js environments
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
-		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		const proto = ReadableStream.prototype as ReadableStreamWithAsyncIterator<
+			ReadResult<Format>
+		>;
+		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
 		const reader = this.getReader();
 		return {

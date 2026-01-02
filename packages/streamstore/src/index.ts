@@ -26,13 +26,49 @@ export { BatchTransform } from "./batch-transform.js";
 export { IndexedAppendAck, Producer, RecordSubmitTicket } from "./producer.js";
 
 // =============================================================================
-// SDK Types (Hot Paths)
+// SDK Types
 // =============================================================================
 
+// Core types for streaming operations
+// Stream types
+// Basin types
+// Access token types
+// Metrics types
 export type {
+	AccessTokenInfo,
+	AccessTokenScope,
+	AccountMetricsInput,
+	AccumulationMetric,
 	AppendAck,
 	AppendSessionOptions,
+	BasinConfig,
+	BasinInfo,
+	BasinMetricsInput,
 	BytesAppendRecord,
+	CreateBasinInput,
+	CreateBasinResponse,
+	CreateStreamInput,
+	CreateStreamResponse,
+	DeleteBasinInput,
+	DeleteOnEmptyConfig,
+	DeleteStreamInput,
+	GaugeMetric,
+	GetBasinConfigInput,
+	GetStreamConfigInput,
+	IssueAccessTokenInput,
+	IssueAccessTokenResponse,
+	LabelMetric,
+	ListAccessTokensInput,
+	ListAccessTokensResponse,
+	ListAllAccessTokensInput,
+	ListAllBasinsInput,
+	ListAllStreamsInput,
+	ListBasinsInput,
+	ListBasinsResponse,
+	ListStreamsInput,
+	ListStreamsResponse,
+	Metric,
+	MetricSetResponse,
 	ReadBatch,
 	ReadFrom,
 	ReadInput,
@@ -40,9 +76,19 @@ export type {
 	ReadRecord,
 	ReadStart,
 	ReadStop,
+	ReconfigureBasinInput,
+	ReconfigureBasinResponse,
+	ReconfigureStreamInput,
+	ReconfigureStreamResponse,
+	RevokeAccessTokenInput,
+	ScalarMetric,
+	StreamConfig,
+	StreamInfo,
+	StreamMetricsInput,
 	StreamPosition,
 	StringAppendRecord,
 	TailResponse,
+	TimestampingConfig,
 } from "./types.js";
 /**
  * Record types and factory functions for append operations.
@@ -58,62 +104,34 @@ export {
 } from "./types.js";
 
 // =============================================================================
-// Generated Types (Re-exported directly)
+// API Types (Wire Format)
 // =============================================================================
 
-/**
- * Generated API types for configs, info, and metrics.
- * These use snake_case field names matching the wire format.
- */
+// Commonly used enums and config types (re-exported for convenience)
 export type {
-	// Access token types
-	AccessTokenIdStr,
-	AccessTokenInfo,
-	AccessTokenScope,
+	// Metric types
 	AccountMetricSet,
-	AccumulationMetric,
-	// Config types
-	BasinConfig,
-	// Info types
-	BasinInfo,
 	BasinMetricSet,
-	BasinReconfiguration,
+	// Enums and string literals
 	BasinScope,
 	BasinState,
-	CreateStreamRequest,
-	DeleteOnEmptyConfig,
-	DeleteOnEmptyReconfiguration,
-	// Other generated types
-	FencingToken,
-	GaugeMetric,
-	Header,
+	// Retention
 	InfiniteRetention,
-	IssueAccessTokenResponse,
-	LabelMetric,
-	ListAccessTokensResponse,
-	ListBasinsResponse,
-	ListStreamsResponse,
-	Metric,
-	// Metric types
-	MetricSetResponse,
-	MetricUnit,
 	Operation,
+	// Scope configuration
 	PermittedOperationGroups,
-	ReadWritePermissions,
 	ResourceSet,
 	RetentionPolicy,
-	ScalarMetric,
-	SequencedRecord,
 	StorageClass,
-	StreamConfig,
-	StreamInfo,
 	StreamMetricSet,
-	StreamReconfiguration,
 	TimeseriesInterval,
-	TimestampingConfig,
 	TimestampingMode,
-	TimestampingReconfiguration,
 } from "./generated/types.gen.js";
+/**
+ * Generated API types matching the wire format (snake_case field names).
+ * Use these when you need to work with raw API data or understand the wire protocol.
+ */
+export * as API from "./generated/types.gen.js";
 
 // =============================================================================
 // Client Configuration
@@ -138,43 +156,11 @@ export {
 } from "./error.js";
 
 // =============================================================================
-// Input Types (Management Operations)
-// =============================================================================
-
-export type {
-	IssueAccessTokenInput,
-	ListAccessTokensInput,
-	ListAllAccessTokensInput,
-	RevokeAccessTokenInput,
-} from "./accessTokens.js";
-export type { StreamOptions } from "./basin.js";
-export type {
-	CreateBasinInput,
-	DeleteBasinInput,
-	GetBasinConfigInput,
-	ListAllBasinsInput,
-	ListBasinsInput,
-	ReconfigureBasinInput,
-} from "./basins.js";
-export type { BatchOutput, BatchTransformOptions } from "./batch-transform.js";
-export type {
-	AccountMetricsInput,
-	BasinMetricsInput,
-	StreamMetricsInput,
-} from "./metrics.js";
-export type {
-	CreateStreamInput,
-	DeleteStreamInput,
-	GetStreamConfigInput,
-	ListAllStreamsInput,
-	ListStreamsInput,
-	ReconfigureStreamInput,
-} from "./streams.js";
-
-// =============================================================================
 // Streaming Types
 // =============================================================================
 
+export type { StreamOptions } from "./basin.js";
+export type { BatchOutput, BatchTransformOptions } from "./batch-transform.js";
 export type {
 	AcksStream,
 	AppendHeaders,

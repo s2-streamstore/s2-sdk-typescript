@@ -1,34 +1,18 @@
-import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
+import type { RetryConfig, S2RequestOptions } from "./common.js";
 import { withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
-	type BasinConfig,
-	type BasinInfo,
-	type CreateBasinData,
-	type CreateBasinResponse,
 	createBasin,
-	type DeleteBasinData,
 	deleteBasin,
-	type GetBasinConfigData,
 	getBasinConfig,
-	type ListBasinsData,
-	type ListBasinsResponse,
 	listBasins,
-	type ReconfigureBasinData,
-	type ReconfigureBasinResponse,
 	reconfigureBasin,
 } from "./generated/index.js";
+import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { randomToken } from "./lib/base64.js";
-import { type ListAllArgs, paginate } from "./lib/paginate.js";
+import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
-
-export interface ListBasinsInput extends DataToObject<ListBasinsData> {}
-export interface ListAllBasinsInput extends ListAllArgs<ListBasinsInput> {}
-export interface CreateBasinInput extends DataToObject<CreateBasinData> {}
-export interface GetBasinConfigInput extends DataToObject<GetBasinConfigData> {}
-export interface DeleteBasinInput extends DataToObject<DeleteBasinData> {}
-export interface ReconfigureBasinInput
-	extends DataToObject<ReconfigureBasinData> {}
+import type * as Types from "./types.js";
 
 export class S2Basins {
 	private readonly client: Client;
@@ -43,31 +27,31 @@ export class S2Basins {
 	 * List basins.
 	 *
 	 * @param args.prefix Return basins whose names start with the given prefix
-	 * @param args.start_after Name to start after (for pagination)
+	 * @param args.startAfter Name to start after (for pagination)
 	 * @param args.limit Max results (up to 1000)
 	 */
 	public async list(
-		args?: ListBasinsInput,
+		args?: Types.ListBasinsInput,
 		options?: S2RequestOptions,
-	): Promise<ListBasinsResponse> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.ListBasinsResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listBasins({
 					client: this.client,
-					query: args,
+					query: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.ListBasinsResponse>(response);
 	}
 
 	/**
 	 * List all basins with automatic pagination.
 	 * Returns a lazy async iterable that fetches pages as needed.
 	 *
-	 * @param includeDeleted Include basins that are being deleted (default: false)
-	 * @param args.prefix Return basins whose names start with the given prefix
-	 * @param args.limit Max results per page (up to 1000)
+	 * @param includeDeleted - Include basins that are being deleted (default: false)
+	 * @param args - Optional filtering options: `prefix` to filter by name prefix, `limit` for max results per page
 	 *
 	 * @example
 	 * ```ts
@@ -78,16 +62,16 @@ export class S2Basins {
 	 */
 	public listAll(
 		includeDeleted = false,
-		args?: ListAllBasinsInput,
+		args?: Types.ListAllBasinsInput,
 		options?: S2RequestOptions,
-	): AsyncIterable<BasinInfo> {
+	): AsyncIterable<Types.BasinInfo> {
 		return paginate(
 			(a) =>
 				this.list(a, options).then((r) => ({
 					items: r.basins.filter(
 						(b) => includeDeleted || b.state !== "deleting",
 					),
-					has_more: r.has_more,
+					hasMore: r.hasMore,
 				})),
 			args ?? {},
 			(basin) => basin.name,
@@ -98,24 +82,25 @@ export class S2Basins {
 	 * Create a basin.
 	 *
 	 * @param args.basin Globally unique basin name (8-48 chars, lowercase letters, numbers, hyphens; cannot begin or end with a hyphen)
-	 * @param args.config Optional basin configuration (e.g. default stream config)
+	 * @param args.config Optional basin configuration (e.g. defaultStreamConfig)
 	 * @param args.scope Basin scope
 	 */
 	public async create(
-		args: CreateBasinInput,
+		args: Types.CreateBasinInput,
 		options?: S2RequestOptions,
-	): Promise<CreateBasinResponse> {
+	): Promise<Types.CreateBasinResponse> {
 		const requestToken = randomToken();
-		return await withRetries(this.retryConfig, async () => {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createBasin({
 					client: this.client,
-					body: args,
+					body: toSnakeCase(args),
 					headers: { "s2-request-token": requestToken },
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.CreateBasinResponse>(response);
 	}
 
 	/**
@@ -124,10 +109,10 @@ export class S2Basins {
 	 * @param args.basin Basin name
 	 */
 	public async getConfig(
-		args: GetBasinConfigInput,
+		args: Types.GetBasinConfigInput,
 		options?: S2RequestOptions,
-	): Promise<BasinConfig> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.BasinConfig> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getBasinConfig({
 					client: this.client,
@@ -136,6 +121,7 @@ export class S2Basins {
 				}),
 			);
 		});
+		return toCamelCase<Types.BasinConfig>(response);
 	}
 
 	/**
@@ -144,7 +130,7 @@ export class S2Basins {
 	 * @param args.basin Basin name
 	 */
 	public async delete(
-		args: DeleteBasinInput,
+		args: Types.DeleteBasinInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
 		await withRetries(this.retryConfig, async () => {
@@ -164,18 +150,19 @@ export class S2Basins {
 	 * @param args Configuration for the basin to reconfigure (including basin name and fields to change)
 	 */
 	public async reconfigure(
-		args: ReconfigureBasinInput,
+		args: Types.ReconfigureBasinInput,
 		options?: S2RequestOptions,
-	): Promise<ReconfigureBasinResponse> {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<Types.ReconfigureBasinResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureBasin({
 					client: this.client,
 					path: args,
-					body: args,
+					body: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.ReconfigureBasinResponse>(response);
 	}
 }

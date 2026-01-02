@@ -74,9 +74,9 @@ describeIf("Basin Management Integration Tests", () => {
 			const createResponse = await s2.basins.create({
 				basin: basinName,
 				config: {
-					default_stream_config: {
-						retention_policy: { age: RETENTION_AGE_SECS },
-						delete_on_empty: { min_age_secs: DELETE_ON_EMPTY_MIN_AGE_SECS },
+					defaultStreamConfig: {
+						retentionPolicy: { age: RETENTION_AGE_SECS },
+						deleteOnEmpty: { minAgeSecs: DELETE_ON_EMPTY_MIN_AGE_SECS },
 					},
 				},
 			});
@@ -90,15 +90,15 @@ describeIf("Basin Management Integration Tests", () => {
 			// Step 3: Get basin config and verify it matches expectations
 			const basinConfig = await s2.basins.getConfig({ basin: basinName });
 
-			expect(basinConfig.default_stream_config).toBeDefined();
-			expect(basinConfig.default_stream_config?.retention_policy).toEqual({
+			expect(basinConfig.defaultStreamConfig).toBeDefined();
+			expect(basinConfig.defaultStreamConfig?.retentionPolicy).toEqual({
 				age: RETENTION_AGE_SECS,
 			});
-			expect(basinConfig.default_stream_config?.delete_on_empty).toEqual({
-				min_age_secs: DELETE_ON_EMPTY_MIN_AGE_SECS,
+			expect(basinConfig.defaultStreamConfig?.deleteOnEmpty).toEqual({
+				minAgeSecs: DELETE_ON_EMPTY_MIN_AGE_SECS,
 			});
 			// Express is the default storage class
-			expect(basinConfig.default_stream_config?.storage_class).toBe("express");
+			expect(basinConfig.defaultStreamConfig?.storageClass).toBe("express");
 			console.log("Basin config verified");
 
 			// Step 4: Create a basin client
@@ -147,13 +147,13 @@ describeIf("Basin Management Integration Tests", () => {
 			});
 
 			// Stream should inherit basin's default config
-			expect(streamConfig.retention_policy).toEqual({
+			expect(streamConfig.retentionPolicy).toEqual({
 				age: RETENTION_AGE_SECS,
 			});
-			expect(streamConfig.delete_on_empty).toEqual({
-				min_age_secs: DELETE_ON_EMPTY_MIN_AGE_SECS,
+			expect(streamConfig.deleteOnEmpty).toEqual({
+				minAgeSecs: DELETE_ON_EMPTY_MIN_AGE_SECS,
 			});
-			expect(streamConfig.storage_class).toBe("express");
+			expect(streamConfig.storageClass).toBe("express");
 			console.log("Random stream config verified");
 
 			// Step 8: Reconfigure another random stream
@@ -163,12 +163,12 @@ describeIf("Basin Management Integration Tests", () => {
 
 			const reconfiguredStream = await basin.streams.reconfigure({
 				stream: anotherStreamName,
-				storage_class: "standard",
+				storageClass: "standard",
 			});
 
-			expect(reconfiguredStream.storage_class).toBe("standard");
+			expect(reconfiguredStream.storageClass).toBe("standard");
 			// Other config should remain unchanged
-			expect(reconfiguredStream.retention_policy).toEqual({
+			expect(reconfiguredStream.retentionPolicy).toEqual({
 				age: RETENTION_AGE_SECS,
 			});
 
@@ -176,7 +176,7 @@ describeIf("Basin Management Integration Tests", () => {
 			const updatedConfig = await basin.streams.getConfig({
 				stream: anotherStreamName,
 			});
-			expect(updatedConfig.storage_class).toBe("standard");
+			expect(updatedConfig.storageClass).toBe("standard");
 			console.log("Stream reconfiguration verified");
 
 			// Step 9: Sanity append to the reconfigured stream
@@ -205,7 +205,7 @@ describeIf("Basin Management Integration Tests", () => {
 			// Step 10: Read back and verify
 			const readResult = await stream.read(
 				{
-					start: { from: { seq_num: 0 } },
+					start: { from: { seqNum: 0 } },
 					stop: { limits: { count: 3 } },
 				},
 				{ as: "string" },
@@ -228,16 +228,16 @@ describeIf("Basin Management Integration Tests", () => {
 
 			const tokenResponse = await s2.accessTokens.issue({
 				id: tokenId,
-				auto_prefix_streams: true,
-				expires_at: expiresAt,
+				autoPrefixStreams: true,
+				expiresAt: expiresAt,
 				scope: {
 					// Basin scope: only basins starting with "typescript"
 					basins: { prefix: "typescript" },
 					// Stream scope: only streams starting with "test/"
-					// This is also the prefix that will be stripped with auto_prefix_streams
+					// This is also the prefix that will be stripped with autoPrefixStreams
 					streams: { prefix: "test/" },
-					// Read-only via op_groups
-					op_groups: {
+					// Read-only via opGroups
+					opGroups: {
 						account: { read: true },
 						basin: { read: true },
 						stream: { read: true },
@@ -245,13 +245,13 @@ describeIf("Basin Management Integration Tests", () => {
 				},
 			});
 
-			expect(tokenResponse.access_token).toBeDefined();
-			expect(tokenResponse.access_token.length).toBeGreaterThan(0);
+			expect(tokenResponse.accessToken).toBeDefined();
+			expect(tokenResponse.accessToken.length).toBeGreaterThan(0);
 			console.log(`Created access token: ${tokenId}`);
 
 			// Step 12: Create a new S2 client with the scoped token
 			const scopedS2 = new S2({
-				accessToken: tokenResponse.access_token,
+				accessToken: tokenResponse.accessToken,
 			});
 
 			// Step 13: List streams using the scoped client
@@ -290,7 +290,7 @@ describeIf("Basin Management Integration Tests", () => {
 			);
 			const scopedReadResult = await scopedStream.read(
 				{
-					start: { from: { seq_num: 0 } },
+					start: { from: { seqNum: 0 } },
 					stop: { limits: { count: 3 } },
 				},
 				{ as: "string" },

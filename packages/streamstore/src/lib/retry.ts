@@ -29,6 +29,21 @@ const debugWith = createDebug("s2:retry:with");
 const debugRead = createDebug("s2:retry:read");
 const debugSession = createDebug("s2:retry:session");
 
+/** Type guard for errors with a code property (e.g., Node.js errors). */
+function hasErrorCode(err: unknown, code: string): boolean {
+	return (
+		typeof err === "object" &&
+		err !== null &&
+		"code" in err &&
+		err.code === code
+	);
+}
+
+/** Type for ReadableStream with optional async iterator support. */
+type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
+	[Symbol.asyncIterator]?: () => AsyncIterableIterator<T>;
+};
+
 /**
  * Convert generated StreamPosition to SDK StreamPosition.
  */
@@ -51,20 +66,22 @@ function toSDKReadRecord<Format extends "string" | "bytes">(
 		!Array.isArray(record.headers)
 	) {
 		// String format: headers is an object, convert to array of tuples
-		return {
+		const result: Types.ReadRecord<"string"> = {
 			seqNum: record.seq_num,
 			timestamp: record.timestamp,
-			body: record.body as any,
-			headers: Object.entries(record.headers) as any,
-		} as Types.ReadRecord<Format>;
+			body: (record.body as string) ?? "",
+			headers: Object.entries(record.headers as Record<string, string>),
+		};
+		return result as Types.ReadRecord<Format>;
 	} else {
 		// Bytes format: headers is already an array
-		return {
+		const result: Types.ReadRecord<"bytes"> = {
 			seqNum: record.seq_num,
 			timestamp: record.timestamp,
-			body: record.body as any,
-			headers: (record.headers ?? []) as any,
-		} as Types.ReadRecord<Format>;
+			body: (record.body as Uint8Array) ?? new Uint8Array(),
+			headers: (record.headers as Array<[Uint8Array, Uint8Array]>) ?? [],
+		};
+		return result as Types.ReadRecord<Format>;
 	}
 }
 
@@ -445,7 +462,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					await session?.cancel(reason);
 				} catch (err) {
 					// Ignore ERR_INVALID_STATE - stream may already be closed/cancelled
-					if ((err as any)?.code !== "ERR_INVALID_STATE") {
+					if (!hasErrorCode(err, "ERR_INVALID_STATE")) {
 						throw err;
 					}
 				}
@@ -459,7 +476,10 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 	// Polyfill for older browsers / Node.js environments
 	[Symbol.asyncIterator](): AsyncIterableIterator<Types.ReadRecord<Format>> {
-		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		const proto = ReadableStream.prototype as ReadableStreamWithAsyncIterator<
+			Types.ReadRecord<Format>
+		>;
+		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") {
 			try {
 				return fn.call(this);
@@ -482,7 +502,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				try {
 					await reader.cancel(e);
 				} catch (err) {
-					if ((err as any)?.code !== "ERR_INVALID_STATE") throw err;
+					if (!hasErrorCode(err, "ERR_INVALID_STATE")) throw err;
 				}
 				reader.releaseLock();
 				return { done: true, value: undefined };
@@ -491,7 +511,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				try {
 					await reader.cancel("done");
 				} catch (err) {
-					if ((err as any)?.code !== "ERR_INVALID_STATE") throw err;
+					if (!hasErrorCode(err, "ERR_INVALID_STATE")) throw err;
 				}
 				reader.releaseLock();
 				return { done: true, value: undefined };

@@ -6,6 +6,7 @@
  */
 
 import * as API from "../generated/types.gen.js";
+import type * as InternalTypes from "../lib/stream/types.js";
 import * as Types from "../types.js";
 
 // =============================================================================
@@ -177,26 +178,35 @@ function fromAPISequencedRecordBytes(
 // Response Mappers
 // =============================================================================
 
+/** Input type for read batch mappers - accepts both API and internal types. */
+type ReadBatchInput<Format extends "string" | "bytes"> =
+	| API.ReadBatch
+	| InternalTypes.ReadBatch<Format>;
+
 /**
- * Convert API ReadBatch to SDK ReadBatch (string format).
+ * Convert API/internal ReadBatch to SDK ReadBatch (string format).
  */
-export function fromAPIReadBatchString(
-	batch: API.ReadBatch,
-): Types.ReadBatch<"string"> {
+export function fromAPIReadBatchString<
+	Format extends "string" | "bytes" = "string",
+>(batch: ReadBatchInput<Format>): Types.ReadBatch<"string"> {
 	return {
-		records: batch.records.map(fromAPISequencedRecordString),
+		records: batch.records.map((r) =>
+			fromAPISequencedRecordString(r as API.SequencedRecord),
+		),
 		tail: batch.tail ? fromAPIStreamPosition(batch.tail) : undefined,
 	};
 }
 
 /**
- * Convert API ReadBatch to SDK ReadBatch (bytes format).
+ * Convert API/internal ReadBatch to SDK ReadBatch (bytes format).
  */
-export function fromAPIReadBatchBytes(
-	batch: API.ReadBatch,
-): Types.ReadBatch<"bytes"> {
+export function fromAPIReadBatchBytes<
+	Format extends "string" | "bytes" = "bytes",
+>(batch: ReadBatchInput<Format>): Types.ReadBatch<"bytes"> {
 	return {
-		records: batch.records.map(fromAPISequencedRecordBytes),
+		records: batch.records.map((r) =>
+			fromAPISequencedRecordBytes(r as API.SequencedRecord),
+		),
 		tail: batch.tail ? fromAPIStreamPosition(batch.tail) : undefined,
 	};
 }
@@ -206,7 +216,7 @@ export function fromAPIReadBatchBytes(
 // =============================================================================
 
 /**
- * Convert SDK ReadInput to flat query parameters for the API.
+ * Convert SDK ReadInput (camelCase) to flat query parameters for the API (snake_case).
  */
 export function toAPIReadQuery(input?: Types.ReadInput): {
 	seq_num?: number;
@@ -227,12 +237,12 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 
 	if (input.start?.from) {
 		const from = input.start.from;
-		if ("seq_num" in from) {
-			query.seq_num = from.seq_num;
+		if ("seqNum" in from) {
+			query.seq_num = from.seqNum;
 		} else if ("timestamp" in from) {
 			query.timestamp = from.timestamp;
-		} else if ("tail_offset" in from) {
-			query.tail_offset = from.tail_offset;
+		} else if ("tailOffset" in from) {
+			query.tail_offset = from.tailOffset;
 		}
 	}
 
@@ -257,8 +267,8 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 		query.wait = input.stop.wait;
 	}
 
-	if (input.ignore_command_records !== undefined) {
-		query.ignore_command_records = input.ignore_command_records;
+	if (input.ignoreCommandRecords !== undefined) {
+		query.ignore_command_records = input.ignoreCommandRecords;
 	}
 
 	return query;

@@ -51,7 +51,7 @@ describeIf("ReadSession Integration Tests", () => {
 
 			// Use tail_offset to read from a known valid position
 			const session = await stream.readSession({
-				start: { from: { seq_num: 0 } },
+				start: { from: { seqNum: 0 } },
 				stop: { limits: { count: 3 } },
 			});
 
@@ -84,7 +84,7 @@ describeIf("ReadSession Integration Tests", () => {
 
 			// Use tail_offset to read from a known valid position
 			const session = await stream.readSession({
-				start: { from: { seq_num: 0 } },
+				start: { from: { seqNum: 0 } },
 				stop: { limits: { count: 2 } },
 			});
 
@@ -119,7 +119,7 @@ describeIf("ReadSession Integration Tests", () => {
 
 			const session = await stream.readSession(
 				{
-					start: { from: { seq_num: 0 } },
+					start: { from: { seqNum: 0 } },
 					stop: { limits: { count: 1 } },
 				},
 				{ as: "bytes" },

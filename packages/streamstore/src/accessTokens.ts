@@ -1,26 +1,15 @@
-import type { DataToObject, RetryConfig, S2RequestOptions } from "./common.js";
-import { S2Error, withS2Data } from "./error.js";
+import type { RetryConfig, S2RequestOptions } from "./common.js";
+import { withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
-	type AccessTokenInfo,
-	type IssueAccessTokenData,
 	issueAccessToken,
-	type ListAccessTokensData,
 	listAccessTokens,
-	type RevokeAccessTokenData,
 	revokeAccessToken,
 } from "./generated/index.js";
-import { type ListAllArgs, paginate } from "./lib/paginate.js";
+import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
+import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
-
-export interface ListAccessTokensInput
-	extends DataToObject<ListAccessTokensData> {}
-export interface ListAllAccessTokensInput
-	extends ListAllArgs<ListAccessTokensInput> {}
-export interface IssueAccessTokenInput
-	extends DataToObject<IssueAccessTokenData> {}
-export interface RevokeAccessTokenInput
-	extends DataToObject<RevokeAccessTokenData> {}
+import type * as Types from "./types.js";
 
 export class S2AccessTokens {
 	readonly client: Client;
@@ -35,27 +24,30 @@ export class S2AccessTokens {
 	 * List access tokens.
 	 *
 	 * @param args.prefix Filter to IDs beginning with this prefix
-	 * @param args.start_after Filter to IDs lexicographically after this value
+	 * @param args.startAfter Filter to IDs lexicographically after this value
 	 * @param args.limit Max results (up to 1000)
 	 */
-	public async list(args?: ListAccessTokensInput, options?: S2RequestOptions) {
-		return await withRetries(this.retryConfig, async () => {
+	public async list(
+		args?: Types.ListAccessTokensInput,
+		options?: S2RequestOptions,
+	): Promise<Types.ListAccessTokensResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listAccessTokens({
 					client: this.client,
-					query: args,
+					query: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.ListAccessTokensResponse>(response);
 	}
 
 	/**
 	 * List all access tokens with automatic pagination.
 	 * Returns a lazy async iterable that fetches pages as needed.
 	 *
-	 * @param args.prefix Filter to IDs beginning with this prefix
-	 * @param args.limit Max results per page (up to 1000)
+	 * @param args - Optional filtering options: `prefix` to filter by ID prefix, `limit` for max results per page
 	 *
 	 * @example
 	 * ```ts
@@ -65,14 +57,14 @@ export class S2AccessTokens {
 	 * ```
 	 */
 	public listAll(
-		args?: ListAllAccessTokensInput,
+		args?: Types.ListAllAccessTokensInput,
 		options?: S2RequestOptions,
-	): AsyncIterable<AccessTokenInfo> {
+	): AsyncIterable<Types.AccessTokenInfo> {
 		return paginate(
 			(a) =>
 				this.list(a, options).then((r) => ({
-					items: r.access_tokens,
-					has_more: r.has_more,
+					items: r.accessTokens,
+					hasMore: r.hasMore,
 				})),
 			args ?? {},
 			(token) => token.id,
@@ -84,19 +76,23 @@ export class S2AccessTokens {
 	 *
 	 * @param args.id Unique token ID (1-96 bytes)
 	 * @param args.scope Token scope (operations and resource sets)
-	 * @param args.auto_prefix_streams Namespace stream names by configured prefix scope
-	 * @param args.expires_at Expiration in ISO 8601; defaults to requestor's token expiry
+	 * @param args.autoPrefixStreams Namespace stream names by configured prefix scope
+	 * @param args.expiresAt Expiration in ISO 8601; defaults to requestor's token expiry
 	 */
-	public async issue(args: IssueAccessTokenInput, options?: S2RequestOptions) {
-		return await withRetries(this.retryConfig, async () => {
+	public async issue(
+		args: Types.IssueAccessTokenInput,
+		options?: S2RequestOptions,
+	): Promise<Types.IssueAccessTokenResponse> {
+		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				issueAccessToken({
 					client: this.client,
-					body: args,
+					body: toSnakeCase(args),
 					...options,
 				}),
 			);
 		});
+		return toCamelCase<Types.IssueAccessTokenResponse>(response);
 	}
 
 	/**
@@ -105,10 +101,10 @@ export class S2AccessTokens {
 	 * @param args.id Token ID to revoke
 	 */
 	public async revoke(
-		args: RevokeAccessTokenInput,
+		args: Types.RevokeAccessTokenInput,
 		options?: S2RequestOptions,
-	) {
-		return await withRetries(this.retryConfig, async () => {
+	): Promise<void> {
+		await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				revokeAccessToken({
 					client: this.client,

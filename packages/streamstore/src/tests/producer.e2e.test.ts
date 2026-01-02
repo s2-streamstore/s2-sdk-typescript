@@ -115,7 +115,7 @@ describeIf("Producer Integration Tests", () => {
 
 					const batch = await stream.read(
 						{
-							start: { from: { seq_num: seqNum } },
+							start: { from: { seqNum: seqNum } },
 							stop: { limits: { count: 1 } },
 						},
 						{ as: "bytes" as const },
