@@ -567,7 +567,8 @@ type InflightEntry = {
 	needsSubmit?: boolean;
 };
 
-const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
+const MIN_MAX_INFLIGHT_BYTES = 1 * 1024 * 1024; // 1 MiB minimum
+const DEFAULT_MAX_INFLIGHT_BYTES = 3 * 1024 * 1024; // 3 MiB default
 
 type CapacityWaiter = {
 	resolve: () => void;
@@ -630,9 +631,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			...config,
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
-		this.maxQueuedBytes =
-			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
-		this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
+		// Clamp maxInflightBytes to at least 1 MiB
+		this.maxQueuedBytes = Math.max(
+			MIN_MAX_INFLIGHT_BYTES,
+			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES,
+		);
+		// Clamp maxInflightBatches to at least 1 if set
+		this.maxInflightBatches =
+			this.sessionOptions?.maxInflightBatches !== undefined
+				? Math.max(1, this.sessionOptions.maxInflightBatches)
+				: undefined;
 
 		this.readable = new ReadableStream<Types.AppendAck>({
 			start: (controller) => {
