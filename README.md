@@ -22,11 +22,17 @@
 
 This repo contains the official TypeScript SDK for [S2](https://s2.dev), a serverless data store for streams, built on the service's [REST API](https://s2.dev/docs/rest/protocol).
 
-**Offramps**
-- Runnable examples: `examples/`
-- Patterns package: `packages/patterns/README.md`
-- SDK type docs (JSDoc/TypeDoc): `https://s2-streamstore.github.io/s2-sdk-typescript/`
-- S2 REST docs: `https://s2.dev/docs/rest/protocol`
+S2 is a managed service that provides unlimited, durable streams.
+
+Streams can be appended to, with all new records added to the tail of the stream. You can read from any portion of a stream – indexing by record sequence number, or timestamp – and follow updates live.
+
+See it in action on the [playground](https://s2.dev/playground).
+
+**Quick links:**
+- Runnable [examples](./examples) directory 
+- Patterns [package](packages/patterns)
+- SDK [documentation](https://s2-streamstore.github.io/s2-sdk-typescript/)
+- S2 REST API [documentation](https://s2.dev/docs/rest/protocol)
 
 ## Install
 
@@ -39,6 +45,16 @@ bun add @s2-dev/streamstore
 ```
 
 ## Quick start
+
+Want to get up and running? Head to the [S2 dashboard](https://s2.dev/dashboard) to sign-up and grab an access key, and create a new "basin" from the UI.
+
+Then define the following environment variables respectively:
+```bash
+export S2_ACCESS_TOKEN="<token>"
+export S2_BASIN="<basin>"
+```
+
+From there, you can run the following snippet (or any of the other [examples](./examples)).
 
 <!-- snippet:start quick-start -->
 ```ts
@@ -124,17 +140,34 @@ Run tests:
 bun run test
 ```
 
-Run the browser example (from the core package):
+The SDK also ships with a basic browser example, to experiment with using the SDK directly from the web.
 
 ```bash
 bun run --cwd packages/streamstore example:browser
 ```
 
-## Data plane
+## Using S2
 
-### Records and batches (unary append)
+S2 SDKs, including this TypeScript one, provide high-level abstractions and conveniences over the core [REST API](https://s2.dev/docs/rest/protocol).
 
-Appends are **batched**: the atomic unit of append is an `AppendInput` (a batch of records).
+### Account and basin operations
+
+The account and basin APIs allow for CRUD ops on basins (namespaces of streams), streams, granular access tokens, and more.
+
+### Data plane (stream) operations
+
+The core SDK verbs are around appending data to streams, reading data from them.
+
+See the examples and documentation for more details.
+
+Below are some high level notes on how to interact with the data plane.
+
+#### Appends 
+
+The atomic unit of append is an `AppendInput`, which contains a batch of `AppendRecord`s and some optional additional parameters.
+
+Records contain a body and optional headers. After an append completes, each record will be assigned a sequence number (and a timestamp).
+
 
 <!-- snippet:start data-plane-unary -->
 ```ts
@@ -169,23 +202,28 @@ Use an `AppendSession` when you want higher throughput and ordering guarantees:
 ```ts
 console.log("Opening appendSession with maxInflightBytes=1MiB.");
 const appendSession = await stream.appendSession({
+	// This determines the maximum amount of unacknowledged, pending appends,
+	// which can be outstanding at any given time. This is used to apply backpressure.
 	maxInflightBytes: 1024 * 1024,
 });
 
-// Demonstrate matchSeqNum by anchoring to the last ack.
 const startSeq = mixedAck.end.seqNum;
-const appendAck = await appendSession.submit(
-	AppendInput.create(
-		[
-			AppendRecord.string({ body: "session record A" }),
-			AppendRecord.string({ body: "session record B" }),
-		],
-		{ matchSeqNum: startSeq },
-	),
+// Submit an append batch.
+// This returns a promise that resolves into a `BatchSubmitTicket` once the session has
+// capacity to send it.
+const append1: BatchSubmitTicket = await appendSession.submit(
+	AppendInput.create([
+		AppendRecord.string({ body: "session record A" }),
+		AppendRecord.string({ body: "session record B" }),
+	]),
+);
+const append2: BatchSubmitTicket = await appendSession.submit(
+	AppendInput.create([AppendRecord.string({ body: "session record C" })]),
 );
 
-console.log("Session submit acked range:");
-console.dir(await appendAck.ack(), { depth: null });
+// The tickets can be used to wait for the append to become durable (acknowledged by S2).
+console.dir(await append1.ack(), { depth: null });
+console.dir(await append2.ack(), { depth: null });
 
 console.log("Closing append session to flush outstanding batches.");
 await appendSession.close();
@@ -194,20 +232,21 @@ await appendSession.close();
 
 ### Producer (auto-batching for performance)
 
-Streams are limited in **batches/sec**, not bytes/sec. For throughput, you typically want fewer, larger batches.
-`Producer` wraps an append session and auto-batches records (via `BatchTransform`), which is the recommended path for most high-throughput writers.
+Streams can support up to 200 appended batches per second (per single stream), but tens of MiB/second.
+
+For throughput, you typically want fewer, but larger batches.
+
+The `Producer` wraps an append session and auto-batches records (via `BatchTransform`), by lingering and accumulating records for a configurable amount of time, which is the recommended path for most high-throughput writers.
 
 <!-- snippet:start producer-core -->
 ```ts
 const producer = new Producer(
 	new BatchTransform({
+		// Linger and collect new records for up to 25ms per batch.
 		lingerDurationMillis: 25,
 		maxBatchRecords: 200,
-		matchSeqNum: tail.tail.seqNum,
 	}),
-	await stream.appendSession({
-		maxInflightBytes: 4 * 1024 * 1024,
-	}),
+	await stream.appendSession(),
 );
 
 const tickets = [];
@@ -233,12 +272,15 @@ let record3 = await stream.read({
 console.dir(record3, { depth: null });
 
 await producer.close();
+await stream.close();
 ```
 <!-- snippet:end producer-core -->
 
-### Read sessions (multi-batch reads and tailing)
+### Read sessions
 
-Use `readSession()` when you want:
+Read operations, similarly, can be done via individual `read` calls, or via a `readSession`. 
+
+Use a session whenever you want:
 - to read more than a single response batch (responses larger than 1 MiB),
 - to keep a session open and tail for new data (omit stop criteria).
 

@@ -46,13 +46,11 @@ const tail = await stream.checkTail();
 // snippet-region producer-core start
 const producer = new Producer(
 	new BatchTransform({
+		// Linger and collect new records for up to 25ms per batch.
 		lingerDurationMillis: 25,
 		maxBatchRecords: 200,
-		matchSeqNum: tail.tail.seqNum,
 	}),
-	await stream.appendSession({
-		maxInflightBytes: 4 * 1024 * 1024,
-	}),
+	await stream.appendSession(),
 );
 
 const tickets = [];
@@ -78,4 +76,5 @@ let record3 = await stream.read({
 console.dir(record3, { depth: null });
 
 await producer.close();
+await stream.close();
 // snippet-region producer-core end

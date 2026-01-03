@@ -1,6 +1,7 @@
 import {
 	AppendInput,
 	AppendRecord,
+	BatchSubmitTicket,
 	S2,
 	S2Environment,
 	S2Error,
@@ -92,23 +93,28 @@ console.dir(byteSummaries);
 // snippet-region data-plane-append-session start
 console.log("Opening appendSession with maxInflightBytes=1MiB.");
 const appendSession = await stream.appendSession({
+	// This determines the maximum amount of unacknowledged, pending appends,
+	// which can be outstanding at any given time. This is used to apply backpressure.
 	maxInflightBytes: 1024 * 1024,
 });
 
-// Demonstrate matchSeqNum by anchoring to the last ack.
 const startSeq = mixedAck.end.seqNum;
-const appendAck = await appendSession.submit(
-	AppendInput.create(
-		[
-			AppendRecord.string({ body: "session record A" }),
-			AppendRecord.string({ body: "session record B" }),
-		],
-		{ matchSeqNum: startSeq },
-	),
+// Submit an append batch.
+// This returns a promise that resolves into a `BatchSubmitTicket` once the session has
+// capacity to send it.
+const append1: BatchSubmitTicket = await appendSession.submit(
+	AppendInput.create([
+		AppendRecord.string({ body: "session record A" }),
+		AppendRecord.string({ body: "session record B" }),
+	]),
+);
+const append2: BatchSubmitTicket = await appendSession.submit(
+	AppendInput.create([AppendRecord.string({ body: "session record C" })]),
 );
 
-console.log("Session submit acked range:");
-console.dir(await appendAck.ack(), { depth: null });
+// The tickets can be used to wait for the append to become durable (acknowledged by S2).
+console.dir(await append1.ack(), { depth: null });
+console.dir(await append2.ack(), { depth: null });
 
 console.log("Closing append session to flush outstanding batches.");
 await appendSession.close();
