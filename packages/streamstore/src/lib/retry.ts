@@ -103,6 +103,7 @@ const RETRYABLE_STATUS_CODES = new Set([
 	500, // internal_server_error
 	502, // bad_gateway
 	503, // service_unavailable
+	504, // gateway_timeout
 ]);
 
 /**
