@@ -43,6 +43,7 @@ try {
 const stream = basin.stream(streamName);
 const tail = await stream.checkTail();
 
+// snippet-region producer-core start
 const producer = new Producer(
 	new BatchTransform({
 		lingerDurationMillis: 25,
@@ -77,3 +78,4 @@ let record3 = await stream.read({
 console.dir(record3, { depth: null });
 
 await producer.close();
+// snippet-region producer-core end

@@ -15,38 +15,38 @@ const SNIPPETS = [
 		lang: "ts",
 	},
 	{
-		name: "getting-started",
-		file: "examples/getting-started.ts",
-		lang: "ts",
-	},
-	{
-		name: "retry-config",
+		name: "client-config",
 		file: "examples/client-config.ts",
 		lang: "ts",
 	},
 	{
-		name: "append-session-create",
-		file: "examples/append-session.ts",
+		name: "data-plane-unary",
+		file: "examples/data-plane-ops.ts",
+		region: "data-plane-unary",
+		lang: "ts",
+	},
+	{
+		name: "data-plane-append-session",
+		file: "examples/data-plane-ops.ts",
+		region: "data-plane-append-session",
+		lang: "ts",
+	},
+	{
+		name: "producer-core",
+		file: "examples/producer.ts",
+		region: "producer-core",
+		lang: "ts",
+	},
+	{
+		name: "read-session-core",
+		file: "examples/read-session.ts",
+		region: "read-session-core",
 		lang: "ts",
 	},
 	{
 		name: "force-transport",
 		file: "examples/force-transport.ts",
-		lang: "ts",
-	},
-	{
-		name: "access-token",
-		file: "examples/access-token.ts",
-		lang: "ts",
-	},
-	{
-		name: "producer-basic",
-		file: "examples/producer.ts",
-		lang: "ts",
-	},
-	{
-		name: "patterns-serialization",
-		file: "examples/patterns-serialization.ts",
+		region: "force-transport",
 		lang: "ts",
 	},
 ];
@@ -78,7 +78,13 @@ const loadedSnippets = new Map(
 						`Snippet region "${snippet.region}" end marker not found in ${snippet.file}`,
 					);
 				}
-				extracted = contents.slice(afterStart + 1, endIdx);
+				// Slice to the start of the end-marker line (not the token itself) so
+				// comment prefixes like `// ` or `/* ` are not included in the snippet.
+				const endLineStart = contents.lastIndexOf("\n", endIdx);
+				extracted = contents.slice(
+					afterStart + 1,
+					endLineStart === -1 ? endIdx : endLineStart,
+				);
 			}
 			return [
 				snippet.name,

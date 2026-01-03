@@ -45,6 +45,7 @@ console.log("Checking tail on %s/%s", basinName, streamName);
 const tail = await stream.checkTail();
 console.dir(tail, { depth: null });
 
+// snippet-region data-plane-unary start
 // Append a mixed batch: string + bytes with headers.
 console.log("Appending two records (string + bytes).");
 const mixedAck = await stream.append(
@@ -63,6 +64,7 @@ const mixedAck = await stream.append(
 	]),
 );
 console.dir(mixedAck, { depth: null });
+// snippet-region data-plane-unary end
 
 console.log("Reading back the batch as strings:");
 const stringBatch = await stream.read({
@@ -87,6 +89,7 @@ const byteSummaries = byteBatch.records.map(
 );
 console.dir(byteSummaries);
 
+// snippet-region data-plane-append-session start
 console.log("Opening appendSession with maxInflightBytes=1MiB.");
 const appendSession = await stream.appendSession({
 	maxInflightBytes: 1024 * 1024,
@@ -109,6 +112,7 @@ console.dir(await appendAck.ack(), { depth: null });
 
 console.log("Closing append session to flush outstanding batches.");
 await appendSession.close();
+// snippet-region data-plane-append-session end
 
 console.log("Starting read session to tail from seqNum %d", startSeq);
 const readSession = await stream.readSession({

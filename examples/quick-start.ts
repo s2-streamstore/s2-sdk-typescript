@@ -49,7 +49,7 @@ console.log(
 	`Appended records ${ack.start.seqNum} through ${ack.end.seqNum}. Tail is now ${ack.tail.seqNum}.`,
 );
 
-// Read the two records back as bytes.
+// Read the two records back as binary.
 const batch = await stream.read(
 	{
 		start: { from: { seqNum: ack.start.seqNum } },
