@@ -44,9 +44,9 @@ export type AccountMetricSet = 'active-basins' | 'account-ops';
 
 export type AccumulationMetric = {
     /**
-     * The duration of bucket for the accumulation.
+     * The interval at which data points are accumulated.
      */
-    bucket_length: TimeseriesInterval;
+    interval: TimeseriesInterval;
     /**
      * Timeseries name.
      */
@@ -58,7 +58,8 @@ export type AccumulationMetric = {
     /**
      * Timeseries values.
      * Each element is a tuple of a timestamp in Unix epoch seconds and a data point.
-     * The data point represents the accumulated value for a bucket of time starting at the provided timestamp, lasting for the duration of the `bucket_length` parameter.
+     * The data point represents the accumulated value for the time period starting at the timestamp,
+     * spanning one `interval`.
      */
     values: Array<[
         number,
@@ -72,7 +73,7 @@ export type AccumulationMetric = {
 export type AppendAck = {
     /**
      * Sequence number of the last record that was appended `+ 1`, and timestamp of the last record that was appended.
-     * The difference between `end.seqNum` and `start.seqNum` will be the number of records appended.
+     * The difference between `end.seq_num` and `start.seq_num` will be the number of records appended.
      */
     end: StreamPosition;
     /**
@@ -148,10 +149,7 @@ export type BasinInfo = {
      * Basin name.
      */
     name: BasinNameStr;
-    /**
-     * Basin scope.
-     */
-    scope: BasinScope;
+    scope?: null | BasinScope;
     /**
      * Basin state.
      */
@@ -186,19 +184,12 @@ export type CreateBasinRequest = {
      */
     basin: BasinNameStr;
     config?: null | BasinConfig;
-    /**
-     * Basin scope.
-     */
-    scope?: BasinScope;
+    scope?: null | BasinScope;
 };
 
 export type CreateOrReconfigureBasinRequest = {
     config?: null | BasinConfig;
-    /**
-     * Basin scope.
-     * This cannot be reconfigured.
-     */
-    scope?: BasinScope;
+    scope?: null | BasinScope;
 };
 
 export type CreateStreamRequest = {
@@ -326,7 +317,7 @@ export type Metric = {
 } | {
     /**
      * Named series of `(timestamp, value)` points representing an accumulation over a specified
-     * bucket.
+     * interval.
      */
     accumulation: AccumulationMetric;
 } | {

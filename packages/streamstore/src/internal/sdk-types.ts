@@ -132,10 +132,10 @@ export type ListStreamsResponse = CamelCaseKeys<API.ListStreamsResponse>;
 // =============================================================================
 
 /**
- * Accumulation metric with bucket length.
+ * Accumulation metric with interval.
  *
- * Generated: `bucket_length`
- * SDK: `bucketLength`
+ * Generated: `interval`
+ * SDK: `interval`
  */
 export type AccumulationMetric = CamelCaseKeys<API.AccumulationMetric>;
 

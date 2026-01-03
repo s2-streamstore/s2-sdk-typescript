@@ -30,14 +30,24 @@ const accountMetrics = await s2.metrics.account({
 console.dir(accountMetrics, { depth: null });
 
 console.log("Fetching basin-level metrics for %s.", basinName);
-const basinMetrics = await s2.metrics.basin({
+const basinStorage = await s2.metrics.basin({
 	basin: basinName,
 	set: "storage",
 	start: new Date(Date.now() - 3600 * 6 * 1000), // 6 hours ago
 	end: new Date(),
 	interval: "hour",
 });
-console.dir(basinMetrics, { depth: null });
+console.dir(basinStorage, { depth: null });
+
+console.log("Fetching basin-level metrics for %s.", basinName);
+const basinAppendOps = await s2.metrics.basin({
+	basin: basinName,
+	set: "append-ops",
+	start: new Date(Date.now() - 3600 * 6 * 1000), // 6 hours ago
+	end: new Date(),
+	interval: "hour",
+});
+console.dir(basinAppendOps, { depth: null });
 
 console.log("Fetching stream-level metrics for %s/%s.", basinName, streamName);
 const streamMetrics = await s2.metrics.stream({

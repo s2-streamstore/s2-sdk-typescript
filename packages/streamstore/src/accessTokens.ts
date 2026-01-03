@@ -11,7 +11,7 @@ import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
-/** Convert expiresAt input (Date or string) to ISO 8601 string for API. */
+/** Convert expiresAt input (Date or string) to RFC 3339 string for API. */
 function toISOString(
 	value: Date | string | null | undefined,
 ): string | null | undefined {
@@ -111,7 +111,7 @@ export class S2AccessTokens {
 	 * @param args.id Unique token ID (1-96 bytes)
 	 * @param args.scope Token scope (operations and resource sets)
 	 * @param args.autoPrefixStreams Namespace stream names by configured prefix scope
-	 * @param args.expiresAt Expiration time (Date or ISO 8601 string); defaults to requestor's token expiry
+	 * @param args.expiresAt Expiration time (Date or RFC 3339 string); defaults to requestor's token expiry
 	 */
 	public async issue(
 		args: Types.IssueAccessTokenInput,

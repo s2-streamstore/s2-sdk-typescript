@@ -395,9 +395,9 @@ export interface ReconfigureStreamInput {
 export interface StreamInfo {
 	/** Stream name. */
 	name: string;
-	/** Creation time in ISO 8601 format. */
+	/** Creation time in RFC 3339 format. */
 	createdAt: string;
-	/** Deletion time in ISO 8601 format, if the stream is being deleted. */
+	/** Deletion time in RFC 3339 format, if the stream is being deleted. */
 	deletedAt?: string | null;
 }
 
@@ -507,7 +507,7 @@ export interface CreateBasinInput {
 	/** Basin configuration. */
 	config?: BasinConfig | null;
 	/** Basin scope. */
-	scope?: API.BasinScope;
+	scope?: API.BasinScope | null;
 }
 
 /**
@@ -549,7 +549,7 @@ export interface BasinInfo {
 	/** Basin name. */
 	name: string;
 	/** Basin scope. */
-	scope: API.BasinScope;
+	scope?: API.BasinScope | null;
 	/** Basin state. */
 	state: API.BasinState;
 }
@@ -583,7 +583,7 @@ export interface CreateBasinResponse {
 	/** Basin name. */
 	name: string;
 	/** Basin scope. */
-	scope: API.BasinScope;
+	scope?: API.BasinScope | null;
 	/** Basin state. */
 	state: API.BasinState;
 }
@@ -643,7 +643,7 @@ export interface IssueAccessTokenInput {
 	 */
 	autoPrefixStreams?: boolean;
 	/**
-	 * Expiration time (Date or ISO 8601 string).
+	 * Expiration time (Date or RFC 3339 string).
 	 * If not set, the expiration will be set to that of the requestor's token.
 	 */
 	expiresAt?: Date | string | null;
@@ -762,11 +762,11 @@ export interface ScalarMetric {
 }
 
 /**
- * An accumulation metric with timeseries values aggregated over a bucket.
+ * An accumulation metric with timeseries values aggregated over an interval.
  */
 export interface AccumulationMetric {
-	/** The duration of bucket for the accumulation. */
-	bucketLength: API.TimeseriesInterval;
+	/** The interval at which data points are accumulated. */
+	interval: API.TimeseriesInterval;
 	/** Timeseries name. */
 	name: string;
 	/** Unit of the metric. */

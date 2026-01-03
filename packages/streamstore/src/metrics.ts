@@ -18,7 +18,9 @@ function toEpochSeconds(value: number | Date | undefined): number | undefined {
 }
 
 /** Convert API metric response to SDK types with Date conversions. */
-function fromAPIMetricSetResponse(response: unknown): Types.MetricSetResponse {
+export function fromAPIMetricSetResponse(
+	response: unknown,
+): Types.MetricSetResponse {
 	const camelCased = toCamelCase<Types.MetricSetResponse>(response);
 
 	// Convert timeseries timestamps from seconds to Date
