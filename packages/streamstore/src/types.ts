@@ -316,7 +316,7 @@ export interface TailResponse {
  * Options for append sessions (backpressure control).
  */
 export interface AppendSessionOptions {
-	/** Max in-flight bytes before backpressure (default: 10 MiB). */
+	/** Max in-flight bytes before backpressure (default: 3 MiB). */
 	readonly maxInflightBytes?: number;
 	/** Max in-flight batches before backpressure. */
 	readonly maxInflightBatches?: number;

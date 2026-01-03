@@ -196,7 +196,7 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
  */
 export interface AppendSessionOptions {
 	/**
-	 * Aggregate size of records, as calculated by {@link meteredBytes}, to allow in-flight before applying backpressure (default: 10 MiB).
+	 * Aggregate size of records, as calculated by {@link meteredBytes}, to allow in-flight before applying backpressure (default: 3 MiB).
 	 */
 	maxInflightBytes?: number;
 	/**
