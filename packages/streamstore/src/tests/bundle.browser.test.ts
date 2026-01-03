@@ -19,7 +19,7 @@ describe("browser bundling", () => {
 				entry,
 				[
 					`import { S2 } from ${JSON.stringify(join(pkgRoot, "src/index.ts"))};`,
-					`const client = new S2({ accessToken: "test-token", baseUrl: "https://example.com" });`,
+					`const client = new S2({ accessToken: "test-token", endpoints: { account: "https://example.com" } });`,
 					`console.log(client ? "ok" : "fail");`,
 				].join("\n"),
 			);

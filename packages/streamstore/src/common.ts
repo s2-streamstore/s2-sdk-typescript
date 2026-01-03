@@ -1,4 +1,4 @@
-import * as Redacted from "./lib/redacted.js";
+import { S2Endpoints, type S2EndpointsInit } from "./endpoints.js";
 
 /**
  * Policy for retrying append operations.
@@ -72,16 +72,14 @@ export class S2Environment {
 			config.accessToken = token;
 		}
 
-		const baseUrl = process.env.S2_ACCOUNT_ENDPOINT;
-		if (baseUrl) {
-			config.baseUrl = baseUrl;
-		}
-
+		const accountEndpoint = process.env.S2_ACCOUNT_ENDPOINT;
 		const basinEndpoint = process.env.S2_BASIN_ENDPOINT;
-		if (basinEndpoint) {
-			config.makeBasinBaseUrl = basinEndpoint.includes("{basin}")
-				? (basin: string) => basinEndpoint.replace("{basin}", basin)
-				: () => basinEndpoint;
+		if (accountEndpoint || basinEndpoint) {
+			const endpointsInit: S2EndpointsInit = {
+				account: accountEndpoint || undefined,
+				basin: basinEndpoint || undefined,
+			};
+			config.endpoints = new S2Endpoints(endpointsInit);
 		}
 
 		return config;
@@ -100,15 +98,11 @@ export type S2ClientOptions = {
 	 */
 	accessToken: string;
 	/**
-	 * Base URL for the S2 API.
-	 * Defaults to `https://aws.s2.dev`.
+	 * Endpoint configuration for the S2 environment.
+	 *
+	 * Defaults to AWS (`aws.s2.dev` and `{basin}.b.aws.s2.dev`) with the API base path inferred as `/v1`.
 	 */
-	baseUrl?: string;
-	/**
-	 * Function to make a basin-specific base URL.
-	 * Defaults to `https://{basin}.b.aws.s2.dev`.
-	 */
-	makeBasinBaseUrl?: (basin: string) => string;
+	endpoints?: S2Endpoints | S2EndpointsInit;
 	/**
 	 * Retry configuration for handling transient failures.
 	 * Applies to management operations (basins, streams, tokens) and stream operations (read, append).

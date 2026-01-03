@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
+import { S2Endpoints } from "../endpoints.js";
 import {
 	AppendInput,
 	AppendRecord,
@@ -48,8 +49,7 @@ describeIf("Correctness Integration Tests", () => {
 
 		const clientConfig: S2ClientOptions = {
 			accessToken: env.accessToken,
-			baseUrl: env.baseUrl,
-			makeBasinBaseUrl: env.makeBasinBaseUrl,
+			endpoints: env.endpoints ?? new S2Endpoints(),
 			retry: {
 				...env.retry,
 				...retryConfig,

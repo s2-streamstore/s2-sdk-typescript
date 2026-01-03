@@ -4,6 +4,7 @@
 
 export { S2Basin } from "./basin.js";
 export { S2Environment } from "./common.js";
+export { S2Endpoints } from "./endpoints.js";
 /** Top-level entrypoint for the SDK. */
 export { S2 } from "./s2.js";
 export { S2Stream } from "./stream.js";
@@ -145,6 +146,7 @@ export type {
 	S2ClientOptions,
 	S2RequestOptions,
 } from "./common.js";
+export type { S2EndpointsInit } from "./endpoints.js";
 
 // =============================================================================
 // Error Types
