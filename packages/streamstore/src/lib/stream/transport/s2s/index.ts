@@ -375,6 +375,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						":authority": url.host,
 						"user-agent": DEFAULT_USER_AGENT,
 						authorization: `Bearer ${Redacted.value(authToken)}`,
+						// TODO compression
 						accept: "application/protobuf",
 						"content-type": "s2s/proto",
 						...(basinName ? { "s2-basin": basinName } : {}),
@@ -725,6 +726,7 @@ class S2SAppendSession implements TransportAppendSession {
 			"user-agent": DEFAULT_USER_AGENT,
 			authorization: `Bearer ${Redacted.value(this.authToken)}`,
 			"content-type": "s2s/proto",
+			// TODO compression
 			accept: "application/protobuf",
 			...(this.basinName ? { "s2-basin": this.basinName } : {}),
 		});
