@@ -43,55 +43,53 @@ bun add @s2-dev/streamstore
 <!-- snippet:start quick-start -->
 ```ts
 import {
+	AppendAck,
 	AppendInput,
 	AppendRecord,
 	S2,
 	S2Environment,
-	S2Error,
 } from "@s2-dev/streamstore";
 
-const accessToken = process.env.S2_ACCESS_TOKEN;
-if (!accessToken) {
-	throw new Error("Set S2_ACCESS_TOKEN to run the quick-start example.");
-}
-
-const basinName = process.env.S2_BASIN;
-if (!basinName) {
-	throw new Error("Set S2_BASIN so we know which basin to use.");
-}
-
-const streamName = process.env.S2_STREAM ?? "docs/quick-start";
+const basinName = process.env.S2_BASIN ?? "my-existing-basin";
+const streamName = process.env.S2_STREAM ?? "my-new-stream";
 
 const s2 = new S2({
 	...S2Environment.parse(),
-	accessToken,
+	accessToken: process.env.S2_ACCESS_TOKEN ?? "my-access-token",
 });
 
+// Create a basin (namespace) client for basin-level operations.
 const basin = s2.basin(basinName);
-await basin.streams.create({ stream: streamName }).catch((error: unknown) => {
-	if (!(error instanceof S2Error && error.status === 409)) {
-		throw error;
-	}
-});
 
+// Make a new stream within the basin, using the default configuration.
+const streamResponse = await basin.streams.create({ stream: streamName });
+console.dir(streamResponse, { depth: null });
+
+// Create a stream client on our new stream.
 const stream = basin.stream(streamName);
 
-// Make a single append call; the promise resolves when the data is durable.
-const ack = await stream.append(
+// Make a single append call.
+const append: Promise<AppendAck> = stream.append(
+	// `append` expects an input batch of one or many records.
 	AppendInput.create([
+		// Records can use a string encoding...
 		AppendRecord.string({
 			body: "Hello from the docs snippet!",
 			headers: [["content-type", "text/plain"]],
 		}),
+		// ...or contain raw binary data.
 		AppendRecord.bytes({
 			body: new TextEncoder().encode("Bytes payload"),
 		}),
 	]),
 );
 
+// When the promise resolves, the data is fully durable and present on the stream.
+const ack = await append;
 console.log(
-	`Appended records ${ack.start.seqNum} through ${ack.end.seqNum}. Tail is now ${ack.tail.seqNum}.`,
+	`Appended records ${ack.start.seqNum} through ${ack.end.seqNum} (exclusive).`,
 );
+console.dir(ack, { depth: null });
 
 // Read the two records back as binary.
 const batch = await stream.read(
@@ -103,7 +101,8 @@ const batch = await stream.read(
 );
 
 for (const record of batch.records) {
-	console.log(`[read] ${record.seqNum}:`, record.body);
+	console.dir(record, { depth: null });
+	console.log("decoded body: %s", new TextDecoder().decode(record.body));
 }
 ```
 <!-- snippet:end quick-start -->
