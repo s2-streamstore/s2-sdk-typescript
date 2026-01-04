@@ -232,13 +232,13 @@ await appendSession.close();
 ```
 <!-- snippet:end data-plane-append-session -->
 
-### Producer (auto-batching for performance)
+### Producer 
 
 Streams can support up to 200 appended batches per second (per single stream), but tens of MiB/second.
 
 For throughput, you typically want fewer, but larger batches.
 
-The `Producer` wraps an append session and auto-batches records (via `BatchTransform`), by lingering and accumulating records for a configurable amount of time, which is the recommended path for most high-throughput writers.
+The `Producer` API simplifies this by connecting an `appendSession` with an auto-batcher (via `BatchTransform`), which lingers and accumulates records for a configurable amount of time. This is the recommended path for most high-throughput writers.
 
 <!-- snippet:start producer-core -->
 ```ts
@@ -375,19 +375,6 @@ For higher-level, more opinionated building blocks (typed append/read sessions, 
 We use [Github Issues](https://github.com/s2-streamstore/s2-sdk-typescript/issues) to
 track feature requests and issues with the SDK. If you wish to provide feedback,
 report a bug or request a feature, feel free to open a Github issue.
-
-### Contributing
-
-Developers are welcome to submit Pull Requests on the repository. If there is
-no tracking issue for the bug or feature request corresponding to the PR, we
-encourage you to open one for discussion before submitting the PR.
-
-### Maintaining documentation snippets
-
-- Run `bun run snippets` whenever you touch `README.md` or the snippet source files under `examples/`.
-- `bun run check:snippets` (also part of `bun run check`) type-checks every example so regressions are caught in CI.
-- Snippet blocks in markdown are delimited by `<!-- snippet:start NAME -->` / `<!-- snippet:end NAME -->`; never edit the generated code directly – update the matching file in `examples/` instead.
-- To keep snippets small, add region markers to example files: `snippet-region REGION start` / `snippet-region REGION end`.
 
 ## Reach out to us
 

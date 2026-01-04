@@ -1,5 +1,12 @@
 # @s2-dev/streamstore-patterns
 
+## 2.1.0
+
+### Minor Changes
+
+- Updated dependencies [0d76a27]
+  - @s2-dev/streamstore@0.21.0
+
 ## 2.0.0
 
 ### Patch Changes
