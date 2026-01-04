@@ -1,11 +1,28 @@
 import { createWriteStream } from "node:fs";
+
 import {
 	AppendRecord,
 	BatchTransform,
+	Producer,
 	type ReadRecord,
 	S2,
-} from "../src/index.js";
+	S2Environment,
+	S2Error,
+} from "@s2-dev/streamstore";
 
+const accessToken = process.env.S2_ACCESS_TOKEN;
+if (!accessToken) {
+	throw new Error("Set S2_ACCESS_TOKEN to a valid access token.");
+}
+
+const basinName = process.env.S2_BASIN;
+if (!basinName) {
+	throw new Error("Set S2_BASIN so we know where to work.");
+}
+
+const streamName = process.env.S2_STREAM ?? "image/demo";
+
+// Stream transformation for chunking large binary arrays into ones of no larger than `desiredChunkSize`.
 function rechunkStream(
 	desiredChunkSize: number,
 ): TransformStream<Uint8Array, Uint8Array> {
@@ -30,63 +47,77 @@ function rechunkStream(
 }
 
 const s2 = new S2({
-	accessToken: process.env.S2_ACCESS_TOKEN!,
+	...S2Environment.parse(),
+	accessToken,
 	retry: {
-		maxAttempts: 10,
-		retryBackoffDurationMillis: 100,
+		maxAttempts: 3,
+		minDelayMillis: 100,
+		maxDelayMillis: 1000,
 		appendRetryPolicy: "noSideEffects",
 	},
 });
 
-const basinName = process.env.S2_BASIN;
-if (!basinName) {
-	console.error("S2_BASIN environment variable is not set");
-	process.exit(1);
-}
+const basin = s2.basin(basinName);
 
-const basin = s2.basin(process.env.S2_BASIN!);
-const stream = basin.stream("image");
+// Create the image stream if it doesn't already exist.
+await basin.streams.create({ stream: streamName }).catch((error: unknown) => {
+	if (error instanceof S2Error && error.status === 409) {
+		console.log(`Stream ${streamName} already exists.`);
+		return undefined;
+	}
+	throw error;
+});
 
+const stream = basin.stream(streamName);
 const startAt = await stream.checkTail();
 
-const session = await stream.appendSession({
-	maxInflightBytes: 1024 * 1024, // 1MiB
-});
+const producer = new Producer(
+	new BatchTransform({
+		lingerDurationMillis: 100,
+		matchSeqNum: startAt.tail.seqNum,
+	}),
+	await stream.appendSession({
+		maxInflightBytes: 5 * 1024 * 1024,
+	}),
+);
+
+// Fetch an image stream from the web.
 let image = await fetch(
 	"https://upload.wikimedia.org/wikipedia/commons/2/24/Peter_Paul_Rubens_-_Self-portrait_-_RH.S.180_-_Rubenshuis_%28after_restoration%29.jpg",
 );
 
 // Write directly from fetch response to S2 stream
-let append = await image
+await image
 	.body! // Ensure each chunk is at most 128KiB. S2 has a maximum individual record size of 1MiB.
 	.pipeThrough(rechunkStream(1024 * 128))
 	// Convert each chunk to an AppendRecord.
 	.pipeThrough(
 		new TransformStream<Uint8Array, AppendRecord>({
 			transform(arr, controller) {
-				controller.enqueue(AppendRecord.make(arr));
+				controller.enqueue(AppendRecord.bytes({ body: arr }));
 			},
 		}),
 	)
-	// Collect records into batches.
-	.pipeThrough(
-		new BatchTransform({
-			lingerDurationMillis: 5,
-			match_seq_num: startAt.tail.seq_num,
-		}),
-	)
 	// Write to the S2 stream.
-	.pipeTo(session.writable);
+	.pipeTo(producer.writable);
 
 console.log(
-	`image written to S2 over ${session.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num} records, starting at seqNum=${startAt.tail.seq_num}`,
+	`image written to S2 over ${producer.appendSession.lastAckedPosition()!.end!.seqNum - startAt.tail.seqNum} records, starting at seq_num=${startAt.tail.seqNum}`,
 );
 
-let readSession = await stream.readSession({
-	seq_num: startAt.tail.seq_num,
-	count: session.lastAckedPosition()!.end!.seq_num - startAt.tail.seq_num,
-	as: "bytes",
-});
+let readSession = await stream.readSession(
+	{
+		start: { from: { seqNum: startAt.tail.seqNum } },
+		stop: {
+			limits: {
+				count:
+					producer.appendSession.lastAckedPosition()!.end.seqNum -
+					startAt.tail.seqNum,
+			},
+		},
+	},
+	{ as: "bytes" },
+);
 
 // Write to a local file.
 const id = Math.random().toString(36).slice(2, 10);

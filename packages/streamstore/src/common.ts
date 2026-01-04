@@ -1,3 +1,5 @@
+import { S2Endpoints, type S2EndpointsInit } from "./endpoints.js";
+
 /**
  * Policy for retrying append operations.
  *
@@ -18,11 +20,19 @@ export type RetryConfig = {
 	maxAttempts?: number;
 
 	/**
-	 * Base delay in milliseconds between retry attempts.
-	 * Fixed delay per attempt with jitter applied.
+	 * Minimum delay in milliseconds for exponential backoff.
+	 * The first retry will have a delay in the range [minDelayMillis, 2*minDelayMillis).
 	 * @default 100
 	 */
-	retryBackoffDurationMillis?: number;
+	minDelayMillis?: number;
+
+	/**
+	 * Maximum base delay in milliseconds for exponential backoff.
+	 * Once the exponential backoff reaches this value, it stays capped here.
+	 * Note: actual delay with jitter can be up to 2*maxDelayMillis.
+	 * @default 1000
+	 */
+	maxDelayMillis?: number;
 
 	/**
 	 * Policy for retrying append operations.
@@ -37,7 +47,44 @@ export type RetryConfig = {
 	 * Used by retrying append sessions. When unset, defaults to 5000ms.
 	 */
 	requestTimeoutMillis?: number;
+
+	/**
+	 * Maximum time in milliseconds to wait for connection establishment.
+	 * This is a "fail fast" timeout that aborts slow connections early.
+	 * Connection time counts toward requestTimeoutMillis.
+	 *
+	 * Only applies to S2S (HTTP/2) transport when establishing new connections.
+	 * Reused pooled connections are not subject to this timeout.
+	 *
+	 * @default 5000
+	 */
+	connectionTimeoutMillis?: number;
 };
+
+export type S2EnvironmentConfig = Partial<S2ClientOptions>;
+
+export class S2Environment {
+	public static parse(): S2EnvironmentConfig {
+		const config: S2EnvironmentConfig = {};
+
+		const token = process.env.S2_ACCESS_TOKEN;
+		if (token) {
+			config.accessToken = token;
+		}
+
+		const accountEndpoint = process.env.S2_ACCOUNT_ENDPOINT;
+		const basinEndpoint = process.env.S2_BASIN_ENDPOINT;
+		if (accountEndpoint || basinEndpoint) {
+			const endpointsInit: S2EndpointsInit = {
+				account: accountEndpoint || undefined,
+				basin: basinEndpoint || undefined,
+			};
+			config.endpoints = new S2Endpoints(endpointsInit);
+		}
+
+		return config;
+	}
+}
 
 /**
  * Configuration for constructing the top-level `S2` client.
@@ -51,19 +98,15 @@ export type S2ClientOptions = {
 	 */
 	accessToken: string;
 	/**
-	 * Base URL for the S2 API.
-	 * Defaults to `https://aws.s2.dev`.
+	 * Endpoint configuration for the S2 environment.
+	 *
+	 * Defaults to AWS (`aws.s2.dev` and `{basin}.b.aws.s2.dev`) with the API base path inferred as `/v1`.
 	 */
-	baseUrl?: string;
-	/**
-	 * Function to make a basin-specific base URL.
-	 * Defaults to `https://{basin}.b.aws.s2.dev`.
-	 */
-	makeBasinBaseUrl?: (basin: string) => string;
+	endpoints?: S2Endpoints | S2EndpointsInit;
 	/**
 	 * Retry configuration for handling transient failures.
 	 * Applies to management operations (basins, streams, tokens) and stream operations (read, append).
-	 * @default { maxAttempts: 3, retryBackoffDurationMillis: 100 }
+	 * @default { maxAttempts: 3, minDelayMillis: 100, maxDelayMillis: 1000, appendRetryPolicy: "all" }
 	 */
 	retry?: RetryConfig;
 };
@@ -77,16 +120,3 @@ export type S2RequestOptions = {
 	 */
 	signal?: AbortSignal;
 };
-
-/**
- * Helper type that flattens an endpoint's `body`, `path` and `query` into a
- * single object. This lets public methods accept one coherent argument object
- * instead of three separate bags.
- */
-export type DataToObject<T> = (T extends { body?: infer B }
-	? B extends undefined | never
-		? {}
-		: B
-	: {}) &
-	(T extends { path?: infer P } ? (P extends undefined | never ? {} : P) : {}) &
-	(T extends { query?: infer Q } ? (Q extends undefined | never ? {} : Q) : {});

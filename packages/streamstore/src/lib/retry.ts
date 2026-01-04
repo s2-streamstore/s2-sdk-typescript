@@ -7,13 +7,13 @@ import {
 	s2Error,
 	withS2Error,
 } from "../error.js";
-import type { AppendAck, StreamPosition } from "../generated/index.js";
+import type * as API from "../generated/index.js";
+import * as Types from "../types.js";
 import { meteredBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import type {
 	AcksStream,
-	AppendArgs,
 	AppendRecord,
 	AppendSessionOptions,
 	AppendSession as AppendSessionType,
@@ -23,21 +23,78 @@ import type {
 	TransportAppendSession,
 	TransportReadSession,
 } from "./stream/types.js";
+import { BatchSubmitTicket } from "./stream/types.js";
 
 const debugWith = createDebug("s2:retry:with");
 const debugRead = createDebug("s2:retry:read");
 const debugSession = createDebug("s2:retry:session");
 
+/** Type guard for errors with a code property (e.g., Node.js errors). */
+function hasErrorCode(err: unknown, code: string): boolean {
+	return (
+		typeof err === "object" &&
+		err !== null &&
+		"code" in err &&
+		err.code === code
+	);
+}
+
+/** Type for ReadableStream with optional async iterator support. */
+type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
+	[Symbol.asyncIterator]?: () => AsyncIterableIterator<T>;
+};
+
+/**
+ * Convert generated StreamPosition to SDK StreamPosition.
+ */
+function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
+	return {
+		seqNum: pos.seq_num,
+		timestamp: new Date(pos.timestamp),
+	};
+}
+
+/**
+ * Convert internal ReadRecord (with headers as object for strings) to SDK ReadRecord (with headers as array).
+ */
+function toSDKReadRecord<Format extends "string" | "bytes">(
+	record: ReadRecord<Format>,
+): Types.ReadRecord<Format> {
+	if (
+		record.headers &&
+		typeof record.headers === "object" &&
+		!Array.isArray(record.headers)
+	) {
+		// String format: headers is an object, convert to array of tuples
+		const result: Types.ReadRecord<"string"> = {
+			seqNum: record.seq_num,
+			timestamp: new Date(record.timestamp),
+			body: (record.body as string) ?? "",
+			headers: Object.entries(record.headers as Record<string, string>),
+		};
+		return result as Types.ReadRecord<Format>;
+	} else {
+		// Bytes format: headers is already an array
+		const result: Types.ReadRecord<"bytes"> = {
+			seqNum: record.seq_num,
+			timestamp: new Date(record.timestamp),
+			body: (record.body as Uint8Array) ?? new Uint8Array(),
+			headers: (record.headers as Array<[Uint8Array, Uint8Array]>) ?? [],
+		};
+		return result as Types.ReadRecord<Format>;
+	}
+}
+
 /**
  * Default retry configuration.
  */
-export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> & {
-	requestTimeoutMillis: number;
-} = {
+export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
 	maxAttempts: 3,
-	retryBackoffDurationMillis: 100,
+	minDelayMillis: 100,
+	maxDelayMillis: 1000,
 	appendRetryPolicy: "all",
 	requestTimeoutMillis: 5000, // 5 seconds
+	connectionTimeoutMillis: 5000, // 5 seconds
 };
 
 const RETRYABLE_STATUS_CODES = new Set([
@@ -46,6 +103,7 @@ const RETRYABLE_STATUS_CODES = new Set([
 	500, // internal_server_error
 	502, // bad_gateway
 	503, // service_unavailable
+	504, // gateway_timeout
 ]);
 
 /**
@@ -69,19 +127,34 @@ export function isRetryable(error: S2Error): boolean {
 }
 
 /**
- * Calculates the delay before the next retry attempt using fixed backoff
- * with jitter. The `attempt` parameter is currently ignored to keep a
- * constant base delay per attempt.
+ * Calculates the delay before the next retry attempt using exponential backoff
+ * with additive jitter.
+ *
+ * Formula:
+ *   baseDelay = min(minDelayMillis * 2^attempt, maxDelayMillis)
+ *   jitter = random(0, baseDelay)
+ *   delay = baseDelay + jitter
+ *
+ * @param attempt - Zero-based retry attempt number (0 = first retry)
+ * @param minDelayMillis - Minimum delay for exponential backoff
+ * @param maxDelayMillis - Maximum base delay (actual delay can be up to 2x with jitter)
  */
 export function calculateDelay(
 	attempt: number,
-	baseDelayMillis: number,
+	minDelayMillis: number,
+	maxDelayMillis: number,
 ): number {
-	// Apply ±50% jitter around the base delay
-	const jitterRange = 0.5; // 50% up or down
-	const factor = 1 + (Math.random() * 2 - 1) * jitterRange; // [0.5, 1.5]
-	const delay = Math.max(0, baseDelayMillis * factor);
-	return Math.floor(delay);
+	// Calculate exponential backoff: minDelay * 2^attempt, capped at maxDelay
+	const baseDelay = Math.min(
+		minDelayMillis * Math.pow(2, attempt),
+		maxDelayMillis,
+	);
+
+	// Add jitter: random value in [0, baseDelay)
+	const jitter = Math.random() * baseDelay;
+
+	// Total delay is base + jitter
+	return Math.floor(baseDelay + jitter);
 }
 
 /**
@@ -147,7 +220,8 @@ export async function withRetries<T>(
 			// Calculate delay and wait before retrying
 			const delay = calculateDelay(
 				attemptNo - 1,
-				config.retryBackoffDurationMillis,
+				config.minDelayMillis,
+				config.maxDelayMillis,
 			);
 			debugWith(
 				"retryable error, backing off for %dms, status=%s",
@@ -161,11 +235,11 @@ export async function withRetries<T>(
 	throw lastError;
 }
 export class RetryReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadRecord<Format>>
+	extends ReadableStream<Types.ReadRecord<Format>>
 	implements ReadSessionType<Format>
 {
-	private _nextReadPosition: StreamPosition | undefined = undefined;
-	private _lastObservedTail: StreamPosition | undefined = undefined;
+	private _nextReadPosition: API.StreamPosition | undefined = undefined;
+	private _lastObservedTail: API.StreamPosition | undefined = undefined;
 
 	private _recordsRead: number = 0;
 	private _bytesRead: number = 0;
@@ -194,20 +268,15 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				// Connection succeeded - return the retry wrapper
 				return new RetryReadSession<Format>(args, generator, config, session);
 			} catch (err) {
-				const error =
-					err instanceof S2Error
-						? err
-						: new S2Error({
-								message: String(err),
-								status: 502,
-							});
+				const error = s2Error(err);
 				lastError = error;
 
 				const effectiveMax = Math.max(1, retryConfig.maxAttempts);
 				if (isRetryable(error) && attempt < effectiveMax - 1) {
 					const delay = calculateDelay(
 						attempt,
-						retryConfig.retryBackoffDurationMillis,
+						retryConfig.minDelayMillis,
+						retryConfig.maxDelayMillis,
 					);
 					debugRead(
 						"connection error in create, will retry after %dms, status=%s",
@@ -258,20 +327,15 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							session = await generator(nextArgs);
 						} catch (err) {
 							// Convert to S2Error if needed
-							const error =
-								err instanceof S2Error
-									? err
-									: new S2Error({
-											message: String(err),
-											status: 502, // Bad Gateway - connection failure
-										});
+							const error = s2Error(err);
 
 							// Check if we can retry connection errors
 							const effectiveMax = Math.max(1, retryConfig.maxAttempts);
 							if (isRetryable(error) && attempt < effectiveMax - 1) {
 								const delay = calculateDelay(
 									attempt,
-									retryConfig.retryBackoffDurationMillis,
+									retryConfig.minDelayMillis,
+									retryConfig.maxDelayMillis,
 								);
 								debugRead(
 									"connection error, will retry after %dms, status=%s",
@@ -322,7 +386,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								// Compute planned backoff delay now so we can subtract it from wait budget
 								const delay = calculateDelay(
 									attempt,
-									retryConfig.retryBackoffDurationMillis,
+									retryConfig.minDelayMillis,
+									retryConfig.maxDelayMillis,
 								);
 								// Recompute remaining budget from original request each time to avoid double-subtraction
 								if (baselineCount !== undefined) {
@@ -340,7 +405,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 										(performance.now() - startTimeMs) / 1000;
 									nextArgs.wait = Math.max(
 										0,
-										baselineWait - (elapsedSeconds + delay / 1000),
+										Math.floor(baselineWait - (elapsedSeconds + delay / 1000)),
 									);
 								}
 								// Proactively cancel the current transport session before retrying
@@ -377,7 +442,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						this._bytesRead += meteredBytes(record);
 						attempt = 0;
 
-						controller.enqueue(record);
+						controller.enqueue(toSDKReadRecord(record));
 					}
 				}
 			},
@@ -386,7 +451,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					await session?.cancel(reason);
 				} catch (err) {
 					// Ignore ERR_INVALID_STATE - stream may already be closed/cancelled
-					if ((err as any)?.code !== "ERR_INVALID_STATE") {
+					if (!hasErrorCode(err, "ERR_INVALID_STATE")) {
 						throw err;
 					}
 				}
@@ -399,8 +464,11 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	}
 
 	// Polyfill for older browsers / Node.js environments
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadRecord<Format>> {
-		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+	[Symbol.asyncIterator](): AsyncIterableIterator<Types.ReadRecord<Format>> {
+		const proto = ReadableStream.prototype as ReadableStreamWithAsyncIterator<
+			Types.ReadRecord<Format>
+		>;
+		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") {
 			try {
 				return fn.call(this);
@@ -423,7 +491,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				try {
 					await reader.cancel(e);
 				} catch (err) {
-					if ((err as any)?.code !== "ERR_INVALID_STATE") throw err;
+					if (!hasErrorCode(err, "ERR_INVALID_STATE")) throw err;
 				}
 				reader.releaseLock();
 				return { done: true, value: undefined };
@@ -432,7 +500,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				try {
 					await reader.cancel("done");
 				} catch (err) {
-					if ((err as any)?.code !== "ERR_INVALID_STATE") throw err;
+					if (!hasErrorCode(err, "ERR_INVALID_STATE")) throw err;
 				}
 				reader.releaseLock();
 				return { done: true, value: undefined };
@@ -443,12 +511,16 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		};
 	}
 
-	lastObservedTail(): StreamPosition | undefined {
-		return this._lastObservedTail;
+	lastObservedTail(): Types.StreamPosition | undefined {
+		return this._lastObservedTail
+			? toSDKStreamPosition(this._lastObservedTail)
+			: undefined;
 	}
 
-	nextReadPosition(): StreamPosition | undefined {
-		return this._nextReadPosition;
+	nextReadPosition(): Types.StreamPosition | undefined {
+		return this._nextReadPosition
+			? toSDKStreamPosition(this._nextReadPosition)
+			: undefined;
 	}
 }
 
@@ -488,17 +560,22 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
  * Each entry tracks a batch and its promise from the inner transport session.
  */
 type InflightEntry = {
-	records: AppendRecord[];
-	args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number };
+	input: Types.AppendInput;
 	expectedCount: number;
-	meteredBytes: number;
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
 	needsSubmit?: boolean;
 };
 
-const DEFAULT_MAX_INFLIGHT_BYTES = 10 * 1024 * 1024; // 10 MiB default
+const MIN_MAX_INFLIGHT_BYTES = 1 * 1024 * 1024; // 1 MiB minimum
+const DEFAULT_MAX_INFLIGHT_BYTES = 3 * 1024 * 1024; // 3 MiB default
+
+type CapacityWaiter = {
+	resolve: () => void;
+	bytes: number;
+	batches: number;
+};
 
 export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private readonly requestTimeoutMillis: number;
@@ -509,11 +586,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	};
 
 	private readonly inflight: InflightEntry[] = [];
-	private capacityWaiter?: () => void; // Single waiter (WritableStream writer lock)
+	private capacityWaiters: CapacityWaiter[] = []; // Queue of waiters for capacity
 
 	private session?: TransportAppendSession;
 	private queuedBytes = 0;
 	private pendingBytes = 0;
+	private pendingBatches = 0;
 	private consecutiveFailures = 0;
 	private currentAttempt = 0;
 
@@ -524,11 +602,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private closed = false;
 	private fatalError?: S2Error;
 
-	private _lastAckedPosition?: AppendAck;
-	private acksController?: ReadableStreamDefaultController<AppendAck>;
+	private _lastAckedPosition?: Types.AppendAck;
+	private acksController?: ReadableStreamDefaultController<Types.AppendAck>;
 
-	public readonly readable: ReadableStream<AppendAck>;
-	public readonly writable: WritableStream<AppendArgs>;
+	public readonly readable: ReadableStream<Types.AppendAck>;
+	public readonly writable: WritableStream<Types.AppendInput>;
+
+	private readonly streamName: string;
 
 	/**
 	 * If the session has failed, returns the original fatal error that caused
@@ -544,54 +624,44 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		) => Promise<TransportAppendSession>,
 		private readonly sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
+		streamName?: string,
 	) {
+		this.streamName = streamName ?? "unknown";
 		this.retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
-		this.maxQueuedBytes =
-			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
-		this.maxInflightBatches = this.sessionOptions?.maxInflightBatches;
+		// Clamp maxInflightBytes to at least 1 MiB
+		this.maxQueuedBytes = Math.max(
+			MIN_MAX_INFLIGHT_BYTES,
+			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES,
+		);
+		// Clamp maxInflightBatches to at least 1 if set
+		this.maxInflightBatches =
+			this.sessionOptions?.maxInflightBatches !== undefined
+				? Math.max(1, this.sessionOptions.maxInflightBatches)
+				: undefined;
 
-		this.readable = new ReadableStream<AppendAck>({
+		this.readable = new ReadableStream<Types.AppendAck>({
 			start: (controller) => {
 				this.acksController = controller;
 			},
 		});
 
-		this.writable = new WritableStream<AppendArgs>({
+		this.writable = new WritableStream<Types.AppendInput>({
 			write: async (chunk) => {
-				const recordsArray = Array.isArray(chunk.records)
-					? chunk.records
-					: [chunk.records];
-
-				// Calculate metered size
-				let batchMeteredSize = 0;
-				for (const record of recordsArray) {
-					batchMeteredSize += meteredBytes(record);
+				if (this.closed || this.closing) {
+					throw new S2Error({ message: "AppendSession is closed" });
 				}
 
-				// Wait for capacity (backpressure for writable only)
-				await this.waitForCapacity(batchMeteredSize);
-
-				const { records: _records, ...rest } = chunk;
-				const args: Omit<AppendArgs, "records"> & {
-					precalculatedSize?: number;
-				} = rest;
-				args.precalculatedSize = batchMeteredSize;
-
-				// Move reserved bytes to queued bytes accounting before submission
-				this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
-
-				// Submit without waiting for ack (writable doesn't need per-batch resolution)
-				const promise = this.submitInternal(
-					recordsArray,
-					args,
-					batchMeteredSize,
-				);
-				promise.catch(() => {
-					// Swallow to avoid unhandled rejection; pump surfaces errors via readable stream
+				// chunk is already AppendInput with meteredBytes computed
+				// Reuse submit() to leverage shared backpressure/pump logic.
+				const ticket = await this.submit(chunk);
+				// Writable stream API only needs enqueue semantics, so drop ack but
+				// suppress rejection noise (pump surfaces fatal errors elsewhere).
+				ticket.ack().catch(() => {
+					// Intentionally ignored.
 				});
 			},
 			close: async () => {
@@ -610,40 +680,132 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		) => Promise<TransportAppendSession>,
 		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
+		streamName?: string,
 	): Promise<RetryAppendSession> {
-		return new RetryAppendSession(generator, sessionOptions, config);
+		return new RetryAppendSession(
+			generator,
+			sessionOptions,
+			config,
+			streamName,
+		);
 	}
 
 	/**
-	 * Submit an append request. Returns a promise that resolves with the ack.
-	 * This method does not block on capacity (only writable.write() does).
+	 * Wait for capacity to be available for the given batch size.
+	 * Call this before submit() to apply backpressure based on maxInflightBatches/maxInflightBytes.
+	 *
+	 * @param bytes - Size in bytes (use meteredBytes() to calculate)
+	 * @param numBatches - Number of batches (default: 1)
+	 * @returns Promise that resolves when capacity is available
 	 */
-	async submit(
-		records: AppendRecord | AppendRecord[],
-		args?: Omit<AppendArgs, "records"> & { precalculatedSize?: number },
-	): Promise<AppendAck> {
-		const recordsArray = Array.isArray(records) ? records : [records];
-
-		// Calculate metered size if not provided
-		let batchMeteredSize = args?.precalculatedSize ?? 0;
-		if (batchMeteredSize === 0) {
-			for (const record of recordsArray) {
-				batchMeteredSize += meteredBytes(record);
-			}
-		}
-
-		const result = await this.submitInternal(
-			recordsArray,
-			args,
-			batchMeteredSize,
+	async waitForCapacity(bytes: number, numBatches = 1): Promise<void> {
+		debugSession(
+			"[%s] [CAPACITY] checking for %d bytes, %d batches: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d, pendingBatches=%d, maxInflightBatches=%s",
+			this.streamName,
+			bytes,
+			numBatches,
+			this.queuedBytes,
+			this.pendingBytes,
+			this.maxQueuedBytes,
+			this.inflight.length,
+			this.pendingBatches,
+			this.maxInflightBatches ?? "unlimited",
 		);
 
-		// Convert discriminated union back to throw pattern for public API
-		if (result.ok) {
-			return result.value;
-		} else {
-			throw result.error;
+		// Check if we have capacity
+		while (true) {
+			// Check for fatal error before adding to pendingBytes
+			if (this.fatalError) {
+				debugSession(
+					"[%s] [CAPACITY] fatal error detected, rejecting: %s",
+					this.streamName,
+					this.fatalError.message,
+				);
+				throw this.fatalError;
+			}
+
+			// Byte-based gating
+			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
+				// Batch-based gating (if configured)
+				if (
+					this.maxInflightBatches === undefined ||
+					this.inflight.length + this.pendingBatches + numBatches <=
+						this.maxInflightBatches
+				) {
+					debugSession(
+						"[%s] [CAPACITY] capacity available, adding %d to pendingBytes and %d to pendingBatches",
+						this.streamName,
+						bytes,
+						numBatches,
+					);
+					this.pendingBytes += bytes;
+					this.pendingBatches += numBatches;
+					return;
+				}
+			}
+
+			// No capacity - wait in queue
+			debugSession(
+				"[%s] [CAPACITY] no capacity, waiting for release",
+				this.streamName,
+			);
+			await new Promise<void>((resolve) => {
+				this.capacityWaiters.push({
+					resolve,
+					bytes,
+					batches: numBatches,
+				});
+			});
+			debugSession("[%s] [CAPACITY] woke up, rechecking", this.streamName);
 		}
+	}
+
+	/**
+	 * Submit an append request.
+	 * Returns a promise that resolves to a submit ticket once the batch is enqueued (has capacity).
+	 * The ticket's ack() can be awaited to get the AppendAck once the batch is durable.
+	 * This method applies backpressure and will block if capacity limits are reached.
+	 */
+	async submit(input: Types.AppendInput): Promise<BatchSubmitTicket> {
+		if (this.closed || this.closing) {
+			return Promise.reject(
+				new S2Error({ message: "AppendSession is closed" }),
+			);
+		}
+
+		// Use cached metered size from AppendInput
+		const batchMeteredSize = input.meteredBytes;
+
+		// This needs to happen in the sync path.
+		this.ensurePump();
+
+		// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
+		await this.waitForCapacity(batchMeteredSize, 1);
+
+		// Move reserved bytes and batches to queued accounting before submission
+		this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
+		this.pendingBatches = Math.max(0, this.pendingBatches - 1);
+
+		// Create the inner promise that resolves when durable
+		const innerPromise = this.submitInternal(input, batchMeteredSize).then(
+			(result) => {
+				if (result.ok) {
+					return result.value;
+				} else {
+					throw result.error;
+				}
+			},
+		);
+
+		// Prevent early rejections from surfacing as unhandled when callers delay ack()
+		innerPromise.catch(() => {});
+
+		// Return ticket immediately (outer promise has resolved via waitForCapacity)
+		return new BatchSubmitTicket(
+			innerPromise,
+			batchMeteredSize,
+			input.records.length,
+		);
 	}
 
 	/**
@@ -651,22 +813,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Creates inflight entry and starts pump if needed.
 	 */
 	private submitInternal(
-		records: AppendRecord[],
-		args:
-			| (Omit<AppendArgs, "records"> & { precalculatedSize?: number })
-			| undefined,
+		input: Types.AppendInput,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
-		if (this.closed || this.closing) {
-			return Promise.resolve(
-				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
-			);
-		}
-
 		// Check for fatal error (e.g., from abort())
 		if (this.fatalError) {
 			debugSession(
-				"[SUBMIT] rejecting due to fatal error: %s",
+				"[%s] [SUBMIT] rejecting due to fatal error: %s",
+				this.streamName,
 				this.fatalError.message,
 			);
 			return Promise.resolve(err(this.fatalError));
@@ -676,19 +830,19 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		return new Promise<AppendResult>((resolve) => {
 			// Create inflight entry (innerPromise will be set when pump processes it)
 			const entry: InflightEntry = {
-				records,
-				args,
-				expectedCount: records.length,
-				meteredBytes: batchMeteredSize,
+				input,
+				expectedCount: input.records.length,
 				innerPromise: new Promise(() => {}), // Never-resolving placeholder
 				maybeResolve: resolve,
 				needsSubmit: true, // Mark for pump to submit
 			};
 
 			debugSession(
-				"[SUBMIT] enqueueing %d records (%d bytes): inflight=%d->%d, queuedBytes=%d->%d",
-				records.length,
+				"[%s] [SUBMIT] enqueueing %d records (%d bytes), match_seq_num=%s: inflight=%d->%d, queuedBytes=%d->%d",
+				this.streamName,
+				input.records.length,
 				batchMeteredSize,
+				input.matchSeqNum ?? "none",
 				this.inflight.length,
 				this.inflight.length + 1,
 				this.queuedBytes,
@@ -709,77 +863,70 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	}
 
 	/**
-	 * Wait for capacity before allowing write to proceed (writable only).
-	 */
-	private async waitForCapacity(bytes: number): Promise<void> {
-		debugSession(
-			"[CAPACITY] checking for %d bytes: queuedBytes=%d, pendingBytes=%d, maxQueuedBytes=%d, inflight=%d",
-			bytes,
-			this.queuedBytes,
-			this.pendingBytes,
-			this.maxQueuedBytes,
-			this.inflight.length,
-		);
-
-		// Check if we have capacity
-		while (true) {
-			// Check for fatal error before adding to pendingBytes
-			if (this.fatalError) {
-				debugSession(
-					"[CAPACITY] fatal error detected, rejecting: %s",
-					this.fatalError.message,
-				);
-				throw this.fatalError;
-			}
-
-			// Byte-based gating
-			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
-				// Batch-based gating (if configured)
-				if (
-					this.maxInflightBatches === undefined ||
-					this.inflight.length < this.maxInflightBatches
-				) {
-					debugSession(
-						"[CAPACITY] capacity available, adding %d to pendingBytes",
-						bytes,
-					);
-					this.pendingBytes += bytes;
-					return;
-				}
-			}
-
-			// No capacity - wait
-			// WritableStream enforces writer lock, so only one write can be blocked at a time
-			debugSession("[CAPACITY] no capacity, waiting for release");
-			await new Promise<void>((resolve) => {
-				this.capacityWaiter = resolve;
-			});
-			debugSession("[CAPACITY] woke up, rechecking");
-		}
-	}
-
-	/**
 	 * Release capacity and wake waiter if present.
 	 */
 	private releaseCapacity(bytes: number): void {
 		debugSession(
-			"[CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, hasWaiter=%s",
+			"[%s] [CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, pendingBatches=%d, numWaiters=%d",
+			this.streamName,
 			bytes,
 			this.queuedBytes,
 			this.queuedBytes - bytes,
 			this.pendingBytes,
 			Math.max(0, this.pendingBytes - bytes),
-			!!this.capacityWaiter,
+			this.pendingBatches,
+			this.capacityWaiters.length,
 		);
 		this.queuedBytes -= bytes;
 		this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
 
-		// Wake single waiter
-		const waiter = this.capacityWaiter;
-		if (waiter) {
-			debugSession("[CAPACITY] waking waiter");
-			this.capacityWaiter = undefined;
-			waiter();
+		this.wakeCapacityWaiters();
+	}
+
+	private wakeCapacityWaiters(): void {
+		if (this.capacityWaiters.length === 0) {
+			return;
+		}
+
+		let availableBytes = Math.max(
+			0,
+			this.maxQueuedBytes - (this.queuedBytes + this.pendingBytes),
+		);
+		let availableBatches =
+			this.maxInflightBatches === undefined
+				? Number.POSITIVE_INFINITY
+				: Math.max(
+						0,
+						this.maxInflightBatches -
+							(this.inflight.length + this.pendingBatches),
+					);
+
+		while (this.capacityWaiters.length > 0) {
+			const next = this.capacityWaiters[0]!;
+			const needsBytes = next.bytes;
+			const needsBatches = next.batches;
+			const hasBatchCapacity =
+				this.maxInflightBatches === undefined ||
+				needsBatches <= availableBatches;
+
+			if (needsBytes <= availableBytes && hasBatchCapacity) {
+				this.capacityWaiters.shift();
+				availableBytes -= needsBytes;
+				if (this.maxInflightBatches !== undefined) {
+					availableBatches -= needsBatches;
+				}
+				debugSession(
+					"[%s] [CAPACITY] waking waiter (bytes=%d, batches=%d)",
+					this.streamName,
+					needsBytes,
+					needsBatches,
+				);
+				next.resolve();
+				continue;
+			}
+
+			// Not enough capacity for the next waiter yet - keep them queued.
+			break;
 		}
 	}
 
@@ -792,7 +939,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 
 		this.pumpPromise = this.runPump().catch((e) => {
-			debugSession("pump crashed unexpectedly: %s", e);
+			debugSession("[%s] pump crashed unexpectedly: %s", this.streamName, e);
 			// This should never happen - pump handles all errors internally
 		});
 	}
@@ -801,41 +948,50 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Main pump loop: processes inflight queue, handles acks, retries, and recovery.
 	 */
 	private async runPump(): Promise<void> {
-		debugSession("pump started");
+		debugSession("[%s] pump started", this.streamName);
 
 		while (true) {
 			debugSession(
-				"[PUMP] loop: inflight=%d, queuedBytes=%d, pendingBytes=%d, closing=%s, pumpStopped=%s",
+				"[%s] [PUMP] loop: inflight=%d, queuedBytes=%d, pendingBytes=%d, pendingBatches=%d, closing=%s, pumpStopped=%s",
+				this.streamName,
 				this.inflight.length,
 				this.queuedBytes,
 				this.pendingBytes,
+				this.pendingBatches,
 				this.closing,
 				this.pumpStopped,
 			);
 
 			// Check if we should stop
 			if (this.pumpStopped) {
-				debugSession("[PUMP] stopped by flag");
+				debugSession("[%s] [PUMP] stopped by flag", this.streamName);
 				return;
 			}
 
 			// If closing and queue is empty, stop
-			if (this.closing && this.inflight.length === 0) {
-				debugSession("[PUMP] closing and queue empty, stopping");
+			// BUT: if there are capacity waiters, they might add to inflight, so keep running
+			if (
+				this.closing &&
+				this.inflight.length === 0 &&
+				this.capacityWaiters.length === 0
+			) {
+				debugSession(
+					"[%s] [PUMP] closing and queue empty, stopping",
+					this.streamName,
+				);
 				this.pumpStopped = true;
 				return;
 			}
 
 			// If no entries, sleep and continue
 			if (this.inflight.length === 0) {
-				debugSession("[PUMP] no entries, sleeping 10ms");
-				// Use interruptible sleep - can be woken by new submissions
-				await Promise.race([
-					sleep(10),
-					new Promise<void>((resolve) => {
-						this.pumpWakeup = resolve;
-					}),
-				]);
+				debugSession(
+					"[%s] [PUMP] no entries, parking until wakeup",
+					this.streamName,
+				);
+				await new Promise<void>((resolve) => {
+					this.pumpWakeup = resolve;
+				});
 				this.pumpWakeup = undefined;
 				continue;
 			}
@@ -843,18 +999,30 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Get head entry (we know it exists because we checked length above)
 			const head = this.inflight[0]!;
 			debugSession(
-				"[PUMP] processing head: expectedCount=%d, meteredBytes=%d",
+				"[%s] [PUMP] processing head: expectedCount=%d, meteredBytes=%d, match_seq_num=%s",
+				this.streamName,
 				head.expectedCount,
-				head.meteredBytes,
+				head.input.meteredBytes,
+				head.input.matchSeqNum ?? "none",
 			);
 
 			// Ensure session exists
-			debugSession("[PUMP] ensuring session exists");
+			debugSession("[%s] [PUMP] ensuring session exists", this.streamName);
 			await this.ensureSession();
 			if (!this.session) {
 				// Session creation failed - will retry
-				debugSession("[PUMP] session creation failed, sleeping 100ms");
-				await sleep(100);
+				this.consecutiveFailures++;
+				const delay = calculateDelay(
+					this.consecutiveFailures - 1,
+					this.retryConfig.minDelayMillis,
+					this.retryConfig.maxDelayMillis,
+				);
+				debugSession(
+					"[%s] [PUMP] session creation failed, backing off for %dms",
+					this.streamName,
+					delay,
+				);
+				await sleep(delay);
 				continue;
 			}
 
@@ -862,65 +1030,93 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			for (const entry of this.inflight) {
 				if (!entry.innerPromise || entry.needsSubmit) {
 					debugSession(
-						"[PUMP] submitting entry to inner session (%d records, %d bytes)",
+						"[%s] [PUMP] submitting entry to inner session (%d records, %d bytes, match_seq_num=%s)",
+						this.streamName,
 						entry.expectedCount,
-						entry.meteredBytes,
+						entry.input.meteredBytes,
+						entry.input.matchSeqNum ?? "none",
 					);
-					entry.attemptStartedMonotonicMs = performance.now();
-					entry.innerPromise = this.session.submit(entry.records, entry.args);
+					const attemptStarted = performance.now();
+					entry.attemptStartedMonotonicMs = attemptStarted;
+					entry.innerPromise = this.session.submit(entry.input);
 					delete entry.needsSubmit;
 				}
 			}
 
 			// Wait for head with timeout
-			debugSession("[PUMP] waiting for head result");
+			debugSession("[%s] [PUMP] waiting for head result", this.streamName);
 			const result = await this.waitForHead(head);
-			debugSession("[PUMP] got result: kind=%s", result.kind);
+			debugSession(
+				"[%s] [PUMP] got result: kind=%s",
+				this.streamName,
+				result.kind,
+			);
 
+			// Convert result to AppendResult (timeout becomes retryable error)
+			let appendResult: AppendResult;
 			if (result.kind === "timeout") {
-				// Ack timeout - fatal (per-attempt)
+				// Ack timeout - convert to retryable error that flows through retry logic
 				const attemptElapsed =
 					head.attemptStartedMonotonicMs != null
 						? Math.round(performance.now() - head.attemptStartedMonotonicMs)
 						: undefined;
 				const error = new S2Error({
-					message: `Request timeout after ${attemptElapsed ?? "unknown"}ms (${head.expectedCount} records, ${head.meteredBytes} bytes)`,
+					message: `Request timeout after ${attemptElapsed ?? "unknown"}ms (${
+						head.expectedCount
+					} records, ${head.input.meteredBytes} bytes)`,
 					status: 408,
 					code: "REQUEST_TIMEOUT",
+					origin: "sdk",
 				});
-				debugSession("ack timeout for head entry: %s", error.message);
-				await this.abort(error);
-				return;
+				debugSession(
+					"[%s] ack timeout for head entry: %s",
+					this.streamName,
+					error.message,
+				);
+				appendResult = err(error);
+			} else {
+				// Promise settled
+				appendResult = result.value;
 			}
-
-			// Promise settled
-			const appendResult = result.value;
 
 			if (appendResult.ok) {
 				// Success!
 				const ack = appendResult.value;
-				debugSession("[PUMP] success, got ack", { ack });
+				debugSession(
+					"[%s] [PUMP] success, got ack: seq_num=%d-%d",
+					this.streamName,
+					ack.start.seqNum,
+					ack.end.seqNum,
+				);
 
 				// Invariant check: ack count matches batch count
-				const ackCount = Number(ack.end.seq_num) - Number(ack.start.seq_num);
+				const ackCount = ack.end.seqNum - ack.start.seqNum;
 				if (ackCount !== head.expectedCount) {
 					const error = invariantViolation(
 						`Ack count mismatch: expected ${head.expectedCount}, got ${ackCount}`,
 					);
-					debugSession("invariant violation: %s", error.message);
+					debugSession(
+						"[%s] invariant violation: %s",
+						this.streamName,
+						error.message,
+					);
 					await this.abort(error);
 					return;
 				}
 
 				// Invariant check: sequence numbers must be strictly increasing
 				if (this._lastAckedPosition) {
-					const prevEnd = BigInt(this._lastAckedPosition.end.seq_num);
-					const currentEnd = BigInt(ack.end.seq_num);
+					const prevEnd = this._lastAckedPosition.end.seqNum;
+					const currentEnd = ack.end.seqNum;
 					if (currentEnd <= prevEnd) {
 						const error = invariantViolation(
 							`Sequence number not strictly increasing: previous=${prevEnd}, current=${currentEnd}`,
 						);
-						debugSession("invariant violation: %s", error.message);
+						debugSession(
+							"[%s] invariant violation: %s",
+							this.streamName,
+							error.message,
+						);
 						await this.abort(error);
 						return;
 					}
@@ -938,16 +1134,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				try {
 					this.acksController?.enqueue(ack);
 				} catch (e) {
-					debugSession("failed to enqueue ack: %s", e);
+					debugSession("[%s] failed to enqueue ack: %s", this.streamName, e);
 				}
 
 				// Remove from inflight and release capacity
 				debugSession(
-					"[PUMP] removing head from inflight, releasing %d bytes",
-					head.meteredBytes,
+					"[%s] [PUMP] removing head from inflight, releasing %d bytes",
+					this.streamName,
+					head.input.meteredBytes,
 				);
 				this.inflight.shift();
-				this.releaseCapacity(head.meteredBytes);
+				this.releaseCapacity(head.input.meteredBytes);
 
 				// Reset consecutive failures on success
 				this.consecutiveFailures = 0;
@@ -956,14 +1153,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// Error result
 				const error = appendResult.error;
 				debugSession(
-					"[PUMP] error: status=%s, message=%s",
+					"[%s] [PUMP] error: status=%s, message=%s",
+					this.streamName,
 					error.status,
 					error.message,
 				);
 
 				// Check if retryable
 				if (!isRetryable(error)) {
-					debugSession("error not retryable, aborting");
+					debugSession("[%s] error not retryable, aborting", this.streamName);
 					await this.abort(error);
 					return;
 				}
@@ -973,7 +1171,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!this.isIdempotent(head)
 				) {
-					debugSession("error not policy-compliant (noSideEffects), aborting");
+					debugSession(
+						"[%s] error not policy-compliant (noSideEffects), aborting",
+						this.streamName,
+					);
 					await this.abort(error);
 					return;
 				}
@@ -982,7 +1183,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
 				const allowedRetries = effectiveMax - 1;
 				if (this.currentAttempt >= allowedRetries) {
-					debugSession("max attempts reached (%d), aborting", effectiveMax);
+					debugSession(
+						"[%s] max attempts reached (%d), aborting",
+						this.streamName,
+						effectiveMax,
+					);
 					const wrappedError = new S2Error({
 						message: `Max attempts (${effectiveMax}) exhausted: ${error.message}`,
 						status: error.status,
@@ -997,7 +1202,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.currentAttempt++;
 
 				debugSession(
-					"performing recovery (retry %d/%d)",
+					"[%s] performing recovery (retry %d/%d)",
+					this.streamName,
 					this.currentAttempt,
 					allowedRetries,
 				);
@@ -1012,17 +1218,18 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Returns either the settled result or a timeout indicator.
 	 *
 	 * Per-attempt ack timeout semantics:
-	 * - The deadline is computed from the most recent (re)submit attempt using
-	 *   a monotonic clock (performance.now) to avoid issues with wall clock
-	 *   adjustments.
+	 * - The deadline is computed from the current attempt's start time using a
+	 *   monotonic clock (performance.now) to avoid issues with wall clock adjustments.
+	 * - Each retry gets a fresh timeout window (attemptStartedMonotonicMs is reset
+	 *   during recovery).
 	 * - If attempt start is missing (for backward compatibility), we measure
 	 *   from "now" with the full timeout window.
 	 */
 	private async waitForHead(
 		head: InflightEntry,
 	): Promise<{ kind: "settled"; value: AppendResult } | { kind: "timeout" }> {
-		const startMono = head.attemptStartedMonotonicMs ?? performance.now();
-		const deadline = startMono + this.requestTimeoutMillis;
+		const attemptStart = head.attemptStartedMonotonicMs ?? performance.now();
+		const deadline = attemptStart + this.requestTimeoutMillis;
 		const remaining = Math.max(0, deadline - performance.now());
 
 		let timer: any;
@@ -1046,14 +1253,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Recover from transient error: recreate session and resubmit all inflight entries.
 	 */
 	private async recover(): Promise<void> {
-		debugSession("starting recovery");
+		debugSession("[%s] starting recovery", this.streamName);
 
 		// Calculate backoff delay
 		const delay = calculateDelay(
 			this.consecutiveFailures - 1,
-			this.retryConfig.retryBackoffDurationMillis,
+			this.retryConfig.minDelayMillis,
+			this.retryConfig.maxDelayMillis,
 		);
-		debugSession("backing off for %dms", delay);
+		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);
 
 		// Teardown old session
@@ -1062,12 +1270,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				const closeResult = await this.session.close();
 				if (!closeResult.ok) {
 					debugSession(
-						"error closing old session during recovery: %s",
+						"[%s] error closing old session during recovery: %s",
+						this.streamName,
 						closeResult.error.message,
 					);
 				}
 			} catch (e) {
-				debugSession("exception closing old session: %s", e);
+				debugSession(
+					"[%s] exception closing old session: %s",
+					this.streamName,
+					e,
+				);
 			}
 			this.session = undefined;
 		}
@@ -1075,7 +1288,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		// Create new session
 		await this.ensureSession();
 		if (!this.session) {
-			debugSession("failed to create new session during recovery");
+			debugSession(
+				"[%s] failed to create new session during recovery",
+				this.streamName,
+			);
 			// Will retry on next pump iteration
 			return;
 		}
@@ -1084,17 +1300,29 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		const session: TransportAppendSession = this.session;
 
 		// Resubmit all inflight entries (replace their innerPromise and reset attempt start)
-		debugSession("resubmitting %d inflight entries", this.inflight.length);
+		debugSession(
+			"[%s] resubmitting %d inflight entries",
+			this.streamName,
+			this.inflight.length,
+		);
 		for (const entry of this.inflight) {
 			// Attach .catch to superseded promise to avoid unhandled rejection
 			entry.innerPromise.catch(() => {});
 
 			// Create new promise from new session
-			entry.attemptStartedMonotonicMs = performance.now();
-			entry.innerPromise = session.submit(entry.records, entry.args);
+			const attemptStarted = performance.now();
+			entry.attemptStartedMonotonicMs = attemptStarted;
+			entry.innerPromise = session.submit(entry.input);
+			debugSession(
+				"[%s] resubmitted entry (%d records, %d bytes, match_seq_num=%s)",
+				this.streamName,
+				entry.expectedCount,
+				entry.input.meteredBytes,
+				entry.input.matchSeqNum ?? "none",
+			);
 		}
 
-		debugSession("recovery complete");
+		debugSession("[%s] recovery complete", this.streamName);
 	}
 
 	/**
@@ -1102,10 +1330,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * For appends, idempotency requires match_seq_num.
 	 */
 	private isIdempotent(entry: InflightEntry): boolean {
-		const args = entry.args;
-		if (!args) return false;
-
-		return args.match_seq_num !== undefined;
+		return entry.input.matchSeqNum !== undefined;
 	}
 
 	/**
@@ -1117,10 +1342,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 
 		try {
+			debugSession("[%s] creating new transport session", this.streamName);
 			this.session = await this.generator(this.sessionOptions);
+			debugSession("[%s] transport session created", this.streamName);
 		} catch (e) {
 			const error = s2Error(e);
-			debugSession("failed to create session: %s", error.message);
+			debugSession(
+				"[%s] failed to create session: %s",
+				this.streamName,
+				error.message,
+			);
 			// Don't set this.session - will retry later
 		}
 	}
@@ -1133,12 +1364,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			return; // Already aborted
 		}
 
-		debugSession("aborting session: %s", error.message);
+		debugSession("[%s] aborting session: %s", this.streamName, error.message);
 
 		this.fatalError = error;
 		this.pumpStopped = true;
 
 		// Resolve all inflight entries with error
+		debugSession(
+			"[%s] rejecting %d inflight entries",
+			this.streamName,
+			this.inflight.length,
+		);
 		for (const entry of this.inflight) {
 			if (entry.maybeResolve) {
 				entry.maybeResolve(err(error));
@@ -1147,26 +1383,36 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.inflight.length = 0;
 		this.queuedBytes = 0;
 		this.pendingBytes = 0;
+		this.pendingBatches = 0;
 
 		// Error the readable stream
 		try {
 			this.acksController?.error(error);
 		} catch (e) {
-			debugSession("failed to error acks controller: %s", e);
+			debugSession(
+				"[%s] failed to error acks controller: %s",
+				this.streamName,
+				e,
+			);
 		}
 
-		// Wake capacity waiter to unblock any pending writer
-		if (this.capacityWaiter) {
-			this.capacityWaiter();
-			this.capacityWaiter = undefined;
+		// Wake all capacity waiters to unblock any pending writers
+		for (const waiter of this.capacityWaiters) {
+			waiter.resolve();
 		}
+		this.capacityWaiters = [];
 
 		// Close inner session
 		if (this.session) {
+			debugSession("[%s] closing inner session", this.streamName);
 			try {
 				await this.session.close();
 			} catch (e) {
-				debugSession("error closing session during abort: %s", e);
+				debugSession(
+					"[%s] error closing session during abort: %s",
+					this.streamName,
+					e,
+				);
 			}
 			this.session = undefined;
 		}
@@ -1185,7 +1431,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			return;
 		}
 
-		debugSession("close requested");
+		debugSession("[%s] close requested", this.streamName);
 		this.closing = true;
 
 		// Wake pump if it's sleeping so it can check closing flag
@@ -1195,6 +1441,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Wait for pump to stop (drains inflight queue, including through recovery)
 		if (this.pumpPromise) {
+			debugSession(
+				"[%s] [CLOSE] awaiting pump to drain inflight queue",
+				this.streamName,
+			);
 			await this.pumpPromise;
 		}
 
@@ -1203,10 +1453,18 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			try {
 				const result = await this.session.close();
 				if (!result.ok) {
-					debugSession("error closing inner session: %s", result.error.message);
+					debugSession(
+						"[%s] error closing inner session: %s",
+						this.streamName,
+						result.error.message,
+					);
 				}
 			} catch (e) {
-				debugSession("exception closing inner session: %s", e);
+				debugSession(
+					"[%s] exception closing inner session: %s",
+					this.streamName,
+					e,
+				);
 			}
 			this.session = undefined;
 		}
@@ -1215,7 +1473,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		try {
 			this.acksController?.close();
 		} catch (e) {
-			debugSession("error closing acks controller: %s", e);
+			debugSession(
+				"[%s] error closing acks controller: %s",
+				this.streamName,
+				e,
+			);
 		}
 
 		this.closed = true;
@@ -1225,7 +1487,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			throw this.fatalError;
 		}
 
-		debugSession("close complete");
+		debugSession("[%s] close complete", this.streamName);
 	}
 
 	async [Symbol.asyncDispose](): Promise<void> {
@@ -1242,7 +1504,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	/**
 	 * Get the last acknowledged position.
 	 */
-	lastAckedPosition(): AppendAck | undefined {
+	lastAckedPosition(): Types.AppendAck | undefined {
 		return this._lastAckedPosition;
 	}
 }

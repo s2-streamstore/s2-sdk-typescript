@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
+import { AppendInput, AppendRecord } from "../index.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const pkgRoot = join(__dirname, "..", "..");
@@ -18,7 +19,7 @@ describe("browser bundling", () => {
 				entry,
 				[
 					`import { S2 } from ${JSON.stringify(join(pkgRoot, "src/index.ts"))};`,
-					`const client = new S2({ accessToken: "test-token", baseUrl: "https://example.com" });`,
+					`const client = new S2({ accessToken: "test-token", endpoints: { account: "https://example.com" } });`,
 					`console.log(client ? "ok" : "fail");`,
 				].join("\n"),
 			);

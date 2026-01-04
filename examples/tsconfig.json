@@ -1,0 +1,22 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"compilerOptions": {
+		"rootDir": "..",
+		"baseUrl": "..",
+		"module": "NodeNext",
+		"target": "ES2022",
+		"moduleResolution": "node16",
+		"lib": ["ESNext", "DOM"],
+		"types": ["bun-types"],
+		"esModuleInterop": true,
+		"strict": true,
+		"skipLibCheck": true,
+		"paths": {
+			"@s2-dev/streamstore": ["packages/streamstore/src/index.ts"],
+			"@s2-dev/streamstore/*": ["packages/streamstore/src/*"],
+			"@s2-dev/streamstore-patterns": ["packages/patterns/src/index.ts"],
+			"@s2-dev/streamstore-patterns/*": ["packages/patterns/src/*"]
+		}
+	},
+	"include": ["./**/*.ts"]
+}

@@ -143,6 +143,6 @@ export function frameChunksToRecords(chunks: Uint8Array[]): AppendRecord[] {
 		if (index === 0) {
 			headers = makeFrameHeaders(totalBytes, numRecords);
 		}
-		return AppendRecord.make(chunk, headers);
+		return AppendRecord.bytes({ body: chunk, headers });
 	});
 }

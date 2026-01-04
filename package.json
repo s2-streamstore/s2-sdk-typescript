@@ -19,7 +19,7 @@
     "test": "vitest --run",
     "test:core": "bun run --cwd packages/streamstore test",
     "test:patterns": "bun run --cwd packages/patterns test",
-    "check": "biome check && bun run build:core && bun run --cwd packages/streamstore check && bun run --cwd packages/patterns check",
+    "check": "bun run snippets && bun run check:snippets && biome check && bun run build:core && bun run --cwd packages/streamstore check && bun run --cwd packages/patterns check",
     "check:patterns": "bun run --cwd packages/patterns check",
     "check:write": "biome check --write",
     "format": "biome format --write",
@@ -28,7 +28,9 @@
     "release": "changeset publish",
     "gen:openapi": "openapi-ts",
     "gen:proto": "protoc --ts_out packages/streamstore/src/generated/proto --ts_opt ts_nocheck --proto_path s2-protos s2-protos/s2/v1/s2.proto && mv packages/streamstore/src/generated/proto/s2/v1/s2.ts packages/streamstore/src/generated/proto/s2.ts",
-    "docs": "typedoc"
+    "docs": "typedoc",
+    "snippets": "node scripts/sync-snippets.mjs",
+    "check:snippets": "tsc --noEmit -p examples/tsconfig.json"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",

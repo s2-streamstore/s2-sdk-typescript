@@ -17,7 +17,7 @@ const LEGACY_WRITER_ID = "__legacy__";
  */
 export function extractDedupeSeq(
 	headers?: ReadHeaders<"bytes">,
-): [string, bigint] | undefined {
+): [string, number] | undefined {
 	if (!headers) return undefined;
 
 	let seq: bigint | undefined;
@@ -57,7 +57,7 @@ export function extractDedupeSeq(
 	}
 
 	if (seq === undefined) return undefined;
-	return [writerId ?? LEGACY_WRITER_ID, seq];
+	return [writerId ?? LEGACY_WRITER_ID, Number(seq)];
 }
 
 /**
@@ -68,7 +68,7 @@ export function extractDedupeSeq(
  * duplicate and should be dropped.
  */
 export class DedupeFilter {
-	private lastSeenSeq: bigint | undefined;
+	private lastSeenSeq: number | undefined;
 	private lastWriterId: string | undefined;
 
 	shouldAccept(headers?: ReadHeaders<"bytes">): boolean {
@@ -101,13 +101,13 @@ export class DedupeFilter {
 export function injectDedupeHeaders(
 	records: AppendRecord[],
 	writerId: string,
-	startSeq: bigint,
-): bigint {
+	startSeq: number,
+): number {
 	let seq = startSeq;
 
 	for (const record of records) {
 		const headerValue = encodeU64(seq);
-		seq += 1n;
+		seq += 1;
 
 		const existing = record.headers as
 			| AppendHeaders<"string">
@@ -121,20 +121,14 @@ export function injectDedupeHeaders(
 				[DEDUPE_SEQ_HEADER_BYTES, headerValue],
 				[DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)],
 			];
-		} else if (Array.isArray(existing)) {
+		} else {
 			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
-			for (const [k, v] of existing as any) {
+			for (const [k, v] of existing as Array<
+				[string | Uint8Array, string | Uint8Array]
+			>) {
 				const kb = typeof k === "string" ? textEncoder.encode(k) : k;
 				const vb = typeof v === "string" ? textEncoder.encode(v) : v;
 				hdrs.push([kb, vb]);
-			}
-			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
-			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)]);
-			headers = hdrs as AppendHeaders<"bytes">;
-		} else {
-			const hdrs: Array<[Uint8Array, Uint8Array]> = [];
-			for (const [k, v] of Object.entries(existing as Record<string, string>)) {
-				hdrs.push([textEncoder.encode(k), textEncoder.encode(v)]);
 			}
 			hdrs.push([DEDUPE_SEQ_HEADER_BYTES, headerValue]);
 			hdrs.push([DEDUPE_WRITER_UNIQ_ID, textEncoder.encode(writerId)]);

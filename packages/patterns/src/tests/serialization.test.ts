@@ -1,4 +1,9 @@
-import { AppendAck, AppendRecord, meteredBytes } from "@s2-dev/streamstore";
+import {
+	AppendAck,
+	AppendInput,
+	AppendRecord,
+	meteredBytes,
+} from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
 import { MAX_RECORD_BYTES } from "../patterns/chunking.js";
 import {
@@ -19,22 +24,21 @@ import { decodeU64 } from "../patterns/u64.js";
 
 class FakeAppendSession {
 	submitted: { record: AppendRecord; matchSeqNum?: number }[] = [];
-	private nextSeqNum = 0n;
+	private nextSeqNum = 0;
 
-	async submit(
-		records: AppendRecord | AppendRecord[],
-		args?: { match_seq_num?: number },
-	): Promise<AppendAck> {
-		const batch = Array.isArray(records) ? records : [records];
+	async submit(input: AppendInput): Promise<any> {
+		const batch = Array.isArray(input.records)
+			? input.records
+			: [input.records];
 
 		for (const r of batch) {
 			this.submitted.push({
 				record: r,
-				matchSeqNum: args?.match_seq_num,
+				matchSeqNum: input.matchSeqNum,
 			});
 		}
 
-		const count = BigInt(batch.length);
+		const count = batch.length;
 		const startSeq = this.nextSeqNum;
 		const endSeq = startSeq + count;
 		const timestamp = 0 as any;
@@ -42,11 +46,22 @@ class FakeAppendSession {
 		this.nextSeqNum = endSeq;
 
 		// Minimal AppendAck shape used by SerializingAppendSession.submit
-		return {
+		const ack = {
 			start: { seq_num: startSeq, timestamp },
 			end: { seq_num: endSeq, timestamp },
 			tail: { seq_num: endSeq, timestamp },
 		} as AppendAck;
+
+		const bytes = batch.reduce(
+			(total, record) => total + meteredBytes(record),
+			0,
+		);
+
+		return {
+			ack: async () => ack,
+			bytes,
+			numRecords: batch.length,
+		};
 	}
 }
 
@@ -73,18 +88,13 @@ function toByteHeaders(
 ): [Uint8Array, Uint8Array][] {
 	const enc = new TextEncoder();
 	if (!headers) return [];
-	if (Array.isArray(headers)) {
-		return (headers as any).map(([k, v]: any) => {
+	return (headers as Array<[string | Uint8Array, string | Uint8Array]>).map(
+		([k, v]) => {
 			const kb = typeof k === "string" ? enc.encode(k) : (k as Uint8Array);
 			const vb = typeof v === "string" ? enc.encode(v) : (v as Uint8Array);
 			return [kb, vb];
-		});
-	}
-	const result: [Uint8Array, Uint8Array][] = [];
-	for (const [k, v] of Object.entries(headers as Record<string, string>)) {
-		result.push([enc.encode(k), enc.encode(v)]);
-	}
-	return result;
+		},
+	);
 }
 
 const textEncoder = new TextEncoder();
@@ -118,7 +128,7 @@ async function runTests(): Promise<void> {
 	const session = new SerializingAppendSession<Message>(
 		fakeSession as any,
 		(m) => textEncoder.encode(JSON.stringify(m)),
-		{ chunkSize, matchSeqNum: 10, dedupeSeq: 0n },
+		{ chunkSize, matchSeqNum: 10, dedupeSeq: 0 },
 	);
 
 	for (const m of messages) {
@@ -134,7 +144,7 @@ async function runTests(): Promise<void> {
 	// Total records should match expected chunk counts for both messages.
 	expect(submitted.length).toBe(totalChunks);
 
-	// match_seq_num should start at 10 and increment per record.
+	// matchSeqNum should start at 10 and increment per record.
 	const matchSeqNums = submitted.map((s) => s.matchSeqNum);
 	expect(matchSeqNums).toEqual(
 		Array.from({ length: totalChunks }, (_v, i) => 10 + i),
@@ -157,7 +167,7 @@ async function runTests(): Promise<void> {
 		} else {
 			expect(w).toBe(writerId);
 		}
-		expect(seq).toBe(BigInt(i));
+		expect(seq).toBe(i);
 	}
 
 	// First record of each message should carry frame headers describing
@@ -248,7 +258,7 @@ async function runTests(): Promise<void> {
 }
 
 describe("serialization patterns", () => {
-	it("writes frames with dedupe and match_seq_num and reconstructs on read", async () => {
+	it("writes frames with dedupe and matchSeqNum and reconstructs on read", async () => {
 		await runTests();
 	});
 
@@ -256,14 +266,14 @@ describe("serialization patterns", () => {
 		const mkRecord = (): AppendRecord => ({ body: new Uint8Array() });
 
 		const writer1Batch1: AppendRecord[] = [mkRecord(), mkRecord()];
-		injectDedupeHeaders(writer1Batch1, "writer-1", 0n);
+		injectDedupeHeaders(writer1Batch1, "writer-1", 0);
 
 		// Duplicate of the first batch from the same writer.
 		const writer1Batch1Dup = writer1Batch1;
 
 		// New writer starting from seq 0 should be treated as a new stream.
 		const writer2Batch: AppendRecord[] = [mkRecord(), mkRecord()];
-		injectDedupeHeaders(writer2Batch, "writer-2", 0n);
+		injectDedupeHeaders(writer2Batch, "writer-2", 0);
 
 		const allRecords = [...writer1Batch1, ...writer1Batch1Dup, ...writer2Batch];
 
@@ -283,10 +293,10 @@ describe("serialization patterns", () => {
 			extractDedupeSeq(rec.headers as any),
 		);
 		expect(acceptedMeta).toEqual([
-			["writer-1", 0n],
-			["writer-1", 1n],
-			["writer-2", 0n],
-			["writer-2", 1n],
+			["writer-1", 0],
+			["writer-1", 1],
+			["writer-2", 0],
+			["writer-2", 1],
 		]);
 	});
 });

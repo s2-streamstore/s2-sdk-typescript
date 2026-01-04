@@ -1,0 +1,187 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import { type S2ClientOptions, S2Environment } from "../common.js";
+import { AppendRecord, BatchTransform, S2 } from "../index.js";
+import type { SessionTransports } from "../lib/stream/types.js";
+import { Producer } from "../producer.js";
+
+const transports: SessionTransports[] = ["fetch", "s2s"];
+const hasEnv = !!process.env.S2_ACCESS_TOKEN && !!process.env.S2_BASIN;
+const describeIf = hasEnv ? describe : describe.skip;
+
+const TOTAL_RECORDS = 192;
+const SAMPLE_SIZE = 8;
+const TEST_TIMEOUT_MS = 60_000;
+const MAX_PARALLEL_SUBMITS = 64;
+const CHUNK_SIZE_BYTES = 128 * 1024;
+const ILLEGAL_RECORD_BYTES = 1_100_000;
+
+const pickSampleIndexes = (count: number, sampleSize: number): number[] => {
+	let seed = 0xdecafbad;
+	const picks = new Set<number>();
+	while (picks.size < Math.min(sampleSize, count)) {
+		seed = (seed * 1664525 + 1013904223) >>> 0;
+		picks.add(seed % count);
+	}
+	return [...picks];
+};
+
+const encoder = new TextEncoder();
+/**
+ * This e2e test codifies what we learned while debugging the Producer bug:
+ * 1. Producer must await appendSession.submit per batch; otherwise, a later batch
+ *    whose submit promise resolves earlier (because it hit available capacity) can
+ *    overtake the slower batch that started first, violating matchSeqNum.
+ * 2. The race only shows up under real-world pressure: large byte records, a tiny
+ *    session window, matchSeqNum pinning, and highly parallel submit() calls.
+ * 3. When the fix is reverted, this test deterministically fails with a
+ *    SeqNumMismatchError (matching the image.ts repro), giving us regression coverage.
+ */
+const buildChunk = (index: number): Uint8Array => {
+	const chunk = new Uint8Array(CHUNK_SIZE_BYTES);
+	chunk.fill((index % 251) + 1);
+	const marker = encoder.encode(`producer-${index}`);
+	chunk.set(marker.slice(0, chunk.length));
+	return chunk;
+};
+
+describeIf("Producer Integration Tests", () => {
+	let s2: S2;
+	let basinName: string;
+
+	beforeAll(() => {
+		const basin = process.env.S2_BASIN;
+		if (!basin) return;
+		const env = S2Environment.parse();
+		if (!env.accessToken) return;
+		s2 = new S2(env as S2ClientOptions);
+		basinName = basin;
+	});
+
+	it.each(transports)(
+		"flushes producer batches and verifies data via unary read (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const uniqueStreamName = `integration-test-producer-${transport}-${Date.now()}-${Math.random()
+				.toString(36)
+				.slice(2, 8)}`;
+			await basin.streams.create({
+				stream: uniqueStreamName,
+			});
+
+			const stream = basin.stream(uniqueStreamName, {
+				forceTransport: transport,
+			});
+
+			const startTail = await stream.checkTail();
+
+			const appendSession = await stream.appendSession({
+				maxInflightBytes: 2 * 1024 * 1024,
+				maxInflightBatches: 4,
+			});
+			const producer = new Producer(
+				new BatchTransform({
+					lingerDurationMillis: 10,
+					maxBatchRecords: 1000,
+					maxBatchBytes: 1024 * 1024,
+					matchSeqNum: startTail.tail.seqNum,
+				}),
+				appendSession,
+			);
+
+			try {
+				const tickets: Array<Awaited<ReturnType<Producer["submit"]>>> = [];
+				const pending: Array<Promise<Awaited<ReturnType<Producer["submit"]>>>> =
+					[];
+				for (let i = 0; i < TOTAL_RECORDS; i++) {
+					// TODO, having concurrent submits could lead to issues with matchSeqNum, if order assigned msn != order serialized to session
+					const submission = producer.submit(
+						AppendRecord.bytes({ body: buildChunk(i) }),
+					);
+					pending.push(submission);
+					if (pending.length >= MAX_PARALLEL_SUBMITS) {
+						const settled = await Promise.all(pending.splice(0));
+						tickets.push(...settled);
+					}
+				}
+				if (pending.length > 0) {
+					const settled = await Promise.all(pending.splice(0));
+					tickets.push(...settled);
+				}
+
+				const indexesToVerify = pickSampleIndexes(TOTAL_RECORDS, SAMPLE_SIZE);
+				for (const index of indexesToVerify) {
+					const ack = await tickets[index]!.ack();
+					const seqNum = ack.seqNum();
+
+					const batch = await stream.read(
+						{
+							start: { from: { seqNum: seqNum } },
+							stop: { limits: { count: 1 } },
+						},
+						{ as: "bytes" as const },
+					);
+					expect(batch.records).toHaveLength(1);
+					const body = batch.records[0]?.body;
+					expect(body).toBeDefined();
+					expect(body?.length).toBe(CHUNK_SIZE_BYTES);
+					const expected = buildChunk(index);
+					expect(Buffer.from(body!)).toEqual(Buffer.from(expected));
+				}
+			} finally {
+				await producer.close();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it.each(transports)(
+		"propagates writable errors for oversized records (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const uniqueStreamName = `integration-test-producer-overflow-${transport}-${Date.now()}-${Math.random()
+				.toString(36)
+				.slice(2, 8)}`;
+			await basin.streams.create({
+				stream: uniqueStreamName,
+			});
+
+			const stream = basin.stream(uniqueStreamName, {
+				forceTransport: transport,
+			});
+
+			const appendSession = await stream.appendSession({
+				maxInflightBytes: 512 * 1024,
+				maxInflightBatches: 2,
+			});
+			const producer = new Producer(
+				new BatchTransform({
+					lingerDurationMillis: 0,
+					maxBatchRecords: 1,
+					matchSeqNum: (await stream.checkTail()).tail.seqNum,
+				}),
+				appendSession,
+			);
+			producer.pump.catch(() => {});
+
+			const oversized = new Uint8Array(ILLEGAL_RECORD_BYTES);
+			oversized.fill(0xab);
+
+			const readable = new ReadableStream<AppendRecord>({
+				start(controller) {
+					for (let i = 0; i < 4; i++) {
+						controller.enqueue(AppendRecord.string({ body: `ok-${i}` }));
+					}
+					controller.enqueue(AppendRecord.bytes({ body: oversized }));
+					controller.close();
+				},
+			});
+
+			await expect(readable.pipeTo(producer.writable)).rejects.toMatchObject({
+				message: expect.stringContaining("exceeds maximum batch size"),
+			});
+
+			await producer.close().catch(() => {});
+		},
+		TEST_TIMEOUT_MS,
+	);
+});

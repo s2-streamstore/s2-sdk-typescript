@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BatchTransform } from "../batch-transform.js";
 import { S2Error } from "../error.js";
+import { AppendInput, AppendRecord } from "../index.js";
 
 describe("BatchTransform", () => {
 	it("batches records based on linger duration", async () => {
@@ -13,9 +14,9 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		// Write 3 records quickly
-		writer.write({ body: "a" });
-		writer.write({ body: "b" });
-		writer.write({ body: "c" });
+		writer.write(AppendRecord.string({ body: "a" }));
+		writer.write(AppendRecord.string({ body: "b" }));
+		writer.write(AppendRecord.string({ body: "c" }));
 
 		// Wait for linger duration
 		await new Promise((resolve) => setTimeout(resolve, 60));
@@ -42,8 +43,8 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		// Write 2 records - should flush immediately
-		writer.write({ body: "a" });
-		writer.write({ body: "b" });
+		writer.write(AppendRecord.string({ body: "a" }));
+		writer.write(AppendRecord.string({ body: "b" }));
 
 		// Should get batch immediately (no need to wait for linger)
 		const result = await reader.read();
@@ -51,8 +52,8 @@ describe("BatchTransform", () => {
 		expect(result.value?.records).toHaveLength(2);
 
 		// Write 2 more - should flush again
-		writer.write({ body: "c" });
-		writer.write({ body: "d" });
+		writer.write(AppendRecord.string({ body: "c" }));
+		writer.write(AppendRecord.string({ body: "d" }));
 
 		const result2 = await reader.read();
 		expect(result2.done).toBe(false);
@@ -75,9 +76,9 @@ describe("BatchTransform", () => {
 		const writePromise = (async () => {
 			// Each record is ~13 bytes (8 overhead + 5 body)
 			// Two records = ~26 bytes, adding third would exceed 30
-			await writer.write({ body: "hello" }); // ~13 bytes
-			await writer.write({ body: "world" }); // ~13 bytes
-			await writer.write({ body: "test!" }); // ~13 bytes
+			await writer.write(AppendRecord.string({ body: "hello" })); // ~13 bytes
+			await writer.write(AppendRecord.string({ body: "world" })); // ~13 bytes
+			await writer.write(AppendRecord.string({ body: "test!" })); // ~13 bytes
 			await writer.close();
 		})();
 
@@ -106,8 +107,8 @@ describe("BatchTransform", () => {
 
 		// Write and close in parallel with reading
 		const writePromise = (async () => {
-			await writer.write({ body: "a" });
-			await writer.write({ body: "b" });
+			await writer.write(AppendRecord.string({ body: "a" }));
+			await writer.write(AppendRecord.string({ body: "b" }));
 			await writer.close();
 		})();
 
@@ -132,8 +133,8 @@ describe("BatchTransform", () => {
 		const writer = batcher.writable.getWriter();
 		const reader = batcher.readable.getReader();
 
-		writer.write({ body: new Uint8Array([1, 2, 3]) });
-		writer.write({ body: new Uint8Array([4, 5, 6]) });
+		writer.write(AppendRecord.bytes({ body: new Uint8Array([1, 2, 3]) }));
+		writer.write(AppendRecord.bytes({ body: new Uint8Array([4, 5, 6]) }));
 
 		await new Promise((resolve) => setTimeout(resolve, 60));
 
@@ -151,7 +152,11 @@ describe("BatchTransform", () => {
 		});
 
 		// Create a readable stream of records
-		const records = [{ body: "a" }, { body: "b" }, { body: "c" }];
+		const records = [
+			AppendRecord.string({ body: "a" }),
+			AppendRecord.string({ body: "b" }),
+			AppendRecord.string({ body: "c" }),
+		];
 
 		const sourceStream = new ReadableStream({
 			async start(controller) {
@@ -190,7 +195,7 @@ describe("BatchTransform", () => {
 
 		// Write 5 records rapidly
 		for (let i = 0; i < 5; i++) {
-			writer.write({ body: `record-${i}` });
+			writer.write(AppendRecord.string({ body: `record-${i}` }));
 		}
 
 		// Wait for linger
@@ -243,10 +248,10 @@ describe("BatchTransform", () => {
 		// Write and read concurrently
 		const writePromise = (async () => {
 			// Write 2 records - should flush immediately due to maxBatchRecords
-			await writer.write({ body: "a" });
-			await writer.write({ body: "b" });
+			await writer.write(AppendRecord.string({ body: "a" }));
+			await writer.write(AppendRecord.string({ body: "b" }));
 			// Write one more and immediately close
-			await writer.write({ body: "c" });
+			await writer.write(AppendRecord.string({ body: "c" }));
 			await writer.close();
 		})();
 
@@ -273,9 +278,9 @@ describe("BatchTransform", () => {
 
 		// Write and close in parallel with reading
 		const writePromise = (async () => {
-			await writer.write({ body: "a" });
-			await writer.write({ body: "b" });
-			await writer.write({ body: "c" });
+			await writer.write(AppendRecord.string({ body: "a" }));
+			await writer.write(AppendRecord.string({ body: "b" }));
+			await writer.write(AppendRecord.string({ body: "c" }));
 			await writer.close();
 		})();
 
@@ -306,7 +311,9 @@ describe("BatchTransform", () => {
 		const largeBody = "x".repeat(100);
 
 		// Write and read concurrently to avoid deadlock
-		const writePromise = writer.write({ body: largeBody }).catch((err) => err);
+		const writePromise = writer
+			.write(AppendRecord.string({ body: largeBody }))
+			.catch((err) => err);
 		const readPromise = reader.read().catch((err) => err);
 
 		// Either the write or read should fail with the error
@@ -333,7 +340,9 @@ describe("BatchTransform", () => {
 		const largeBody = new Uint8Array(50); // 50 bytes + 8 overhead = 58 bytes
 
 		// Write and read concurrently to avoid deadlock
-		const writePromise = writer.write({ body: largeBody }).catch((err) => err);
+		const writePromise = writer
+			.write(AppendRecord.bytes({ body: largeBody }))
+			.catch((err) => err);
 		const readPromise = reader.read().catch((err) => err);
 
 		// Either the write or read should fail with the error
@@ -348,35 +357,35 @@ describe("BatchTransform", () => {
 		expect(error.message).toContain("exceeds maximum batch size");
 	});
 
-	it("includes fencing_token in batch output", async () => {
+	it("includes fencingToken in batch output", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
-			fencing_token: "my-fence-token",
+			fencingToken: "my-fence-token",
 		});
 
 		const writer = batcher.writable.getWriter();
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ body: "a" });
-			await writer.write({ body: "b" });
+			await writer.write(AppendRecord.string({ body: "a" }));
+			await writer.write(AppendRecord.string({ body: "b" }));
 			await writer.close();
 		})();
 
 		const result = await reader.read();
 		expect(result.done).toBe(false);
 		expect(result.value?.records).toHaveLength(2);
-		expect(result.value?.fencing_token).toBe("my-fence-token");
+		expect(result.value?.fencingToken).toBe("my-fence-token");
 
 		await writePromise;
 		reader.releaseLock();
 	});
 
-	it("auto-increments match_seq_num across batches", async () => {
+	it("auto-increments matchSeqNum across batches", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
 			maxBatchRecords: 2,
-			match_seq_num: 0, // Start at 0
+			matchSeqNum: 0, // Start at 0
 		});
 
 		const writer = batcher.writable.getWriter();
@@ -384,38 +393,38 @@ describe("BatchTransform", () => {
 
 		const writePromise = (async () => {
 			// First batch: 2 records
-			await writer.write({ body: "a" });
-			await writer.write({ body: "b" });
+			await writer.write(AppendRecord.string({ body: "a" }));
+			await writer.write(AppendRecord.string({ body: "b" }));
 			// Second batch: 3 records
-			await writer.write({ body: "c" });
-			await writer.write({ body: "d" });
-			await writer.write({ body: "e" });
+			await writer.write(AppendRecord.string({ body: "c" }));
+			await writer.write(AppendRecord.string({ body: "d" }));
+			await writer.write(AppendRecord.string({ body: "e" }));
 			await writer.close();
 		})();
 
-		// First batch should have match_seq_num: 0 (2 records)
+		// First batch should have matchSeqNum: 0 (2 records)
 		const result1 = await reader.read();
 		expect(result1.done).toBe(false);
 		expect(result1.value?.records).toHaveLength(2);
-		expect(result1.value?.match_seq_num).toBe(0);
+		expect(result1.value?.matchSeqNum).toBe(0);
 
-		// Second batch should have match_seq_num: 2 (incremented by batch size)
+		// Second batch should have matchSeqNum: 2 (incremented by batch size)
 		const result2 = await reader.read();
 		expect(result2.done).toBe(false);
 		expect(result2.value?.records).toHaveLength(2);
-		expect(result2.value?.match_seq_num).toBe(2);
+		expect(result2.value?.matchSeqNum).toBe(2);
 
-		// Third batch should have match_seq_num: 4
+		// Third batch should have matchSeqNum: 4
 		const result3 = await reader.read();
 		expect(result3.done).toBe(false);
 		expect(result3.value?.records).toHaveLength(1);
-		expect(result3.value?.match_seq_num).toBe(4);
+		expect(result3.value?.matchSeqNum).toBe(4);
 
 		await writePromise;
 		reader.releaseLock();
 	});
 
-	it("works without fencing_token or match_seq_num", async () => {
+	it("works without fencingToken or matchSeqNum", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
 		});
@@ -424,15 +433,15 @@ describe("BatchTransform", () => {
 		const reader = batcher.readable.getReader();
 
 		const writePromise = (async () => {
-			await writer.write({ body: "a" });
+			await writer.write(AppendRecord.string({ body: "a" }));
 			await writer.close();
 		})();
 
 		const result = await reader.read();
 		expect(result.done).toBe(false);
 		expect(result.value?.records).toHaveLength(1);
-		expect(result.value?.fencing_token).toBeUndefined();
-		expect(result.value?.match_seq_num).toBeUndefined();
+		expect(result.value?.fencingToken).toBeUndefined();
+		expect(result.value?.matchSeqNum).toBeUndefined();
 
 		await writePromise;
 		reader.releaseLock();

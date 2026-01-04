@@ -4,6 +4,7 @@
     "includes": [
       "packages/*/src/**/*.ts",
       "packages/*/examples/**/*.ts",
+      "examples/*.ts",
       "*.json",
       "!packages/streamstore/src/generated/**/*.ts"
     ]

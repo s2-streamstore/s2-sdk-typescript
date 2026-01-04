@@ -1,3 +1,16 @@
+/**
+ * Generate a random token of the specified byte length, base64 encoded.
+ * Uses crypto.getRandomValues() which is available in browsers and Node.js 19+.
+ *
+ * @param byteLength Number of random bytes to generate (default: 16)
+ * @returns Base64-encoded random string
+ */
+export const randomToken = (byteLength = 16): string => {
+	const bytes = new Uint8Array(byteLength);
+	crypto.getRandomValues(bytes);
+	return encodeToBase64(bytes);
+};
+
 export const encodeToBase64 = (bytes: Uint8Array) => {
 	const length = bytes.length;
 
@@ -30,34 +43,42 @@ export const encodeToBase64 = (bytes: Uint8Array) => {
 };
 
 export const decodeFromBase64 = (str: string): Uint8Array => {
-	const stripped = stripCrlf(str);
-	const length = stripped.length;
+	// Normalize to standard base64:
+	// - remove CRLF
+	// - allow base64url ("-" and "_")
+	// - add missing padding
+	const normalized = stripCrlf(str)
+		.trim()
+		.replace(/-/g, "+")
+		.replace(/_/g, "/");
+	const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+
+	const length = padded.length;
 	if (length % 4 !== 0) {
 		throw new Error(`Length must be a multiple of 4, but is ${length}`);
 	}
 
-	const index = stripped.indexOf("=");
+	const index = padded.indexOf("=");
 	if (
 		index !== -1 &&
-		(index < length - 2 ||
-			(index === length - 2 && stripped[length - 1] !== "="))
+		(index < length - 2 || (index === length - 2 && padded[length - 1] !== "="))
 	) {
 		throw new Error("Found a '=' character, but it is not at the end");
 	}
 
 	try {
-		const missingOctets = stripped.endsWith("==")
+		const missingOctets = padded.endsWith("==")
 			? 2
-			: stripped.endsWith("=")
+			: padded.endsWith("=")
 				? 1
 				: 0;
 		const result = new Uint8Array(3 * (length / 4) - missingOctets);
 		for (let i = 0, j = 0; i < length; i += 4, j += 3) {
 			const buffer =
-				(getBase64Code(stripped.charCodeAt(i)) << 18) |
-				(getBase64Code(stripped.charCodeAt(i + 1)) << 12) |
-				(getBase64Code(stripped.charCodeAt(i + 2)) << 6) |
-				getBase64Code(stripped.charCodeAt(i + 3));
+				(getBase64Code(padded.charCodeAt(i)) << 18) |
+				(getBase64Code(padded.charCodeAt(i + 1)) << 12) |
+				(getBase64Code(padded.charCodeAt(i + 2)) << 6) |
+				getBase64Code(padded.charCodeAt(i + 3));
 
 			result[j] = buffer >> 16;
 			result[j + 1] = (buffer >> 8) & 0xff;

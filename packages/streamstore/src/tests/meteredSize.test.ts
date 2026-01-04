@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { AppendRecord, meteredBytes } from "../utils.js";
+import { AppendRecord } from "../types.js";
+import { meteredBytes } from "../utils.js";
 
 describe("meteredSizeBytes", () => {
 	it("calculates size for string format records", () => {
-		const record = AppendRecord.make("hello", {
-			foo: "bar",
-			baz: "qux",
+		const record = AppendRecord.string({
+			body: "hello",
+			headers: [
+				["foo", "bar"],
+				["baz", "qux"],
+			],
 		});
 
 		const size = meteredBytes(record);
@@ -18,8 +22,9 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for string format with UTF-8 characters", () => {
-		const record = AppendRecord.make("hello 世界", {
-			emoji: "🚀",
+		const record = AppendRecord.string({
+			body: "hello 世界",
+			headers: [["emoji", "🚀"]],
 		});
 
 		const size = meteredBytes(record);
@@ -32,9 +37,10 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for bytes format records", () => {
-		const record = AppendRecord.make(new Uint8Array([1, 2, 3, 4, 5]), [
-			[new Uint8Array([10, 20]), new Uint8Array([30, 40, 50])],
-		]);
+		const record = AppendRecord.bytes({
+			body: new Uint8Array([1, 2, 3, 4, 5]),
+			headers: [[new Uint8Array([10, 20]), new Uint8Array([30, 40, 50])]],
+		});
 
 		const size = meteredBytes(record);
 
@@ -46,8 +52,9 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for record with no body", () => {
-		const record = AppendRecord.make(undefined, {
-			foo: "bar",
+		const record = AppendRecord.string({
+			body: "",
+			headers: [["foo", "bar"]],
 		});
 
 		const size = meteredBytes(record);
@@ -60,7 +67,9 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for record with no headers", () => {
-		const record = AppendRecord.make("hello");
+		const record = AppendRecord.string({
+			body: "hello",
+		});
 
 		const size = meteredBytes(record);
 
@@ -72,7 +81,9 @@ describe("meteredSizeBytes", () => {
 	});
 
 	it("calculates size for empty record", () => {
-		const record = AppendRecord.make();
+		const record = AppendRecord.string({
+			body: "",
+		});
 
 		const size = meteredBytes(record);
 

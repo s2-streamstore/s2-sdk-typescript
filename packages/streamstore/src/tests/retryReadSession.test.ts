@@ -3,11 +3,12 @@ import { S2Error } from "../error.js";
 import type { StreamPosition } from "../generated/index.js";
 import { RetryReadSession } from "../lib/retry.js";
 import type {
+	ReadRecord as InternalReadRecord,
 	ReadArgs,
-	ReadRecord,
 	ReadResult,
 	TransportReadSession,
 } from "../lib/stream/types.js";
+import type { ReadRecord as SDKReadRecord } from "../types.js";
 
 /**
  * Fake TransportReadSession for testing ReadSession.
@@ -22,7 +23,7 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 	constructor(
 		private readonly behavior: {
 			// Records to emit before erroring (if errorAfterRecords is set)
-			records: Array<ReadRecord<Format>>;
+			records: Array<InternalReadRecord<Format>>;
 			// Error after emitting this many records (undefined = no error)
 			errorAfterRecords?: number;
 			// Error to emit as error result
@@ -129,7 +130,7 @@ describe("ReadSession (unit)", () => {
 	// Instead, we use very short backoff times (1ms) to make tests run fast
 
 	it("adjusts count parameter on retry after partial read", async () => {
-		const records: ReadRecord<"string">[] = [
+		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "a" },
 			{ seq_num: 1, timestamp: 0, body: "b" },
 			{ seq_num: 2, timestamp: 0, body: "c" },
@@ -154,11 +155,11 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ count: 10 }, // Request 10 records
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
-		const results: ReadRecord<"string">[] = [];
+		const results: SDKReadRecord<"string">[] = [];
 		for await (const record of session) {
 			results.push(record);
 		}
@@ -174,7 +175,7 @@ describe("ReadSession (unit)", () => {
 
 	it("adjusts bytes parameter on retry after partial read", async () => {
 		// Each record is ~50 bytes (rough estimate with body + overhead)
-		const records: ReadRecord<"string">[] = [
+		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "x".repeat(42) }, // ~50 bytes
 			{ seq_num: 1, timestamp: 0, body: "y".repeat(42) }, // ~50 bytes
 		];
@@ -198,11 +199,11 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ bytes: 500 }, // Request 500 bytes
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
-		const results: ReadRecord<"string">[] = [];
+		const results: SDKReadRecord<"string">[] = [];
 		for await (const record of session) {
 			results.push(record);
 		}
@@ -219,7 +220,7 @@ describe("ReadSession (unit)", () => {
 	});
 
 	it("adjusts wait parameter based on elapsed time", async () => {
-		const records: ReadRecord<"string">[] = [
+		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "a" },
 		];
 
@@ -242,11 +243,11 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ wait: 10 }, // Wait up to 10 seconds
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
-		const results: ReadRecord<"string">[] = [];
+		const results: SDKReadRecord<"string">[] = [];
 		for await (const record of session) {
 			results.push(record);
 		}
@@ -263,7 +264,7 @@ describe("ReadSession (unit)", () => {
 	});
 
 	it("adjusts seq_num to resume from next position on retry", async () => {
-		const records: ReadRecord<"string">[] = [
+		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 100, timestamp: 0, body: "a" },
 			{ seq_num: 101, timestamp: 0, body: "b" },
 			{ seq_num: 102, timestamp: 0, body: "c" },
@@ -288,11 +289,11 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ seq_num: 100 }, // Start from seq_num 100
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records (including through retry)
-		const results: ReadRecord<"string">[] = [];
+		const results: SDKReadRecord<"string">[] = [];
 		for await (const record of session) {
 			results.push(record);
 		}
@@ -307,7 +308,7 @@ describe("ReadSession (unit)", () => {
 	});
 
 	it("does not adjust until parameter on retry (absolute boundary)", async () => {
-		const records: ReadRecord<"string">[] = [
+		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "a" },
 			{ seq_num: 1, timestamp: 0, body: "b" },
 		];
@@ -331,11 +332,11 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ until: 1000 }, // Read until seq_num 1000
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
-		const results: ReadRecord<"string">[] = [];
+		const results: SDKReadRecord<"string">[] = [];
 		for await (const record of session) {
 			results.push(record);
 		}
@@ -350,7 +351,7 @@ describe("ReadSession (unit)", () => {
 	});
 
 	it("combines all parameter adjustments on retry", async () => {
-		const records: ReadRecord<"string">[] = [
+		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 50, timestamp: 0, body: "x".repeat(42) },
 			{ seq_num: 51, timestamp: 0, body: "y".repeat(42) },
 		];
@@ -380,11 +381,11 @@ describe("ReadSession (unit)", () => {
 				wait: 30,
 				until: 1000,
 			},
-			{ retryBackoffDurationMillis: 1, maxAttempts: 2 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 2 },
 		);
 
 		// Consume all records
-		const results: ReadRecord<"string">[] = [];
+		const results: SDKReadRecord<"string">[] = [];
 		for await (const record of session) {
 			results.push(record);
 		}
@@ -427,7 +428,7 @@ describe("ReadSession (unit)", () => {
 				});
 			},
 			{ count: 10 },
-			{ retryBackoffDurationMillis: 1, maxAttempts: 3 }, // Allow 2 retries
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 3 }, // Allow 2 retries
 		);
 
 		// Try to consume the stream - should fail after exhausting retries
@@ -445,11 +446,11 @@ describe("ReadSession (unit)", () => {
 
 	it("does not double-subtract count across multiple retries", async () => {
 		// First attempt emits 30 then errors, second emits 40 then errors, third succeeds
-		const records1: ReadRecord<"string">[] = Array.from(
+		const records1: InternalReadRecord<"string">[] = Array.from(
 			{ length: 30 },
 			(_, i) => ({ seq_num: i, timestamp: 0, body: "a" }),
 		);
-		const records2: ReadRecord<"string">[] = Array.from(
+		const records2: InternalReadRecord<"string">[] = Array.from(
 			{ length: 40 },
 			(_, i) => ({ seq_num: 30 + i, timestamp: 0, body: "b" }),
 		);
@@ -480,7 +481,7 @@ describe("ReadSession (unit)", () => {
 				return new FakeReadSession({ records: [] });
 			},
 			{ seq_num: 0, count: 100 },
-			{ retryBackoffDurationMillis: 1, maxAttempts: 3 },
+			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 3 },
 		);
 
 		// Drain the session

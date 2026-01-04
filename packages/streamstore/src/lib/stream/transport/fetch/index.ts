@@ -1,18 +1,25 @@
 import createDebug from "debug";
+
+/** Type for ReadableStream with optional async iterator support. */
+type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
+	[Symbol.asyncIterator]?: () => AsyncIterableIterator<T>;
+};
+
 import type { S2RequestOptions } from "../../../../common.js";
-import { RangeNotSatisfiableError, S2Error } from "../../../../error.js";
+import {
+	RangeNotSatisfiableError,
+	S2Error,
+	s2Error,
+} from "../../../../error.js";
 import {
 	type Client,
 	createClient,
 	createConfig,
 } from "../../../../generated/client/index.js";
-import type {
-	AppendAck,
-	ReadBatch as GeneratedReadBatch,
-	StreamPosition,
-} from "../../../../generated/index.js";
+import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
-import { meteredBytes } from "../../../../utils.js";
+import type * as Types from "../../../../types.js";
+import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
@@ -24,7 +31,6 @@ import {
 } from "../../../retry.js";
 import { canSetUserAgentHeader, DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
-	AppendArgs,
 	AppendRecord,
 	AppendSession,
 	AppendSessionOptions,
@@ -100,8 +106,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		return new FetchReadSession(response.response.body, format);
 	}
 
-	private _nextReadPosition: StreamPosition | undefined = undefined;
-	private _lastObservedTail: StreamPosition | undefined = undefined;
+	private _nextReadPosition: API.StreamPosition | undefined = undefined;
+	private _lastObservedTail: API.StreamPosition | undefined = undefined;
 
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
 		// Track error from parser
@@ -118,7 +124,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 			// Parse SSE events according to the S2 protocol
 			if (msg.event === "batch" && msg.data) {
-				const rawBatch: GeneratedReadBatch = JSON.parse(msg.data);
+				const rawBatch: API.ReadBatch = JSON.parse(msg.data);
 				const batch = (() => {
 					// If format is bytes, decode base64 to Uint8Array
 					if (format === "bytes") {
@@ -280,11 +286,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 						return;
 					} catch (error) {
 						// Convert unexpected errors to S2Error and emit as error result
-						const s2Err =
-							error instanceof S2Error
-								? error
-								: new S2Error({ message: String(error), status: 500 });
-						controller.enqueue({ ok: false, error: s2Err });
+						controller.enqueue({ ok: false, error: s2Error(error) });
 						done = true;
 						await reader.cancel();
 						controller.close();
@@ -298,17 +300,20 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		});
 	}
 
-	public nextReadPosition(): StreamPosition | undefined {
+	public nextReadPosition(): API.StreamPosition | undefined {
 		return this._nextReadPosition;
 	}
 
-	public lastObservedTail(): StreamPosition | undefined {
+	public lastObservedTail(): API.StreamPosition | undefined {
 		return this._lastObservedTail;
 	}
 
 	// Implement AsyncIterable (for await...of support)
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
-		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		const proto = ReadableStream.prototype as ReadableStreamWithAsyncIterator<
+			ReadResult<Format>
+		>;
+		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") {
 			try {
 				return fn.call(this);
@@ -352,11 +357,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
 export class FetchAppendSession implements TransportAppendSession {
-	private queue: Array<{
-		records: AppendRecord[];
-		fencing_token?: string;
-		match_seq_num?: number;
-	}> = [];
+	private queue: Array<Types.AppendInput> = [];
 	private pendingResolvers: Array<{
 		resolve: (result: AppendResult) => void;
 	}> = [];
@@ -389,6 +390,7 @@ export class FetchAppendSession implements TransportAppendSession {
 	) {
 		this.options = requestOptions;
 		this.stream = stream;
+		debug("[%s] FetchAppendSession created", stream);
 		const headers: Record<string, string> = {};
 		if (transportConfig.basinName) {
 			headers["s2-basin"] = transportConfig.basinName;
@@ -411,15 +413,19 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * Never throws - returns CloseResult.
 	 */
 	async close(): Promise<CloseResult> {
+		debug("[%s] FetchAppendSession close requested", this.stream);
 		try {
 			this.closed = true;
 			await this.waitForDrain();
+			debug("[%s] FetchAppendSession close complete", this.stream);
 			return okClose();
 		} catch (error) {
-			const s2Err =
-				error instanceof S2Error
-					? error
-					: new S2Error({ message: String(error), status: 500 });
+			const s2Err = s2Error(error);
+			debug(
+				"[%s] FetchAppendSession close error: %s",
+				this.stream,
+				s2Err.message,
+			);
 			return errClose(s2Err);
 		}
 	}
@@ -429,29 +435,38 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * The request will be queued and sent when no other request is in-flight.
 	 * Never throws - returns AppendResult discriminated union.
 	 */
-	submit(
-		records: AppendRecord | AppendRecord[],
-		args?: {
-			fencing_token?: string;
-			match_seq_num?: number;
-			precalculatedSize?: number;
-		},
-	): Promise<AppendResult> {
+	submit(input: Types.AppendInput): Promise<AppendResult> {
+		debug(
+			"[%s] FetchAppendSession.submit: records=%d, match_seq_num=%s, queueLen=%d",
+			this.stream,
+			input.records.length,
+			input.matchSeqNum ?? "none",
+			this.queue.length,
+		);
+
 		// Validate closed state
 		if (this.closed) {
+			debug(
+				"[%s] FetchAppendSession.submit: session closed, rejecting",
+				this.stream,
+			);
 			return Promise.resolve(
 				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
 			);
 		}
 
-		const recordsArray = Array.isArray(records) ? records : [records];
-
 		// Validate batch size limits (non-retryable 400-level error)
-		if (recordsArray.length > 1000) {
+		// Note: This should already be validated by AppendInput.create(), but we check defensively
+		if (input.records.length > 1000) {
+			debug(
+				"[%s] FetchAppendSession.submit: batch too large (%d records)",
+				this.stream,
+				input.records.length,
+			);
 			return Promise.resolve(
 				err(
 					new S2Error({
-						message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
+						message: `Batch of ${input.records.length} exceeds maximum batch size of 1000 records`,
 						status: 400,
 						code: "INVALID_ARGUMENT",
 					}),
@@ -459,15 +474,15 @@ export class FetchAppendSession implements TransportAppendSession {
 			);
 		}
 
-		// Validate metered size (use precalculated if provided)
-		let batchMeteredSize = args?.precalculatedSize ?? 0;
-		if (batchMeteredSize === 0) {
-			for (const record of recordsArray) {
-				batchMeteredSize += meteredBytes(record);
-			}
-		}
+		// Validate metered size (use cached value from AppendInput)
+		const batchMeteredSize = input.meteredBytes;
 
 		if (batchMeteredSize > 1024 * 1024) {
+			debug(
+				"[%s] FetchAppendSession.submit: batch too large (%d bytes)",
+				this.stream,
+				batchMeteredSize,
+			);
 			return Promise.resolve(
 				err(
 					new S2Error({
@@ -480,12 +495,13 @@ export class FetchAppendSession implements TransportAppendSession {
 		}
 
 		return new Promise((resolve) => {
-			this.queue.push({
-				records: recordsArray,
-				fencing_token: args?.fencing_token,
-				match_seq_num: args?.match_seq_num,
-			});
+			this.queue.push(input);
 			this.pendingResolvers.push({ resolve });
+			debug(
+				"[%s] FetchAppendSession.submit: queued, queueLen=%d",
+				this.stream,
+				this.queue.length,
+			);
 
 			// Start processing if not already running
 			if (!this.processingPromise) {
@@ -500,37 +516,64 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * Single-flight: only one request in progress at a time.
 	 */
 	private async processLoop(): Promise<void> {
+		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
 		while (this.queue.length > 0) {
 			this.inFlight = true;
-			const args = this.queue.shift()!;
+			const input = this.queue.shift()!;
 			const resolver = this.pendingResolvers.shift()!;
 
+			debug(
+				"[%s] FetchAppendSession.processLoop: sending %d records, match_seq_num=%s",
+				this.stream,
+				input.records.length,
+				input.matchSeqNum ?? "none",
+			);
+
 			try {
+				const preferProtobuf = input.records.some(
+					(record) => computeAppendRecordFormat(record) === "bytes",
+				);
+				const appendOptions = this.options
+					? { ...this.options, preferProtobuf }
+					: { preferProtobuf };
+
 				const ack = await streamAppend(
 					this.stream,
 					this.client,
-					args.records,
-					{
-						fencing_token: args.fencing_token,
-						match_seq_num: args.match_seq_num,
-					},
-					this.options,
+					input,
+					appendOptions,
+				);
+
+				debug(
+					"[%s] FetchAppendSession.processLoop: success, seq_num=%d-%d",
+					this.stream,
+					ack.start.seqNum,
+					ack.end.seqNum,
 				);
 
 				// Resolve with success result
 				resolver.resolve(ok(ack));
 			} catch (error) {
 				// Convert error to S2Error and resolve with error result
-				const s2Err =
-					error instanceof S2Error
-						? error
-						: new S2Error({ message: String(error), status: 502 });
+				const s2Err = s2Error(error);
+
+				debug(
+					"[%s] FetchAppendSession.processLoop: error, status=%s, message=%s",
+					this.stream,
+					s2Err.status,
+					s2Err.message,
+				);
 
 				// Resolve this request with error
 				resolver.resolve(err(s2Err));
 
 				// Resolve all remaining pending promises with the same error
 				// (transport failure affects all queued requests)
+				debug(
+					"[%s] FetchAppendSession.processLoop: failing %d queued requests",
+					this.stream,
+					this.pendingResolvers.length,
+				);
 				for (const pendingResolver of this.pendingResolvers) {
 					pendingResolver.resolve(err(s2Err));
 				}
@@ -547,6 +590,7 @@ export class FetchAppendSession implements TransportAppendSession {
 			this.inFlight = false;
 		}
 
+		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
 	}
 
@@ -593,12 +637,6 @@ export class FetchTransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
-		// Fetch transport intentionally enforces single-flight submission (HTTP/1.1)
-		// This ensures only one batch is in-flight at a time, regardless of user setting.
-		const opts = {
-			...sessionOptions,
-			maxInflightBatches: 1,
-		} as AppendSessionOptions;
 		return AppendSessionImpl.create(
 			(myOptions) => {
 				return FetchAppendSession.create(
@@ -608,8 +646,9 @@ export class FetchTransport implements SessionTransport {
 					requestOptions,
 				);
 			},
-			opts,
+			sessionOptions,
 			this.transportConfig.retry,
+			stream, // Pass stream name for debug context
 		);
 	}
 
@@ -625,5 +664,10 @@ export class FetchTransport implements SessionTransport {
 			args,
 			this.transportConfig.retry,
 		);
+	}
+
+	async close(): Promise<void> {
+		// Fetch transport holds no long-lived resources beyond the client.
+		// Provided for API symmetry; nothing to tear down.
 	}
 }

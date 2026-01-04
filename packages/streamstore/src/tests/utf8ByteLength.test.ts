@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AppendInput, AppendRecord } from "../index.js";
 import { utf8ByteLength } from "../utils.js";
 
 describe("utf8ByteLength", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
+import { AppendInput, AppendRecord } from "../index.js";
 import { DEFAULT_RETRY_CONFIG, withRetries } from "../lib/retry.js";
 
 describe("Retry Logic", () => {
@@ -21,7 +22,7 @@ describe("Retry Logic", () => {
 				.mockResolvedValue("success");
 
 			const result = await withRetries(
-				{ maxAttempts: 3, retryBackoffDurationMillis: 1 },
+				{ maxAttempts: 3, minDelayMillis: 1, maxDelayMillis: 1 },
 				fn,
 			);
 
@@ -34,7 +35,10 @@ describe("Retry Logic", () => {
 			const fn = vi.fn().mockRejectedValue(error);
 
 			await expect(
-				withRetries({ maxAttempts: 3, retryBackoffDurationMillis: 1 }, fn),
+				withRetries(
+					{ maxAttempts: 3, minDelayMillis: 1, maxDelayMillis: 1 },
+					fn,
+				),
 			).rejects.toThrow(error);
 
 			expect(fn).toHaveBeenCalledTimes(1);
@@ -49,7 +53,7 @@ describe("Retry Logic", () => {
 				.mockResolvedValue("success");
 
 			const result = await withRetries(
-				{ maxAttempts: 3, retryBackoffDurationMillis: 1 },
+				{ maxAttempts: 3, minDelayMillis: 1, maxDelayMillis: 1 },
 				fn,
 			);
 
@@ -62,7 +66,10 @@ describe("Retry Logic", () => {
 			const fn = vi.fn().mockRejectedValue(error);
 
 			await expect(
-				withRetries({ maxAttempts: 2, retryBackoffDurationMillis: 1 }, fn),
+				withRetries(
+					{ maxAttempts: 2, minDelayMillis: 1, maxDelayMillis: 1 },
+					fn,
+				),
 			).rejects.toThrow(error);
 
 			// Initial attempt + 1 retry = 2 calls
@@ -74,7 +81,10 @@ describe("Retry Logic", () => {
 			const fn = vi.fn().mockRejectedValue(error);
 
 			await expect(
-				withRetries({ maxAttempts: 1, retryBackoffDurationMillis: 1 }, fn),
+				withRetries(
+					{ maxAttempts: 1, minDelayMillis: 1, maxDelayMillis: 1 },
+					fn,
+				),
 			).rejects.toThrow(error);
 
 			expect(fn).toHaveBeenCalledTimes(1);
@@ -92,8 +102,11 @@ describe("Retry Logic", () => {
 	describe("DEFAULT_RETRY_CONFIG", () => {
 		it("should have correct default values", () => {
 			expect(DEFAULT_RETRY_CONFIG.maxAttempts).toBe(3);
-			expect(DEFAULT_RETRY_CONFIG.retryBackoffDurationMillis).toBe(100);
+			expect(DEFAULT_RETRY_CONFIG.minDelayMillis).toBe(100);
+			expect(DEFAULT_RETRY_CONFIG.maxDelayMillis).toBe(1000);
 			expect(DEFAULT_RETRY_CONFIG.appendRetryPolicy).toBe("all");
+			expect(DEFAULT_RETRY_CONFIG.requestTimeoutMillis).toBe(5000);
+			expect(DEFAULT_RETRY_CONFIG.connectionTimeoutMillis).toBe(5000);
 		});
 	});
 });

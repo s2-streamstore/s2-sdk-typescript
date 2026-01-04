@@ -6,6 +6,11 @@ import createDebug from "debug";
 
 const debug = createDebug("s2:event-stream");
 
+/** Type for ReadableStream with optional async iterator support. */
+type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
+	[Symbol.asyncIterator]?: () => AsyncIterableIterator<T>;
+};
+
 export type SseMessage<T> = {
 	data?: T | undefined;
 	event?: string | undefined;
@@ -84,7 +89,9 @@ export class EventStream<T>
 
 	// Polyfill for older browsers
 	[Symbol.asyncIterator](): AsyncIterableIterator<T> {
-		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		const proto =
+			ReadableStream.prototype as ReadableStreamWithAsyncIterator<T>;
+		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") {
 			try {
 				return fn.call(this);

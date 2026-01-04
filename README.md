@@ -20,264 +20,355 @@
   </p>
 </div>
 
-[S2](https://s2.dev) is a serverless data store for streams.
-
-This repo is the official TypeScript SDK, which provides an ergonomic interface over the service's [REST API](https://s2.dev/docs/rest/protocol).
-
-> **Note:** This is a rewrite of the TypeScript SDK. The older version (0.15.3) is still available and can be installed:
-> ```bash
-> npm add @s2-dev/streamstore@0.15.3
-> ```
-> The archived repository for the older SDK is available [here](https://github.com/s2-streamstore/s2-sdk-typescript-old).
-
-## S2 Basics
+This repo contains the official TypeScript SDK for [S2](https://s2.dev), a serverless data store for streams, built on the service's [REST API](https://s2.dev/docs/rest/protocol).
 
 S2 is a managed service that provides unlimited, durable streams.
 
 Streams can be appended to, with all new records added to the tail of the stream. You can read from any portion of a stream – indexing by record sequence number, or timestamp – and follow updates live.
 
-See it in action on the playground (built with this TypeScript SDK): [s2.dev/playground](https://s2.dev/playground).
+See it in action on the [playground](https://s2.dev/playground).
 
-## SDK
+**Quick links:**
+- Runnable [examples](./examples) directory
+- Patterns [package](packages/patterns)
+- SDK [documentation](https://s2-streamstore.github.io/s2-sdk-typescript/)
+- S2 REST API [documentation](https://s2.dev/docs/rest/protocol)
 
-### Getting started
+> **Note:** The repository for releases prior to 0.16.x can be found at this [link](https://github.com/s2-streamstore/s2-sdk-typescript-old).
 
-1. Add the `@s2-dev/streamstore` dependency to your project:
-   ```bash
-   npm add @s2-dev/streamstore
-   # or
-   yarn add @s2-dev/streamstore
-   # or
-   bun add @s2-dev/streamstore
-   ```
-
-1. Generate an access token by logging onto the web console at
-   [s2.dev](https://s2.dev/dashboard).
-
-1. Make a request using SDK client.
-   ```typescript
-   import { S2 } from "@s2-dev/streamstore";
-
-   const s2 = new S2({
-     accessToken: process.env.S2_ACCESS_TOKEN!,
-   });
-
-   const basins = await s2.basins.list();
-   console.log("My basins:", basins.basins.map((basin) => basin.name));
-   ```
-
-### Configuration and retries
-
-The `S2` client and stream sessions support configurable retry behavior:
-
-- Configure global retry behavior when constructing `S2`:
-
-  ```ts
-  import { S2 } from "@s2-dev/streamstore";
-
-  const s2 = new S2({
-    accessToken: process.env.S2_ACCESS_TOKEN!,
-    retry: {
-      // Total attempts including the first call (1 = no retries)
-      maxAttempts: 3,
-      // Base delay (ms) between attempts; jitter is applied
-      retryBackoffDurationMillis: 100,
-      // Retry policy for append operations (default: "all"; see API docs for details)
-      appendRetryPolicy: "all",
-      // Maximum time (ms) to wait for an append ack before treating it as failed
-      requestTimeoutMillis: 5000,
-    },
-  });
-  ```
-
-- Stream append/read sessions created from `S2.basin(...).stream(...)` inherit this retry configuration.
-- The `appendRetryPolicy` dictates how failed appends should be retried. If you are not using a concurrency control like `match_seq_num`, then retrying a failed append could result in duplicate data, depending on the nature of the failure. This policy can be set to tolerate potential duplicates by retrying all failures (`"all"`, the default) or only failures guaranteed not to have had a side effect (`"noSideEffects"`). If you cannot tolerate potential duplicates and do not have explicit deduplication downstream, consider using `"noSideEffects"` instead of the default.
-
-See the generated API docs for the full description of `RetryConfig`, `AppendRetryPolicy` and `AppendSessionOptions`.
-
-### Append sessions
-
-The `AppendSession` represents a session for appending batches of records to a stream. There are two ways of interacting with an append session:
-- via `submit(...)`, which returns a `Promise<AppendAck>` that resolves when the batch is acknowledged by S2.
-- via the session's `.readable` and `.writable` streams (`ReadableStream<AppendAck>` / `WritableStream<AppendArgs>`).
-
-You obtain an append session from a stream via:
-
-```ts
-const session = await stream.appendSession();
-```
-
-All batches submitted to the same append session will be made durable in the same order as they are submitted, regardless of which method is used. Batches _can_ be duplicated, however, depending on the `appendRetryPolicy` used.
-
-#### Transports
-
-The append session supports two transports:
-- One based on `fetch`
-- Another which uses our custom [`s2s` protocol](https://s2.dev/docs/rest/records/overview#s2s-spec) over HTTP/2.
-
-When possible, the `s2s` protocol is preferred as it allows for safe pipelining of concurrent appends over the same session, while still enforcing ordering across batches. This can't be guaranteed with the `fetch`-based transport, so it will not pipeline writes (effectively meaning there can only be one inflight, unacknowledged append at a time, thus limiting throughput).
-
-This SDK will attempt to detect whether `s2s` can be used (if the runtime has `node:http2` support), and select a transport accordingly. The transport detection also be overridden via the `forceTransport` option when creating a stream client:
-
-```typescript
-const stream = s2
-    .basin("my-basin")
-    .stream("my-stream", { forceTransport: "fetch" });
-```
-
-#### Backpressure
-
-Only writing via `WritableStream` reflects backpressure. A `write(...)` call will resolve as soon as the batch is enqueued for transmission, and will block until there is capacity.
-
-Enqueuing a batch means that the session has accepted the batch, and that it is now inflight. It _doesn't_ mean that the batch has been acknowledged by S2. Because of this, if using `WritableStream`, you should also make sure to `close()` the session, as otherwise you may miss a failure. Only after closing the writer without error can the upstream contents be considered to have been safely appended to the stream.
-
-The `AppendSession` controls how many batches can be inflight at a given time, which is the origin of backpressure. This can be configured by setting either `maxInflightBatches` or `maxInflightBytes` on `AppendSessionOptions`. Writes will block until there is capacity, thus exerting backpressure on upstream writers.
-
-
-## Examples
-
-This repo is a small monorepo with:
-
-- Core SDK package: `@s2-dev/streamstore` in `packages/streamstore`
-- Optional patterns package: `@s2-dev/streamstore-patterns` in `packages/patterns`
-
-Core SDK examples live under:
-
-- [`packages/streamstore/examples`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/packages/streamstore/examples)
-
-Run a core example with:
+## Install
 
 ```bash
-export S2_ACCESS_TOKEN="<YOUR ACCESS TOKEN>"
-npx tsx packages/streamstore/examples/<example_name>.ts
+npm add @s2-dev/streamstore
+# or
+yarn add @s2-dev/streamstore
+# or
+bun add @s2-dev/streamstore
 ```
 
-Patterns-specific examples (serialization pipeline, typed client, etc.) live under:
+## Quick start
 
-- [`packages/patterns/examples`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/packages/patterns/examples)
+Want to get up and running? Head to the [S2 dashboard](https://s2.dev/dashboard) to sign-up and grab an access key, and create a new "basin" from the UI.
 
-To use those, first install the optional patterns package alongside the core SDK and then follow the instructions in:
+Then define the following environment variables respectively:
+```bash
+export S2_ACCESS_TOKEN="<token>"
+export S2_BASIN="<basin>"
+```
 
-- [`packages/patterns/README.md`](https://github.com/s2-streamstore/s2-sdk-typescript/tree/main/packages/patterns/README.md)
+From there, you can run the following snippet (or any of the other [examples](./examples)).
 
-### Example: Appending and Reading Data
+<!-- snippet:start quick-start -->
+```ts
+import {
+	AppendAck,
+	AppendInput,
+	AppendRecord,
+	S2,
+	S2Environment,
+} from "@s2-dev/streamstore";
 
-```typescript
-import { S2, AppendRecord } from "@s2-dev/streamstore";
+const basinName = process.env.S2_BASIN ?? "my-existing-basin";
+const streamName = process.env.S2_STREAM ?? "my-new-stream";
 
 const s2 = new S2({
-  accessToken: process.env.S2_ACCESS_TOKEN!,
+	...S2Environment.parse(),
+	accessToken: process.env.S2_ACCESS_TOKEN ?? "my-access-token",
 });
 
-// Get a basin and stream
-const basin = s2.basin("my-basin");
-const stream = basin.stream("my-stream");
+// Create a basin (namespace) client for basin-level operations.
+const basin = s2.basin(basinName);
 
-// Append records
-await stream.append([
-  AppendRecord.make("Hello, world!", { foo: "bar" }),
-  AppendRecord.make(new Uint8Array([1, 2, 3]), { type: "binary" }),
-]);
+// Make a new stream within the basin, using the default configuration.
+const streamResponse = await basin.streams.create({ stream: streamName });
+console.dir(streamResponse, { depth: null });
 
-// Read records
-const result = await stream.read({
-  seq_num: 0,
-  count: 10,
+// Create a stream client on our new stream.
+const stream = basin.stream(streamName);
+
+// Make a single append call.
+const append: Promise<AppendAck> = stream.append(
+	// `append` expects an input batch of one or many records.
+	AppendInput.create([
+		// Records can use a string encoding...
+		AppendRecord.string({
+			body: "Hello from the docs snippet!",
+			headers: [["content-type", "text/plain"]],
+		}),
+		// ...or contain raw binary data.
+		AppendRecord.bytes({
+			body: new TextEncoder().encode("Bytes payload"),
+		}),
+	]),
+);
+
+// When the promise resolves, the data is fully durable and present on the stream.
+const ack = await append;
+console.log(
+	`Appended records ${ack.start.seqNum} through ${ack.end.seqNum} (exclusive).`,
+);
+console.dir(ack, { depth: null });
+
+// Read the two records back as binary.
+const batch = await stream.read(
+	{
+		start: { from: { seqNum: ack.start.seqNum } },
+		stop: { limits: { count: 2 } },
+	},
+	{ as: "bytes" },
+);
+
+for (const record of batch.records) {
+	console.dir(record, { depth: null });
+	console.log("decoded body: %s", new TextDecoder().decode(record.body));
+}
+```
+<!-- snippet:end quick-start -->
+
+## Development
+
+Run examples:
+
+```bash
+export S2_ACCESS_TOKEN="<token>"
+export S2_BASIN="<basin>"
+export S2_STREAM="<stream>" # optional per example
+npx tsx examples/<example>.ts
+```
+
+Run tests:
+
+```bash
+bun run test
+```
+
+The SDK also ships with a basic browser example, to experiment with using the SDK directly from the web.
+
+```bash
+bun run --cwd packages/streamstore example:browser
+```
+
+## Using S2
+
+S2 SDKs, including this TypeScript one, provide high-level abstractions and conveniences over the core [REST API](https://s2.dev/docs/rest/protocol).
+
+### Account and basin operations
+
+The account and basin APIs allow for CRUD ops on basins (namespaces of streams), streams, granular access tokens, and more.
+
+### Data plane (stream) operations
+
+The core SDK verbs are around appending data to streams, reading data from them.
+
+See the examples and documentation for more details.
+
+Below are some high level notes on how to interact with the data plane.
+
+#### Appends
+
+The atomic unit of append is an `AppendInput`, which contains a batch of `AppendRecord`s and some optional additional parameters.
+
+Records contain a body and optional headers. After an append completes, each record will be assigned a sequence number (and a timestamp).
+
+
+<!-- snippet:start data-plane-unary -->
+```ts
+// Append a mixed batch: string + bytes with headers.
+console.log("Appending two records (string + bytes).");
+const mixedAck = await stream.append(
+	AppendInput.create([
+		AppendRecord.string({
+			body: "string payload",
+			headers: [
+				["record-type", "example"],
+				["user-id", "123"],
+			],
+		}),
+		AppendRecord.bytes({
+			body: new TextEncoder().encode("bytes payload"),
+			headers: [[new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]],
+		}),
+	]),
+);
+console.dir(mixedAck, { depth: null });
+```
+<!-- snippet:end data-plane-unary -->
+
+### Append sessions (ordered, stateful appends)
+
+Use an `AppendSession` when you want higher throughput and ordering guarantees:
+- It is stateful and enforces that the order you submit batches becomes the order on the stream.
+- It supports pipelining submissions while still preserving ordering (especially with the `s2s` transport).
+
+<!-- snippet:start data-plane-append-session -->
+```ts
+console.log("Opening appendSession with maxInflightBytes=1MiB.");
+const appendSession = await stream.appendSession({
+	// This determines the maximum amount of unacknowledged, pending appends,
+	// which can be outstanding at any given time. This is used to apply backpressure.
+	maxInflightBytes: 1024 * 1024,
 });
 
-for (const record of result.records) {
-  console.log("Record:", record.body, "Headers:", record.headers);
+const startSeq = mixedAck.end.seqNum;
+// Submit an append batch.
+// This returns a promise that resolves into a `BatchSubmitTicket` once the session has
+// capacity to send it.
+const append1: BatchSubmitTicket = await appendSession.submit(
+	AppendInput.create([
+		AppendRecord.string({ body: "session record A" }),
+		AppendRecord.string({ body: "session record B" }),
+	]),
+);
+const append2: BatchSubmitTicket = await appendSession.submit(
+	AppendInput.create([AppendRecord.string({ body: "session record C" })]),
+);
+
+// The tickets can be used to wait for the append to become durable (acknowledged by S2).
+console.dir(await append1.ack(), { depth: null });
+console.dir(await append2.ack(), { depth: null });
+
+console.log("Closing append session to flush outstanding batches.");
+await appendSession.close();
+```
+<!-- snippet:end data-plane-append-session -->
+
+### Producer (auto-batching for performance)
+
+Streams can support up to 200 appended batches per second (per single stream), but tens of MiB/second.
+
+For throughput, you typically want fewer, but larger batches.
+
+The `Producer` wraps an append session and auto-batches records (via `BatchTransform`), by lingering and accumulating records for a configurable amount of time, which is the recommended path for most high-throughput writers.
+
+<!-- snippet:start producer-core -->
+```ts
+const producer = new Producer(
+	new BatchTransform({
+		// Linger and collect new records for up to 25ms per batch.
+		lingerDurationMillis: 25,
+		maxBatchRecords: 200,
+	}),
+	await stream.appendSession(),
+);
+
+const tickets = [];
+for (let i = 0; i < 10; i += 1) {
+	const ticket = await producer.submit(
+		AppendRecord.string({
+			body: `record-${i}`,
+		}),
+	);
+	tickets.push(ticket);
 }
 
-// Stream records with read session
+const acks = await Promise.all(tickets.map((ticket) => ticket.ack()));
+for (const ack of acks) {
+	console.log("Record durable at seqNum:", ack.seqNum());
+}
+
+// Use the seqNum of the third ack as a coordinate for reading it back.
+let record3 = await stream.read({
+	start: { from: { seqNum: acks[3].seqNum() } },
+	stop: { limits: { count: 1 } },
+});
+console.dir(record3, { depth: null });
+
+await producer.close();
+await stream.close();
+```
+<!-- snippet:end producer-core -->
+
+### Read sessions
+
+Read operations, similarly, can be done via individual `read` calls, or via a `readSession`.
+
+Use a session whenever you want:
+- to read more than a single response batch (responses larger than 1 MiB),
+- to keep a session open and tail for new data (omit stop criteria).
+
+<!-- snippet:start read-session-core -->
+```ts
 const readSession = await stream.readSession({
-  clamp: true,
-  tail_offset: 10,
+	start: { from: { tailOffset: 10 }, clamp: true },
+	stop: { waitSecs: 10 },
 });
 
 for await (const record of readSession) {
-  console.log("Streaming record:", record);
+	console.log(record.seqNum, record.body);
 }
 ```
+<!-- snippet:end read-session-core -->
 
->
-> You might want to update the basin name in the examples before running since
-> basin names are globally unique and each example uses the same basin name
-> (`"my-favorite-basin"`).
+## Client configuration
 
-## Patterns 
+### Retries and append retry policy
 
-This repo also contains a package of more opinionated patterns and types for building around S2. This is available as `@s2-dev/streamstore-patterns`, and located in `packages/patterns`.
+<!-- snippet:start client-config -->
+```ts
+import { S2, S2Environment, S2Error } from "@s2-dev/streamstore";
 
-See the [README](packages/patterns) in the package for more, as well as examples of how to create a typed client for use with AI SDK.
+const accessToken = process.env.S2_ACCESS_TOKEN;
+if (!accessToken) {
+	throw new Error("Set S2_ACCESS_TOKEN to configure the SDK.");
+}
 
-```typescript
-type AiStreamChunk = {
-    role: "assistant" | "user",
-    content: string
-};
+const basinName = process.env.S2_BASIN;
+if (!basinName) {
+	throw new Error("Set S2_BASIN so we know which basin to inspect.");
+}
 
+const streamName = process.env.S2_STREAM ?? "docs/client-config";
+
+// Global retry config applies to every stream/append/read session created via this client.
 const s2 = new S2({
-    accessToken: s2AccessToken,
-    retry: {
-        maxAttempts: 10,
-        retryBackoffDurationMillis: 100,
-        appendRetryPolicy: "all",
-    },
+	...S2Environment.parse(),
+	accessToken,
+	retry: {
+		maxAttempts: 3,
+		minDelayMillis: 100,
+		maxDelayMillis: 500,
+		appendRetryPolicy: "all",
+		requestTimeoutMillis: 5_000,
+	},
 });
 
-// Create the raw append session.
-const appendSession = await s2
-    .basin("mega-corp-agent-sessions")
-    .stream("session/09b5fb6")
-    .appendSession();
-
-const textEncoder = new TextEncoder();
-
-// Use the serializing append session wrapper to add framing,
-// type serialization, and deduplication logic.
-const appender = new SerializingAppendSession<AiStreamChunk>(
-    appendSession,
-    (msg) => textEncoder.encode(JSON.stringify(msg)),
-);
-
-// Get a stream of tokens from AI SDK.
-const modelStream = await streamText({
-    model: openai("gpt-4o-mini"),
-    prompt: "Tell me who has the most beautiful durable stream API in the land.",
+const basin = s2.basin(basinName);
+await basin.streams.create({ stream: streamName }).catch((error: unknown) => {
+	if (!(error instanceof S2Error && error.status === 409)) {
+		throw error;
+	}
 });
 
-// Tee the stream, using one for processing and sending the
-// other to S2.
-let [forUI, forS2] = modelStream.textStream
-    .pipeThrough(
-        new TransformStream<string, AiStreamChunk>({
-            transform: (text, controller) => {
-                controller.enqueue({
-                    role: "assistant",
-                    content: text,
-                });
-            },
-        }),
-    )
-    .tee();
-
-let s2Pipe = forS2.pipeTo(appender);
-
-for await (const msg of forUI) {
-    // Send messages to your UI.
-    console.log(msg);
-}
-
-// Ensure the stream is fully saved in S2.
-await s2Pipe;
+const stream = basin.stream(streamName);
+const tail = await stream.checkTail();
+console.log("Tail info:");
+console.dir(tail, { depth: null });
 ```
+<!-- snippet:end client-config -->
 
-## SDK Docs and Reference
+- `appendRetryPolicy: "noSideEffects"` only retries appends that are naturally idempotent via `matchSeqNum`.
+- `appendRetryPolicy: "all"` can retry any failure (higher durability, but can duplicate data without idempotency).
 
-For detailed documentation for the SDK, please check the generated type docs [here](https://s2-streamstore.github.io/s2-sdk-typescript/).
+### Session transports
 
-For API reference, please visit the [S2 Documentation](https://s2.dev/docs).
+Sessions can use either:
+- `fetch` (HTTP/1.1)
+- `s2s` (S2’s streaming protocol over HTTP/2)
+
+You can force a transport per stream:
+
+<!-- snippet:start force-transport -->
+```ts
+// Override the automatic transport detection to force the fetch transport.
+const stream = basin.stream(streamName, {
+	forceTransport: "s2s",
+});
+```
+<!-- snippet:end force-transport -->
+
+## Patterns
+
+For higher-level, more opinionated building blocks (typed append/read sessions, framing, dedupe helpers), see the [patterns](packages/patterns/README.md) package.
 
 ## Feedback
 
@@ -290,6 +381,13 @@ report a bug or request a feature, feel free to open a Github issue.
 Developers are welcome to submit Pull Requests on the repository. If there is
 no tracking issue for the bug or feature request corresponding to the PR, we
 encourage you to open one for discussion before submitting the PR.
+
+### Maintaining documentation snippets
+
+- Run `bun run snippets` whenever you touch `README.md` or the snippet source files under `examples/`.
+- `bun run check:snippets` (also part of `bun run check`) type-checks every example so regressions are caught in CI.
+- Snippet blocks in markdown are delimited by `<!-- snippet:start NAME -->` / `<!-- snippet:end NAME -->`; never edit the generated code directly – update the matching file in `examples/` instead.
+- To keep snippets small, add region markers to example files: `snippet-region REGION start` / `snippet-region REGION end`.
 
 ## Reach out to us
 
