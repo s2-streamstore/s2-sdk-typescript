@@ -224,7 +224,10 @@ export namespace AppendInput {
 
 		return {
 			records,
-			matchSeqNum: options?.matchSeqNum,
+			matchSeqNum:
+				options?.matchSeqNum === undefined
+					? undefined
+					: Math.floor(options.matchSeqNum),
 			fencingToken: options?.fencingToken,
 			meteredBytes: totalBytes,
 		};
@@ -401,10 +404,10 @@ export interface ReconfigureStreamInput {
 export interface StreamInfo {
 	/** Stream name. */
 	name: string;
-	/** Creation time in RFC 3339 format. */
-	createdAt: string;
-	/** Deletion time in RFC 3339 format, if the stream is being deleted. */
-	deletedAt?: string | null;
+	/** Creation time. */
+	createdAt: Date;
+	/** Deletion time, if the stream is being deleted. */
+	deletedAt?: Date | null;
 }
 
 /**
@@ -649,10 +652,10 @@ export interface IssueAccessTokenInput {
 	 */
 	autoPrefixStreams?: boolean;
 	/**
-	 * Expiration time (Date or RFC 3339 string).
+	 * Expiration time (Date, milliseconds since Unix epoch, or RFC 3339 string).
 	 * If not set, the expiration will be set to that of the requestor's token.
 	 */
-	expiresAt?: Date | string | null;
+	expiresAt?: Date | number | string | null;
 }
 
 /**

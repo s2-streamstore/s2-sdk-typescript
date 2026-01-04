@@ -22,7 +22,7 @@ function toAPIRetentionPolicy(
 	if (policy === null) return null;
 	if (policy === undefined) return undefined;
 	if ("ageSecs" in policy) {
-		return { age: policy.ageSecs };
+		return { age: Math.floor(policy.ageSecs) };
 	}
 	return policy; // { infinite: ... } passes through
 }
@@ -44,6 +44,15 @@ function toAPIStreamConfig(config: Types.StreamConfig | null | undefined): any {
 	if (config === null || config === undefined) return config;
 	return {
 		...config,
+		deleteOnEmpty: config.deleteOnEmpty
+			? {
+					...config.deleteOnEmpty,
+					minAgeSecs:
+						config.deleteOnEmpty.minAgeSecs === undefined
+							? undefined
+							: Math.max(0, Math.floor(config.deleteOnEmpty.minAgeSecs)),
+				}
+			: config.deleteOnEmpty,
 		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
 	};
 }

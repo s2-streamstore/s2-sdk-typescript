@@ -405,7 +405,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 										(performance.now() - startTimeMs) / 1000;
 									nextArgs.wait = Math.max(
 										0,
-										baselineWait - (elapsedSeconds + delay / 1000),
+										Math.floor(baselineWait - (elapsedSeconds + delay / 1000)),
 									);
 								}
 								// Proactively cancel the current transport session before retrying

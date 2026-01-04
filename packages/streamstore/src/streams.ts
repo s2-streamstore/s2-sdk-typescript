@@ -15,6 +15,20 @@ import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
+function toDate(value: string | null | undefined): Date | null | undefined {
+	if (value === null) return null;
+	if (value === undefined) return undefined;
+	return new Date(value);
+}
+
+function transformStreamInfo(stream: any): Types.StreamInfo {
+	return {
+		...stream,
+		createdAt: toDate(stream.createdAt) as Date,
+		deletedAt: toDate(stream.deletedAt),
+	};
+}
+
 /** Convert SDK RetentionPolicy (ageSecs) to API RetentionPolicy (age). */
 function toAPIRetentionPolicy(
 	policy: Types.RetentionPolicy | null | undefined,
@@ -22,7 +36,7 @@ function toAPIRetentionPolicy(
 	if (policy === null) return null;
 	if (policy === undefined) return undefined;
 	if ("ageSecs" in policy) {
-		return { age: policy.ageSecs };
+		return { age: Math.floor(policy.ageSecs) };
 	}
 	return policy; // { infinite: ... } passes through
 }
@@ -44,6 +58,15 @@ function toAPIStreamConfig(config: Types.StreamConfig | null | undefined): any {
 	if (config === null || config === undefined) return config;
 	return {
 		...config,
+		deleteOnEmpty: config.deleteOnEmpty
+			? {
+					...config.deleteOnEmpty,
+					minAgeSecs:
+						config.deleteOnEmpty.minAgeSecs === undefined
+							? undefined
+							: Math.max(0, Math.floor(config.deleteOnEmpty.minAgeSecs)),
+				}
+			: config.deleteOnEmpty,
 		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
 	};
 }
@@ -90,7 +113,11 @@ export class S2Streams {
 				}),
 			);
 		});
-		return toCamelCase<Types.ListStreamsResponse>(response);
+		const camelCased = toCamelCase<any>(response);
+		return {
+			...camelCased,
+			streams: camelCased.streams.map(transformStreamInfo),
+		};
 	}
 
 	/**

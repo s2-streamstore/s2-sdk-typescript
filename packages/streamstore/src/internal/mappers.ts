@@ -6,6 +6,7 @@
  */
 
 import * as API from "../generated/types.gen.js";
+import { decodeFromBase64, encodeToBase64 } from "../lib/base64.js";
 import type * as InternalTypes from "../lib/stream/types.js";
 import * as Types from "../types.js";
 
@@ -20,23 +21,11 @@ function toBytes(value: string | Uint8Array): Uint8Array {
 }
 
 function toBase64(value: string | Uint8Array): string {
-	const bytes = toBytes(value);
-	if (typeof btoa !== "undefined") {
-		return btoa(String.fromCharCode(...bytes));
-	}
-	return Buffer.from(bytes).toString("base64");
+	return encodeToBase64(toBytes(value));
 }
 
 function fromBase64(value: string): Uint8Array {
-	if (typeof atob !== "undefined") {
-		const binary = atob(value);
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) {
-			bytes[i] = binary.charCodeAt(i);
-		}
-		return bytes;
-	}
-	return new Uint8Array(Buffer.from(value, "base64"));
+	return decodeFromBase64(value);
 }
 
 /** Convert milliseconds to Date. */
@@ -47,7 +36,7 @@ function toDate(ms: number): Date {
 /** Convert Date or milliseconds to milliseconds. */
 function toEpochMs(value: number | Date | undefined | null): number | null {
 	if (value === undefined || value === null) return null;
-	return typeof value === "number" ? value : value.getTime();
+	return typeof value === "number" ? Math.floor(value) : value.getTime();
 }
 
 // =============================================================================
@@ -249,15 +238,15 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 	if (input.start?.from) {
 		const from = input.start.from;
 		if ("seqNum" in from) {
-			query.seq_num = from.seqNum;
+			query.seq_num = Math.floor(from.seqNum);
 		} else if ("timestamp" in from) {
 			// Convert Date to milliseconds if needed
 			query.timestamp =
 				typeof from.timestamp === "number"
-					? from.timestamp
+					? Math.floor(from.timestamp)
 					: from.timestamp.getTime();
 		} else if ("tailOffset" in from) {
-			query.tail_offset = from.tailOffset;
+			query.tail_offset = Math.floor(from.tailOffset);
 		}
 	}
 
@@ -267,22 +256,22 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 
 	if (input.stop?.limits) {
 		if (input.stop.limits.count !== undefined) {
-			query.count = input.stop.limits.count;
+			query.count = Math.floor(input.stop.limits.count);
 		}
 		if (input.stop.limits.bytes !== undefined) {
-			query.bytes = input.stop.limits.bytes;
+			query.bytes = Math.floor(input.stop.limits.bytes);
 		}
 	}
 
 	if (input.stop?.untilTimestamp !== undefined) {
 		query.until =
 			typeof input.stop.untilTimestamp === "number"
-				? input.stop.untilTimestamp
+				? Math.floor(input.stop.untilTimestamp)
 				: input.stop.untilTimestamp.getTime();
 	}
 
 	if (input.stop?.waitSecs !== undefined) {
-		query.wait = Math.floor(input.stop.waitSecs);
+		query.wait = Math.max(0, Math.floor(input.stop.waitSecs));
 	}
 
 	if (input.ignoreCommandRecords !== undefined) {

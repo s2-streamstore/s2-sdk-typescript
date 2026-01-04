@@ -11,13 +11,14 @@ import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
-/** Convert expiresAt input (Date or string) to RFC 3339 string for API. */
+/** Convert expiresAt input (Date, milliseconds, or string) to RFC 3339 string for API. */
 function toISOString(
-	value: Date | string | null | undefined,
+	value: Date | number | string | null | undefined,
 ): string | null | undefined {
 	if (value === null) return null;
 	if (value === undefined) return undefined;
 	if (value instanceof Date) return value.toISOString();
+	if (typeof value === "number") return new Date(value).toISOString();
 	return value;
 }
 
