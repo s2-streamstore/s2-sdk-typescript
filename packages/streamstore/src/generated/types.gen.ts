@@ -44,9 +44,9 @@ export type AccountMetricSet = 'active-basins' | 'account-ops';
 
 export type AccumulationMetric = {
     /**
-     * The duration of bucket for the accumulation.
+     * The interval at which data points are accumulated.
      */
-    bucket_length: TimeseriesInterval;
+    interval: TimeseriesInterval;
     /**
      * Timeseries name.
      */
@@ -58,7 +58,7 @@ export type AccumulationMetric = {
     /**
      * Timeseries values.
      * Each element is a tuple of a timestamp in Unix epoch seconds and a data point.
-     * The data point represents the accumulated value for a bucket of time starting at the provided timestamp, lasting for the duration of the `bucket_length` parameter.
+     * The data point represents the accumulated value for the time period starting at the timestamp, spanning one `interval`.
      */
     values: Array<[
         number,
@@ -148,10 +148,7 @@ export type BasinInfo = {
      * Basin name.
      */
     name: BasinNameStr;
-    /**
-     * Basin scope.
-     */
-    scope: BasinScope;
+    scope?: null | BasinScope;
     /**
      * Basin state.
      */
@@ -181,24 +178,17 @@ export type BasinState = 'active' | 'creating' | 'deleting';
 export type CreateBasinRequest = {
     /**
      * Basin name which must be globally unique.
-     * It can be between 8 and 48 characters in length, and comprise lowercase letters, numbers and hyphens.
+     * It can be between 8 and 48 bytes in length, and comprise lowercase letters, numbers and hyphens.
      * It cannot begin or end with a hyphen.
      */
     basin: BasinNameStr;
     config?: null | BasinConfig;
-    /**
-     * Basin scope.
-     */
-    scope?: BasinScope;
+    scope?: null | BasinScope;
 };
 
 export type CreateOrReconfigureBasinRequest = {
     config?: null | BasinConfig;
-    /**
-     * Basin scope.
-     * This cannot be reconfigured.
-     */
-    scope?: BasinScope;
+    scope?: null | BasinScope;
 };
 
 export type CreateStreamRequest = {
@@ -325,8 +315,7 @@ export type Metric = {
     scalar: ScalarMetric;
 } | {
     /**
-     * Named series of `(timestamp, value)` points representing an accumulation over a specified
-     * bucket.
+     * Named series of `(timestamp, value)` points representing an accumulation over a specified interval.
      */
     accumulation: AccumulationMetric;
 } | {
