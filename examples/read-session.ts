@@ -42,7 +42,7 @@ await stream.append(
 // snippet-region read-session-core start
 const readSession = await stream.readSession({
 	start: { from: { tailOffset: 10 }, clamp: true },
-	stop: { wait: 10 },
+	stop: { waitSecs: 10 },
 });
 
 for await (const record of readSession) {

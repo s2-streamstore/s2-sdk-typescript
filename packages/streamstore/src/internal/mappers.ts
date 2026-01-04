@@ -274,12 +274,15 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 		}
 	}
 
-	if (input.stop?.until !== undefined) {
-		query.until = input.stop.until;
+	if (input.stop?.untilTimestamp !== undefined) {
+		query.until =
+			typeof input.stop.untilTimestamp === "number"
+				? input.stop.untilTimestamp
+				: input.stop.untilTimestamp.getTime();
 	}
 
-	if (input.stop?.wait !== undefined) {
-		query.wait = input.stop.wait;
+	if (input.stop?.waitSecs !== undefined) {
+		query.wait = Math.floor(input.stop.waitSecs);
 	}
 
 	if (input.ignoreCommandRecords !== undefined) {

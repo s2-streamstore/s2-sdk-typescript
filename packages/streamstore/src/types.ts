@@ -265,10 +265,16 @@ export interface ReadLimits {
  */
 export interface ReadStop {
 	readonly limits?: ReadLimits;
-	/** Timestamp at which to stop (exclusive, milliseconds since epoch). */
-	readonly until?: number;
-	/** Duration in seconds to wait for new records before stopping. */
-	readonly wait?: number;
+	/**
+	 * Timestamp at which to stop (exclusive).
+	 * Accepts a `Date` or milliseconds since Unix epoch.
+	 */
+	readonly untilTimestamp?: number | Date;
+	/**
+	 * Duration in seconds to wait for new records before stopping.
+	 * Non-integer values are floored when sent to the API.
+	 */
+	readonly waitSecs?: number;
 }
 
 /**

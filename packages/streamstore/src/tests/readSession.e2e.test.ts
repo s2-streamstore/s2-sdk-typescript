@@ -138,4 +138,30 @@ describeIf("ReadSession Integration Tests", () => {
 			}
 		},
 	);
+
+	it.each(transports)(
+		"should keep readSession open for at least waitSecs when starting at tail (%s)",
+		async (transport) => {
+			const basin = s2.basin(basinName);
+			const stream = basin.stream(streamName, { forceTransport: transport });
+
+			const waitSecs = 5;
+			const session = await stream.readSession({
+				start: { from: { tailOffset: 0 } },
+				stop: { waitSecs },
+			});
+
+			const reader = session.getReader();
+			const startMs = Date.now();
+			const result = await reader.read();
+			const elapsedMs = Date.now() - startMs;
+
+			// Starting at tailOffset: 0 should yield no records; the session should end after waitSecs.
+			expect(result.done).toBe(true);
+
+			// Allow for small scheduling/transport jitter; the important property is that waitSecs is honored.
+			expect(elapsedMs).toBeGreaterThanOrEqual(waitSecs * 1000 - 250);
+		},
+		20_000,
+	);
 });
