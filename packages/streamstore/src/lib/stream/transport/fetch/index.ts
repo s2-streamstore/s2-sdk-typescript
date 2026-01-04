@@ -19,7 +19,7 @@ import {
 import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
 import type * as Types from "../../../../types.js";
-import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
+import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";

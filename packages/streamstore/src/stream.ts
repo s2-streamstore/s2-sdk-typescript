@@ -103,21 +103,22 @@ export class S2Stream {
 		options?: S2RequestOptions & { as?: Format },
 	): Promise<Types.ReadBatch<Format>> {
 		this.ensureOpen();
+		const { as, ...requestOptions } = options ?? {};
 		return await withRetries(this.retryConfig, async () => {
 			// Convert ReadInput to ReadArgs using mapper
 			const readArgs: ReadArgs<Format> = {
 				...toAPIReadQuery(input),
-				as: options?.as,
+				as,
 			} as ReadArgs<Format>;
 			const genBatch = await streamRead(
 				this.name,
 				this.client,
 				readArgs,
-				options,
+				requestOptions,
 			);
 			// Convert from API to SDK ReadBatch
 			return (
-				options?.as === "bytes"
+				as === "bytes"
 					? fromAPIReadBatchBytes(genBatch)
 					: fromAPIReadBatchString(genBatch)
 			) as Types.ReadBatch<Format>;
@@ -169,13 +170,14 @@ export class S2Stream {
 		options?: S2RequestOptions & { as?: Format },
 	): Promise<ReadSession<Format>> {
 		this.ensureOpen();
+		const { as, ...requestOptions } = options ?? {};
 		const transport = await this.getTransport();
 		// Convert ReadInput to ReadArgs using mapper
 		const readArgs: ReadArgs<Format> = {
 			...toAPIReadQuery(input),
-			as: options?.as,
+			as,
 		} as ReadArgs<Format>;
-		return await transport.makeReadSession(this.name, readArgs, options);
+		return await transport.makeReadSession(this.name, readArgs, requestOptions);
 	}
 	/**
 	 * Create an append session that guarantees ordering of submissions.

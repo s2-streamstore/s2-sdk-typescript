@@ -24,7 +24,6 @@ import {
 import type * as API from "../../../../generated/index.js";
 import * as Proto from "../../../../generated/proto/s2.js";
 import type * as Types from "../../../../types.js";
-import { meteredBytes } from "../../../../utils.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";

@@ -34,8 +34,10 @@ function toDate(ms: number): Date {
 }
 
 /** Convert Date or milliseconds to milliseconds. */
-function toEpochMs(value: number | Date | undefined | null): number | null {
-	if (value === undefined || value === null) return null;
+function toEpochMs(
+	value: number | Date | undefined | null,
+): number | undefined {
+	if (value === undefined || value === null) return undefined;
 	return typeof value === "number" ? Math.floor(value) : value.getTime();
 }
 

@@ -29,12 +29,12 @@ Streams can be appended to, with all new records added to the tail of the stream
 See it in action on the [playground](https://s2.dev/playground).
 
 **Quick links:**
-- Runnable [examples](./examples) directory 
+- Runnable [examples](./examples) directory
 - Patterns [package](packages/patterns)
 - SDK [documentation](https://s2-streamstore.github.io/s2-sdk-typescript/)
 - S2 REST API [documentation](https://s2.dev/docs/rest/protocol)
 
-> **Note:** The repository for releases prior to 0.16.x can be found at this [link](https://github.com/s2-streamstore/s2-sdk-typescript-old). 
+> **Note:** The repository for releases prior to 0.16.x can be found at this [link](https://github.com/s2-streamstore/s2-sdk-typescript-old).
 
 ## Install
 
@@ -164,7 +164,7 @@ See the examples and documentation for more details.
 
 Below are some high level notes on how to interact with the data plane.
 
-#### Appends 
+#### Appends
 
 The atomic unit of append is an `AppendInput`, which contains a batch of `AppendRecord`s and some optional additional parameters.
 
@@ -280,7 +280,7 @@ await stream.close();
 
 ### Read sessions
 
-Read operations, similarly, can be done via individual `read` calls, or via a `readSession`. 
+Read operations, similarly, can be done via individual `read` calls, or via a `readSession`.
 
 Use a session whenever you want:
 - to read more than a single response batch (responses larger than 1 MiB),

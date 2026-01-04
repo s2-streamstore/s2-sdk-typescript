@@ -91,15 +91,14 @@ export async function streamAppend(
 ) {
 	const { preferProtobuf, ...requestOptions } = options ?? {};
 
-	const hasAnyBytesRecords =
-		preferProtobuf ??
-		input.records.some(
-			(record) => computeAppendRecordFormat(record) === "bytes",
-		);
+	const hasAnyBytesRecords = input.records.some(
+		(record) => computeAppendRecordFormat(record) === "bytes",
+	);
+	const useProtobuf = hasAnyBytesRecords || preferProtobuf === true;
 
 	let response: any;
 
-	if (hasAnyBytesRecords) {
+	if (useProtobuf) {
 		const protoBody = encodeProtoAppendInput(input);
 
 		const headers = {
