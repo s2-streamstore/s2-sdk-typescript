@@ -366,7 +366,7 @@ const stream = basin.stream(streamName, {
 
 ## Patterns
 
-For higher-level, more opinionated building blocks (typed append/read sessions, framing, dedupe helpers), see `packages/patterns/README.md`.
+For higher-level, more opinionated building blocks (typed append/read sessions, framing, dedupe helpers), see the [patterns](packages/patterns/README.md) package.
 
 ## Feedback
 
