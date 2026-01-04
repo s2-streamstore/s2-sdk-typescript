@@ -34,6 +34,8 @@ See it in action on the [playground](https://s2.dev/playground).
 - SDK [documentation](https://s2-streamstore.github.io/s2-sdk-typescript/)
 - S2 REST API [documentation](https://s2.dev/docs/rest/protocol)
 
+> **Note:** The repository for releases prior to 0.16.x can be found at this [link](https://github.com/s2-streamstore/s2-sdk-typescript-old). 
+
 ## Install
 
 ```bash
