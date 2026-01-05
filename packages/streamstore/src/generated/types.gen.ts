@@ -58,8 +58,7 @@ export type AccumulationMetric = {
     /**
      * Timeseries values.
      * Each element is a tuple of a timestamp in Unix epoch seconds and a data point.
-     * The data point represents the accumulated value for the time period starting at the timestamp,
-     * spanning one `interval`.
+     * The data point represents the accumulated value for the time period starting at the timestamp, spanning one `interval`.
      */
     values: Array<[
         number,
@@ -179,7 +178,7 @@ export type BasinState = 'active' | 'creating' | 'deleting';
 export type CreateBasinRequest = {
     /**
      * Basin name which must be globally unique.
-     * It can be between 8 and 48 characters in length, and comprise lowercase letters, numbers and hyphens.
+     * It can be between 8 and 48 bytes in length, and comprise lowercase letters, numbers and hyphens.
      * It cannot begin or end with a hyphen.
      */
     basin: BasinNameStr;
@@ -223,6 +222,8 @@ export type ErrorInfo = {
 };
 
 export type FencingToken = string;
+
+export type Format = 'raw' | 'base64';
 
 export type GaugeMetric = {
     /**
@@ -316,8 +317,7 @@ export type Metric = {
     scalar: ScalarMetric;
 } | {
     /**
-     * Named series of `(timestamp, value)` points representing an accumulation over a specified
-     * interval.
+     * Named series of `(timestamp, value)` points representing an accumulation over a specified interval.
      */
     accumulation: AccumulationMetric;
 } | {
@@ -411,8 +411,6 @@ export type RetentionPolicy = {
      */
     infinite: InfiniteRetention;
 };
-
-export type S2Format = 'raw' | 'base64';
 
 export type ScalarMetric = {
     /**
@@ -756,12 +754,6 @@ export type ReconfigureBasinResponse = ReconfigureBasinResponses[keyof Reconfigu
 
 export type CreateOrReconfigureBasinData = {
     body?: null | CreateOrReconfigureBasinRequest;
-    headers?: {
-        /**
-         * Client-specified request token for idempotent retries.
-         */
-        's2-request-token'?: string;
-    };
     path: {
         /**
          * Basin name.
@@ -1063,12 +1055,6 @@ export type ReconfigureStreamResponse = ReconfigureStreamResponses[keyof Reconfi
 
 export type CreateOrReconfigureStreamData = {
     body?: null | StreamConfig;
-    headers?: {
-        /**
-         * Client-specified request token for idempotent retries.
-         */
-        's2-request-token'?: string;
-    };
     path: {
         /**
          * Stream name.
@@ -1104,7 +1090,7 @@ export type ReadData = {
          * Use `raw` (default) for efficient transmission and storage of Unicode data — storage will be in UTF-8.
          * Use `base64` for safe transmission with efficient storage of binary data.
          */
-        's2-format'?: S2Format;
+        's2-format'?: Format;
     };
     path: {
         /**
@@ -1180,7 +1166,7 @@ export type AppendData = {
          * Use `raw` (default) for efficient transmission and storage of Unicode data — storage will be in UTF-8.
          * Use `base64` for safe transmission with efficient storage of binary data.
          */
-        's2-format'?: S2Format;
+        's2-format'?: Format;
     };
     path: {
         /**
