@@ -405,12 +405,24 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					stream.on("data", (chunk: Buffer) => {
 						try {
 							const status = responseCode ?? 500;
-							if (status >= 400) {																
+							if (status >= 400) {
+								const errorText = textDecoder.decode(chunk);
+								debug("error response: status=%d body=%s", status, errorText);
 								if (status === 416) {
-									safeError(new RangeNotSatisfiableError({ status }));
+									try {
+										const errorJson = JSON.parse(errorText);
+										safeError(
+											new RangeNotSatisfiableError({
+												status,
+												code: errorJson.code,
+												tail: errorJson.tail,
+											}),
+										);
+									} catch {
+										safeError(new RangeNotSatisfiableError({ status }));
+									}
 									return;
 								}
-								const errorText = textDecoder.decode(chunk);
 								try {
 									const errorJson = JSON.parse(errorText);
 									safeError(
@@ -446,7 +458,13 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 											// Map known read errors
 											if (status === 416) {
-												safeError(new RangeNotSatisfiableError({ status }));
+												safeError(
+													new RangeNotSatisfiableError({
+														status,
+														code: errorJson.code,
+														tail: errorJson.tail,
+													}),
+												);
 											} else {
 												safeError(
 													makeServerError(
