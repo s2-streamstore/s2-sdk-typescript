@@ -763,8 +763,7 @@ class S2SAppendSession implements TransportAppendSession {
 		stream.on("data", (chunk: Buffer) => {
 			try {
 				// Check for HTTP-level errors first (before s2s frame parsing)
-				if ((responseCode ?? 200) >= 400) {
-					const status = responseCode ?? 500;
+				if ((responseCode ?? 200) >= 400) {					
 					const errorText = textDecoder.decode(chunk);
 					try {
 						const errorJson = JSON.parse(errorText);
@@ -772,7 +771,7 @@ class S2SAppendSession implements TransportAppendSession {
 							new S2Error({
 								message: errorJson.message ?? "Unknown error",
 								code: errorJson.code,
-								status,
+								status: responseCode,
 								origin: "server",
 							}),
 						);
@@ -780,7 +779,7 @@ class S2SAppendSession implements TransportAppendSession {
 						safeError(
 							new S2Error({
 								message: errorText || "Unknown error",
-								status,
+								status: responseCode,
 								origin: "server",
 							}),
 						);
