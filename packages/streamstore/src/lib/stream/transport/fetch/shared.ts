@@ -53,8 +53,15 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	if (response.error) {
 		const status = response.response.status;
 		if (status === 416) {
-			const err = response.error as { tail?: { seq_num: number; timestamp: number }; code?: string };
-			throw new RangeNotSatisfiableError({ status, tail: err.tail, code: err.code });
+			const err = response.error as {
+				tail?: { seq_num: number; timestamp: number };
+				code?: string;
+			};
+			throw new RangeNotSatisfiableError({
+				status,
+				tail: err.tail,
+				code: err.code,
+			});
 		}
 		throw makeServerError(
 			{ status, statusText: response.response.statusText },

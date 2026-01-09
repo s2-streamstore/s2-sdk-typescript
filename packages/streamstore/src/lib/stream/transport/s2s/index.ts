@@ -781,7 +781,7 @@ class S2SAppendSession implements TransportAppendSession {
 		stream.on("data", (chunk: Buffer) => {
 			try {
 				// Check for HTTP-level errors first (before s2s frame parsing)
-				if ((responseCode ?? 200) >= 400) {					
+				if ((responseCode ?? 200) >= 400) {
 					const errorText = textDecoder.decode(chunk);
 					try {
 						const errorJson = JSON.parse(errorText);
