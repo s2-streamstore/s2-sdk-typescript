@@ -356,19 +356,27 @@ export class FencingTokenMismatchError extends S2Error {
  * This occurs when you specify a `startSeqNum` that is greater than the current tail
  * of the stream (HTTP 416 Range Not Satisfiable).
  *
+ * The `tail` property contains the current tail position of the stream.
+ *
  * To handle this gracefully, you can set `clamp: true` in your read options to
  * automatically start from the tail instead of throwing an error.
  */
 export class RangeNotSatisfiableError extends S2Error {
+	/** The current tail position of the stream. */
+	public readonly tail?: { seq_num: number; timestamp: number };
+
 	constructor({
-		message = "Range not satisfiable: requested position is beyond the stream tail. Use 'clamp: true' to start from the tail instead.",
 		code,
 		status = 416,
+		tail,
 	}: {
-		message?: string;
 		code?: string;
 		status?: number;
+		tail?: { seq_num: number; timestamp: number };
 	} = {}) {
+		const message = tail
+			? `Range not satisfiable: requested position is beyond the stream tail (seq_num=${tail.seq_num}). Use 'clamp: true' to start from the tail instead.`
+			: "Range not satisfiable: requested position is beyond the stream tail. Use 'clamp: true' to start from the tail instead.";
 		super({
 			message,
 			code,
@@ -376,6 +384,7 @@ export class RangeNotSatisfiableError extends S2Error {
 			origin: "server",
 		});
 		this.name = "RangeNotSatisfiableError";
+		this.tail = tail;
 	}
 }
 
