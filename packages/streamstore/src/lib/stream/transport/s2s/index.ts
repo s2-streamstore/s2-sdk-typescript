@@ -404,7 +404,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 					stream.on("data", (chunk: Buffer) => {
 						try {
-							if ((responseCode ?? 500) >= 400) {
+							const status = responseCode ?? 500;
+							if (status >= 400) {																
+								if (status === 416) {
+									safeError(new RangeNotSatisfiableError({ status }));
+									return;
+								}
 								const errorText = textDecoder.decode(chunk);
 								try {
 									const errorJson = JSON.parse(errorText);
@@ -412,7 +417,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										new S2Error({
 											message: errorJson.message ?? "Unknown error",
 											code: errorJson.code,
-											status: responseCode,
+											status,
 											origin: "server",
 										}),
 									);
@@ -420,7 +425,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									safeError(
 										new S2Error({
 											message: errorText || "Unknown error",
-											status: responseCode,
+											status,
 											origin: "server",
 										}),
 									);
@@ -759,6 +764,7 @@ class S2SAppendSession implements TransportAppendSession {
 			try {
 				// Check for HTTP-level errors first (before s2s frame parsing)
 				if ((responseCode ?? 200) >= 400) {
+					const status = responseCode ?? 500;
 					const errorText = textDecoder.decode(chunk);
 					try {
 						const errorJson = JSON.parse(errorText);
@@ -766,7 +772,7 @@ class S2SAppendSession implements TransportAppendSession {
 							new S2Error({
 								message: errorJson.message ?? "Unknown error",
 								code: errorJson.code,
-								status: responseCode,
+								status,
 								origin: "server",
 							}),
 						);
@@ -774,7 +780,7 @@ class S2SAppendSession implements TransportAppendSession {
 						safeError(
 							new S2Error({
 								message: errorText || "Unknown error",
-								status: responseCode,
+								status,
 								origin: "server",
 							}),
 						);
