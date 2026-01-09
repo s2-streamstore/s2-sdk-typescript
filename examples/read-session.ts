@@ -30,7 +30,9 @@ await basin.streams.create({ stream: streamName }).catch((error: unknown) => {
 	}
 });
 
-const stream = basin.stream(streamName);
+const stream = basin.stream(streamName, {
+	forceTransport: "s2s",
+});
 
 // Ensure there is at least one record so the snippet has something to show.
 await stream.append(
@@ -41,8 +43,8 @@ await stream.append(
 
 // snippet-region read-session-core start
 const readSession = await stream.readSession({
-	start: { from: { tailOffset: 10 }, clamp: true },
-	stop: { waitSecs: 10 },
+	start: { from: { seqNum: 10 }, clamp: true },
+	// stop: { waitSecs: 10 },
 });
 
 for await (const record of readSession) {
