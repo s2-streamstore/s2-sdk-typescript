@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.0
+
+### Minor Changes
+
+- 1c13db6: Minor fix to handle 416 explicitly in s2s read session
+
 ## 0.21.0
 
 ### Minor Changes
