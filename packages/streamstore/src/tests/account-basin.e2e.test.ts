@@ -44,9 +44,10 @@ describeIf("Basin Management Integration Tests", () => {
 	let s2: S2;
 	let basinName: string;
 	let basin: S2Basin;
+	let env: Partial<S2ClientOptions>;
 
 	beforeAll(() => {
-		const env = S2Environment.parse();
+		env = S2Environment.parse();
 		if (!env.accessToken) return;
 		s2 = new S2(env as S2ClientOptions);
 	});
@@ -253,6 +254,7 @@ describeIf("Basin Management Integration Tests", () => {
 			// Step 12: Create a new S2 client with the scoped token
 			const scopedS2 = new S2({
 				accessToken: tokenResponse.accessToken,
+				endpoints: env.endpoints,
 			});
 
 			// Step 13: List streams using the scoped client
