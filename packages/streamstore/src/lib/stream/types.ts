@@ -7,7 +7,7 @@ import type * as Result from "../result.js";
 
 export type ReadHeaders<Format extends "string" | "bytes" = "string"> =
 	Format extends "string"
-		? Record<string, string>
+		? Array<[string, string]>
 		: Array<[Uint8Array, Uint8Array]>;
 
 /**

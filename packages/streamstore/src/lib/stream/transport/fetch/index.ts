@@ -143,9 +143,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 							...rawBatch,
 							records: rawBatch.records.map((record) => ({
 								...record,
-								headers: record.headers
-									? Object.fromEntries(record.headers)
-									: undefined,
+								headers: record.headers || undefined,
 							})),
 						} satisfies ReadBatch<"string">;
 					}

@@ -79,9 +79,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 		records:
 			response.data.records?.map((record: API.SequencedRecord) => ({
 				...record,
-				headers: record.headers
-					? Object.fromEntries(record.headers)
-					: undefined,
+				headers: record.headers || undefined,
 			})) ?? [],
 	};
 	return res as ReadBatch<Format>;
