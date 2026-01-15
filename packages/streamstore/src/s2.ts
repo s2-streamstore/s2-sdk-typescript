@@ -3,7 +3,7 @@ import { S2Basin } from "./basin.js";
 import { S2Basins } from "./basins.js";
 import type { RetryConfig, S2ClientOptions } from "./common.js";
 import { S2Endpoints } from "./endpoints.js";
-import { makeServerError } from "./error.js";
+import { S2Error, makeServerError } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
@@ -12,6 +12,12 @@ import {
 	DEFAULT_USER_AGENT,
 } from "./lib/stream/runtime.js";
 import { S2Metrics } from "./metrics.js";
+
+/**
+ * Basin names must be 8-48 characters, lowercase alphanumeric and hyphens,
+ * cannot start or end with a hyphen.
+ */
+const BASIN_NAME_REGEX = /^[a-z0-9][a-z0-9-]{6,46}[a-z0-9]$/;
 
 /**
  * Top-level S2 SDK client.
@@ -71,9 +77,18 @@ export class S2 {
 	/**
 	 * Create a basin-scoped client bound to a specific basin name.
 	 *
-	 * @param name Basin name.
+	 * @param name Basin name (8-48 characters, lowercase alphanumeric and hyphens, no leading/trailing hyphens).
+	 * @throws {S2Error} If the basin name is invalid.
 	 */
 	public basin(name: string) {
+		if (!BASIN_NAME_REGEX.test(name)) {
+			throw new S2Error({
+				message:
+					`Invalid basin name: "${name}". Basin names must be 8-48 characters, ` +
+					`contain only lowercase letters, numbers, and hyphens, and cannot start or end with a hyphen.`,
+				origin: "sdk",
+			});
+		}
 		return new S2Basin(name, {
 			accessToken: this.accessToken,
 			baseUrl: this.endpoints.basinBaseUrl(name),
