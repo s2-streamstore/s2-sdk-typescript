@@ -103,7 +103,7 @@ export class EndpointTemplate {
 	/**
 	 * Resolve the template into a base URL string.
 	 *
-	 * - If `{basin}` appears in the hostname, it is substituted verbatim (basin names are already validated elsewhere).
+	 * - If `{basin}` appears in the hostname, it is substituted verbatim (basin names are validated by S2.basin()).
 	 * - If `{basin}` appears in the path/query/hash, it is substituted via `encodeURIComponent`.
 	 */
 	public baseUrl(basin?: string): string {

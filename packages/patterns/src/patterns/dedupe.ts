@@ -61,11 +61,19 @@ export function extractDedupeSeq(
 }
 
 /**
- * Simple dedupe filter for a single-writer stream.
+ * Dedupe filter for a single-writer stream with crash recovery.
  *
- * Assumes per-record dedupe sequence numbers are monotonically increasing and
- * delivered in order. Any record with seq <= lastSeenSeq is considered a
- * duplicate and should be dropped.
+ * Designed for streams where only one writer is active at a time, but the
+ * writer may crash and restart with a new session (and thus a new `_writer_id`).
+ * When a new writer ID is seen, the filter resets its state, assuming the
+ * previous writer is no longer active.
+ *
+ * Within a writer session, dedupe sequence numbers must be monotonically
+ * increasing and delivered in order. Records with seq <= lastSeenSeq are
+ * considered duplicates (from retried appends) and should be dropped.
+ *
+ * Note: This does not support multiple concurrent writers. If writers
+ * interleave, duplicates from earlier writers may not be filtered correctly.
  */
 export class DedupeFilter {
 	private lastSeenSeq: number | undefined;

@@ -2,6 +2,7 @@ import { AppendHeaders, AppendRecord, meteredBytes } from "@s2-dev/streamstore";
 
 import {
 	DEDUPE_SEQ_HEADER_BYTES,
+	DEDUPE_WRITER_UNIQ_ID,
 	FRAME_BYTES_HEADER_BYTES,
 	FRAME_RECORDS_HEADER_BYTES,
 } from "./constants.js";
@@ -18,7 +19,7 @@ export const MAX_RECORD_BYTES = 1024 * 1024;
  *
  * We assume:
  * - binary format headers (Uint8Array keys/values)
- * - three headers: frame_bytes, frame_records, dedupe_seq
+ * - four headers: frame_bytes, frame_records, dedupe_seq, writer_id
  *
  * This uses the SDK's meteredBytes implementation so it stays correct if
  * the sizing rules ever change.
@@ -33,6 +34,7 @@ function computeOverheads(): {
 		[FRAME_RECORDS_HEADER_BYTES, new Uint8Array(8)],
 		[FRAME_BYTES_HEADER_BYTES, new Uint8Array(8)],
 		[DEDUPE_SEQ_HEADER_BYTES, new Uint8Array(8)],
+		[DEDUPE_WRITER_UNIQ_ID, new Uint8Array(12)], // 12 bytes for nanoid(12)
 	];
 
 	const withHeaders = AppendRecord.bytes({ body: new Uint8Array(0), headers });
