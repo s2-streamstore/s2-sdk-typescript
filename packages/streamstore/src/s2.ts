@@ -3,7 +3,7 @@ import { S2Basin } from "./basin.js";
 import { S2Basins } from "./basins.js";
 import type { RetryConfig, S2ClientOptions } from "./common.js";
 import { S2Endpoints } from "./endpoints.js";
-import { S2Error, makeServerError } from "./error.js";
+import { makeServerError, S2Error } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import * as Redacted from "./lib/redacted.js";
