@@ -1,5 +1,11 @@
 # @s2-dev/streamstore-patterns
 
+## 2.1.1
+
+### Patch Changes
+
+- 0105c3a: Bugfixes
+
 ## 2.1.0
 
 ### Minor Changes

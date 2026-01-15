@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.1
+
+### Patch Changes
+
+- 0105c3a: Bugfixes
+
 ## 0.22.0
 
 ### Minor Changes

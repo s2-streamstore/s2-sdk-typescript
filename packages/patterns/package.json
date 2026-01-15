@@ -1,6 +1,6 @@
 {
   "name": "@s2-dev/streamstore-patterns",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Add-on patterns built on top of the S2 StreamStore TypeScript SDK.",
   "license": "MIT",
   "type": "module",
