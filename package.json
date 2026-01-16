@@ -27,7 +27,7 @@
     "gen:version": "bun run --cwd packages/streamstore gen:version",
     "release": "changeset publish",
     "gen:openapi": "openapi-ts",
-    "gen:proto": "protoc --ts_out packages/streamstore/src/generated/proto --ts_opt ts_nocheck --proto_path s2-protos s2-protos/s2/v1/s2.proto && mv packages/streamstore/src/generated/proto/s2/v1/s2.ts packages/streamstore/src/generated/proto/s2.ts",
+    "gen:proto": "protoc --ts_out packages/streamstore/src/generated/proto --ts_opt ts_nocheck --proto_path s2-specs s2-specs/s2/v1/s2.proto && mv packages/streamstore/src/generated/proto/s2/v1/s2.ts packages/streamstore/src/generated/proto/s2.ts",
     "docs": "typedoc",
     "snippets": "node scripts/sync-snippets.mjs",
     "check:snippets": "tsc --noEmit -p examples/tsconfig.json"

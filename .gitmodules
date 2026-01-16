@@ -1,3 +1,3 @@
-[submodule "s2-protos"]
-	path = s2-protos
-	url = https://github.com/s2-streamstore/s2-protos
+[submodule "s2-specs"]
+	path = s2-specs
+	url = https://github.com/s2-streamstore/s2-specs
