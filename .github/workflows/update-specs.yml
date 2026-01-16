@@ -1,4 +1,4 @@
-name: Update s2-protos submodule
+name: Update s2-specs submodule
 
 permissions:
   contents: write
@@ -6,11 +6,11 @@ permissions:
 
 on:
   repository_dispatch:
-    types: [s2-proto-update]
+    types: [s2-specs-update]
   workflow_dispatch:
 
 jobs:
-  update-protos:
+  update-specs:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,18 +23,18 @@ jobs:
         id: submodules
         uses: sgoudham/update-git-submodules@v2.1.1
         with:
-          submodules: s2-protos
+          submodules: s2-specs
 
       - name: Setup Bun
-        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        if: ${{ steps.submodules.outputs['s2-specs--updated'] }}
         uses: oven-sh/setup-bun@v2
 
       - name: Install Dependencies
-        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        if: ${{ steps.submodules.outputs['s2-specs--updated'] }}
         run: bun install
 
       - name: Regenerate Proto and OpenAPI files
-        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        if: ${{ steps.submodules.outputs['s2-specs--updated'] }}
         run: |
           mkdir -p packages/streamstore/src/generated/proto
           bun run gen:proto
@@ -42,24 +42,24 @@ jobs:
           git add packages/streamstore/src/generated
 
       - name: Create Pull Request
-        if: ${{ steps.submodules.outputs['s2-protos--updated'] }}
+        if: ${{ steps.submodules.outputs['s2-specs--updated'] }}
         uses: peter-evans/create-pull-request@v7
         with:
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          title: "chore: update s2-protos to ${{ steps.submodules.outputs['s2-protos--latestShortCommitSha'] }}"
-          branch: "protos/update-s2-protos-${{ steps.submodules.outputs['s2-protos--latestShortCommitSha'] }}"
+          title: "chore: update s2-specs to ${{ steps.submodules.outputs['s2-specs--latestShortCommitSha'] }}"
+          branch: "specs/update-s2-specs-${{ steps.submodules.outputs['s2-specs--latestShortCommitSha'] }}"
           body: |
-            ## s2-protos Update
+            ## s2-specs Update
 
             ${{ steps.submodules.outputs.prBody }}
 
             ### Changes
-            - Updated s2-protos submodule
+            - Updated s2-specs submodule
             - Regenerated proto TypeScript files
             - Regenerated OpenAPI TypeScript files
 
-            **Commit:** ${{ steps.submodules.outputs['s2-protos--latestCommitSha'] }}
+            **Commit:** ${{ steps.submodules.outputs['s2-specs--latestCommitSha'] }}
           labels: |
             dependencies
-            protos
+            specs
