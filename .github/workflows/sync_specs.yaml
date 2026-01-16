@@ -1,4 +1,4 @@
-name: Update s2-specs submodule
+name: Sync specs submodule
 
 permissions:
   contents: write
@@ -43,10 +43,11 @@ jobs:
 
       - name: Create Pull Request
         if: ${{ steps.submodules.outputs['s2-specs--updated'] }}
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
-          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          committer: s2-helper[bot] <194906454+s2-helper[bot]@users.noreply.github.com>
+          author: s2-helper[bot] <194906454+s2-helper[bot]@users.noreply.github.com>
+          sign-commits: true
           title: "chore: update s2-specs to ${{ steps.submodules.outputs['s2-specs--latestShortCommitSha'] }}"
           branch: "specs/update-s2-specs-${{ steps.submodules.outputs['s2-specs--latestShortCommitSha'] }}"
           body: |
