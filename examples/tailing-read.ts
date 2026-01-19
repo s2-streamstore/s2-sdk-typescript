@@ -42,7 +42,7 @@ const appendSession = await streamClient.appendSession({
 const readAbort = new AbortController();
 const readSession = await streamClient.readSession(
 	{
-		start: { from: { tailOffset: 0 }, clamp: true },
+		start: { from: { seqNum: 0 }, clamp: true },
 	},
 	{ signal: readAbort.signal },
 );
@@ -69,6 +69,7 @@ const readLoop = async () => {
 	try {
 		for await (const record of readSession) {
 			console.log("tailing read:", record.seqNum, record.body);
+			console.log("last observed tail: %s, next read position %s", readSession.lastObservedTail(), readSession.nextReadPosition())
 		}
 	} catch (error: unknown) {
 		if (
