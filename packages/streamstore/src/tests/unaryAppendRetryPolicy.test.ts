@@ -28,8 +28,8 @@ describe("Unary append retry policy", () => {
 		const stream = new S2Stream("test", {} as any, {} as any, {
 			appendRetryPolicy: "noSideEffects",
 			maxAttempts: 2,
-			minDelayMillis: 1,
-			maxDelayMillis: 1,
+			minBaseDelayMillis: 1,
+			maxBaseDelayMillis: 1,
 		});
 
 		const ack = await stream.append(
@@ -51,8 +51,8 @@ describe("Unary append retry policy", () => {
 		const stream = new S2Stream("test", {} as any, {} as any, {
 			appendRetryPolicy: "noSideEffects",
 			maxAttempts: 2,
-			minDelayMillis: 1,
-			maxDelayMillis: 1,
+			minBaseDelayMillis: 1,
+			maxBaseDelayMillis: 1,
 		});
 
 		await expect(

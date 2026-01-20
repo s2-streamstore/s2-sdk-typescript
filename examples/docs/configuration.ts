@@ -29,8 +29,8 @@ import { S2 } from "@s2-dev/streamstore";
 		accessToken: token,
 		retry: {
 			maxAttempts: 5,
-			minDelayMillis: 100,
-			maxDelayMillis: 2000,
+			minBaseDelayMillis: 100,
+			maxBaseDelayMillis: 2000,
 		},
 	});
 	// ANCHOR_END: retry-config
