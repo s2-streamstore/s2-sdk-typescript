@@ -124,21 +124,20 @@ export class S2Basins {
 	 * List all basins with automatic pagination.
 	 * Returns a lazy async iterable that fetches pages as needed.
 	 *
-	 * @param includeDeleted - Include basins that are being deleted (default: false)
-	 * @param args - Optional filtering options: `prefix` to filter by name prefix, `limit` for max results per page
+	 * @param args - Optional options: `prefix` to filter by name prefix, `limit` for max results per page, `includeDeleted` to include basins pending deletion
 	 *
 	 * @example
 	 * ```ts
-	 * for await (const basin of s2.basins.listAll(false, { prefix: "my-" })) {
+	 * for await (const basin of s2.basins.listAll({ prefix: "my-" })) {
 	 *   console.log(basin.name);
 	 * }
 	 * ```
 	 */
 	public listAll(
-		includeDeleted = false,
 		args?: Types.ListAllBasinsInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.BasinInfo> {
+		const { includeDeleted, ...listArgs } = args ?? {};
 		return paginate(
 			(a) =>
 				this.list(a, options).then((r) => ({
@@ -147,7 +146,7 @@ export class S2Basins {
 					),
 					hasMore: r.hasMore,
 				})),
-			args ?? {},
+			listArgs,
 			(basin) => basin.name,
 		);
 	}

@@ -157,3 +157,14 @@ function accessTokenAutoPrefix() {
 void accessTokenReadOnly;
 void accessTokenGranular;
 void accessTokenAutoPrefix;
+
+// Pagination example - not executed by default
+async function paginationExample() {
+	// ANCHOR: pagination
+	// Iterate through all streams with automatic pagination
+	for await (const stream of basin.streams.listAll()) {
+		console.log(stream.name);
+	}
+	// ANCHOR_END: pagination
+}
+void paginationExample;
