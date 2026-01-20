@@ -42,10 +42,8 @@ import { S2 } from "@s2-dev/streamstore";
 	// ANCHOR: timeout-config
 	const client = new S2({
 		accessToken: token,
-		retry: {
-			connectionTimeoutMillis: 5000,
-			requestTimeoutMillis: 10000,
-		},
+		connectionTimeoutMillis: 3000,
+		requestTimeoutMillis: 5000,
 	});
 	// ANCHOR_END: timeout-config
 	void client;

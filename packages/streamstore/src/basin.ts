@@ -39,6 +39,8 @@ export class S2Basin {
 			baseUrl: options.baseUrl,
 			accessToken: options.accessToken,
 			basinName: options.includeBasinHeader ? name : undefined,
+			connectionTimeoutMillis: options.retryConfig?.connectionTimeoutMillis,
+			requestTimeoutMillis: options.retryConfig?.requestTimeoutMillis,
 			retry: options.retryConfig,
 		};
 		const headers: Record<string, string> = {};
