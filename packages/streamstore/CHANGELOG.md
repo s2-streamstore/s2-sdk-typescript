@@ -1,5 +1,15 @@
 # @s2-dev/streamstore
 
+## 0.22.2
+
+### Patch Changes
+
+- 792b99a: - Promote connectionTimeoutMillis and requestTimeoutMillis to top-level client options
+  - Deprecate timeout settings under retry config (backwards-compatible)
+  - Reduce default connection timeout from 5s to 3s
+  - Change basins.listAll() and streams.listAll() to accept includeDeleted in options object instead of as first positional argument
+  - Rename delay config options to clarify they apply to base delay
+
 ## 0.22.1
 
 ### Patch Changes
