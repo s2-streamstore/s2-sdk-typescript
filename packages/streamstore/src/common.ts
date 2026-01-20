@@ -21,18 +21,18 @@ export type RetryConfig = {
 
 	/**
 	 * Minimum delay in milliseconds for exponential backoff.
-	 * The first retry will have a delay in the range [minDelayMillis, 2*minDelayMillis).
+	 * The first retry will have a delay in the range [minBaseDelayMillis, 2*minBaseDelayMillis).
 	 * @default 100
 	 */
-	minDelayMillis?: number;
+	minBaseDelayMillis?: number;
 
 	/**
 	 * Maximum base delay in milliseconds for exponential backoff.
 	 * Once the exponential backoff reaches this value, it stays capped here.
-	 * Note: actual delay with jitter can be up to 2*maxDelayMillis.
+	 * Note: actual delay with jitter can be up to 2*maxBaseDelayMillis.
 	 * @default 1000
 	 */
-	maxDelayMillis?: number;
+	maxBaseDelayMillis?: number;
 
 	/**
 	 * Policy for retrying append operations.
@@ -45,6 +45,8 @@ export type RetryConfig = {
 	 * the attempt timed out and applying retry logic.
 	 *
 	 * Used by retrying append sessions. When unset, defaults to 5000ms.
+	 *
+	 * @deprecated Use `requestTimeoutMillis` on {@link S2ClientOptions} instead.
 	 */
 	requestTimeoutMillis?: number;
 
@@ -56,7 +58,8 @@ export type RetryConfig = {
 	 * Only applies to S2S (HTTP/2) transport when establishing new connections.
 	 * Reused pooled connections are not subject to this timeout.
 	 *
-	 * @default 5000
+	 * @default 3000
+	 * @deprecated Use `connectionTimeoutMillis` on {@link S2ClientOptions} instead.
 	 */
 	connectionTimeoutMillis?: number;
 };
@@ -104,9 +107,27 @@ export type S2ClientOptions = {
 	 */
 	endpoints?: S2Endpoints | S2EndpointsInit;
 	/**
+	 * Maximum time in milliseconds to wait for an append ack before considering
+	 * the attempt timed out and applying retry logic.
+	 *
+	 * Used by retrying append sessions. When unset, defaults to 5000ms.
+	 */
+	requestTimeoutMillis?: number;
+	/**
+	 * Maximum time in milliseconds to wait for connection establishment.
+	 * This is a "fail fast" timeout that aborts slow connections early.
+	 * Connection time counts toward requestTimeoutMillis.
+	 *
+	 * Only applies to S2S (HTTP/2) transport when establishing new connections.
+	 * Reused pooled connections are not subject to this timeout.
+	 *
+	 * @default 3000
+	 */
+	connectionTimeoutMillis?: number;
+	/**
 	 * Retry configuration for handling transient failures.
 	 * Applies to management operations (basins, streams, tokens) and stream operations (read, append).
-	 * @default { maxAttempts: 3, minDelayMillis: 100, maxDelayMillis: 1000, appendRetryPolicy: "all" }
+	 * @default { maxAttempts: 3, minBaseDelayMillis: 100, maxBaseDelayMillis: 1000, appendRetryPolicy: "all" }
 	 */
 	retry?: RetryConfig;
 };

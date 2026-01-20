@@ -25,7 +25,7 @@ const s2 = new S2({
 	accessToken,
 	retry: {
 		maxAttempts: 10,
-		minDelayMillis: 100,
+		minBaseDelayMillis: 100,
 		appendRetryPolicy: "all",
 	},
 });

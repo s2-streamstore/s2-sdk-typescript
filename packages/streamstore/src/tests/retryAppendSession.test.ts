@@ -237,8 +237,8 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 			undefined,
 			{
-				minDelayMillis: 1,
-				maxDelayMillis: 1,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
 				maxAttempts: 2,
 				appendRetryPolicy: "all",
 			},
@@ -262,8 +262,8 @@ describe("AppendSessionImpl (unit)", () => {
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
 			{
-				minDelayMillis: 1,
-				maxDelayMillis: 1,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
 				maxAttempts: 1,
 				appendRetryPolicy: "all",
 			},
@@ -284,8 +284,8 @@ describe("AppendSessionImpl (unit)", () => {
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
 			{
-				minDelayMillis: 1,
-				maxDelayMillis: 1,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
 				maxAttempts: 2,
 				appendRetryPolicy: "noSideEffects",
 			},
@@ -304,8 +304,8 @@ describe("AppendSessionImpl (unit)", () => {
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
 			{
-				minDelayMillis: 1,
-				maxDelayMillis: 1,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
 				maxAttempts: 2,
 				appendRetryPolicy: "noSideEffects",
 			},
@@ -338,7 +338,7 @@ describe("AppendSessionImpl (unit)", () => {
 		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ customAcks: [ack1, ack2] }),
 			undefined,
-			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 1 }, // No retries
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 }, // No retries
 		);
 
 		// First submit should succeed
@@ -394,7 +394,7 @@ describe("AppendSessionImpl (unit)", () => {
 		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ customAcks: [ack1, ack2] }),
 			undefined,
-			{ minDelayMillis: 1, maxDelayMillis: 1, maxAttempts: 1 },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
 		);
 
 		// First submit should succeed

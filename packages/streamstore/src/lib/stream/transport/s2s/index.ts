@@ -187,7 +187,7 @@ export class S2STransport implements SessionTransport {
 
 		// Apply connection timeout if configured
 		const connectionTimeout =
-			this.transportConfig.retry?.connectionTimeoutMillis ?? 5000;
+			this.transportConfig.connectionTimeoutMillis ?? 3000;
 
 		let timeoutId: NodeJS.Timeout | undefined;
 		const timeoutPromise = new Promise<never>((_, reject) => {

@@ -90,11 +90,11 @@ function toSDKReadRecord<Format extends "string" | "bytes">(
  */
 export const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
 	maxAttempts: 3,
-	minDelayMillis: 100,
-	maxDelayMillis: 1000,
+	minBaseDelayMillis: 100,
+	maxBaseDelayMillis: 1000,
 	appendRetryPolicy: "all",
 	requestTimeoutMillis: 5000, // 5 seconds
-	connectionTimeoutMillis: 5000, // 5 seconds
+	connectionTimeoutMillis: 3000, // 3 seconds
 };
 
 const RETRYABLE_STATUS_CODES = new Set([
@@ -131,23 +131,23 @@ export function isRetryable(error: S2Error): boolean {
  * with additive jitter.
  *
  * Formula:
- *   baseDelay = min(minDelayMillis * 2^attempt, maxDelayMillis)
+ *   baseDelay = min(minBaseDelayMillis * 2^attempt, maxBaseDelayMillis)
  *   jitter = random(0, baseDelay)
  *   delay = baseDelay + jitter
  *
  * @param attempt - Zero-based retry attempt number (0 = first retry)
- * @param minDelayMillis - Minimum delay for exponential backoff
- * @param maxDelayMillis - Maximum base delay (actual delay can be up to 2x with jitter)
+ * @param minBaseDelayMillis - Minimum delay for exponential backoff
+ * @param maxBaseDelayMillis - Maximum base delay (actual delay can be up to 2x with jitter)
  */
 export function calculateDelay(
 	attempt: number,
-	minDelayMillis: number,
-	maxDelayMillis: number,
+	minBaseDelayMillis: number,
+	maxBaseDelayMillis: number,
 ): number {
 	// Calculate exponential backoff: minDelay * 2^attempt, capped at maxDelay
 	const baseDelay = Math.min(
-		minDelayMillis * Math.pow(2, attempt),
-		maxDelayMillis,
+		minBaseDelayMillis * Math.pow(2, attempt),
+		maxBaseDelayMillis,
 	);
 
 	// Add jitter: random value in [0, baseDelay)
@@ -220,8 +220,8 @@ export async function withRetries<T>(
 			// Calculate delay and wait before retrying
 			const delay = calculateDelay(
 				attemptNo - 1,
-				config.minDelayMillis,
-				config.maxDelayMillis,
+				config.minBaseDelayMillis,
+				config.maxBaseDelayMillis,
 			);
 			debugWith(
 				"retryable error, backing off for %dms, status=%s",
@@ -275,8 +275,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				if (isRetryable(error) && attempt < effectiveMax - 1) {
 					const delay = calculateDelay(
 						attempt,
-						retryConfig.minDelayMillis,
-						retryConfig.maxDelayMillis,
+						retryConfig.minBaseDelayMillis,
+						retryConfig.maxBaseDelayMillis,
 					);
 					debugRead(
 						"connection error in create, will retry after %dms, status=%s",
@@ -334,8 +334,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							if (isRetryable(error) && attempt < effectiveMax - 1) {
 								const delay = calculateDelay(
 									attempt,
-									retryConfig.minDelayMillis,
-									retryConfig.maxDelayMillis,
+									retryConfig.minBaseDelayMillis,
+									retryConfig.maxBaseDelayMillis,
 								);
 								debugRead(
 									"connection error, will retry after %dms, status=%s",
@@ -386,8 +386,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								// Compute planned backoff delay now so we can subtract it from wait budget
 								const delay = calculateDelay(
 									attempt,
-									retryConfig.minDelayMillis,
-									retryConfig.maxDelayMillis,
+									retryConfig.minBaseDelayMillis,
+									retryConfig.maxBaseDelayMillis,
 								);
 								// Recompute remaining budget from original request each time to avoid double-subtraction
 								if (baselineCount !== undefined) {
@@ -1014,8 +1014,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.consecutiveFailures++;
 				const delay = calculateDelay(
 					this.consecutiveFailures - 1,
-					this.retryConfig.minDelayMillis,
-					this.retryConfig.maxDelayMillis,
+					this.retryConfig.minBaseDelayMillis,
+					this.retryConfig.maxBaseDelayMillis,
 				);
 				debugSession(
 					"[%s] [PUMP] session creation failed, backing off for %dms",
@@ -1258,8 +1258,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		// Calculate backoff delay
 		const delay = calculateDelay(
 			this.consecutiveFailures - 1,
-			this.retryConfig.minDelayMillis,
-			this.retryConfig.maxDelayMillis,
+			this.retryConfig.minBaseDelayMillis,
+			this.retryConfig.maxBaseDelayMillis,
 		);
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);

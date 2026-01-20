@@ -42,8 +42,8 @@ describeIf("Correctness Integration Tests", () => {
 		const retryConfig = {
 			appendRetryPolicy: "all" as const,
 			maxAttempts: 65536,
-			minDelayMillis: 1000,
-			maxDelayMillis: 1000,
+			minBaseDelayMillis: 1000,
+			maxBaseDelayMillis: 1000,
 			requestTimeoutMillis: 5_000,
 		};
 

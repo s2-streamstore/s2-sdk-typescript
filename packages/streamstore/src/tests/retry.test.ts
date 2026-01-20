@@ -22,7 +22,7 @@ describe("Retry Logic", () => {
 				.mockResolvedValue("success");
 
 			const result = await withRetries(
-				{ maxAttempts: 3, minDelayMillis: 1, maxDelayMillis: 1 },
+				{ maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
 				fn,
 			);
 
@@ -36,7 +36,7 @@ describe("Retry Logic", () => {
 
 			await expect(
 				withRetries(
-					{ maxAttempts: 3, minDelayMillis: 1, maxDelayMillis: 1 },
+					{ maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
 					fn,
 				),
 			).rejects.toThrow(error);
@@ -53,7 +53,7 @@ describe("Retry Logic", () => {
 				.mockResolvedValue("success");
 
 			const result = await withRetries(
-				{ maxAttempts: 3, minDelayMillis: 1, maxDelayMillis: 1 },
+				{ maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
 				fn,
 			);
 
@@ -67,7 +67,7 @@ describe("Retry Logic", () => {
 
 			await expect(
 				withRetries(
-					{ maxAttempts: 2, minDelayMillis: 1, maxDelayMillis: 1 },
+					{ maxAttempts: 2, minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
 					fn,
 				),
 			).rejects.toThrow(error);
@@ -82,7 +82,7 @@ describe("Retry Logic", () => {
 
 			await expect(
 				withRetries(
-					{ maxAttempts: 1, minDelayMillis: 1, maxDelayMillis: 1 },
+					{ maxAttempts: 1, minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
 					fn,
 				),
 			).rejects.toThrow(error);
@@ -102,11 +102,11 @@ describe("Retry Logic", () => {
 	describe("DEFAULT_RETRY_CONFIG", () => {
 		it("should have correct default values", () => {
 			expect(DEFAULT_RETRY_CONFIG.maxAttempts).toBe(3);
-			expect(DEFAULT_RETRY_CONFIG.minDelayMillis).toBe(100);
-			expect(DEFAULT_RETRY_CONFIG.maxDelayMillis).toBe(1000);
+			expect(DEFAULT_RETRY_CONFIG.minBaseDelayMillis).toBe(100);
+			expect(DEFAULT_RETRY_CONFIG.maxBaseDelayMillis).toBe(1000);
 			expect(DEFAULT_RETRY_CONFIG.appendRetryPolicy).toBe("all");
 			expect(DEFAULT_RETRY_CONFIG.requestTimeoutMillis).toBe(5000);
-			expect(DEFAULT_RETRY_CONFIG.connectionTimeoutMillis).toBe(5000);
+			expect(DEFAULT_RETRY_CONFIG.connectionTimeoutMillis).toBe(3000);
 		});
 	});
 });

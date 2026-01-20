@@ -231,6 +231,14 @@ export interface TransportConfig {
 	 */
 	basinName?: string;
 	/**
+	 * Maximum time in milliseconds to wait for an append ack before timing out.
+	 */
+	requestTimeoutMillis?: number;
+	/**
+	 * Maximum time in milliseconds to wait for connection establishment.
+	 */
+	connectionTimeoutMillis?: number;
+	/**
 	 * Retry configuration inherited from the top-level client
 	 */
 	retry?: RetryConfig;

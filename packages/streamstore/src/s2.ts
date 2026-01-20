@@ -48,7 +48,16 @@ export class S2 {
 	 */
 	constructor(options: S2ClientOptions) {
 		this.accessToken = Redacted.make(options.accessToken);
-		this.retryConfig = options.retry ?? {};
+		// Merge timeout config: top-level options take precedence over retry.* for backwards compatibility
+		this.retryConfig = {
+			...options.retry,
+			...(options.requestTimeoutMillis !== undefined && {
+				requestTimeoutMillis: options.requestTimeoutMillis,
+			}),
+			...(options.connectionTimeoutMillis !== undefined && {
+				connectionTimeoutMillis: options.connectionTimeoutMillis,
+			}),
+		};
 		this.endpoints =
 			options.endpoints instanceof S2Endpoints
 				? options.endpoints

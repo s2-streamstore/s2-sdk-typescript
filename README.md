@@ -325,8 +325,8 @@ const s2 = new S2({
 	accessToken,
 	retry: {
 		maxAttempts: 3,
-		minDelayMillis: 100,
-		maxDelayMillis: 500,
+		minBaseDelayMillis: 100,
+		maxBaseDelayMillis: 500,
 		appendRetryPolicy: "all",
 		requestTimeoutMillis: 5_000,
 	},

@@ -31,8 +31,12 @@ export type PageFetcher<TItem, TArgs> = (
 /**
  * Arguments for listAll pagination methods.
  * Omits startAfter since pagination is handled automatically.
+ * Adds includeDeleted option to include resources pending deletion.
  */
-export type ListAllArgs<TArgs> = Omit<TArgs, "startAfter">;
+export type ListAllArgs<TArgs> = Omit<TArgs, "startAfter"> & {
+	/** Include resources that are pending deletion (default: false). */
+	includeDeleted?: boolean;
+};
 
 /**
  * Creates a lazy async iterable that automatically paginates through all results.

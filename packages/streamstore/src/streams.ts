@@ -124,8 +124,7 @@ export class S2Streams {
 	 * List all streams in the basin with automatic pagination.
 	 * Returns a lazy async iterable that fetches pages as needed.
 	 *
-	 * @param includeDeleted - Include deleted streams (default: false)
-	 * @param args - Optional filtering options: `prefix` to filter by name prefix, `limit` for max results per page
+	 * @param args - Optional options: `prefix` to filter by name prefix, `limit` for max results per page, `includeDeleted` to include streams pending deletion
 	 *
 	 * @example
 	 * ```ts
@@ -135,17 +134,17 @@ export class S2Streams {
 	 * ```
 	 */
 	public listAll(
-		includeDeleted = false,
 		args?: Types.ListAllStreamsInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.StreamInfo> {
+		const { includeDeleted, ...listArgs } = args ?? {};
 		return paginate(
 			(a) =>
 				this.list(a, options).then((r) => ({
 					items: r.streams.filter((s) => includeDeleted || !s.deletedAt),
 					hasMore: r.hasMore,
 				})),
-			args ?? {},
+			listArgs,
 			(stream) => stream.name,
 		);
 	}

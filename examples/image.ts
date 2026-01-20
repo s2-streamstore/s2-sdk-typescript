@@ -51,8 +51,8 @@ const s2 = new S2({
 	accessToken,
 	retry: {
 		maxAttempts: 3,
-		minDelayMillis: 100,
-		maxDelayMillis: 1000,
+		minBaseDelayMillis: 100,
+		maxBaseDelayMillis: 1000,
 		appendRetryPolicy: "noSideEffects",
 	},
 });
