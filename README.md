@@ -361,7 +361,7 @@ You can force a transport per stream:
 ```ts
 // Override the automatic transport detection to force the fetch transport.
 const stream = basin.stream(streamName, {
-	forceTransport: "s2s",
+	forceTransport: "fetch",
 });
 ```
 <!-- snippet:end force-transport -->
