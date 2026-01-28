@@ -51,16 +51,13 @@ const s2 = new S2({
 });
 
 const basin = s2.basin(basinName);
-try {
-	await basin.streams.create({ stream: streamName });
-	console.log("Created stream:", streamName);
-} catch (error: unknown) {
+await basin.streams.create({ stream: streamName }).catch((error: unknown) => {
 	if (error instanceof S2Error && error.status === 409) {
 		console.log("Stream already exists:", streamName);
-	} else {
-		throw error;
+		return;
 	}
-}
+	throw error;
+});
 
 const stream = basin.stream(streamName);
 
@@ -72,56 +69,52 @@ const producer = new Producer(
 	await stream.appendSession(),
 );
 
+// Wrap WebSocket in a ReadableStream.
+function websocketToReadable(ws: WebSocket): ReadableStream<JetstreamEvent> {
+	return new ReadableStream({
+		start(controller) {
+			ws.onmessage = (event) => {
+				controller.enqueue(JSON.parse(event.data as string));
+			};
+			ws.onerror = (e) => controller.error(e);
+			ws.onclose = () => controller.close();
+		},
+		cancel() {
+			ws.close();
+		},
+	});
+}
+
 const jetstreamUrl = new URL("wss://jetstream2.us-east.bsky.network/subscribe");
 jetstreamUrl.searchParams.set("wantedCollections", "app.bsky.feed.post");
 
 console.log("Connecting to Bluesky Jetstream...");
 const ws = new WebSocket(jetstreamUrl.toString());
+await new Promise<void>((resolve, reject) => {
+	ws.onopen = () => resolve();
+	ws.onerror = (e) => reject(e);
+});
+
+console.log("Connected to Bluesky Jetstream");
+console.log("Streaming new posts to S2...");
+console.log("Press Ctrl+C to stop.\n");
 
 let submitted = 0;
 let acked = 0;
-let logInterval: Timer | null = null;
 
-ws.onopen = () => {
-	console.log("Connected to Bluesky Jetstream");
-	console.log("Streaming new posts to S2...");
-	console.log("Press Ctrl+C to stop.\n");
-
-	logInterval = setInterval(() => {
-		const inflight = submitted - acked;
-		console.log(`submitted=${submitted} acked=${acked} inflight=${inflight}`);
-	}, 1000);
-};
-
-ws.onerror = (error) => {
-	console.error("WebSocket error:", error);
-	if (logInterval) clearInterval(logInterval);
-};
-
-ws.onclose = async () => {
-	console.log("\nConnection closed, draining...");
-	if (logInterval) clearInterval(logInterval);
-	await producer.close();
-	await stream.close();
-	console.log(`Final: submitted=${submitted} acked=${acked}`);
-};
-
-ws.onmessage = async (event) => {
-	try {
-		const data: JetstreamEvent = JSON.parse(event.data as string);
-
+// Transform that filters posts and converts to AppendRecord.
+const toAppendRecord = new TransformStream<JetstreamEvent, AppendRecord>({
+	transform(data, controller) {
 		if (
 			data.kind !== "commit" ||
 			data.commit?.operation !== "create" ||
-			data.commit?.collection !== "app.bsky.feed.post"
+			data.commit?.collection !== "app.bsky.feed.post" ||
+			!data.commit?.record?.text
 		) {
 			return;
 		}
-
-		const post = data.commit.record;
-		if (!post?.text) return;
-
-		const ticket = await producer.submit(
+		submitted++;
+		controller.enqueue(
 			AppendRecord.string({
 				body: JSON.stringify(data),
 				headers: [
@@ -132,17 +125,39 @@ ws.onmessage = async (event) => {
 				],
 			}),
 		);
-		submitted++;
+	},
+});
 
-		ticket.ack().then(() => {
-			acked++;
-		});
-	} catch (err) {
-		console.error("Error processing message:", err);
+// Ack loop runs concurrently, tracking acked count.
+const ackLoop = (async () => {
+	const reader = producer.readable.getReader();
+	while (true) {
+		const { done } = await reader.read();
+		if (done) break;
+		acked++;
 	}
-};
+})();
 
-process.on("SIGINT", async () => {
+const logInterval = setInterval(() => {
+	console.log(
+		`submitted=${submitted} acked=${acked} inflight=${submitted - acked}`,
+	);
+}, 1000);
+
+// Graceful shutdown on Ctrl+C.
+process.on("SIGINT", () => {
 	console.log("\nShutting down...");
 	ws.close();
 });
+
+// Pipe WebSocket -> filter/transform -> S2 producer.
+try {
+	await websocketToReadable(ws)
+		.pipeThrough(toAppendRecord)
+		.pipeTo(producer.writable);
+	await ackLoop;
+} finally {
+	clearInterval(logInterval);
+	await stream.close();
+	console.log(`Final: submitted=${submitted} acked=${acked}`);
+}
