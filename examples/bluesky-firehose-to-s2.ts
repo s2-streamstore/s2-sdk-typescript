@@ -72,9 +72,7 @@ const producer = new Producer(
 	await stream.appendSession(),
 );
 
-const jetstreamUrl = new URL(
-	"wss://jetstream2.us-east.bsky.network/subscribe",
-);
+const jetstreamUrl = new URL("wss://jetstream2.us-east.bsky.network/subscribe");
 jetstreamUrl.searchParams.set("wantedCollections", "app.bsky.feed.post");
 
 console.log("Connecting to Bluesky Jetstream...");
