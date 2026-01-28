@@ -101,6 +101,8 @@ console.log("Press Ctrl+C to stop.\n");
 
 let submitted = 0;
 let acked = 0;
+let lastLogTime = Date.now();
+let lastSubmitted = 0;
 
 // Transform that filters posts and converts to AppendRecord.
 const toAppendRecord = new TransformStream<JetstreamEvent, AppendRecord>({
@@ -139,8 +141,13 @@ const ackLoop = (async () => {
 })();
 
 const logInterval = setInterval(() => {
+	const now = Date.now();
+	const elapsed = (now - lastLogTime) / 1000;
+	const rate = ((submitted - lastSubmitted) / elapsed).toFixed(1);
+	lastLogTime = now;
+	lastSubmitted = submitted;
 	console.log(
-		`submitted=${submitted} acked=${acked} inflight=${submitted - acked}`,
+		`submitted=${submitted} acked=${acked} inflight=${submitted - acked} (${rate} msg/s)`,
 	);
 }, 1000);
 
