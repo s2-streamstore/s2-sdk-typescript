@@ -82,25 +82,27 @@ const ws = new WebSocket(jetstreamUrl.toString());
 
 let submitted = 0;
 let acked = 0;
-
-const logInterval = setInterval(() => {
-	const inflight = submitted - acked;
-	console.log(`submitted=${submitted} acked=${acked} inflight=${inflight}`);
-}, 1000);
+let logInterval: Timer | null = null;
 
 ws.onopen = () => {
 	console.log("Connected to Bluesky Jetstream");
 	console.log("Streaming new posts to S2...");
 	console.log("Press Ctrl+C to stop.\n");
+
+	logInterval = setInterval(() => {
+		const inflight = submitted - acked;
+		console.log(`submitted=${submitted} acked=${acked} inflight=${inflight}`);
+	}, 1000);
 };
 
 ws.onerror = (error) => {
 	console.error("WebSocket error:", error);
+	if (logInterval) clearInterval(logInterval);
 };
 
 ws.onclose = async () => {
 	console.log("\nConnection closed, draining...");
-	clearInterval(logInterval);
+	if (logInterval) clearInterval(logInterval);
 	await producer.close();
 	await stream.close();
 	console.log(`Final: submitted=${submitted} acked=${acked}`);
