@@ -1,12 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendInput, AppendRecord, S2, type S2Basin } from "../index.js";
-import {
-	makeBasinName,
-	makeStreamName,
-	TEST_TIMEOUT_MS,
-} from "./helpers.js";
 import { meteredBytes } from "../utils.js";
+import { makeBasinName, makeStreamName, TEST_TIMEOUT_MS } from "./helpers.js";
 
 const hasEnv = !!process.env.S2_ACCESS_TOKEN;
 const describeIf = hasEnv ? describe : describe.skip;
