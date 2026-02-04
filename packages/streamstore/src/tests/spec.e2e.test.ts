@@ -8,6 +8,7 @@ const describeIf = hasEnv ? describe : describe.skip;
 
 const TEST_TIMEOUT_MS = 120_000;
 const DEFAULT_RETENTION_AGE_SECS = 3600;
+type MeteredInput = Parameters<typeof meteredBytes>[0];
 
 const makeBasinName = (prefix: string): string => {
 	const suffix = Math.random().toString(36).slice(2, 10);
@@ -195,7 +196,7 @@ describeIf("Spec Integration Tests", () => {
 						{ as: "bytes" },
 					);
 					const totalRead = batch.records.reduce(
-						(sum, r) => sum + meteredBytes(r),
+						(sum, r) => sum + meteredBytes(r as unknown as MeteredInput),
 						0,
 					);
 					expect(totalRead).toBeGreaterThan(0);
@@ -226,7 +227,9 @@ describeIf("Spec Integration Tests", () => {
 						stop: { limits: { count: 1 } },
 					});
 					const ts = baseline.records[0]?.timestamp;
-					expect(ts).toBeDefined();
+					if (!ts) {
+						throw new Error("Expected baseline timestamp");
+					}
 
 					await expect(
 						stream.read({
@@ -302,7 +305,11 @@ describeIf("Spec Integration Tests", () => {
 					AppendInput.create([AppendRecord.string({ body: "auto" })]),
 				);
 				const cfg = await autoBasin.streams.getConfig({ stream: streamName });
-				expect(cfg.retentionPolicy?.ageSecs).toBe(DEFAULT_RETENTION_AGE_SECS);
+				const retention = cfg.retentionPolicy;
+				if (!retention || !("ageSecs" in retention)) {
+					throw new Error("Expected ageSecs retention policy");
+				}
+				expect(retention.ageSecs).toBe(DEFAULT_RETENTION_AGE_SECS);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -318,7 +325,11 @@ describeIf("Spec Integration Tests", () => {
 				).rejects.toMatchObject({ status: 416 });
 
 				const cfg = await autoBasin.streams.getConfig({ stream: streamName });
-				expect(cfg.retentionPolicy?.ageSecs).toBe(DEFAULT_RETENTION_AGE_SECS);
+				const retention = cfg.retentionPolicy;
+				if (!retention || !("ageSecs" in retention)) {
+					throw new Error("Expected ageSecs retention policy");
+				}
+				expect(retention.ageSecs).toBe(DEFAULT_RETENTION_AGE_SECS);
 			},
 			TEST_TIMEOUT_MS,
 		);

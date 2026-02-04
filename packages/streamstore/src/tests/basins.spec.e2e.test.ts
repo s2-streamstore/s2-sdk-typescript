@@ -27,7 +27,7 @@ describeIf("Basins spec parity", () => {
 	const createBasin = async (
 		name: string,
 		config?: Parameters<S2["basins"]["create"]>[0]["config"],
-		scope?: string,
+		scope?: Parameters<S2["basins"]["create"]>[0]["scope"],
 	) => {
 		await s2.basins.create({ basin: name, config, scope });
 		await waitForBasinReady(s2, name);
@@ -640,7 +640,11 @@ describeIf("Basins spec parity", () => {
 				const cfg = await basinClient.streams.getConfig({
 					stream: streamName,
 				});
-				expect(cfg.retentionPolicy?.ageSecs).toBe(3600);
+				const retention = cfg.retentionPolicy;
+				if (!retention || !("ageSecs" in retention)) {
+					throw new Error("Expected ageSecs retention policy");
+				}
+				expect(retention.ageSecs).toBe(3600);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -667,7 +671,11 @@ describeIf("Basins spec parity", () => {
 				const cfg = await basinClient.streams.getConfig({
 					stream: streamName,
 				});
-				expect(cfg.retentionPolicy?.ageSecs).toBe(3600);
+				const retention = cfg.retentionPolicy;
+				if (!retention || !("ageSecs" in retention)) {
+					throw new Error("Expected ageSecs retention policy");
+				}
+				expect(retention.ageSecs).toBe(3600);
 			},
 			TEST_TIMEOUT_MS,
 		);
