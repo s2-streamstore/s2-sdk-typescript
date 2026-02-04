@@ -8,11 +8,11 @@ import {
 	S2,
 } from "../index.js";
 import {
-	TEST_TIMEOUT_MS,
 	isFreeTierLimitation,
 	makeBasinName,
 	makeStreamName,
 	sleep,
+	TEST_TIMEOUT_MS,
 	waitForBasinReady,
 } from "./helpers.js";
 
@@ -126,7 +126,9 @@ describeIf("Streams spec parity", () => {
 			"iterates via listAll",
 			async () => {
 				const names: string[] = [];
-				for await (const info of basin.streams.listAll({ prefix: listPrefix })) {
+				for await (const info of basin.streams.listAll({
+					prefix: listPrefix,
+				})) {
 					names.push(info.name);
 				}
 				expect(names).toEqual(expect.arrayContaining(listStreams));
@@ -309,9 +311,7 @@ describeIf("Streams spec parity", () => {
 		it(
 			"rejects empty stream name",
 			async () => {
-				await expect(
-					basin.streams.create({ stream: "" }),
-				).rejects.toBeTruthy();
+				await expect(basin.streams.create({ stream: "" })).rejects.toBeTruthy();
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -811,9 +811,9 @@ describeIf("Streams spec parity", () => {
 			"returns 404 for non-existent stream",
 			async () => {
 				await expect(
-					basin.stream("nonexistent-stream-12345").append(
-						AppendInput.create([AppendRecord.string({ body: "x" })]),
-					),
+					basin
+						.stream("nonexistent-stream-12345")
+						.append(AppendInput.create([AppendRecord.string({ body: "x" })])),
 				).rejects.toMatchObject({ status: 404 });
 			},
 			TEST_TIMEOUT_MS,
@@ -1411,9 +1411,7 @@ describeIf("Streams spec parity", () => {
 							fencingToken: "token",
 						}),
 					);
-					await stream.append(
-						AppendInput.create([AppendRecord.fence("")]),
-					);
+					await stream.append(AppendInput.create([AppendRecord.fence("")]));
 					await stream.append(
 						AppendInput.create([AppendRecord.string({ body: "record-2" })]),
 					);
@@ -1437,9 +1435,7 @@ describeIf("Streams spec parity", () => {
 							AppendRecord.string({ body: "c" }),
 						]),
 					);
-					await stream.append(
-						AppendInput.create([AppendRecord.trim(2)]),
-					);
+					await stream.append(AppendInput.create([AppendRecord.trim(2)]));
 				} finally {
 					await basin.streams.delete({ stream: streamName }).catch(() => {});
 				}
@@ -1459,9 +1455,7 @@ describeIf("Streams spec parity", () => {
 							AppendRecord.string({ body: "b" }),
 						]),
 					);
-					await stream.append(
-						AppendInput.create([AppendRecord.trim(10)]),
-					);
+					await stream.append(AppendInput.create([AppendRecord.trim(10)]));
 				} finally {
 					await basin.streams.delete({ stream: streamName }).catch(() => {});
 				}

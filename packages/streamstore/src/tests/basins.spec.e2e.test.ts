@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendInput, AppendRecord, S2 } from "../index.js";
 import {
-	TEST_TIMEOUT_MS,
 	isFreeTierLimitation,
 	makeBasinName,
 	makeStreamName,
 	sleep,
+	TEST_TIMEOUT_MS,
 	waitForBasinReady,
 } from "./helpers.js";
 
@@ -269,9 +269,7 @@ describeIf("Basins spec parity", () => {
 				expect(cfg.createStreamOnAppend).toBe(
 					config.createStreamOnAppend ?? false,
 				);
-				expect(cfg.createStreamOnRead).toBe(
-					config.createStreamOnRead ?? false,
-				);
+				expect(cfg.createStreamOnRead).toBe(config.createStreamOnRead ?? false);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -323,7 +321,9 @@ describeIf("Basins spec parity", () => {
 				}
 				await waitForBasinReady(s2, basin);
 				const cfg = await s2.basins.getConfig({ basin });
-				expect(cfg.defaultStreamConfig?.retentionPolicy).toEqual(retentionPolicy);
+				expect(cfg.defaultStreamConfig?.retentionPolicy).toEqual(
+					retentionPolicy,
+				);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -370,7 +370,9 @@ describeIf("Basins spec parity", () => {
 				const basin = trackBasin(makeBasinName("ts-doe"));
 				await s2.basins.create({
 					basin,
-					config: { defaultStreamConfig: { deleteOnEmpty: { minAgeSecs: 3600 } } },
+					config: {
+						defaultStreamConfig: { deleteOnEmpty: { minAgeSecs: 3600 } },
+					},
 				});
 				await waitForBasinReady(s2, basin);
 				const cfg = await s2.basins.getConfig({ basin });
@@ -390,9 +392,7 @@ describeIf("Basins spec parity", () => {
 		])(
 			"rejects invalid basin name (%s)",
 			async (basin) => {
-				await expect(
-					s2.basins.create({ basin }),
-				).rejects.toBeTruthy();
+				await expect(s2.basins.create({ basin })).rejects.toBeTruthy();
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -435,7 +435,9 @@ describeIf("Basins spec parity", () => {
 				await expect(
 					s2.basins.create({
 						basin,
-						config: { defaultStreamConfig: { retentionPolicy: { ageSecs: 0 } } },
+						config: {
+							defaultStreamConfig: { retentionPolicy: { ageSecs: 0 } },
+						},
 					}),
 				).rejects.toMatchObject({ status: 422 });
 			},
@@ -633,9 +635,7 @@ describeIf("Basins spec parity", () => {
 				await basinClient
 					.stream(streamName)
 					.append(
-						AppendInput.create([
-							AppendRecord.string({ body: "record" }),
-						]),
+						AppendInput.create([AppendRecord.string({ body: "record" })]),
 					);
 				const cfg = await basinClient.streams.getConfig({
 					stream: streamName,
@@ -852,7 +852,9 @@ describeIf("Basins spec parity", () => {
 				const basin = trackBasin(makeBasinName("ts-rpart"));
 				await s2.basins.create({
 					basin,
-					config: { defaultStreamConfig: { retentionPolicy: { ageSecs: 3600 } } },
+					config: {
+						defaultStreamConfig: { retentionPolicy: { ageSecs: 3600 } },
+					},
 				});
 				await waitForBasinReady(s2, basin);
 				const cfg = await s2.basins.reconfigure({

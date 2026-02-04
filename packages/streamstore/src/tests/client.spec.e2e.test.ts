@@ -5,6 +5,7 @@ import { TEST_TIMEOUT_MS } from "./helpers.js";
 
 const hasEnv = !!process.env.S2_ACCESS_TOKEN;
 const describeIf = hasEnv ? describe : describe.skip;
+const itUnlessLite = process.env.S2_LITE ? it.skip : it;
 
 describeIf("Client lifecycle", () => {
 	it(
@@ -19,7 +20,7 @@ describeIf("Client lifecycle", () => {
 		TEST_TIMEOUT_MS,
 	);
 
-	it(
+	itUnlessLite(
 		"rejects invalid token",
 		async () => {
 			const env = S2Environment.parse();

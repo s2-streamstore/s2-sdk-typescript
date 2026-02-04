@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendInput, AppendRecord, S2 } from "../index.js";
 import {
-	TEST_TIMEOUT_MS,
 	makeBasinName,
 	makeStreamName,
+	TEST_TIMEOUT_MS,
 	waitForBasinReady,
 } from "./helpers.js";
 
@@ -120,9 +120,24 @@ describeIf("Metrics spec parity", () => {
 		);
 
 		it.each([
-			{ name: "start-after-end", build: () => ({ start: Date.now(), end: Date.now() - 3600_000 }) },
-			{ name: "end-too-far-future", build: () => ({ start: Date.now() - 3600_000, end: Date.now() + 600_000 }) },
-			{ name: "range-too-large", build: () => ({ start: Date.now() - 40 * 24 * 3600_000, end: Date.now() }) },
+			{
+				name: "start-after-end",
+				build: () => ({ start: Date.now(), end: Date.now() - 3600_000 }),
+			},
+			{
+				name: "end-too-far-future",
+				build: () => ({
+					start: Date.now() - 3600_000,
+					end: Date.now() + 600_000,
+				}),
+			},
+			{
+				name: "range-too-large",
+				build: () => ({
+					start: Date.now() - 40 * 24 * 3600_000,
+					end: Date.now(),
+				}),
+			},
 		])(
 			"rejects invalid time range (%s)",
 			async ({ build }) => {
@@ -137,9 +152,7 @@ describeIf("Metrics spec parity", () => {
 		it(
 			"rejects nil args",
 			async () => {
-				await expect(
-					s2.metrics.account(undefined as any),
-				).rejects.toBeTruthy();
+				await expect(s2.metrics.account(undefined as any)).rejects.toBeTruthy();
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -284,9 +297,7 @@ describeIf("Metrics spec parity", () => {
 		it(
 			"rejects nil args",
 			async () => {
-				await expect(
-					s2.metrics.basin(undefined as any),
-				).rejects.toBeTruthy();
+				await expect(s2.metrics.basin(undefined as any)).rejects.toBeTruthy();
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -465,9 +476,7 @@ describeIf("Metrics spec parity", () => {
 		it(
 			"rejects nil args",
 			async () => {
-				await expect(
-					s2.metrics.stream(undefined as any),
-				).rejects.toBeTruthy();
+				await expect(s2.metrics.stream(undefined as any)).rejects.toBeTruthy();
 			},
 			TEST_TIMEOUT_MS,
 		);

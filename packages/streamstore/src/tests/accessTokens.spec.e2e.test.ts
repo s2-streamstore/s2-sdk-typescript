@@ -2,10 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { S2 } from "../index.js";
 import {
-	TEST_TIMEOUT_MS,
 	isFreeTierLimitation,
 	makeBasinName,
 	makeStreamName,
+	TEST_TIMEOUT_MS,
 	waitForBasinReady,
 } from "./helpers.js";
 
@@ -25,7 +25,9 @@ describeIf("Access tokens spec parity", () => {
 	const makeTokenId = (prefix: string) =>
 		`${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 
-	const issueToken = async (args: Parameters<S2["accessTokens"]["issue"]>[0]) => {
+	const issueToken = async (
+		args: Parameters<S2["accessTokens"]["issue"]>[0],
+	) => {
 		const resp = await s2.accessTokens.issue(args);
 		createdTokenIds.push(args.id);
 		return resp;
@@ -407,9 +409,7 @@ describeIf("Access tokens spec parity", () => {
 		it(
 			"rejects empty token ID",
 			async () => {
-				await expect(
-					s2.accessTokens.revoke({ id: "" }),
-				).rejects.toBeTruthy();
+				await expect(s2.accessTokens.revoke({ id: "" })).rejects.toBeTruthy();
 			},
 			TEST_TIMEOUT_MS,
 		);

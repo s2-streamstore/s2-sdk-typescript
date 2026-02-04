@@ -172,8 +172,14 @@ describeIf("Spec Integration Tests", () => {
 						AppendRecord.bytes({ body }),
 					);
 
-					const batch1Bytes = batch1.reduce((sum, r) => sum + r.meteredBytes, 0);
-					const batch2Bytes = batch2.reduce((sum, r) => sum + r.meteredBytes, 0);
+					const batch1Bytes = batch1.reduce(
+						(sum, r) => sum + r.meteredBytes,
+						0,
+					);
+					const batch2Bytes = batch2.reduce(
+						(sum, r) => sum + r.meteredBytes,
+						0,
+					);
 					expect(batch1Bytes).toBeLessThanOrEqual(1024 * 1024);
 					expect(batch2Bytes).toBeLessThanOrEqual(1024 * 1024);
 					expect(batch1Bytes + batch2Bytes).toBeGreaterThan(1024 * 1024);
@@ -194,7 +200,9 @@ describeIf("Spec Integration Tests", () => {
 					);
 					expect(totalRead).toBeGreaterThan(0);
 					expect(totalRead).toBeLessThanOrEqual(1024 * 1024);
-					expect(batch.records.length).toBeLessThan(batch1.length + batch2.length);
+					expect(batch.records.length).toBeLessThan(
+						batch1.length + batch2.length,
+					);
 				} finally {
 					await basin.streams.delete({ stream: streamName }).catch(() => {});
 				}
