@@ -832,14 +832,16 @@ describeIf("Basins spec parity", () => {
 		);
 
 		it(
-			"rejects empty reconfigure payload",
+			"accepts empty reconfigure payload (no-op)",
 			async () => {
 				const basin = trackBasin(makeBasinName("ts-rempty"));
-				await s2.basins.create({ basin });
+				await s2.basins.create({
+					basin,
+					config: { createStreamOnAppend: true },
+				});
 				await waitForBasinReady(s2, basin);
-				await expect(
-					s2.basins.reconfigure({ basin }),
-				).rejects.toBeTruthy();
+				const cfg = await s2.basins.reconfigure({ basin });
+				expect(cfg.createStreamOnAppend).toBe(true);
 			},
 			TEST_TIMEOUT_MS,
 		);

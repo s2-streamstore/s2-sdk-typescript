@@ -11,7 +11,10 @@
 import { S2Error } from "./error.js";
 import type * as API from "./generated/types.gen.js";
 import type { ListAllArgs } from "./lib/paginate.js";
-import { meteredBytes as calculateMeteredBytes } from "./utils.js";
+import {
+	meteredBytes as calculateMeteredBytes,
+	utf8ByteLength,
+} from "./utils.js";
 
 // =============================================================================
 // Stream Position
@@ -220,6 +223,17 @@ export namespace AppendInput {
 				message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
 				origin: "sdk",
 			});
+		}
+
+		if (options?.fencingToken !== undefined) {
+			const tokenBytes = utf8ByteLength(options.fencingToken);
+			if (tokenBytes > 36) {
+				throw new S2Error({
+					message: "fencing token must not exceed 36 bytes in length",
+					origin: "sdk",
+					status: 422,
+				});
+			}
 		}
 
 		return {

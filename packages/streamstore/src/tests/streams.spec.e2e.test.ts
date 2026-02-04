@@ -582,13 +582,14 @@ describeIf("Streams spec parity", () => {
 		);
 
 		it(
-			"rejects empty reconfigure payload",
+			"accepts empty reconfigure payload (no-op)",
 			async () => {
-				const streamName = await createStream("ts-rempty");
+				const streamName = await createStream("ts-rempty", {
+					storageClass: "standard",
+				});
 				try {
-					await expect(
-						basin.streams.reconfigure({ stream: streamName }),
-					).rejects.toBeTruthy();
+					const cfg = await basin.streams.reconfigure({ stream: streamName });
+					expect(cfg.storageClass).toBe("standard");
 				} finally {
 					await basin.streams.delete({ stream: streamName }).catch(() => {});
 				}
@@ -954,16 +955,17 @@ describeIf("Streams spec parity", () => {
 			"rejects fencing token too long",
 			async () => {
 				const streamName = await createStream("ts-ft-long");
-				const stream = basin.stream(streamName);
 				try {
 					const token = "x".repeat(37);
-					await expect(
-						stream.append(
-							AppendInput.create([AppendRecord.string({ body: "record" })], {
-								fencingToken: token,
-							}),
-						),
-					).rejects.toMatchObject({ status: 422 });
+					let err: unknown;
+					try {
+						AppendInput.create([AppendRecord.string({ body: "record" })], {
+							fencingToken: token,
+						});
+					} catch (caught) {
+						err = caught;
+					}
+					expect(err).toMatchObject({ status: 422 });
 				} finally {
 					await basin.streams.delete({ stream: streamName }).catch(() => {});
 				}
