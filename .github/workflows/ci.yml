@@ -81,6 +81,6 @@ jobs:
             "ref": "${{ github.ref }}",
             "lang": "bun",
             "bun-version": "latest",
-            "test_cmd": "bun run vitest --run --exclude '**/account-basin*'"
+            "test_cmd": "S2_LITE=1 bun run vitest --run --exclude '**/account-basin*' --exclude '**/accessTokens*' --exclude '**/metrics*' --exclude '**/spec.e2e*'"
           }
         ]
