@@ -47,6 +47,7 @@ describeIf("Basins spec parity", () => {
 	}, TEST_TIMEOUT_MS);
 
 	afterAll(async () => {
+		if (!s2) return;
 		for (const basin of createdBasins) {
 			await s2.basins.delete({ basin }).catch(() => {});
 		}

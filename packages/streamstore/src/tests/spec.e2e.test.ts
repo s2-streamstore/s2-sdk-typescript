@@ -1,25 +1,22 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendInput, AppendRecord, S2, type S2Basin } from "../index.js";
+import {
+	makeBasinName,
+	makeStreamName,
+	TEST_TIMEOUT_MS,
+} from "./helpers.js";
 import { meteredBytes } from "../utils.js";
 
 const hasEnv = !!process.env.S2_ACCESS_TOKEN;
 const describeIf = hasEnv ? describe : describe.skip;
 
-const TEST_TIMEOUT_MS = 120_000;
 const DEFAULT_RETENTION_AGE_SECS = 3600;
 type MeteredInput = Parameters<typeof meteredBytes>[0];
 
-const makeBasinName = (prefix: string): string => {
-	const suffix = Math.random().toString(36).slice(2, 10);
-	return `${prefix}-${suffix}`.slice(0, 48);
-};
-
-const makeStreamName = (prefix: string): string =>
-	`${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
 describeIf("Spec Integration Tests", () => {
 	let s2: S2;
+	let endpoints: S2ClientOptions["endpoints"];
 	let basinName: string;
 	let autoBasinName: string;
 	let basin: S2Basin;
@@ -35,6 +32,7 @@ describeIf("Spec Integration Tests", () => {
 	beforeAll(async () => {
 		const env = S2Environment.parse();
 		if (!env.accessToken) return;
+		endpoints = env.endpoints;
 		s2 = new S2(env as S2ClientOptions);
 
 		basinName = makeBasinName("typescript-spec");
@@ -58,6 +56,7 @@ describeIf("Spec Integration Tests", () => {
 	}, TEST_TIMEOUT_MS);
 
 	afterAll(async () => {
+		if (!s2) return;
 		if (autoBasinName) {
 			await s2.basins.delete({ basin: autoBasinName }).catch(() => {});
 		}
@@ -377,9 +376,10 @@ describeIf("Spec Integration Tests", () => {
 					},
 				});
 
+				if (!endpoints) return;
 				const limited = new S2({
 					accessToken: token.accessToken,
-					endpoints: S2Environment.parse().endpoints,
+					endpoints,
 				});
 				const limitedBasin = limited.basin(basinName);
 

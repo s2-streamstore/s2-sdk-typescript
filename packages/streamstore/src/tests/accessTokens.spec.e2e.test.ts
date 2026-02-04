@@ -58,6 +58,7 @@ describeIf("Access tokens spec parity", () => {
 	}, TEST_TIMEOUT_MS);
 
 	afterAll(async () => {
+		if (!s2) return;
 		for (const tokenId of createdTokenIds) {
 			await s2.accessTokens.revoke({ id: tokenId }).catch(() => {});
 		}

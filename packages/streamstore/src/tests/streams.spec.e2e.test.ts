@@ -44,6 +44,7 @@ describeIf("Streams spec parity", () => {
 	}, TEST_TIMEOUT_MS);
 
 	afterAll(async () => {
+		if (!s2) return;
 		if (basinName) {
 			await s2.basins.delete({ basin: basinName }).catch(() => {});
 		}
