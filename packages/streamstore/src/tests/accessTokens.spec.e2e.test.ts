@@ -350,9 +350,11 @@ describeIf("Access tokens spec parity", () => {
 						prefix: rawName,
 					});
 					const limitedNames = limitedList.streams.map((s) => s.name);
-					expect(limitedNames).toContain(rawName);
+					expect(limitedNames).toContain(prefixedName);
 
-					const adminList = await adminBasin.streams.list({ prefix: "tenant/" });
+					const adminList = await adminBasin.streams.list({
+						prefix: "tenant/",
+					});
 					const adminNames = adminList.streams.map((s) => s.name);
 					expect(adminNames).toContain(prefixedName);
 				} finally {
