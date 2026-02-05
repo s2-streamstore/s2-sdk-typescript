@@ -317,6 +317,56 @@ describeIf("Access tokens spec parity", () => {
 		);
 
 		it(
+			"auto-prefixes streams when enabled",
+			async () => {
+				if (!setupOk) return;
+				if (!endpoints) return;
+
+				const tokenId = makeTokenId("ts-autoprefix-enforce");
+				const rawName = makeStreamName("apx");
+				const prefixedName = `tenant/${rawName}`;
+
+				const token = await issueToken({
+					id: tokenId,
+					autoPrefixStreams: true,
+					scope: {
+						basins: { exact: basinA },
+						streams: { prefix: "tenant/" },
+						ops: ["create-stream", "list-streams"],
+					},
+				});
+
+				const limited = new S2({
+					accessToken: token.accessToken,
+					endpoints,
+				});
+				const limitedBasin = limited.basin(basinA);
+				const adminBasin = s2.basin(basinA);
+
+				try {
+					await limitedBasin.streams.create({ stream: rawName });
+
+					const limitedList = await limitedBasin.streams.list({
+						prefix: rawName,
+					});
+					const limitedNames = limitedList.streams.map((s) => s.name);
+					expect(limitedNames).toContain(prefixedName);
+
+					const adminList = await adminBasin.streams.list({
+						prefix: "tenant/",
+					});
+					const adminNames = adminList.streams.map((s) => s.name);
+					expect(adminNames).toContain(prefixedName);
+				} finally {
+					await adminBasin.streams
+						.delete({ stream: prefixedName })
+						.catch(() => {});
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
 			"issues token with expiresAt",
 			async () => {
 				const expiresAt = new Date(Date.now() + 60_000);

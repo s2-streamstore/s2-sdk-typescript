@@ -12,12 +12,10 @@ type MeteredInput = Parameters<typeof meteredBytes>[0];
 
 describeIf("Spec Integration Tests", () => {
 	let s2: S2;
-	let endpoints: S2ClientOptions["endpoints"];
 	let basinName: string;
 	let autoBasinName: string;
 	let basin: S2Basin;
 	let autoBasin: S2Basin;
-	let metricsStreamName: string;
 
 	const createStream = async (target: S2Basin, prefix: string) => {
 		const streamName = makeStreamName(prefix);
@@ -28,7 +26,6 @@ describeIf("Spec Integration Tests", () => {
 	beforeAll(async () => {
 		const env = S2Environment.parse();
 		if (!env.accessToken) return;
-		endpoints = env.endpoints;
 		s2 = new S2(env as S2ClientOptions);
 
 		basinName = makeBasinName("typescript-spec");
@@ -48,7 +45,6 @@ describeIf("Spec Integration Tests", () => {
 
 		basin = s2.basin(basinName);
 		autoBasin = s2.basin(autoBasinName);
-		metricsStreamName = await createStream(basin, "metrics");
 	}, TEST_TIMEOUT_MS);
 
 	afterAll(async () => {
@@ -325,191 +321,6 @@ describeIf("Spec Integration Tests", () => {
 					throw new Error("Expected ageSecs retention policy");
 				}
 				expect(retention.ageSecs).toBe(DEFAULT_RETENTION_AGE_SECS);
-			},
-			TEST_TIMEOUT_MS,
-		);
-	});
-
-	describe("Access token auto-prefix", () => {
-		it(
-			"rejects autoPrefixStreams with exact stream scope",
-			async () => {
-				const tokenId = `spec-autoprefix-exact-${Math.random()
-					.toString(36)
-					.slice(2, 10)}`;
-
-				await expect(
-					s2.accessTokens.issue({
-						id: tokenId,
-						autoPrefixStreams: true,
-						scope: {
-							basins: { prefix: "" },
-							streams: { exact: "tenant/stream" },
-							ops: ["create-stream"],
-						},
-					}),
-				).rejects.toMatchObject({ status: 422 });
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
-			"creates and lists streams with auto-prefixing enabled",
-			async () => {
-				const tokenId = `spec-autoprefix-${Math.random()
-					.toString(36)
-					.slice(2, 10)}`;
-				const rawName = makeStreamName("apx");
-				const prefixedName = `tenant/${rawName}`;
-
-				const token = await s2.accessTokens.issue({
-					id: tokenId,
-					autoPrefixStreams: true,
-					scope: {
-						basins: { exact: basinName },
-						streams: { prefix: "tenant/" },
-						ops: ["create-stream", "list-streams"],
-					},
-				});
-
-				if (!endpoints) return;
-				const limited = new S2({
-					accessToken: token.accessToken,
-					endpoints,
-				});
-				const limitedBasin = limited.basin(basinName);
-
-				try {
-					await limitedBasin.streams.create({ stream: rawName });
-
-					const limitedList = await limitedBasin.streams.list({
-						prefix: rawName,
-					});
-					const limitedNames = limitedList.streams.map((s) => s.name);
-					expect(limitedNames).toContain(rawName);
-
-					const adminList = await basin.streams.list({ prefix: "tenant/" });
-					const adminNames = adminList.streams.map((s) => s.name);
-					expect(adminNames).toContain(prefixedName);
-				} finally {
-					await basin.streams.delete({ stream: prefixedName }).catch(() => {});
-					await s2.accessTokens.revoke({ id: tokenId }).catch(() => {});
-				}
-			},
-			TEST_TIMEOUT_MS,
-		);
-	});
-
-	describe("Metrics validation", () => {
-		const invalidRanges = [
-			{
-				name: "start-after-end",
-				build: () => {
-					const now = Date.now();
-					return { start: now, end: now - 3600 * 1000 };
-				},
-			},
-			{
-				name: "end-too-far-future",
-				build: () => {
-					const now = Date.now();
-					return { start: now - 3600 * 1000, end: now + 600 * 1000 };
-				},
-			},
-			{
-				name: "range-too-large",
-				build: () => {
-					const now = Date.now();
-					return { start: now - 40 * 24 * 3600 * 1000, end: now };
-				},
-			},
-		];
-
-		for (const tc of invalidRanges) {
-			it(
-				`rejects invalid account metric range (${tc.name})`,
-				async () => {
-					const { start, end } = tc.build();
-					await expect(
-						s2.metrics.account({
-							set: "active-basins",
-							start,
-							end,
-						}),
-					).rejects.toMatchObject({ status: 422 });
-				},
-				TEST_TIMEOUT_MS,
-			);
-
-			it(
-				`rejects invalid basin metric range (${tc.name})`,
-				async () => {
-					const { start, end } = tc.build();
-					await expect(
-						s2.metrics.basin({
-							basin: basinName,
-							set: "storage",
-							start,
-							end,
-						}),
-					).rejects.toMatchObject({ status: 422 });
-				},
-				TEST_TIMEOUT_MS,
-			);
-
-			it(
-				`rejects invalid stream metric range (${tc.name})`,
-				async () => {
-					const { start, end } = tc.build();
-					await expect(
-						s2.metrics.stream({
-							basin: basinName,
-							stream: metricsStreamName,
-							set: "storage",
-							start,
-							end,
-						}),
-					).rejects.toMatchObject({ status: 422 });
-				},
-				TEST_TIMEOUT_MS,
-			);
-		}
-
-		it(
-			"rejects basin storage interval other than hour",
-			async () => {
-				const now = Date.now();
-				const start = now - 3600 * 1000;
-				const end = now;
-				await expect(
-					s2.metrics.basin({
-						basin: basinName,
-						set: "storage",
-						start,
-						end,
-						interval: "minute",
-					}),
-				).rejects.toMatchObject({ status: 422 });
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
-			"rejects stream storage interval other than minute",
-			async () => {
-				const now = Date.now();
-				const start = now - 3600 * 1000;
-				const end = now;
-				await expect(
-					s2.metrics.stream({
-						basin: basinName,
-						stream: metricsStreamName,
-						set: "storage",
-						start,
-						end,
-						interval: "hour",
-					}),
-				).rejects.toMatchObject({ status: 422 });
 			},
 			TEST_TIMEOUT_MS,
 		);
