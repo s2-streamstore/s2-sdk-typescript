@@ -91,6 +91,26 @@ export function meteredBytes<Format extends "string" | "bytes">(
 	return 8 + 2 * numHeaders + headersSize + bodySize;
 }
 
+/**
+ * Whether this is a command record.
+ * Command records have exactly one header with an empty name.
+ */
+export function isCommandRecord(record: {
+	headers?:
+		| ReadonlyArray<readonly [string, string]>
+		| ReadonlyArray<readonly [Uint8Array, Uint8Array]>
+		| Array<[string, string]>
+		| Array<[Uint8Array, Uint8Array]>
+		| Record<string, string>
+		| null;
+}): boolean {
+	if (!record.headers || !Array.isArray(record.headers)) return false;
+	if (record.headers.length !== 1) return false;
+	const [name] = record.headers[0]!;
+	if (typeof name === "string") return name === "";
+	return (name as Uint8Array).length === 0;
+}
+
 export function computeAppendRecordFormat(
 	record: AppendRecord,
 ): "string" | "bytes" {

@@ -33,7 +33,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	args?: ReadArgs<Format>,
 	options?: S2RequestOptions,
 ) {
-	const { as, ...queryParams } = args ?? {};
+	const { as, ignore_command_records, ...queryParams } = args ?? {};
 	const wantsBytes = (as ?? "string") === "bytes";
 	let response: any;
 	try {

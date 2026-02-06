@@ -59,7 +59,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		options?: S2RequestOptions,
 	) {
 		debug("FetchReadSession.create stream=%s args=%o", name, args);
-		const { as, ...queryParams } = args ?? {};
+		const { as, ignore_command_records, ...queryParams } = args ?? {};
 
 		const response = await read({
 			client,

@@ -8,6 +8,7 @@ import {
 	fromAPITailResponse,
 	toAPIReadQuery,
 } from "./internal/mappers.js";
+import { isCommandRecord } from "./utils.js";
 import { withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
@@ -117,11 +118,18 @@ export class S2Stream {
 				requestOptions,
 			);
 			// Convert from API to SDK ReadBatch
-			return (
+			const batch = (
 				as === "bytes"
 					? fromAPIReadBatchBytes(genBatch)
 					: fromAPIReadBatchString(genBatch)
 			) as Types.ReadBatch<Format>;
+			if (input?.ignoreCommandRecords) {
+				return {
+					...batch,
+					records: batch.records.filter((r) => !isCommandRecord(r)),
+				};
+			}
+			return batch;
 		});
 	}
 	/**
@@ -176,6 +184,7 @@ export class S2Stream {
 		const readArgs: ReadArgs<Format> = {
 			...toAPIReadQuery(input),
 			as,
+			ignore_command_records: input?.ignoreCommandRecords,
 		} as ReadArgs<Format>;
 		return await transport.makeReadSession(this.name, readArgs, requestOptions);
 	}
