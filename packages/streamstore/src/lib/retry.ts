@@ -240,6 +240,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 {
 	private _nextReadPosition: API.StreamPosition | undefined = undefined;
 	private _lastObservedTail: API.StreamPosition | undefined = undefined;
+	private _lastTailAtMs: number | undefined = undefined;
 
 	private _recordsRead: number = 0;
 	private _bytesRead: number = 0;
@@ -307,7 +308,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			...config,
 		};
 		let session: TransportReadSession<Format> | undefined = initialSession;
-		const startTimeMs = performance.now(); // Capture start time before super()
 		super({
 			start: async (controller) => {
 				let nextArgs = { ...args } as ReadArgs<Format>;
@@ -361,7 +361,10 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						// Update last observed tail if transport exposes it
 						try {
 							const tail = session.lastObservedTail?.();
-							if (tail) this._lastObservedTail = tail;
+							if (tail) {
+								this._lastObservedTail = tail;
+								this._lastTailAtMs = performance.now();
+							}
 						} catch {}
 						if (done) {
 							reader.releaseLock();
@@ -399,14 +402,24 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								if (baselineBytes !== undefined) {
 									nextArgs.bytes = Math.max(0, baselineBytes - this._bytesRead);
 								}
-								// Adjust wait from original budget based on total elapsed time since start
+								// Remaining wait budget for retry:
+								// During catchup (tail not yet observed), the full wait is sent.
+								// Once tailing, the wait budget is depleted based on time since
+								// the last batch with tail info, which approximates how long the
+								// server has been in its long polling state.
 								if (baselineWait !== undefined) {
-									const elapsedSeconds =
-										(performance.now() - startTimeMs) / 1000;
-									nextArgs.wait = Math.max(
-										0,
-										Math.floor(baselineWait - (elapsedSeconds + delay / 1000)),
-									);
+									if (this._lastTailAtMs !== undefined) {
+										const elapsedSeconds =
+											(performance.now() - this._lastTailAtMs) / 1000;
+										nextArgs.wait = Math.max(
+											0,
+											Math.floor(
+												baselineWait - (elapsedSeconds + delay / 1000),
+											),
+										);
+									} else {
+										nextArgs.wait = baselineWait;
+									}
 								}
 								// Proactively cancel the current transport session before retrying
 								try {
