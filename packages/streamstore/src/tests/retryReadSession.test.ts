@@ -28,6 +28,8 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 			errorAfterRecords?: number;
 			// Error to emit as error result
 			error?: S2Error;
+			// Tail position to report (simulates being near the tail)
+			tail?: StreamPosition;
 		},
 	) {
 		let emittedCount = 0; // Use local variable in super() callback
@@ -91,7 +93,7 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 	}
 
 	lastObservedTail(): StreamPosition | undefined {
-		return undefined;
+		return this.behavior.tail;
 	}
 
 	// Implement AsyncIterable (for await...of support)
@@ -220,6 +222,7 @@ describe("ReadSession (unit)", () => {
 	});
 
 	it("adjusts wait parameter based on elapsed time", async () => {
+		const tail: StreamPosition = { seq_num: 100, timestamp: 0 };
 		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "a" },
 		];
@@ -232,11 +235,12 @@ describe("ReadSession (unit)", () => {
 				capturedArgs.push({ ...args });
 				callCount++;
 				if (callCount === 1) {
-					// First call: emit 1 record then error
+					// First call: emit 1 record (with tail) then error
 					return new FakeReadSession({
 						records,
 						errorAfterRecords: 1,
 						error: new S2Error({ message: "transient error", status: 500 }),
+						tail,
 					});
 				}
 				// Second call: succeed
@@ -351,6 +355,7 @@ describe("ReadSession (unit)", () => {
 	});
 
 	it("combines all parameter adjustments on retry", async () => {
+		const tail: StreamPosition = { seq_num: 100, timestamp: 0 };
 		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 50, timestamp: 0, body: "x".repeat(42) },
 			{ seq_num: 51, timestamp: 0, body: "y".repeat(42) },
@@ -364,11 +369,12 @@ describe("ReadSession (unit)", () => {
 				capturedArgs.push({ ...args });
 				callCount++;
 				if (callCount === 1) {
-					// First call: emit 2 records then error
+					// First call: emit 2 records (with tail) then error
 					return new FakeReadSession({
 						records,
 						errorAfterRecords: 2,
 						error: new S2Error({ message: "transient error", status: 500 }),
+						tail,
 					});
 				}
 				// Second call: succeed
