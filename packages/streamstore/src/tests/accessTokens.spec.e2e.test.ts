@@ -350,7 +350,8 @@ describeIf("Access tokens spec parity", () => {
 						prefix: rawName,
 					});
 					const limitedNames = limitedList.streams.map((s) => s.name);
-					expect(limitedNames).toContain(prefixedName);
+					// Server strips the auto-prefix from listed stream names
+					expect(limitedNames).toContain(rawName);
 
 					const adminList = await adminBasin.streams.list({
 						prefix: "tenant/",
