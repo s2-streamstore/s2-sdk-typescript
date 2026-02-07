@@ -229,7 +229,6 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 	bytes?: number;
 	until?: number;
 	wait?: number;
-	ignore_command_records?: boolean;
 } {
 	if (!input) {
 		return {};
@@ -274,10 +273,6 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 
 	if (input.stop?.waitSecs !== undefined) {
 		query.wait = Math.max(0, Math.floor(input.stop.waitSecs));
-	}
-
-	if (input.ignoreCommandRecords !== undefined) {
-		query.ignore_command_records = input.ignoreCommandRecords;
 	}
 
 	return query;

@@ -22,6 +22,7 @@ import type {
 	TransportConfig,
 } from "./lib/stream/types.js";
 import type * as Types from "./types.js";
+import { isCommandRecord } from "./utils.js";
 
 /**
  * Basin-scoped stream helper for append/read operations.
@@ -117,11 +118,18 @@ export class S2Stream {
 				requestOptions,
 			);
 			// Convert from API to SDK ReadBatch
-			return (
+			const batch = (
 				as === "bytes"
 					? fromAPIReadBatchBytes(genBatch)
 					: fromAPIReadBatchString(genBatch)
 			) as Types.ReadBatch<Format>;
+			if (input?.ignoreCommandRecords) {
+				return {
+					...batch,
+					records: batch.records.filter((r) => !isCommandRecord(r)),
+				};
+			}
+			return batch;
 		});
 	}
 	/**
@@ -176,6 +184,7 @@ export class S2Stream {
 		const readArgs: ReadArgs<Format> = {
 			...toAPIReadQuery(input),
 			as,
+			ignore_command_records: input?.ignoreCommandRecords,
 		} as ReadArgs<Format>;
 		return await transport.makeReadSession(this.name, readArgs, requestOptions);
 	}

@@ -33,6 +33,7 @@ export type ReadRecord<Format extends "string" | "bytes" = "string"> = {
 export type ReadArgs<Format extends "string" | "bytes" = "string"> =
 	API.ReadData["query"] & {
 		as?: Format;
+		ignore_command_records?: boolean;
 	};
 
 export type AppendHeaders<Format extends "string" | "bytes" = "string"> =

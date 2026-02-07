@@ -9,7 +9,7 @@ import {
 } from "../error.js";
 import type * as API from "../generated/index.js";
 import * as Types from "../types.js";
-import { meteredBytes } from "../utils.js";
+import { isCommandRecord, meteredBytes } from "../utils.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import type {
@@ -455,6 +455,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						this._bytesRead += meteredBytes(record);
 						attempt = 0;
 
+						if (args?.ignore_command_records && isCommandRecord(record)) {
+							continue;
+						}
 						controller.enqueue(toSDKReadRecord(record));
 					}
 				}
