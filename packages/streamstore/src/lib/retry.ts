@@ -455,10 +455,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						this._bytesRead += meteredBytes(record);
 						attempt = 0;
 
-						if (
-							args?.ignore_command_records &&
-							isCommandRecord(record)
-						) {
+						if (args?.ignore_command_records && isCommandRecord(record)) {
 							continue;
 						}
 						controller.enqueue(toSDKReadRecord(record));

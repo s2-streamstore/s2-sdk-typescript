@@ -505,7 +505,12 @@ describe("ReadSession (unit)", () => {
 	it("filters command records when ignore_command_records is set", async () => {
 		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "data" },
-			{ seq_num: 1, timestamp: 0, body: "fence-token", headers: [["", "fence"]] },
+			{
+				seq_num: 1,
+				timestamp: 0,
+				body: "fence-token",
+				headers: [["", "fence"]],
+			},
 			{ seq_num: 2, timestamp: 0, body: "more data" },
 		];
 
@@ -530,7 +535,12 @@ describe("ReadSession (unit)", () => {
 	it("does not filter command records when ignore_command_records is not set", async () => {
 		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "data" },
-			{ seq_num: 1, timestamp: 0, body: "fence-token", headers: [["", "fence"]] },
+			{
+				seq_num: 1,
+				timestamp: 0,
+				body: "fence-token",
+				headers: [["", "fence"]],
+			},
 			{ seq_num: 2, timestamp: 0, body: "more data" },
 		];
 

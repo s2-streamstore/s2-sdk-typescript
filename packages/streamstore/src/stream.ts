@@ -8,7 +8,6 @@ import {
 	fromAPITailResponse,
 	toAPIReadQuery,
 } from "./internal/mappers.js";
-import { isCommandRecord } from "./utils.js";
 import { withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
@@ -23,6 +22,7 @@ import type {
 	TransportConfig,
 } from "./lib/stream/types.js";
 import type * as Types from "./types.js";
+import { isCommandRecord } from "./utils.js";
 
 /**
  * Basin-scoped stream helper for append/read operations.
