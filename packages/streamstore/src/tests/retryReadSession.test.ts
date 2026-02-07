@@ -501,4 +501,52 @@ describe("ReadSession (unit)", () => {
 		expect(capturedArgs[1]?.count).toBe(70); // 100 - 30
 		expect(capturedArgs[2]?.count).toBe(30); // 100 - (30 + 40)
 	});
+
+	it("filters command records when ignore_command_records is set", async () => {
+		const records: InternalReadRecord<"string">[] = [
+			{ seq_num: 0, timestamp: 0, body: "data" },
+			{ seq_num: 1, timestamp: 0, body: "fence-token", headers: [["", "fence"]] },
+			{ seq_num: 2, timestamp: 0, body: "more data" },
+		];
+
+		const session = await RetryReadSession.create(
+			async (_args) => {
+				return new FakeReadSession({ records });
+			},
+			{ ignore_command_records: true },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const results: SDKReadRecord<"string">[] = [];
+		for await (const record of session) {
+			results.push(record);
+		}
+
+		expect(results).toHaveLength(2);
+		expect(results[0]!.seqNum).toBe(0);
+		expect(results[1]!.seqNum).toBe(2);
+	});
+
+	it("does not filter command records when ignore_command_records is not set", async () => {
+		const records: InternalReadRecord<"string">[] = [
+			{ seq_num: 0, timestamp: 0, body: "data" },
+			{ seq_num: 1, timestamp: 0, body: "fence-token", headers: [["", "fence"]] },
+			{ seq_num: 2, timestamp: 0, body: "more data" },
+		];
+
+		const session = await RetryReadSession.create(
+			async (_args) => {
+				return new FakeReadSession({ records });
+			},
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const results: SDKReadRecord<"string">[] = [];
+		for await (const record of session) {
+			results.push(record);
+		}
+
+		expect(results).toHaveLength(3);
+	});
 });
