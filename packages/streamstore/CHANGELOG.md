@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.3
+
+### Patch Changes
+
+- fd5d960: fix: ignore command records
+
 ## 0.22.2
 
 ### Patch Changes
