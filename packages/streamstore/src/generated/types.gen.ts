@@ -245,11 +245,6 @@ export type GaugeMetric = {
     ]>;
 };
 
-/**
- * Headers add structured information to a record as name-value pairs.
- *
- * The name cannot be empty, with the exception of an S2 command record.
- */
 export type Header = [
     string,
     string
@@ -536,11 +531,11 @@ export type ListAccessTokensData = {
     path?: never;
     query?: {
         /**
-         * Filter to access tokens whose ID begins with this prefix.
+         * Filter to access tokens whose IDs begin with this prefix.
          */
         prefix?: string;
         /**
-         * Filter to access tokens whose ID lexicographically starts after this string.
+         * Filter to access tokens whose IDs lexicographically start after this string.
          */
         start_after?: string;
         /**
@@ -915,11 +910,11 @@ export type ListStreamsData = {
     path?: never;
     query?: {
         /**
-         * Filter to streams whose name begins with this prefix.
+         * Filter to streams whose names begin with this prefix.
          */
         prefix?: string;
         /**
-         * Filter to streams whose name begins with this prefix.
+         * Filter to streams whose names lexicographically start after this string.
          * It must be greater than or equal to the `prefix` if specified.
          */
         start_after?: string;
