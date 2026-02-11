@@ -54,9 +54,13 @@ export function supportsHttp2(): boolean {
 	switch (runtime) {
 		case "node":
 		case "deno":
+			return true;
+
 		case "bun":
 			// via node:http2
-			return true;
+			// NOTE: bun's http2 support appears to be buggy, re: https://github.com/s2-streamstore/s2-sdk-typescript/issues/113
+			// so we disable http2 for now
+			return false;
 
 		case "browser":
 		case "workerd":
