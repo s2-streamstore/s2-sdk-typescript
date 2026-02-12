@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.4
+
+### Patch Changes
+
+- 013dd0a: fix: exclude bun from http2 autodetection
+
 ## 0.22.3
 
 ### Patch Changes
