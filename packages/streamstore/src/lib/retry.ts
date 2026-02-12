@@ -55,34 +55,18 @@ function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
 }
 
 /**
- * Convert internal ReadRecord (with headers as object for strings) to SDK ReadRecord (with headers as array).
+ * Convert internal ReadRecord to SDK ReadRecord.
+ * Headers are always an array of tuples from both S2S and fetch transports.
  */
 function toSDKReadRecord<Format extends "string" | "bytes">(
 	record: ReadRecord<Format>,
 ): Types.ReadRecord<Format> {
-	if (
-		record.headers &&
-		typeof record.headers === "object" &&
-		!Array.isArray(record.headers)
-	) {
-		// String format: headers is an object, convert to array of tuples
-		const result: Types.ReadRecord<"string"> = {
-			seqNum: record.seq_num,
-			timestamp: new Date(record.timestamp),
-			body: (record.body as string) ?? "",
-			headers: Object.entries(record.headers as Record<string, string>),
-		};
-		return result as Types.ReadRecord<Format>;
-	} else {
-		// Bytes format: headers is already an array
-		const result: Types.ReadRecord<"bytes"> = {
-			seqNum: record.seq_num,
-			timestamp: new Date(record.timestamp),
-			body: (record.body as Uint8Array) ?? new Uint8Array(),
-			headers: (record.headers as Array<[Uint8Array, Uint8Array]>) ?? [],
-		};
-		return result as Types.ReadRecord<Format>;
-	}
+	return {
+		seqNum: record.seq_num,
+		timestamp: new Date(record.timestamp),
+		body: (record.body ?? (typeof record.body === "string" ? "" : new Uint8Array())) as Types.ReadRecord<Format>["body"],
+		headers: (record.headers ?? []) as Types.ReadRecord<Format>["headers"],
+	} as Types.ReadRecord<Format>;
 }
 
 /**

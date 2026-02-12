@@ -8,7 +8,7 @@ const textEncoder = new TextEncoder();
 
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
-function bigintToSafeNumber(value: bigint, field: string): number {
+export function bigintToSafeNumber(value: bigint, field: string): number {
 	if (value > MAX_SAFE_BIGINT) {
 		throw new S2Error({
 			message: `${field} exceeds JavaScript Number.MAX_SAFE_INTEGER (${Number.MAX_SAFE_INTEGER}); use protobuf transport with bigint support or ensure values stay within 53-bit range`,
