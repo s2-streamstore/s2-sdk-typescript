@@ -867,18 +867,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	private releaseCapacity(bytes: number): void {
 		debugSession(
-			"[%s] [CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, pendingBatches=%d, numWaiters=%d",
+			"[%s] [CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d, pendingBatches=%d, numWaiters=%d",
 			this.streamName,
 			bytes,
 			this.queuedBytes,
 			this.queuedBytes - bytes,
 			this.pendingBytes,
-			Math.max(0, this.pendingBytes - bytes),
 			this.pendingBatches,
 			this.capacityWaiters.length,
 		);
 		this.queuedBytes -= bytes;
-		this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
 
 		this.wakeCapacityWaiters();
 	}
