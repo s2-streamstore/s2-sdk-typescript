@@ -11,7 +11,7 @@ import {
 import type * as API from "./generated/types.gen.js";
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { randomToken } from "./lib/base64.js";
-import { paginate } from "./lib/paginate.js";
+import { filterAsync, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
@@ -138,15 +138,19 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.StreamInfo> {
 		const { includeDeleted, ...listArgs } = args ?? {};
-		return paginate(
+		const allItems = paginate(
 			(a) =>
 				this.list(a, options).then((r) => ({
-					items: r.streams.filter((s) => includeDeleted || !s.deletedAt),
+					items: r.streams,
 					hasMore: r.hasMore,
 				})),
 			listArgs,
 			(stream) => stream.name,
 		);
+		if (includeDeleted) {
+			return allItems;
+		}
+		return filterAsync(allItems, (s) => !s.deletedAt);
 	}
 
 	/**
