@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.5
+
+### Patch Changes
+
+- d9a5707: bug fixes for #115, #114, #117, #116, #119, #118, #120
+
 ## 0.22.4
 
 ### Patch Changes
