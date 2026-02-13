@@ -200,26 +200,10 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 						return;
 					}
 
-					// Check for ping timeout before reading
-					const now = performance.now();
-					const timeSinceLastPingMs = now - lastPingTimeMs;
-					if (timeSinceLastPingMs > PING_TIMEOUT_MS) {
-						const timeoutError = new S2Error({
-							message: `No ping received for ${Math.floor(timeSinceLastPingMs / 1000)}s (timeout: ${PING_TIMEOUT_MS / 1000}s)`,
-							status: 408, // Request Timeout
-							code: "TIMEOUT",
-						});
-						debug("ping timeout detected, elapsed=%dms", timeSinceLastPingMs);
-						controller.enqueue({ ok: false, error: timeoutError });
-						done = true;
-						await reader.cancel();
-						controller.close();
-						return;
-					}
-
 					// Capture current ping time to detect if activity happens during timeout
 					const capturedLastPingTime = lastPingTimeMs;
-					const remainingTimeMs = PING_TIMEOUT_MS - timeSinceLastPingMs;
+					const remainingTimeMs =
+						PING_TIMEOUT_MS - (performance.now() - lastPingTimeMs);
 
 					// Reuse pending read if it exists (from previous stale timeout iteration)
 					if (!pendingRead) {

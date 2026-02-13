@@ -2,13 +2,13 @@ import { S2Error } from "../../../error.js";
 import type * as API from "../../../generated/index.js";
 import * as Proto from "../../../generated/proto/s2.js";
 import type * as Types from "../../../types.js";
-import type { AppendRecord, ReadBatch } from "../types.js";
+import type { AppendRecord, ReadBatch, ReadRecord } from "../types.js";
 
 const textEncoder = new TextEncoder();
 
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
-function bigintToSafeNumber(value: bigint, field: string): number {
+export function bigintToSafeNumber(value: bigint, field: string): number {
 	if (value > MAX_SAFE_BIGINT) {
 		throw new S2Error({
 			message: `${field} exceeds JavaScript Number.MAX_SAFE_INTEGER (${Number.MAX_SAFE_INTEGER}); use protobuf transport with bigint support or ensure values stay within 53-bit range`,
@@ -89,6 +89,65 @@ const fromProtoSequencedRecord = (
 		body: record.body,
 	};
 };
+
+/**
+ * Convert a raw protobuf SequencedRecord to the requested ReadRecord format.
+ * Used by the S2S transport for record conversion.
+ */
+export function convertProtoRecord<
+	Format extends "string" | "bytes" = "string",
+>(
+	record: {
+		seqNum?: bigint;
+		timestamp?: bigint;
+		headers?: Array<{ name?: Uint8Array; value?: Uint8Array }>;
+		body?: Uint8Array;
+	},
+	format: Format,
+	textDecoder: TextDecoder = new TextDecoder(),
+): ReadRecord<Format> {
+	if (record.seqNum === undefined || record.timestamp === undefined) {
+		throw new S2Error({
+			message:
+				"Malformed SequencedRecord: missing required seqNum or timestamp",
+			status: 500,
+			origin: "sdk",
+		});
+	}
+	if (format === "bytes") {
+		return {
+			seq_num: bigintToSafeNumber(record.seqNum, "SequencedRecord.seqNum"),
+			timestamp: bigintToSafeNumber(
+				record.timestamp,
+				"SequencedRecord.timestamp",
+			),
+			headers: record.headers?.map(
+				(h) =>
+					[h.name ?? new Uint8Array(), h.value ?? new Uint8Array()] as [
+						Uint8Array,
+						Uint8Array,
+					],
+			),
+			body: record.body,
+		} as ReadRecord<Format>;
+	}
+	const headerEntries = record.headers?.map(
+		(h) =>
+			[
+				h.name ? textDecoder.decode(h.name) : "",
+				h.value ? textDecoder.decode(h.value) : "",
+			] as [string, string],
+	);
+	return {
+		seq_num: bigintToSafeNumber(record.seqNum, "SequencedRecord.seqNum"),
+		timestamp: bigintToSafeNumber(
+			record.timestamp,
+			"SequencedRecord.timestamp",
+		),
+		headers: headerEntries,
+		body: record.body ? textDecoder.decode(record.body) : undefined,
+	} as ReadRecord<Format>;
+}
 
 export const buildProtoAppendInput = (
 	input: Types.AppendInput,

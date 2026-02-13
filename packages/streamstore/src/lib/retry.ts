@@ -55,34 +55,22 @@ function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
 }
 
 /**
- * Convert internal ReadRecord (with headers as object for strings) to SDK ReadRecord (with headers as array).
+ * Convert internal ReadRecord to SDK ReadRecord.
+ * Headers are always an array of tuples from both S2S and fetch transports.
  */
 function toSDKReadRecord<Format extends "string" | "bytes">(
 	record: ReadRecord<Format>,
+	format: Format,
 ): Types.ReadRecord<Format> {
-	if (
-		record.headers &&
-		typeof record.headers === "object" &&
-		!Array.isArray(record.headers)
-	) {
-		// String format: headers is an object, convert to array of tuples
-		const result: Types.ReadRecord<"string"> = {
-			seqNum: record.seq_num,
-			timestamp: new Date(record.timestamp),
-			body: (record.body as string) ?? "",
-			headers: Object.entries(record.headers as Record<string, string>),
-		};
-		return result as Types.ReadRecord<Format>;
-	} else {
-		// Bytes format: headers is already an array
-		const result: Types.ReadRecord<"bytes"> = {
-			seqNum: record.seq_num,
-			timestamp: new Date(record.timestamp),
-			body: (record.body as Uint8Array) ?? new Uint8Array(),
-			headers: (record.headers as Array<[Uint8Array, Uint8Array]>) ?? [],
-		};
-		return result as Types.ReadRecord<Format>;
-	}
+	return {
+		seqNum: record.seq_num,
+		timestamp: new Date(record.timestamp),
+		body: (record.body ??
+			(format === "string"
+				? ""
+				: new Uint8Array())) as Types.ReadRecord<Format>["body"],
+		headers: (record.headers ?? []) as Types.ReadRecord<Format>["headers"],
+	} as Types.ReadRecord<Format>;
 }
 
 /**
@@ -307,6 +295,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			...DEFAULT_RETRY_CONFIG,
 			...config,
 		};
+		const format = (args?.as ?? "string") as Format;
 		let session: TransportReadSession<Format> | undefined = initialSession;
 		super({
 			start: async (controller) => {
@@ -458,7 +447,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						if (args?.ignore_command_records && isCommandRecord(record)) {
 							continue;
 						}
-						controller.enqueue(toSDKReadRecord(record));
+						controller.enqueue(toSDKReadRecord(record, format));
 					}
 				}
 			},
@@ -883,18 +872,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	private releaseCapacity(bytes: number): void {
 		debugSession(
-			"[%s] [CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d->%d, pendingBatches=%d, numWaiters=%d",
+			"[%s] [CAPACITY] releasing %d bytes: queuedBytes=%d->%d, pendingBytes=%d, pendingBatches=%d, numWaiters=%d",
 			this.streamName,
 			bytes,
 			this.queuedBytes,
 			this.queuedBytes - bytes,
 			this.pendingBytes,
-			Math.max(0, this.pendingBytes - bytes),
 			this.pendingBatches,
 			this.capacityWaiters.length,
 		);
 		this.queuedBytes -= bytes;
-		this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
 
 		this.wakeCapacityWaiters();
 	}

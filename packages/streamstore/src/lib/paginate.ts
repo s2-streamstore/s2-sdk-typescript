@@ -91,3 +91,26 @@ export function paginate<TItem, TArgs>(
 		},
 	};
 }
+
+/**
+ * Filters an async iterable, yielding only items that match the predicate.
+ *
+ * @template T The type of items in the iterable
+ * @param source The async iterable to filter
+ * @param predicate Function that returns true for items to keep
+ * @returns A new async iterable yielding only matching items
+ */
+export function filterAsync<T>(
+	source: AsyncIterable<T>,
+	predicate: (item: T) => boolean,
+): AsyncIterable<T> {
+	return {
+		[Symbol.asyncIterator]: async function* () {
+			for await (const item of source) {
+				if (predicate(item)) {
+					yield item;
+				}
+			}
+		},
+	};
+}

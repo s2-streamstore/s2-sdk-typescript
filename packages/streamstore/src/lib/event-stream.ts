@@ -134,30 +134,48 @@ function concatBuffer(a: Uint8Array, b: Uint8Array): Uint8Array {
 	return c;
 }
 
-/** Finds the first (CR,LF,CR,LF) or (CR,CR) or (LF,LF) */
+/**
+ * Finds the first pair of consecutive newline tokens in the buffer.
+ * A newline token is CRLF (\r\n), LF (\n), or CR (\r).
+ * A boundary is any two consecutive newline tokens, covering all
+ * combinations: \r\n\r\n, \r\n\r, \r\n\n, \r\r\n, \r\r, \n\r\n, \n\r, \n\n.
+ */
 function findBoundary(
 	buf: Uint8Array,
 ): { index: number; length: number } | null {
 	const len = buf.length;
+	const CR = 13;
+	const LF = 10;
 	for (let i = 0; i < len; i++) {
-		if (
-			i <= len - 4 &&
-			buf[i] === 13 &&
-			buf[i + 1] === 10 &&
-			buf[i + 2] === 13 &&
-			buf[i + 3] === 10
-		) {
-			return { index: i, length: 4 };
+		// Detect the first newline token and its length.
+		let firstLen: number;
+		if (buf[i] === CR && i + 1 < len && buf[i + 1] === LF) {
+			firstLen = 2; // CRLF
+		} else if (buf[i] === CR) {
+			firstLen = 1; // CR
+		} else if (buf[i] === LF) {
+			firstLen = 1; // LF
+		} else {
+			continue;
 		}
-		if (i <= len - 2 && buf[i] === 13 && buf[i + 1] === 13) {
-			return { index: i, length: 2 };
+		// Check for a second newline token immediately after the first.
+		const j = i + firstLen;
+		if (j >= len) return null;
+		let secondLen: number;
+		if (buf[j] === CR && j + 1 < len && buf[j + 1] === LF) {
+			secondLen = 2; // CRLF
+		} else if (buf[j] === CR) {
+			secondLen = 1; // CR
+		} else if (buf[j] === LF) {
+			secondLen = 1; // LF
+		} else {
+			continue;
 		}
-		if (i <= len - 2 && buf[i] === 10 && buf[i + 1] === 10) {
-			return { index: i, length: 2 };
-		}
+		return { index: i, length: firstLen + secondLen };
 	}
 	return null;
 }
+
 function parseMessage<T>(
 	chunk: Uint8Array,
 	parse: (x: SseMessage<string>) => ParseResult<T>,

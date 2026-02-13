@@ -45,7 +45,11 @@ import type {
 	TransportConfig,
 	TransportReadSession,
 } from "../../types.js";
-import { encodeProtoAppendInput } from "../proto.js";
+import {
+	bigintToSafeNumber,
+	convertProtoRecord,
+	encodeProtoAppendInput,
+} from "../proto.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
 
 const debug = createDebug("s2:s2s");
@@ -516,8 +520,15 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											// Update next read position to after this record
 											if (record.seqNum !== undefined) {
 												this._nextReadPosition = {
-													seq_num: Number(record.seqNum) + 1,
-													timestamp: Number(record.timestamp ?? 0n),
+													seq_num:
+														bigintToSafeNumber(
+															record.seqNum,
+															"SequencedRecord.seqNum",
+														) + 1,
+													timestamp: bigintToSafeNumber(
+														record.timestamp ?? 0n,
+														"SequencedRecord.timestamp",
+													),
 												};
 											}
 										}
@@ -604,35 +615,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		format: Format,
 		textDecoder: TextDecoder,
 	): ReadRecord<Format> {
-		if (format === "bytes") {
-			return {
-				seq_num: Number(record.seqNum),
-				timestamp: Number(record.timestamp),
-				headers: record.headers?.map(
-					(h) =>
-						[h.name ?? new Uint8Array(), h.value ?? new Uint8Array()] as [
-							Uint8Array,
-							Uint8Array,
-						],
-				),
-				body: record.body,
-			} as ReadRecord<Format>;
-		} else {
-			// Convert to string format with object headers
-			const headerEntries = record.headers?.map(
-				(h) =>
-					[
-						h.name ? textDecoder.decode(h.name) : "",
-						h.value ? textDecoder.decode(h.value) : "",
-					] as [string, string],
-			);
-			return {
-				seq_num: Number(record.seqNum),
-				timestamp: Number(record.timestamp),
-				headers: headerEntries ? Object.fromEntries(headerEntries) : undefined,
-				body: record.body ? textDecoder.decode(record.body) : undefined,
-			} as ReadRecord<Format>;
-		}
+		return convertProtoRecord(record, format, textDecoder);
 	}
 
 	async [Symbol.asyncDispose]() {
@@ -1010,8 +993,8 @@ function convertStreamPosition(
 	proto: Proto.StreamPosition,
 ): API.StreamPosition {
 	return {
-		seq_num: Number(proto.seqNum),
-		timestamp: Number(proto.timestamp),
+		seq_num: bigintToSafeNumber(proto.seqNum, "StreamPosition.seqNum"),
+		timestamp: bigintToSafeNumber(proto.timestamp, "StreamPosition.timestamp"),
 	};
 }
 

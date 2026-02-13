@@ -50,7 +50,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	} catch (error) {
 		throw s2Error(error);
 	}
-	if (response.error) {
+	if (response.error || !response.response.ok) {
 		const status = response.response.status;
 		if (status === 416) {
 			const err = response.error as {
@@ -59,8 +59,8 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 			};
 			throw new RangeNotSatisfiableError({
 				status,
-				tail: err.tail,
-				code: err.code,
+				tail: err?.tail,
+				code: err?.code,
 			});
 		}
 		throw makeServerError(
@@ -127,7 +127,7 @@ export async function streamAppend(
 		} catch (error) {
 			throw s2Error(error);
 		}
-		if (response.error) {
+		if (response.error || !response.response.ok) {
 			const status = response.response.status;
 			if (status === 412) {
 				throw makeAppendPreconditionError(status, response.error);
@@ -162,7 +162,7 @@ export async function streamAppend(
 	} catch (error) {
 		throw s2Error(error);
 	}
-	if (response.error) {
+	if (response.error || !response.response.ok) {
 		const status = response.response.status;
 		if (status === 412) {
 			throw makeAppendPreconditionError(status, response.error);

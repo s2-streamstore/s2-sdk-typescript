@@ -63,22 +63,13 @@ export function meteredBytes<Format extends "string" | "bytes">(
 	let headersSize = 0;
 
 	if (record.headers) {
-		if (Array.isArray(record.headers)) {
-			numHeaders = record.headers.length;
-			headersSize = record.headers.reduce((sum, [k, v]) => {
-				// Infer format from key type: string = UTF-8 bytes, Uint8Array = byte length
-				const keySize = typeof k === "string" ? utf8ByteLength(k) : k.length;
-				const valueSize = typeof v === "string" ? utf8ByteLength(v) : v.length;
-				return sum + keySize + valueSize;
-			}, 0);
-		} else {
-			// Record<string, string> format (only for string format)
-			const entries = Object.entries(record.headers);
-			numHeaders = entries.length;
-			headersSize = entries.reduce((sum, [k, v]) => {
-				return sum + utf8ByteLength(k) + utf8ByteLength(v);
-			}, 0);
-		}
+		numHeaders = record.headers.length;
+		headersSize = record.headers.reduce((sum, [k, v]) => {
+			// Infer format from key type: string = UTF-8 bytes, Uint8Array = byte length
+			const keySize = typeof k === "string" ? utf8ByteLength(k) : k.length;
+			const valueSize = typeof v === "string" ? utf8ByteLength(v) : v.length;
+			return sum + keySize + valueSize;
+		}, 0);
 	}
 
 	// Calculate body size based on actual data type
@@ -101,7 +92,6 @@ export function isCommandRecord(record: {
 		| ReadonlyArray<readonly [Uint8Array, Uint8Array]>
 		| Array<[string, string]>
 		| Array<[Uint8Array, Uint8Array]>
-		| Record<string, string>
 		| null;
 }): boolean {
 	if (!record.headers || !Array.isArray(record.headers)) return false;
