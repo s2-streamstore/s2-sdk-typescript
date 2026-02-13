@@ -89,7 +89,7 @@ describe("duplicate headers preservation (issue #114)", () => {
 		});
 
 		const decoded = roundTripReadBatch(batch);
-		const record = decoded.records[0];
+		const record = decoded.records[0]!;
 
 		// Headers should be an array of tuples, preserving all three entries
 		expect(record.headers).toHaveLength(3);
@@ -122,7 +122,7 @@ describe("duplicate headers preservation (issue #114)", () => {
 		});
 
 		const decoded = roundTripReadBatch(batch);
-		const record = decoded.records[0];
+		const record = decoded.records[0]!;
 
 		expect(record.headers).toHaveLength(2);
 
@@ -149,7 +149,7 @@ describe("duplicate headers preservation (issue #114)", () => {
 		});
 
 		const decoded = roundTripReadBatch(batch);
-		const record = decoded.records[0];
+		const record = decoded.records[0]!;
 
 		expect(record.headers).toEqual([]);
 	});
@@ -167,7 +167,7 @@ describe("duplicate headers preservation (issue #114)", () => {
 		});
 
 		const decoded = roundTripReadBatch(batch);
-		const record = decoded.records[0];
+		const record = decoded.records[0]!;
 
 		// Verify the headers are an Array (not a plain object)
 		expect(Array.isArray(record.headers)).toBe(true);
@@ -195,7 +195,7 @@ describe("uint64 precision in proto decode path (issue #114)", () => {
 		});
 
 		const decoded = roundTripReadBatch(batch);
-		const record = decoded.records[0];
+		const record = decoded.records[0]!;
 
 		expect(record.seq_num).toBe(42);
 		expect(record.timestamp).toBe(1700000000000);
@@ -283,7 +283,7 @@ describe("uint64 precision in proto decode path (issue #114)", () => {
 		});
 
 		const decoded = roundTripReadBatch(batch);
-		expect(decoded.records[0].seq_num).toBe(Number.MAX_SAFE_INTEGER);
+		expect(decoded.records[0]!.seq_num).toBe(Number.MAX_SAFE_INTEGER);
 	});
 });
 
@@ -409,7 +409,7 @@ describe("cross-transport consistency: fetch/proto vs S2S produce same shapes", 
 
 		// Path 1: Fetch/proto decode (returns bytes format)
 		const fetchResult = roundTripReadBatch(proto);
-		const fetchRecord = fetchResult.records[0];
+		const fetchRecord = fetchResult.records[0]!;
 
 		// Path 2: S2S convertProtoRecord (also test bytes format for comparison)
 		const s2sRecord = convertProtoRecord(
@@ -520,16 +520,16 @@ describe("full decode path preserves headers and converts fields", () => {
 		const decoded = roundTripReadBatch(batch);
 
 		// First record has duplicate headers preserved
-		expect(decoded.records[0].seq_num).toBe(10);
-		expect(decoded.records[0].headers).toHaveLength(2);
-		const firstRecordHeaderValues = decoded.records[0].headers!.map(([, v]) =>
+		expect(decoded.records[0]!.seq_num).toBe(10);
+		expect(decoded.records[0]!.headers).toHaveLength(2);
+		const firstRecordHeaderValues = decoded.records[0]!.headers!.map(([, v]) =>
 			new TextDecoder().decode(v as Uint8Array),
 		);
 		expect(firstRecordHeaderValues).toEqual(["abc", "def"]);
 
 		// Second record
-		expect(decoded.records[1].seq_num).toBe(11);
-		expect(decoded.records[1].headers).toHaveLength(1);
+		expect(decoded.records[1]!.seq_num).toBe(11);
+		expect(decoded.records[1]!.headers).toHaveLength(1);
 
 		// Tail is decoded
 		expect(decoded.tail).toBeDefined();
