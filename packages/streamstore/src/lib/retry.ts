@@ -637,11 +637,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			...config,
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
-		// Clamp maxInflightBytes to at least 1 MiB
-		this.maxQueuedBytes = Math.max(
-			MIN_MAX_INFLIGHT_BYTES,
-			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES,
-		);
+		const maxInflightBytes =
+			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
+		if (maxInflightBytes < MIN_MAX_INFLIGHT_BYTES) {
+			throw new S2Error({
+				message: `maxInflightBytes must be at least ${MIN_MAX_INFLIGHT_BYTES}`,
+				origin: "sdk",
+			});
+		}
+		this.maxQueuedBytes = maxInflightBytes;
 		// Clamp maxInflightBatches to at least 1 if set
 		this.maxInflightBatches =
 			this.sessionOptions?.maxInflightBatches !== undefined
