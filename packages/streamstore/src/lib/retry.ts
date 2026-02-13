@@ -60,11 +60,12 @@ function toSDKStreamPosition(pos: API.StreamPosition): Types.StreamPosition {
  */
 function toSDKReadRecord<Format extends "string" | "bytes">(
 	record: ReadRecord<Format>,
+	format: Format,
 ): Types.ReadRecord<Format> {
 	return {
 		seqNum: record.seq_num,
 		timestamp: new Date(record.timestamp),
-		body: (record.body ?? (typeof record.body === "string" ? "" : new Uint8Array())) as Types.ReadRecord<Format>["body"],
+		body: (record.body ?? (format === "string" ? "" : new Uint8Array())) as Types.ReadRecord<Format>["body"],
 		headers: (record.headers ?? []) as Types.ReadRecord<Format>["headers"],
 	} as Types.ReadRecord<Format>;
 }
@@ -291,6 +292,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			...DEFAULT_RETRY_CONFIG,
 			...config,
 		};
+		const format = (args?.as ?? "string") as Format;
 		let session: TransportReadSession<Format> | undefined = initialSession;
 		super({
 			start: async (controller) => {
@@ -442,7 +444,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						if (args?.ignore_command_records && isCommandRecord(record)) {
 							continue;
 						}
-						controller.enqueue(toSDKReadRecord(record));
+						controller.enqueue(toSDKReadRecord(record, format));
 					}
 				}
 			},
