@@ -134,10 +134,7 @@ export function convertProtoRecord<
 			] as [string, string],
 	);
 	return {
-		seq_num: bigintToSafeNumber(
-			record.seqNum ?? 0n,
-			"SequencedRecord.seqNum",
-		),
+		seq_num: bigintToSafeNumber(record.seqNum ?? 0n, "SequencedRecord.seqNum"),
 		timestamp: bigintToSafeNumber(
 			record.timestamp ?? 0n,
 			"SequencedRecord.timestamp",

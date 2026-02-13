@@ -65,7 +65,10 @@ function toSDKReadRecord<Format extends "string" | "bytes">(
 	return {
 		seqNum: record.seq_num,
 		timestamp: new Date(record.timestamp),
-		body: (record.body ?? (format === "string" ? "" : new Uint8Array())) as Types.ReadRecord<Format>["body"],
+		body: (record.body ??
+			(format === "string"
+				? ""
+				: new Uint8Array())) as Types.ReadRecord<Format>["body"],
 		headers: (record.headers ?? []) as Types.ReadRecord<Format>["headers"],
 	} as Types.ReadRecord<Format>;
 }

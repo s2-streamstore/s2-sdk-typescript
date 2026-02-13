@@ -520,8 +520,15 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											// Update next read position to after this record
 											if (record.seqNum !== undefined) {
 												this._nextReadPosition = {
-													seq_num: bigintToSafeNumber(record.seqNum ?? 0n, "SequencedRecord.seqNum") + 1,
-													timestamp: bigintToSafeNumber(record.timestamp ?? 0n, "SequencedRecord.timestamp"),
+													seq_num:
+														bigintToSafeNumber(
+															record.seqNum ?? 0n,
+															"SequencedRecord.seqNum",
+														) + 1,
+													timestamp: bigintToSafeNumber(
+														record.timestamp ?? 0n,
+														"SequencedRecord.timestamp",
+													),
 												};
 											}
 										}

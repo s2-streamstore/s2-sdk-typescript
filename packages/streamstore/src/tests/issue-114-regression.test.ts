@@ -4,13 +4,13 @@
  * 2. uint64 values exceeding Number.MAX_SAFE_INTEGER must throw (not silently lose precision)
  */
 import { describe, expect, it } from "vitest";
+import * as Proto from "../generated/proto/s2.js";
 import {
 	bigintToSafeNumber,
 	convertProtoRecord,
 	decodeProtoReadBatch,
 	protoAppendAckToJson,
 } from "../lib/stream/transport/proto.js";
-import * as Proto from "../generated/proto/s2.js";
 
 const textEncoder = new TextEncoder();
 
@@ -160,10 +160,7 @@ describe("duplicate headers preservation (issue #114)", () => {
 				Proto.SequencedRecord.create({
 					seqNum: 4n,
 					timestamp: 4000n,
-					headers: [
-						makeHeader("dup", "a"),
-						makeHeader("dup", "b"),
-					],
+					headers: [makeHeader("dup", "a"), makeHeader("dup", "b")],
 					body: textEncoder.encode("test"),
 				}),
 			],
@@ -218,7 +215,9 @@ describe("uint64 precision in proto decode path (issue #114)", () => {
 			],
 		});
 
-		expect(() => roundTripReadBatch(batch)).toThrow(/exceeds JavaScript Number.MAX_SAFE_INTEGER/);
+		expect(() => roundTripReadBatch(batch)).toThrow(
+			/exceeds JavaScript Number.MAX_SAFE_INTEGER/,
+		);
 	});
 
 	it("protoAppendAckToJson throws for unsafe seq_num in positions", () => {
@@ -239,7 +238,9 @@ describe("uint64 precision in proto decode path (issue #114)", () => {
 			}),
 		});
 
-		expect(() => protoAppendAckToJson(ack)).toThrow(/exceeds JavaScript Number.MAX_SAFE_INTEGER/);
+		expect(() => protoAppendAckToJson(ack)).toThrow(
+			/exceeds JavaScript Number.MAX_SAFE_INTEGER/,
+		);
 	});
 
 	it("protoAppendAckToJson succeeds for safe values", () => {
@@ -521,8 +522,8 @@ describe("full decode path preserves headers and converts fields", () => {
 		// First record has duplicate headers preserved
 		expect(decoded.records[0].seq_num).toBe(10);
 		expect(decoded.records[0].headers).toHaveLength(2);
-		const firstRecordHeaderValues = decoded.records[0].headers!.map(
-			([, v]) => new TextDecoder().decode(v as Uint8Array),
+		const firstRecordHeaderValues = decoded.records[0].headers!.map(([, v]) =>
+			new TextDecoder().decode(v as Uint8Array),
 		);
 		expect(firstRecordHeaderValues).toEqual(["abc", "def"]);
 

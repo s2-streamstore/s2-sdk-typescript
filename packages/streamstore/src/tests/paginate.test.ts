@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-	filterAsync,
-	paginate,
-	type PageFetcher,
-} from "../lib/paginate.js";
+import { filterAsync, type PageFetcher, paginate } from "../lib/paginate.js";
 
 /** Collect all items from an async iterable into an array. */
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
@@ -27,9 +23,7 @@ describe("paginate", () => {
 				hasMore: false,
 			});
 
-		const result = await collect(
-			paginate(fetcher, {}, (item) => item.name),
-		);
+		const result = await collect(paginate(fetcher, {}, (item) => item.name));
 
 		expect(result).toEqual([
 			{ name: "a" },
@@ -48,9 +42,7 @@ describe("paginate", () => {
 				hasMore: false,
 			});
 
-		const result = await collect(
-			paginate(fetcher, {}, (item) => item.name),
-		);
+		const result = await collect(paginate(fetcher, {}, (item) => item.name));
 
 		expect(result).toEqual([{ name: "only" }]);
 		expect(fetcher).toHaveBeenCalledTimes(1);
@@ -64,9 +56,7 @@ describe("paginate", () => {
 				hasMore: false,
 			});
 
-		const result = await collect(
-			paginate(fetcher, {}, (item) => item.name),
-		);
+		const result = await collect(paginate(fetcher, {}, (item) => item.name));
 
 		expect(result).toEqual([]);
 		expect(fetcher).toHaveBeenCalledTimes(1);
@@ -99,9 +89,7 @@ describe("paginate", () => {
 				hasMore: true,
 			});
 
-		const result = await collect(
-			paginate(fetcher, {}, (item) => item.name),
-		);
+		const result = await collect(paginate(fetcher, {}, (item) => item.name));
 
 		expect(result).toEqual([]);
 		expect(fetcher).toHaveBeenCalledTimes(1);
@@ -118,9 +106,7 @@ describe("filterAsync", () => {
 			yield 5;
 		}
 
-		const result = await collect(
-			filterAsync(source(), (n) => n % 2 === 0),
-		);
+		const result = await collect(filterAsync(source(), (n) => n % 2 === 0));
 
 		expect(result).toEqual([2, 4]);
 	});
@@ -132,9 +118,7 @@ describe("filterAsync", () => {
 			yield "b";
 		}
 
-		const result = await collect(
-			filterAsync(source(), () => true),
-		);
+		const result = await collect(filterAsync(source(), () => true));
 
 		expect(result).toEqual(["c", "a", "b"]);
 	});
@@ -144,9 +128,7 @@ describe("filterAsync", () => {
 			// yields nothing
 		}
 
-		const result = await collect(
-			filterAsync(source(), () => true),
-		);
+		const result = await collect(filterAsync(source(), () => true));
 
 		expect(result).toEqual([]);
 	});
@@ -158,9 +140,7 @@ describe("filterAsync", () => {
 			yield 3;
 		}
 
-		const result = await collect(
-			filterAsync(source(), () => false),
-		);
+		const result = await collect(filterAsync(source(), () => false));
 
 		expect(result).toEqual([]);
 	});

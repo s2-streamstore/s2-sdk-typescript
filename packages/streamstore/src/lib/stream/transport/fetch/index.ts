@@ -202,7 +202,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 					// Capture current ping time to detect if activity happens during timeout
 					const capturedLastPingTime = lastPingTimeMs;
-					const remainingTimeMs = PING_TIMEOUT_MS - (performance.now() - lastPingTimeMs);
+					const remainingTimeMs =
+						PING_TIMEOUT_MS - (performance.now() - lastPingTimeMs);
 
 					// Reuse pending read if it exists (from previous stale timeout iteration)
 					if (!pendingRead) {
