@@ -45,7 +45,11 @@ import type {
 	TransportConfig,
 	TransportReadSession,
 } from "../../types.js";
-import { bigintToSafeNumber, encodeProtoAppendInput } from "../proto.js";
+import {
+	bigintToSafeNumber,
+	convertProtoRecord,
+	encodeProtoAppendInput,
+} from "../proto.js";
 import { frameMessage, S2SFrameParser } from "./framing.js";
 
 const debug = createDebug("s2:s2s");
@@ -973,63 +977,6 @@ class S2SAppendSession implements TransportAppendSession {
 
 		return this.sendBatch(input);
 	}
-}
-
-/**
- * Convert a protobuf SequencedRecord to the requested ReadRecord format.
- * Exported for testing; used internally by S2SReadSession.
- */
-export function convertProtoRecord<
-	Format extends "string" | "bytes" = "string",
->(
-	record: {
-		seqNum?: bigint;
-		timestamp?: bigint;
-		headers?: Array<{ name?: Uint8Array; value?: Uint8Array }>;
-		body?: Uint8Array;
-	},
-	format: Format,
-	textDecoder: TextDecoder = new TextDecoder(),
-): ReadRecord<Format> {
-	if (format === "bytes") {
-		return {
-			seq_num: bigintToSafeNumber(
-				record.seqNum ?? 0n,
-				"SequencedRecord.seqNum",
-			),
-			timestamp: bigintToSafeNumber(
-				record.timestamp ?? 0n,
-				"SequencedRecord.timestamp",
-			),
-			headers: record.headers?.map(
-				(h) =>
-					[h.name ?? new Uint8Array(), h.value ?? new Uint8Array()] as [
-						Uint8Array,
-						Uint8Array,
-					],
-			),
-			body: record.body,
-		} as ReadRecord<Format>;
-	}
-	const headerEntries = record.headers?.map(
-		(h) =>
-			[
-				h.name ? textDecoder.decode(h.name) : "",
-				h.value ? textDecoder.decode(h.value) : "",
-			] as [string, string],
-	);
-	return {
-		seq_num: bigintToSafeNumber(
-			record.seqNum ?? 0n,
-			"SequencedRecord.seqNum",
-		),
-		timestamp: bigintToSafeNumber(
-			record.timestamp ?? 0n,
-			"SequencedRecord.timestamp",
-		),
-		headers: headerEntries,
-		body: record.body ? textDecoder.decode(record.body) : undefined,
-	} as ReadRecord<Format>;
 }
 
 /**

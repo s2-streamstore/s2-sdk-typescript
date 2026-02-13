@@ -6,10 +6,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	bigintToSafeNumber,
+	convertProtoRecord,
 	decodeProtoReadBatch,
 	protoAppendAckToJson,
 } from "../lib/stream/transport/proto.js";
-import { convertProtoRecord } from "../lib/stream/transport/s2s/index.js";
 import * as Proto from "../generated/proto/s2.js";
 
 const textEncoder = new TextEncoder();
