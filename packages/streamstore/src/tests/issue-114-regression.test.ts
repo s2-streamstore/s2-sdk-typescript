@@ -9,6 +9,7 @@ import {
 	decodeProtoReadBatch,
 	protoAppendAckToJson,
 } from "../lib/stream/transport/proto.js";
+import { convertProtoRecord } from "../lib/stream/transport/s2s/index.js";
 import * as Proto from "../generated/proto/s2.js";
 
 const textEncoder = new TextEncoder();
@@ -282,6 +283,208 @@ describe("uint64 precision in proto decode path (issue #114)", () => {
 
 		const decoded = roundTripReadBatch(batch);
 		expect(decoded.records[0].seq_num).toBe(Number.MAX_SAFE_INTEGER);
+	});
+});
+
+// --- S2S convertProtoRecord (regression #114) --------------------------------
+
+describe("S2S convertProtoRecord preserves duplicate headers", () => {
+	it("preserves duplicate headers in string format", () => {
+		const record = {
+			seqNum: 10n,
+			timestamp: 5000n,
+			headers: [
+				{
+					name: textEncoder.encode("x-key"),
+					value: textEncoder.encode("val-1"),
+				},
+				{
+					name: textEncoder.encode("x-key"),
+					value: textEncoder.encode("val-2"),
+				},
+				{
+					name: textEncoder.encode("x-key"),
+					value: textEncoder.encode("val-3"),
+				},
+			],
+			body: textEncoder.encode("hello"),
+		};
+
+		const converted = convertProtoRecord(record, "string");
+
+		expect(converted.headers).toHaveLength(3);
+		expect(converted.headers).toEqual([
+			["x-key", "val-1"],
+			["x-key", "val-2"],
+			["x-key", "val-3"],
+		]);
+	});
+
+	it("preserves duplicate headers in bytes format", () => {
+		const record = {
+			seqNum: 10n,
+			timestamp: 5000n,
+			headers: [
+				{
+					name: textEncoder.encode("x-key"),
+					value: textEncoder.encode("val-1"),
+				},
+				{
+					name: textEncoder.encode("x-key"),
+					value: textEncoder.encode("val-2"),
+				},
+			],
+			body: textEncoder.encode("hello"),
+		};
+
+		const converted = convertProtoRecord(record, "bytes");
+
+		expect(converted.headers).toHaveLength(2);
+		const names = converted.headers!.map(([n]) =>
+			new TextDecoder().decode(n as Uint8Array),
+		);
+		expect(names).toEqual(["x-key", "x-key"]);
+	});
+
+	it("uses bigintToSafeNumber for seq_num and timestamp", () => {
+		const unsafeSeqNum = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+		const record = {
+			seqNum: unsafeSeqNum,
+			timestamp: 1000n,
+			headers: [],
+			body: textEncoder.encode("test"),
+		};
+
+		expect(() => convertProtoRecord(record, "string")).toThrow(
+			/exceeds JavaScript Number.MAX_SAFE_INTEGER/,
+		);
+	});
+
+	it("decodes string body correctly", () => {
+		const record = {
+			seqNum: 1n,
+			timestamp: 1000n,
+			headers: [],
+			body: textEncoder.encode("hello world"),
+		};
+
+		const converted = convertProtoRecord(record, "string");
+		expect(converted.body).toBe("hello world");
+	});
+
+	it("keeps binary body in bytes format", () => {
+		const body = new Uint8Array([0xff, 0x00, 0xab]);
+		const record = {
+			seqNum: 1n,
+			timestamp: 1000n,
+			headers: [],
+			body,
+		};
+
+		const converted = convertProtoRecord(record, "bytes");
+		expect(converted.body).toBe(body);
+	});
+});
+
+// --- Cross-transport consistency ---------------------------------------------
+
+describe("cross-transport consistency: fetch/proto vs S2S produce same shapes", () => {
+	it("produces matching fields for the same protobuf input", () => {
+		// Build a protobuf record
+		const proto = Proto.ReadBatch.create({
+			records: [
+				Proto.SequencedRecord.create({
+					seqNum: 42n,
+					timestamp: 1700000000000n,
+					headers: [
+						makeHeader("content-type", "application/json"),
+						makeHeader("x-trace", "abc"),
+						makeHeader("x-trace", "def"),
+					],
+					body: textEncoder.encode("test body"),
+				}),
+			],
+		});
+
+		// Path 1: Fetch/proto decode (returns bytes format)
+		const fetchResult = roundTripReadBatch(proto);
+		const fetchRecord = fetchResult.records[0];
+
+		// Path 2: S2S convertProtoRecord (also test bytes format for comparison)
+		const s2sRecord = convertProtoRecord(
+			{
+				seqNum: 42n,
+				timestamp: 1700000000000n,
+				headers: [
+					{
+						name: textEncoder.encode("content-type"),
+						value: textEncoder.encode("application/json"),
+					},
+					{
+						name: textEncoder.encode("x-trace"),
+						value: textEncoder.encode("abc"),
+					},
+					{
+						name: textEncoder.encode("x-trace"),
+						value: textEncoder.encode("def"),
+					},
+				],
+				body: textEncoder.encode("test body"),
+			},
+			"bytes",
+		);
+
+		// Both should have the same seq_num and timestamp
+		expect(fetchRecord.seq_num).toBe(s2sRecord.seq_num);
+		expect(fetchRecord.seq_num).toBe(42);
+		// Timestamps: proto.ts uses Number() for timestamp in fromProtoPosition,
+		// while S2S uses bigintToSafeNumber. Both produce the same value for
+		// safe integers. Timestamps are milliseconds since Unix epoch.
+		expect(fetchRecord.timestamp).toBe(s2sRecord.timestamp);
+		expect(fetchRecord.timestamp).toBe(1700000000000);
+
+		// Both should preserve all 3 headers (including duplicates)
+		expect(fetchRecord.headers).toHaveLength(3);
+		expect(s2sRecord.headers).toHaveLength(3);
+
+		// Both should have the same body
+		expect(new TextDecoder().decode(fetchRecord.body as Uint8Array)).toBe(
+			"test body",
+		);
+		expect(new TextDecoder().decode(s2sRecord.body as Uint8Array)).toBe(
+			"test body",
+		);
+	});
+
+	it("S2S string format matches fetch JSON shape for headers", () => {
+		// S2S string-format record
+		const s2sString = convertProtoRecord(
+			{
+				seqNum: 1n,
+				timestamp: 1000n,
+				headers: [
+					{
+						name: textEncoder.encode("key"),
+						value: textEncoder.encode("val1"),
+					},
+					{
+						name: textEncoder.encode("key"),
+						value: textEncoder.encode("val2"),
+					},
+				],
+				body: textEncoder.encode("body"),
+			},
+			"string",
+		);
+
+		// Headers should be array-of-tuples (not an object)
+		expect(Array.isArray(s2sString.headers)).toBe(true);
+		expect(s2sString.headers).toEqual([
+			["key", "val1"],
+			["key", "val2"],
+		]);
+		expect(typeof s2sString.body).toBe("string");
+		expect(s2sString.body).toBe("body");
 	});
 });
 

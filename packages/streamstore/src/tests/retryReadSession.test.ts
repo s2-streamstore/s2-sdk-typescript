@@ -532,6 +532,58 @@ describe("ReadSession (unit)", () => {
 		expect(results[1]!.seqNum).toBe(2);
 	});
 
+	it("defaults undefined body to empty string for string format reads", async () => {
+		const records: InternalReadRecord<"string">[] = [
+			{ seq_num: 0, timestamp: 1000 },
+			{ seq_num: 1, timestamp: 1000, body: undefined },
+		];
+
+		const session = await RetryReadSession.create(
+			async (_args) => {
+				return new FakeReadSession({ records });
+			},
+			{ as: "string" },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const results: SDKReadRecord<"string">[] = [];
+		for await (const record of session) {
+			results.push(record);
+		}
+
+		expect(results).toHaveLength(2);
+		expect(results[0]!.body).toBe("");
+		expect(typeof results[0]!.body).toBe("string");
+		expect(results[1]!.body).toBe("");
+		expect(typeof results[1]!.body).toBe("string");
+	});
+
+	it("defaults undefined body to empty Uint8Array for bytes format reads", async () => {
+		const records: InternalReadRecord<"bytes">[] = [
+			{ seq_num: 0, timestamp: 1000 },
+			{ seq_num: 1, timestamp: 1000, body: undefined },
+		];
+
+		const session = await RetryReadSession.create(
+			async (_args) => {
+				return new FakeReadSession<"bytes">({ records });
+			},
+			{ as: "bytes" },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const results: SDKReadRecord<"bytes">[] = [];
+		for await (const record of session) {
+			results.push(record);
+		}
+
+		expect(results).toHaveLength(2);
+		expect(results[0]!.body).toBeInstanceOf(Uint8Array);
+		expect(results[0]!.body.length).toBe(0);
+		expect(results[1]!.body).toBeInstanceOf(Uint8Array);
+		expect(results[1]!.body.length).toBe(0);
+	});
+
 	it("does not filter command records when ignore_command_records is not set", async () => {
 		const records: InternalReadRecord<"string">[] = [
 			{ seq_num: 0, timestamp: 0, body: "data" },
