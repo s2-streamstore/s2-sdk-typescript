@@ -106,14 +106,19 @@ export function convertProtoRecord<
 	format: Format,
 	textDecoder: TextDecoder = new TextDecoder(),
 ): ReadRecord<Format> {
+	if (record.seqNum === undefined || record.timestamp === undefined) {
+		throw new S2Error({
+			message:
+				"Malformed SequencedRecord: missing required seqNum or timestamp",
+			status: 500,
+			origin: "sdk",
+		});
+	}
 	if (format === "bytes") {
 		return {
-			seq_num: bigintToSafeNumber(
-				record.seqNum ?? 0n,
-				"SequencedRecord.seqNum",
-			),
+			seq_num: bigintToSafeNumber(record.seqNum, "SequencedRecord.seqNum"),
 			timestamp: bigintToSafeNumber(
-				record.timestamp ?? 0n,
+				record.timestamp,
 				"SequencedRecord.timestamp",
 			),
 			headers: record.headers?.map(
@@ -134,9 +139,9 @@ export function convertProtoRecord<
 			] as [string, string],
 	);
 	return {
-		seq_num: bigintToSafeNumber(record.seqNum ?? 0n, "SequencedRecord.seqNum"),
+		seq_num: bigintToSafeNumber(record.seqNum, "SequencedRecord.seqNum"),
 		timestamp: bigintToSafeNumber(
-			record.timestamp ?? 0n,
+			record.timestamp,
 			"SequencedRecord.timestamp",
 		),
 		headers: headerEntries,

@@ -522,7 +522,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 												this._nextReadPosition = {
 													seq_num:
 														bigintToSafeNumber(
-															record.seqNum ?? 0n,
+															record.seqNum,
 															"SequencedRecord.seqNum",
 														) + 1,
 													timestamp: bigintToSafeNumber(
