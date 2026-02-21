@@ -88,12 +88,19 @@ type BusMessage = {
 };
 
 /** A record on a guest's private memory stream. */
-type MemoryRecord = {
-	role: "system" | "user" | "assistant";
-	content: string;
-	/** Bus seqNum this record corresponds to (absent for system prompt). */
-	busSeqNum?: number;
-};
+type MemoryRecord =
+	| {
+			type: "message";
+			role: "system" | "user" | "assistant";
+			content: string;
+			/** Bus seqNum this record corresponds to (absent for system prompt). */
+			busSeqNum?: number;
+	  }
+	| {
+			type: "reasoning";
+			content: string;
+			busSeqNum?: number;
+	  };
 
 // ---------------------------------------------------------------------------
 // S2 setup
@@ -169,7 +176,11 @@ async function createGuestState(guest: Guest): Promise<GuestState> {
 			for (const record of batch.records) {
 				try {
 					const mem = JSON.parse(dec.decode(record.body)) as MemoryRecord;
-					messages.push({ role: mem.role, content: mem.content });
+					// Only restore messages into LLM context; reasoning is
+					// preserved on the stream for replay but not fed back.
+					if (mem.type !== "reasoning") {
+						messages.push({ role: mem.role, content: mem.content });
+					}
 					if (mem.busSeqNum !== undefined && mem.busSeqNum > lastBusSeqNum) {
 						lastBusSeqNum = mem.busSeqNum;
 					}
@@ -186,7 +197,11 @@ async function createGuestState(guest: Guest): Promise<GuestState> {
 		const fullSystem = `${guest.system}\n\n${setting}`;
 		const systemMsg: CoreMessage = { role: "system", content: fullSystem };
 		messages.push(systemMsg);
-		const rec: MemoryRecord = { role: "system", content: fullSystem };
+		const rec: MemoryRecord = {
+			type: "message",
+			role: "system",
+			content: fullSystem,
+		};
 		const ticket = await producer.submit(
 			AppendRecord.bytes({ body: enc.encode(JSON.stringify(rec)) }),
 		);
@@ -264,7 +279,7 @@ async function saveToMemory(
 	busSeqNum?: number,
 ) {
 	state.messages.push({ role, content });
-	const rec: MemoryRecord = { role, content, busSeqNum };
+	const rec: MemoryRecord = { type: "message", role, content, busSeqNum };
 	const ticket = await state.producer.submit(
 		AppendRecord.bytes({ body: enc.encode(JSON.stringify(rec)) }),
 	);
@@ -272,6 +287,22 @@ async function saveToMemory(
 	if (busSeqNum !== undefined && busSeqNum > state.lastBusSeqNum) {
 		state.lastBusSeqNum = busSeqNum;
 	}
+}
+
+/** Save the model's reasoning to the stream (not added to LLM context). */
+async function saveReasoning(
+	state: GuestState,
+	content: string,
+	busSeqNum?: number,
+) {
+	const rec: MemoryRecord = { type: "reasoning", content, busSeqNum };
+	const ticket = await state.producer.submit(
+		AppendRecord.bytes({
+			body: enc.encode(JSON.stringify(rec)),
+			headers: [[enc.encode("type"), enc.encode("reasoning")]],
+		}),
+	);
+	await ticket.ack();
 }
 
 // ---------------------------------------------------------------------------
@@ -407,8 +438,9 @@ while (true) {
 
 	// Generate this guest's response.
 	const result = await generateText({
-		model: openai("gpt-4o-mini"),
+		model: openai("o4-mini"),
 		messages: state.messages,
+		providerOptions: { openai: { reasoningEffort: "low" } },
 	});
 
 	const response = result.text;
@@ -420,6 +452,11 @@ while (true) {
 		content: response,
 		turn: turnNumber++,
 	});
+
+	// Persist reasoning to the stream (for replay/debugging, not LLM context).
+	if (result.reasoningText) {
+		await saveReasoning(state, result.reasoningText, busSeqNum);
+	}
 
 	// Save to the speaker's own memory as an assistant turn.
 	await saveToMemory(state, "assistant", response, busSeqNum);
