@@ -36,6 +36,11 @@ import { type CoreMessage, generateText } from "ai";
 // Guest definitions — swap these to change the cast!
 // ---------------------------------------------------------------------------
 
+/** Appended to every guest's system prompt to set the scene. */
+const setting =
+	"You find yourself as a guest at a strange dinner. You don't recognize your host, or the other " +
+	"guests, but you are all seated around a table. And it seems that a conversation is just starting.";
+
 interface Guest {
 	name: string;
 	system: string;
@@ -50,7 +55,7 @@ const guests: Guest[] = [
 			"arrogant. Later, you will be put to death because you annoyed the citizens of " +
 			"Athens so much, but that's ok, in some sense you will have won. You speak like Socrates " +
 			"as known from Plato's dialogues. Keep your responses to a single sentence, unless you really " +
-			"have a very important point to make."
+			"have a very important point to make.",
 	},
 	{
 		name: "Freud",
@@ -176,11 +181,12 @@ async function createGuestState(guest: Guest): Promise<GuestState> {
 		}
 	}
 
-	// If fresh start, write the system prompt.
+	// If fresh start, write the system prompt (persona + shared setting).
 	if (messages.length === 0) {
-		const systemMsg: CoreMessage = { role: "system", content: guest.system };
+		const fullSystem = `${guest.system}\n\n${setting}`;
+		const systemMsg: CoreMessage = { role: "system", content: fullSystem };
 		messages.push(systemMsg);
-		const rec: MemoryRecord = { role: "system", content: guest.system };
+		const rec: MemoryRecord = { role: "system", content: fullSystem };
 		const ticket = await producer.submit(
 			AppendRecord.bytes({ body: enc.encode(JSON.stringify(rec)) }),
 		);
@@ -321,8 +327,6 @@ if (existingTurns > 0) {
 // Conversation loop
 // ---------------------------------------------------------------------------
 
-const topic = process.argv[2] ?? "What does it mean to live a good life?";
-
 const rl = readline.createInterface({
 	input: process.stdin,
 	output: process.stdout,
@@ -330,19 +334,23 @@ const rl = readline.createInterface({
 const ask = (query: string) =>
 	new Promise<string>((resolve) => rl.question(query, resolve));
 
-// If fresh start, the host opens with the topic.
 let turnNumber = existingTurns;
 if (turnNumber === 0) {
-	console.log(`\nHost: "${topic}"\n`);
+	// Fresh dinner — the host must open the conversation.
+	let topic = process.argv[2] ?? "";
+	while (!topic.trim()) {
+		topic = await ask("Host, set the topic: ");
+	}
+
+	console.log();
 	const busSeqNum = await postToBus({
 		from: "host",
-		content: topic,
+		content: topic.trim(),
 		turn: turnNumber++,
 	});
 
-	// Every guest hears the host's opening.
 	for (const state of guestStates) {
-		await saveToMemory(state, "user", `[Host]: ${topic}`, busSeqNum);
+		await saveToMemory(state, "user", `[Host]: ${topic.trim()}`, busSeqNum);
 	}
 } else {
 	console.log();
