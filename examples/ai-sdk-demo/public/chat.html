@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat Persistence — S2</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <div class="header">
+      <div class="header-title">
+        <a href="/" class="logo"><img src="https://raw.githubusercontent.com/s2-streamstore/s2-sdk-rust/main/assets/s2-white.png" alt="S2"></a>
+        <span class="sep">/</span>
+        <span class="page">Chat Persistence</span>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-ghost btn-danger" id="restart-btn">Restart</button>
+      </div>
+    </div>
+
+    <div id="status-bar" class="status-bar hidden">
+      <span class="spinner"></span>
+      <span id="status-text">Restoring from S2...</span>
+    </div>
+
+    <div class="main">
+
+      <!-- Chat -->
+      <div class="panel">
+        <div class="panel-body" id="chat-body">
+          <div class="messages" id="messages"></div>
+        </div>
+        <div class="input-row">
+          <input type="text" id="msg-input" placeholder="Send a message..." autocomplete="off">
+          <button class="btn btn-primary" id="send-btn">Send</button>
+        </div>
+      </div>
+
+      <!-- S2 Stream Viewer -->
+      <div class="panel stream-viewer">
+        <div class="panel-header">
+          <span class="live-dot"></span>
+          S2 Stream
+        </div>
+        <div class="panel-body" id="stream-body">
+          <div class="stream-records" id="stream-records"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const messagesEl    = document.getElementById('messages');
+    const streamEl      = document.getElementById('stream-records');
+    const msgInput      = document.getElementById('msg-input');
+    const sendBtn       = document.getElementById('send-btn');
+    const restartBtn    = document.getElementById('restart-btn');
+    const statusBar     = document.getElementById('status-bar');
+    const statusText    = document.getElementById('status-text');
+    const chatBody      = document.getElementById('chat-body');
+    const streamBody    = document.getElementById('stream-body');
+
+    let sending = false;
+    let es = null;
+
+    const scrollChat   = () => { chatBody.scrollTop   = chatBody.scrollHeight; };
+    const scrollStream = () => { streamBody.scrollTop = streamBody.scrollHeight; };
+
+    function addMessage(role, content, opts = {}) {
+      const wrap = document.createElement('div');
+      wrap.className = `message ${role}`;
+      if (opts.fast) wrap.style.animationDuration = '80ms';
+
+      const label = document.createElement('div');
+      label.className = 'message-label';
+      label.textContent = role === 'user' ? 'You' : 'Assistant';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+      if (opts.streaming) bubble.classList.add('streaming');
+      bubble.textContent = content;
+
+      wrap.appendChild(label);
+      wrap.appendChild(bubble);
+      messagesEl.appendChild(wrap);
+      scrollChat();
+      return bubble;
+    }
+
+    function addRecord(seq, type, preview) {
+      const row = document.createElement('div');
+      row.className = 'stream-record';
+      row.innerHTML = `
+        <span class="seq">${seq}</span>
+        <span class="rec-type"><span class="rec-label">${type}</span>${preview ? ' · ' + preview : ''}</span>
+        <span class="dot"></span>`;
+      streamEl.appendChild(row);
+      scrollStream();
+    }
+
+    function setInputEnabled(on) {
+      msgInput.disabled = !on;
+      sendBtn.disabled  = !on;
+    }
+
+    async function loadHistory() {
+      const { messages, records } = await fetch('/api/chat/history').then(r => r.json());
+      for (const m of messages) addMessage(m.role, m.content);
+      for (const r of records)  addRecord(r.seq, r.type, r.preview);
+    }
+
+    function connectSSE() {
+      if (es) es.close();
+      es = new EventSource('/api/chat/events');
+
+      es.addEventListener('assistant-start', () => {
+        sending = true;
+        setInputEnabled(false);
+        window._bubble = addMessage('assistant', '', { streaming: true });
+      });
+
+      es.addEventListener('assistant-chunk', e => {
+        if (window._bubble) { window._bubble.textContent += JSON.parse(e.data); scrollChat(); }
+      });
+
+      es.addEventListener('assistant-end', () => {
+        if (window._bubble) { window._bubble.classList.remove('streaming'); window._bubble = null; }
+        sending = false;
+        setInputEnabled(true);
+        msgInput.focus();
+      });
+
+      es.addEventListener('stream-record', e => {
+        const r = JSON.parse(e.data);
+        addRecord(r.seq, r.type, r.preview);
+      });
+
+      es.addEventListener('restore-start', () => {
+        statusBar.classList.remove('hidden');
+        messagesEl.innerHTML = '';
+        streamEl.innerHTML   = '';
+        setInputEnabled(false);
+      });
+
+      es.addEventListener('restore-message', e => {
+        const m = JSON.parse(e.data);
+        addMessage(m.role, m.content, { fast: true });
+      });
+
+      es.addEventListener('restore-record', e => {
+        const r = JSON.parse(e.data);
+        addRecord(r.seq, r.type, r.preview);
+      });
+
+      es.addEventListener('restore-end', () => {
+        statusBar.classList.add('hidden');
+        setInputEnabled(true);
+        msgInput.focus();
+      });
+    }
+
+    async function sendMessage() {
+      const text = msgInput.value.trim();
+      if (!text || sending) return;
+      msgInput.value = '';
+      addMessage('user', text);
+      try {
+        await fetch('/api/chat/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+      } catch { setInputEnabled(true); }
+    }
+
+    async function restart() {
+      restartBtn.disabled = true;
+      try { await fetch('/api/chat/restart', { method: 'POST' }); } catch {}
+      restartBtn.disabled = false;
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    msgInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    });
+    restartBtn.addEventListener('click', restart);
+
+    loadHistory().then(connectSSE);
+  </script>
+</body>
+</html>
