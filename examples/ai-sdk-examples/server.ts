@@ -1,13 +1,4 @@
 #!/usr/bin/env bun
-/**
- * AI SDK Demo Server — serves 3 demo UIs backed by S2 streams.
- *
- * Usage:
- *   export S2_ACCESS_TOKEN="..."
- *   export S2_BASIN="my-basin"
- *   export OPENAI_API_KEY="..."
- *   bun run examples/ai-sdk-demo/server.ts
- */
 
 import * as crypto from "node:crypto";
 import { dirname, join } from "node:path";
@@ -21,17 +12,13 @@ import {
 	S2Error,
 } from "@s2-dev/streamstore";
 import {
-	type CoreMessage,
+	type ModelMessage,
 	generateText,
 	jsonSchema,
 	stepCountIs,
 	streamText,
 	tool,
 } from "ai";
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
 
 const PORT = parseInt(process.env.PORT || "3456", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");
@@ -45,10 +32,6 @@ if (!basinName) throw new Error("Set S2_BASIN before running this example.");
 const MAX_CONTEXT_MESSAGES = Number(
 	process.env.AI_SDK_MAX_CONTEXT_MESSAGES ?? 40,
 );
-
-// ---------------------------------------------------------------------------
-// S2 Client (shared)
-// ---------------------------------------------------------------------------
 
 const s2 = new S2({
 	...S2Environment.parse(),
@@ -66,7 +49,7 @@ async function ensureStream(name: string) {
 	});
 }
 
-function pruneMessages(messages: CoreMessage[]) {
+function pruneMessages(messages: ModelMessage[]) {
 	if (!Number.isFinite(MAX_CONTEXT_MESSAGES) || MAX_CONTEXT_MESSAGES <= 0)
 		return;
 	const system = messages[0]?.role === "system" ? messages[0] : undefined;
@@ -77,15 +60,9 @@ function pruneMessages(messages: CoreMessage[]) {
 	messages.splice(0, messages.length, ...(system ? [system] : []), ...trimmed);
 }
 
-// ---------------------------------------------------------------------------
-// SSE Helpers
-// ---------------------------------------------------------------------------
-
 type SSEClient = ReadableStreamDefaultController<Uint8Array>;
 
-function sseResponse(
-	clients: Set<SSEClient>,
-): Response {
+function sseResponse(clients: Set<SSEClient>): Response {
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
 			clients.add(controller);
@@ -94,7 +71,6 @@ function sseResponse(
 			clients.delete(controller as SSEClient);
 		},
 	});
-
 	return new Response(stream, {
 		headers: {
 			"Content-Type": "text/event-stream",
@@ -105,11 +81,7 @@ function sseResponse(
 	});
 }
 
-function broadcast(
-	clients: Set<SSEClient>,
-	event: string,
-	data?: unknown,
-) {
+function broadcast(clients: Set<SSEClient>, event: string, data?: unknown) {
 	const payload = data !== undefined ? JSON.stringify(data) : "";
 	const msg = `event: ${event}\ndata: ${payload}\n\n`;
 	const bytes = enc.encode(msg);
@@ -121,24 +93,6 @@ function broadcast(
 		}
 	}
 }
-
-function sendTo(
-	client: SSEClient,
-	event: string,
-	data?: unknown,
-) {
-	const payload = data !== undefined ? JSON.stringify(data) : "";
-	const msg = `event: ${event}\ndata: ${payload}\n\n`;
-	try {
-		client.enqueue(enc.encode(msg));
-	} catch {
-		// Client disconnected
-	}
-}
-
-// ---------------------------------------------------------------------------
-// JSON helpers
-// ---------------------------------------------------------------------------
 
 async function jsonBody(req: Request): Promise<unknown> {
 	return req.json();
@@ -154,9 +108,7 @@ function jsonResponse(data: unknown, status = 200): Response {
 	});
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CHAT PERSISTENCE DEMO
-// ═══════════════════════════════════════════════════════════════════════════
+// ── Chat Persistence ─────────────────────────────────────────────────────────
 
 interface StreamRecordInfo {
 	seq: number;
@@ -165,23 +117,56 @@ interface StreamRecordInfo {
 }
 
 const chatClients = new Set<SSEClient>();
-const chatMessages: CoreMessage[] = [];
+const chatMessages: ModelMessage[] = [];
 const chatRecords: StreamRecordInfo[] = [];
 let chatProducer: Producer;
 let chatStream: ReturnType<typeof basin.stream>;
+let chatStreamBuffer: Array<{ event: string; data: unknown }> | null = null;
 
-function messageToRecord(msg: CoreMessage): AppendRecord {
+function chatEmit(event: string, data?: unknown) {
+	if (chatStreamBuffer !== null) {
+		chatStreamBuffer.push({ event, data });
+	}
+	broadcast(chatClients, event, data);
+}
+
+function handleChatEvents(): Response {
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			if (chatStreamBuffer !== null) {
+				for (const { event, data } of chatStreamBuffer) {
+					const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+					try { controller.enqueue(enc.encode(msg)); } catch { return; }
+				}
+			}
+			chatClients.add(controller);
+		},
+		cancel(controller) {
+			chatClients.delete(controller as SSEClient);
+		},
+	});
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			"Access-Control-Allow-Origin": "*",
+		},
+	});
+}
+
+function messageToRecord(msg: ModelMessage): AppendRecord {
 	return AppendRecord.bytes({
 		body: enc.encode(JSON.stringify(msg)),
 		headers: [[enc.encode("role"), enc.encode(msg.role)]],
 	});
 }
 
-function recordToMessage(body: Uint8Array): CoreMessage {
-	return JSON.parse(dec.decode(body)) as CoreMessage;
+function recordToMessage(body: Uint8Array): ModelMessage {
+	return JSON.parse(dec.decode(body)) as ModelMessage;
 }
 
-function messagePreview(msg: CoreMessage): string {
+function messagePreview(msg: ModelMessage): string {
 	const text =
 		typeof msg.content === "string"
 			? msg.content
@@ -241,7 +226,7 @@ async function handleChatHistory(): Promise<Response> {
 async function handleChatSend(req: Request): Promise<Response> {
 	const { message } = (await jsonBody(req)) as { message: string };
 
-	const userMsg: CoreMessage = { role: "user", content: message };
+	const userMsg: ModelMessage = { role: "user", content: message };
 	chatMessages.push(userMsg);
 	pruneMessages(chatMessages);
 
@@ -251,17 +236,18 @@ async function handleChatSend(req: Request): Promise<Response> {
 	chatRecords.push(userRec);
 	broadcast(chatClients, "stream-record", userRec);
 
-	broadcast(chatClients, "assistant-start");
+	chatStreamBuffer = [];
+	chatEmit("assistant-start");
 
 	const result = streamText({ model: openai("gpt-4o-mini"), messages: chatMessages });
 
 	let fullText = "";
 	for await (const chunk of result.textStream) {
 		fullText += chunk;
-		broadcast(chatClients, "assistant-chunk", chunk);
+		chatEmit("assistant-chunk", chunk);
 	}
 
-	const assistantMsg: CoreMessage = { role: "assistant", content: fullText };
+	const assistantMsg: ModelMessage = { role: "assistant", content: fullText };
 	chatMessages.push(assistantMsg);
 	pruneMessages(chatMessages);
 
@@ -269,8 +255,9 @@ async function handleChatSend(req: Request): Promise<Response> {
 	const assistantAck = await assistantTicket.ack();
 	const assistantRec: StreamRecordInfo = { seq: assistantAck.seqNum(), type: "assistant", preview: messagePreview(assistantMsg) };
 	chatRecords.push(assistantRec);
-	broadcast(chatClients, "stream-record", assistantRec);
-	broadcast(chatClients, "assistant-end");
+	chatEmit("stream-record", assistantRec);
+	chatEmit("assistant-end");
+	chatStreamBuffer = null;
 
 	return jsonResponse({ ok: true });
 }
@@ -315,10 +302,6 @@ async function handleChatRestart(): Promise<Response> {
 	return jsonResponse({ ok: true });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AGENT SESSION DEMO
-// ═══════════════════════════════════════════════════════════════════════════
-
 type AgentEvent =
 	| { type: "run_start"; prompt: string; timestamp: string }
 	| {
@@ -337,7 +320,6 @@ type AgentEvent =
 			timestamp: string;
 	  };
 
-// Per-run state: live clients + event buffer for late-connecting browsers
 type AgentRunState = {
 	clients: Set<SSEClient>;
 	buffer: Array<{ event: string; data: unknown }>;
@@ -345,7 +327,6 @@ type AgentRunState = {
 };
 const agentRuns = new Map<string, AgentRunState>();
 
-// Safe arithmetic evaluator
 type Token =
 	| { type: "number"; value: number }
 	| { type: "op"; value: "+" | "-" | "*" | "/" }
@@ -400,11 +381,7 @@ function evaluateExpression(input: string): number {
 		let value = parseTerm();
 		while (true) {
 			const token = peek();
-			if (
-				!token ||
-				token.type !== "op" ||
-				(token.value !== "+" && token.value !== "-")
-			)
+			if (!token || token.type !== "op" || (token.value !== "+" && token.value !== "-"))
 				break;
 			consume();
 			const rhs = parseTerm();
@@ -417,11 +394,7 @@ function evaluateExpression(input: string): number {
 		let value = parseFactor();
 		while (true) {
 			const token = peek();
-			if (
-				!token ||
-				token.type !== "op" ||
-				(token.value !== "*" && token.value !== "/")
-			)
+			if (!token || token.type !== "op" || (token.value !== "*" && token.value !== "/"))
 				break;
 			consume();
 			const rhs = parseFactor();
@@ -524,7 +497,6 @@ async function handleAgentRun(req: Request): Promise<Response> {
 	const runId = crypto.randomUUID().slice(0, 8);
 	const streamName = `ai-sdk-demo/agent/run-${runId}`;
 
-	// Create the run's stream
 	await ensureStream(streamName);
 	const streamClient = basin.stream(streamName);
 	const producer = new Producer(
@@ -532,7 +504,6 @@ async function handleAgentRun(req: Request): Promise<Response> {
 		await streamClient.appendSession(),
 	);
 
-	// Set up run state with event buffer (for clients that connect after events fire)
 	const runState: AgentRunState = {
 		clients: new Set<SSEClient>(),
 		buffer: [],
@@ -540,13 +511,11 @@ async function handleAgentRun(req: Request): Promise<Response> {
 	};
 	agentRuns.set(runId, runState);
 
-	// Broadcast and buffer every event
 	function emit(event: string, data: unknown) {
 		runState.buffer.push({ event, data });
 		broadcast(runState.clients, event, data);
 	}
 
-	// Helper to log to S2 and broadcast
 	async function log(event: AgentEvent) {
 		const ticket = await producer.submit(
 			AppendRecord.bytes({
@@ -568,7 +537,6 @@ async function handleAgentRun(req: Request): Promise<Response> {
 		emit("stream-record", rec);
 	}
 
-	// Run the agent in the background
 	(async () => {
 		try {
 			await log({
@@ -622,7 +590,6 @@ async function handleAgentRun(req: Request): Promise<Response> {
 			console.error(`[agent] Run ${runId} failed:`, err);
 			runState.done = true;
 		} finally {
-			// Keep state for 2 minutes so clients can replay after page load
 			setTimeout(() => agentRuns.delete(runId), 120_000);
 		}
 	})();
@@ -636,10 +603,8 @@ function handleAgentEvents(url: URL): Response {
 
 	const runState = agentRuns.get(runId);
 
-	// Return a SSE stream that first replays the buffer, then subscribes live
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
-			// Replay buffered events immediately
 			if (runState) {
 				for (const { event, data } of runState.buffer) {
 					const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -649,12 +614,10 @@ function handleAgentEvents(url: URL): Response {
 						return;
 					}
 				}
-				// If run is already done, close the stream
 				if (runState.done) {
 					controller.close();
 					return;
 				}
-				// Otherwise subscribe for future events
 				runState.clients.add(controller);
 			}
 		},
@@ -675,9 +638,7 @@ function handleAgentEvents(url: URL): Response {
 	});
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DINNER PARTY DEMO
-// ═══════════════════════════════════════════════════════════════════════════
+// ── Dinner Party ──────────────────────────────────────────────────────────────
 
 const setting =
 	"You find yourself as a guest at a strange dinner. You don't recognize your host, or the other " +
@@ -739,7 +700,7 @@ type MemoryRecord =
 
 type DinnerGuestState = {
 	guest: Guest;
-	messages: CoreMessage[];
+	messages: ModelMessage[];
 	lastBusSeqNum: number;
 	stream: ReturnType<typeof basin.stream>;
 	producer: Producer;
@@ -771,7 +732,7 @@ async function initDinnerGuest(guest: Guest): Promise<DinnerGuestState> {
 		await stream.appendSession(),
 	);
 
-	const messages: CoreMessage[] = [];
+	const messages: ModelMessage[] = [];
 	let lastBusSeqNum = -1;
 
 	const { tail } = await stream.checkTail();
@@ -795,9 +756,7 @@ async function initDinnerGuest(guest: Guest): Promise<DinnerGuestState> {
 					if (mem.busSeqNum !== undefined && mem.busSeqNum > lastBusSeqNum) {
 						lastBusSeqNum = mem.busSeqNum;
 					}
-				} catch {
-					// skip
-				}
+				} catch { /* skip */ }
 				nextSeqNum = record.seqNum + 1;
 			}
 		}
@@ -805,13 +764,9 @@ async function initDinnerGuest(guest: Guest): Promise<DinnerGuestState> {
 
 	if (messages.length === 0) {
 		const fullSystem = `${guest.system}\n\n${setting}`;
-		const systemMsg: CoreMessage = { role: "system", content: fullSystem };
+		const systemMsg: ModelMessage = { role: "system", content: fullSystem };
 		messages.push(systemMsg);
-		const rec: MemoryRecord = {
-			type: "message",
-			role: "system",
-			content: fullSystem,
-		};
+		const rec: MemoryRecord = { type: "message", role: "system", content: fullSystem };
 		const ticket = await producer.submit(
 			AppendRecord.bytes({ body: enc.encode(JSON.stringify(rec)) }),
 		);
@@ -855,9 +810,7 @@ async function dinnerReadBusAfter(
 			try {
 				const msg = JSON.parse(dec.decode(record.body)) as BusMessage;
 				results.push({ msg, seqNum: record.seqNum });
-			} catch {
-				// skip
-			}
+			} catch { /* skip */ }
 			nextSeqNum = record.seqNum + 1;
 		}
 	}
@@ -880,8 +833,6 @@ async function dinnerSaveToMemory(
 	if (busSeqNum !== undefined && busSeqNum > state.lastBusSeqNum) {
 		state.lastBusSeqNum = busSeqNum;
 	}
-
-	// Broadcast memory stream record
 	broadcast(dinnerClients, "stream-record", {
 		seq: ack.seqNum(),
 		stream: state.guest.name,
@@ -906,7 +857,6 @@ async function dinnerSaveReasoning(
 }
 
 async function initDinner() {
-	// Init bus
 	const busStreamName = `${DINNER_PREFIX}/bus`;
 	await ensureStream(busStreamName);
 	dinnerBusStream = basin.stream(busStreamName);
@@ -915,14 +865,12 @@ async function initDinner() {
 		await dinnerBusStream.appendSession(),
 	);
 
-	// Init guests
 	dinnerGuestStates = [];
 	for (const guest of guests) {
 		const state = await initDinnerGuest(guest);
 		dinnerGuestStates.push(state);
 	}
 
-	// Check bus state
 	const busState = await dinnerBusStream.checkTail();
 	const existingTurns = busState.tail.seqNum;
 
@@ -934,32 +882,22 @@ async function initDinner() {
 				? (dinnerTurnNumber - 1) % dinnerGuestStates.length
 				: 0;
 
-		// Restore bus messages for UI
 		const allBus = await dinnerReadBusAfter(-1);
 		for (const { msg } of allBus) {
 			dinnerMessages.push({ from: msg.from, content: msg.content });
 		}
 
-		// Catch up each guest
 		for (const state of dinnerGuestStates) {
 			const missed = await dinnerReadBusAfter(state.lastBusSeqNum);
 			const fromOthers = missed.filter(
-				(m) =>
-					m.msg.from !== state.guest.name && m.msg.from !== "host",
+				(m) => m.msg.from !== state.guest.name && m.msg.from !== "host",
 			);
 			for (const { msg, seqNum } of fromOthers) {
-				await dinnerSaveToMemory(
-					state,
-					"user",
-					`[${msg.from}]: ${msg.content}`,
-					seqNum,
-				);
+				await dinnerSaveToMemory(state, "user", `[${msg.from}]: ${msg.content}`, seqNum);
 			}
 		}
 
-		console.log(
-			`[dinner] Resumed with ${existingTurns} messages on bus`,
-		);
+		console.log(`[dinner] Resumed with ${existingTurns} messages on bus`);
 	} else {
 		console.log("[dinner] Fresh dinner party");
 	}
@@ -973,13 +911,9 @@ async function handleDinnerStart(req: Request): Promise<Response> {
 	const { topic } = (await jsonBody(req)) as { topic: string };
 
 	if (dinnerStarted) {
-		return jsonResponse({
-			ok: true,
-			nextGuest: getNextGuestName(),
-		});
+		return jsonResponse({ ok: true, nextGuest: getNextGuestName() });
 	}
 
-	// Post topic to bus
 	const busSeqNum = await dinnerPostToBus({
 		from: "host",
 		content: topic.trim(),
@@ -993,25 +927,15 @@ async function handleDinnerStart(req: Request): Promise<Response> {
 		preview: topic.trim().slice(0, 40),
 	});
 
-	// Deliver to all guests
 	for (const state of dinnerGuestStates) {
-		await dinnerSaveToMemory(
-			state,
-			"user",
-			`[Host]: ${topic.trim()}`,
-			busSeqNum,
-		);
+		await dinnerSaveToMemory(state, "user", `[Host]: ${topic.trim()}`, busSeqNum);
 	}
 
 	dinnerMessages.push({ from: "host", content: topic.trim() });
-	broadcast(dinnerClients, "host-message", {
-		content: topic.trim(),
-	});
+	broadcast(dinnerClients, "host-message", { content: topic.trim() });
 
 	dinnerStarted = true;
-	broadcast(dinnerClients, "started", {
-		nextGuest: getNextGuestName(),
-	});
+	broadcast(dinnerClients, "started", { nextGuest: getNextGuestName() });
 
 	return jsonResponse({ ok: true, nextGuest: getNextGuestName() });
 }
@@ -1030,7 +954,6 @@ async function handleDinnerAdvance(): Promise<Response> {
 
 	const response = result.text;
 
-	// Post to bus
 	const busSeqNum = await dinnerPostToBus({
 		from: state.guest.name,
 		content: response,
@@ -1044,30 +967,20 @@ async function handleDinnerAdvance(): Promise<Response> {
 		preview: response.slice(0, 40),
 	});
 
-	// Save reasoning if available
 	if (result.reasoningText) {
 		await dinnerSaveReasoning(state, result.reasoningText, busSeqNum);
 	}
 
-	// Save to speaker's memory
 	await dinnerSaveToMemory(state, "assistant", response, busSeqNum);
 
-	// All other guests hear this
 	for (const other of dinnerGuestStates) {
 		if (other === state) continue;
-		await dinnerSaveToMemory(
-			other,
-			"user",
-			`[${state.guest.name}]: ${response}`,
-			busSeqNum,
-		);
+		await dinnerSaveToMemory(other, "user", `[${state.guest.name}]: ${response}`, busSeqNum);
 	}
 
 	dinnerMessages.push({ from: state.guest.name, content: response });
 
-	// Advance to next guest
-	dinnerGuestIndex =
-		(dinnerGuestIndex + 1) % dinnerGuestStates.length;
+	dinnerGuestIndex = (dinnerGuestIndex + 1) % dinnerGuestStates.length;
 
 	broadcast(dinnerClients, "guest-message", {
 		from: state.guest.name,
@@ -1099,18 +1012,11 @@ async function handleDinnerHost(req: Request): Promise<Response> {
 	});
 
 	for (const state of dinnerGuestStates) {
-		await dinnerSaveToMemory(
-			state,
-			"user",
-			`[Host]: ${message.trim()}`,
-			busSeqNum,
-		);
+		await dinnerSaveToMemory(state, "user", `[Host]: ${message.trim()}`, busSeqNum);
 	}
 
 	dinnerMessages.push({ from: "host", content: message.trim() });
-	broadcast(dinnerClients, "host-message", {
-		content: message.trim(),
-	});
+	broadcast(dinnerClients, "host-message", { content: message.trim() });
 
 	return jsonResponse({ ok: true });
 }
@@ -1124,11 +1030,6 @@ function handleDinnerState(): Response {
 	});
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HTTP Server
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Initialize all demos
 console.log("Initializing demos...");
 await initChat();
 await initDinner();
@@ -1140,7 +1041,6 @@ const server = Bun.serve({
 		const url = new URL(req.url);
 		const path = url.pathname;
 
-		// Handle CORS preflight
 		if (req.method === "OPTIONS") {
 			return new Response(null, {
 				headers: {
@@ -1151,50 +1051,21 @@ const server = Bun.serve({
 			});
 		}
 
-		// ── API Routes ──────────────────────────────────────────────
+		if (path === "/api/chat/history" && req.method === "GET") return handleChatHistory();
+		if (path === "/api/chat/send"    && req.method === "POST") return handleChatSend(req);
+		if (path === "/api/chat/restart" && req.method === "POST") return handleChatRestart();
+		if (path === "/api/chat/events"  && req.method === "GET")  return handleChatEvents();
 
-		// Chat
-		if (path === "/api/chat/history" && req.method === "GET") {
-			return handleChatHistory();
-		}
-		if (path === "/api/chat/send" && req.method === "POST") {
-			return handleChatSend(req);
-		}
-		if (path === "/api/chat/restart" && req.method === "POST") {
-			return handleChatRestart();
-		}
-		if (path === "/api/chat/events" && req.method === "GET") {
-			return sseResponse(chatClients);
-		}
+		if (path === "/api/agent/run"    && req.method === "POST") return handleAgentRun(req);
+		if (path === "/api/agent/events" && req.method === "GET")  return handleAgentEvents(url);
 
-		// Agent
-		if (path === "/api/agent/run" && req.method === "POST") {
-			return handleAgentRun(req);
-		}
-		if (path === "/api/agent/events" && req.method === "GET") {
-			return handleAgentEvents(url);
-		}
+		if (path === "/api/dinner/start"   && req.method === "POST") return handleDinnerStart(req);
+		if (path === "/api/dinner/advance" && req.method === "POST") return handleDinnerAdvance();
+		if (path === "/api/dinner/host"    && req.method === "POST") return handleDinnerHost(req);
+		if (path === "/api/dinner/events"  && req.method === "GET")  return sseResponse(dinnerClients);
+		if (path === "/api/dinner/state"   && req.method === "GET")  return handleDinnerState();
 
-		// Dinner
-		if (path === "/api/dinner/start" && req.method === "POST") {
-			return handleDinnerStart(req);
-		}
-		if (path === "/api/dinner/advance" && req.method === "POST") {
-			return handleDinnerAdvance();
-		}
-		if (path === "/api/dinner/host" && req.method === "POST") {
-			return handleDinnerHost(req);
-		}
-		if (path === "/api/dinner/events" && req.method === "GET") {
-			return sseResponse(dinnerClients);
-		}
-		if (path === "/api/dinner/state" && req.method === "GET") {
-			return handleDinnerState();
-		}
-
-		// ── Static Files ────────────────────────────────────────────
-
-		let filePath = path === "/" ? "/index.html" : path;
+		const filePath = path === "/" ? "/index.html" : path;
 		const fullPath = join(PUBLIC_DIR, filePath);
 		const file = Bun.file(fullPath);
 
@@ -1209,27 +1080,11 @@ const server = Bun.serve({
 					png: "image/png",
 					svg: "image/svg+xml",
 				}[ext || ""] || "application/octet-stream";
-
-			return new Response(file, {
-				headers: { "Content-Type": contentType },
-			});
+			return new Response(file, { headers: { "Content-Type": contentType } });
 		}
 
 		return new Response("Not found", { status: 404 });
 	},
 });
 
-console.log(`
-=====================================
-  S2 + AI SDK Demo Server
-=====================================
-
-  http://localhost:${PORT}
-
-  Demos:
-    /chat.html    — Chat Persistence
-    /agent.html   — Agent Audit Trail
-    /dinner.html  — Dinner Party
-
-Press Ctrl+C to stop
-`);
+console.log(`Listening on http://localhost:${server.port}`);
