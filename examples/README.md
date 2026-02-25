@@ -46,6 +46,18 @@ npx tsx ai-sdk-agent-session.ts
 
 #### Chat persistence
 
+A multi-turn chatbot where the full conversation is persisted on an S2 stream. On restart, the conversation history is replayed from the stream so the model retains full context.
+
+```bash
+export OPENAI_API_KEY="sk-proj-XXXXX"
+npx tsx ai-sdk-chat-persistence.ts
+```
+
 #### Dinner party
 
+A multi-agent conversation where N guests (each an LLM with a distinct persona) sit around a table and discuss a topic. Each guest has their own S2 stream for working memory, and they communicate through a shared bus stream. The conversation is fully resumable.
 
+```bash
+export OPENAI_API_KEY="sk-proj-XXXXX"
+npx tsx ai-sdk-dinner-party.ts "What is the meaning of life?"
+```
