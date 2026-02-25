@@ -123,6 +123,20 @@ const s2 = new S2({
 const basin = s2.basin(basinName);
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+const MAX_CONTEXT_MESSAGES = Number(
+	process.env.AI_SDK_MAX_CONTEXT_MESSAGES ?? 40,
+);
+
+function pruneMessages(messages: CoreMessage[]) {
+	if (!Number.isFinite(MAX_CONTEXT_MESSAGES) || MAX_CONTEXT_MESSAGES <= 0)
+		return;
+	const system = messages[0]?.role === "system" ? messages[0] : undefined;
+	const start = system ? 1 : 0;
+	const nonSystem = messages.slice(start);
+	if (nonSystem.length <= MAX_CONTEXT_MESSAGES) return;
+	const trimmed = nonSystem.slice(-MAX_CONTEXT_MESSAGES);
+	messages.splice(0, messages.length, ...(system ? [system] : []), ...trimmed);
+}
 
 async function ensureStream(name: string) {
 	await basin.streams.create({ stream: name }).catch((err: unknown) => {
@@ -208,6 +222,7 @@ async function createGuestState(guest: Guest): Promise<GuestState> {
 		await ticket.ack();
 	}
 
+	pruneMessages(messages);
 	return { guest, messages, lastBusSeqNum, stream, producer };
 }
 
@@ -279,6 +294,7 @@ async function saveToMemory(
 	busSeqNum?: number,
 ) {
 	state.messages.push({ role, content });
+	pruneMessages(state.messages);
 	const rec: MemoryRecord = { type: "message", role, content, busSeqNum };
 	const ticket = await state.producer.submit(
 		AppendRecord.bytes({ body: enc.encode(JSON.stringify(rec)) }),
@@ -415,66 +431,68 @@ process.on("SIGINT", async () => {
 
 let guestIndex = turnNumber > 0 ? (turnNumber - 1) % guestStates.length : 0;
 
-while (true) {
-	const nextGuest = guestStates[guestIndex].guest.name;
-	const input = await ask(`(${nextGuest} is next) > `);
+try {
+	while (true) {
+		const nextGuest = guestStates[guestIndex].guest.name;
+		const input = await ask(`(${nextGuest} is next) > `);
 
-	if (input.trim().toLowerCase() === "exit") break;
+		if (input.trim().toLowerCase() === "exit") break;
 
-	// If the user typed something, post it as the host.
-	if (input.trim()) {
-		console.log();
+		// If the user typed something, post it as the host.
+		if (input.trim()) {
+			console.log();
+			const busSeqNum = await postToBus({
+				from: "host",
+				content: input.trim(),
+				turn: turnNumber++,
+			});
+			for (const state of guestStates) {
+				await saveToMemory(state, "user", `[Host]: ${input.trim()}`, busSeqNum);
+			}
+		}
+
+		const state = guestStates[guestIndex];
+
+		// Generate this guest's response.
+		const result = await generateText({
+			model: openai("o4-mini"),
+			messages: state.messages,
+			providerOptions: { openai: { reasoningEffort: "low" } },
+		});
+
+		const response = result.text;
+		console.log(`  ${state.guest.name}: ${response}\n`);
+
+		// Post to the shared bus.
 		const busSeqNum = await postToBus({
-			from: "host",
-			content: input.trim(),
+			from: state.guest.name,
+			content: response,
 			turn: turnNumber++,
 		});
-		for (const state of guestStates) {
-			await saveToMemory(state, "user", `[Host]: ${input.trim()}`, busSeqNum);
+
+		// Persist reasoning to the stream (for replay/debugging, not LLM context).
+		if (result.reasoningText) {
+			await saveReasoning(state, result.reasoningText, busSeqNum);
 		}
+
+		// Save to the speaker's own memory as an assistant turn.
+		await saveToMemory(state, "assistant", response, busSeqNum);
+
+		// All other guests hear this message as a user turn.
+		for (const other of guestStates) {
+			if (other === state) continue;
+			await saveToMemory(
+				other,
+				"user",
+				`[${state.guest.name}]: ${response}`,
+				busSeqNum,
+			);
+		}
+
+		// Round-robin to the next guest.
+		guestIndex = (guestIndex + 1) % guestStates.length;
 	}
-
-	const state = guestStates[guestIndex];
-
-	// Generate this guest's response.
-	const result = await generateText({
-		model: openai("o4-mini"),
-		messages: state.messages,
-		providerOptions: { openai: { reasoningEffort: "low" } },
-	});
-
-	const response = result.text;
-	console.log(`  ${state.guest.name}: ${response}\n`);
-
-	// Post to the shared bus.
-	const busSeqNum = await postToBus({
-		from: state.guest.name,
-		content: response,
-		turn: turnNumber++,
-	});
-
-	// Persist reasoning to the stream (for replay/debugging, not LLM context).
-	if (result.reasoningText) {
-		await saveReasoning(state, result.reasoningText, busSeqNum);
-	}
-
-	// Save to the speaker's own memory as an assistant turn.
-	await saveToMemory(state, "assistant", response, busSeqNum);
-
-	// All other guests hear this message as a user turn.
-	for (const other of guestStates) {
-		if (other === state) continue;
-		await saveToMemory(
-			other,
-			"user",
-			`[${state.guest.name}]: ${response}`,
-			busSeqNum,
-		);
-	}
-
-	// Round-robin to the next guest.
-	guestIndex = (guestIndex + 1) % guestStates.length;
+} finally {
+	console.log("\nDinner party paused. Run again to resume the conversation.");
+	await cleanup();
 }
-
-console.log("\nDinner party paused. Run again to resume the conversation.");
-await cleanup();

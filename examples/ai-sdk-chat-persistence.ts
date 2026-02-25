@@ -33,6 +33,21 @@ import { type CoreMessage, streamText } from "ai";
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+const MAX_CONTEXT_MESSAGES = Number(
+	process.env.AI_SDK_MAX_CONTEXT_MESSAGES ?? 40,
+);
+
+function pruneMessages(messages: CoreMessage[]) {
+	if (!Number.isFinite(MAX_CONTEXT_MESSAGES) || MAX_CONTEXT_MESSAGES <= 0)
+		return;
+	const system = messages[0]?.role === "system" ? messages[0] : undefined;
+	const start = system ? 1 : 0;
+	const nonSystem = messages.slice(start);
+	if (nonSystem.length <= MAX_CONTEXT_MESSAGES) return;
+	const trimmed = nonSystem.slice(-MAX_CONTEXT_MESSAGES);
+	messages.splice(0, messages.length, ...(system ? [system] : []), ...trimmed);
+}
+
 function messageToRecord(msg: CoreMessage): AppendRecord {
 	return AppendRecord.bytes({
 		body: enc.encode(JSON.stringify(msg)),
@@ -103,9 +118,13 @@ if (tail.seqNum > 0) {
 		}
 	}
 
-	console.log(
-		`Restored ${messages.length} messages from a previous session.\n`,
-	);
+	const restoredCount = messages.length;
+	pruneMessages(messages);
+	console.log(`Restored ${restoredCount} messages from a previous session.`);
+	if (restoredCount !== messages.length) {
+		console.log(`Using the last ${messages.length} messages for context.`);
+	}
+	console.log();
 	for (const msg of messages.slice(-4)) {
 		const text =
 			typeof msg.content === "string"
@@ -151,6 +170,7 @@ try {
 		// Append the user message.
 		const userMsg: CoreMessage = { role: "user", content: userInput };
 		messages.push(userMsg);
+		pruneMessages(messages);
 		const userTicket = await producer.submit(messageToRecord(userMsg));
 
 		// Stream the assistant response.
@@ -174,6 +194,7 @@ try {
 			content: fullText,
 		};
 		messages.push(assistantMsg);
+		pruneMessages(messages);
 		const assistantTicket = await producer.submit(
 			messageToRecord(assistantMsg),
 		);

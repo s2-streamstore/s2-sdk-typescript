@@ -28,6 +28,139 @@ import {
 import { generateText, jsonSchema, stepCountIs, tool } from "ai";
 
 // ---------------------------------------------------------------------------
+// Safe arithmetic evaluator (no eval / new Function).
+// ---------------------------------------------------------------------------
+
+type Token =
+	| { type: "number"; value: number }
+	| { type: "op"; value: "+" | "-" | "*" | "/" }
+	| { type: "paren"; value: "(" | ")" };
+
+function tokenizeExpression(input: string): Token[] {
+	const tokens: Token[] = [];
+	let i = 0;
+
+	const isDigit = (ch: string) => ch >= "0" && ch <= "9";
+
+	while (i < input.length) {
+		const ch = input[i];
+		if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+			i++;
+			continue;
+		}
+		if (ch === "+" || ch === "-" || ch === "*" || ch === "/") {
+			tokens.push({ type: "op", value: ch });
+			i++;
+			continue;
+		}
+		if (ch === "(" || ch === ")") {
+			tokens.push({ type: "paren", value: ch });
+			i++;
+			continue;
+		}
+		if (isDigit(ch) || ch === ".") {
+			let start = i;
+			let dotCount = 0;
+			while (i < input.length && (isDigit(input[i]) || input[i] === ".")) {
+				if (input[i] === ".") dotCount++;
+				if (dotCount > 1) {
+					throw new Error("Invalid number format");
+				}
+				i++;
+			}
+			const raw = input.slice(start, i);
+			const value = Number(raw);
+			if (!Number.isFinite(value)) {
+				throw new Error(`Invalid number: "${raw}"`);
+			}
+			tokens.push({ type: "number", value });
+			continue;
+		}
+		throw new Error(`Unexpected character: "${ch}"`);
+	}
+
+	return tokens;
+}
+
+function evaluateExpression(input: string): number {
+	const tokens = tokenizeExpression(input);
+	let index = 0;
+
+	const peek = () => tokens[index];
+	const consume = () => tokens[index++];
+
+	const parseExpression = (): number => {
+		let value = parseTerm();
+		while (true) {
+			const token = peek();
+			if (
+				!token ||
+				token.type !== "op" ||
+				(token.value !== "+" && token.value !== "-")
+			) {
+				break;
+			}
+			consume();
+			const rhs = parseTerm();
+			value = token.value === "+" ? value + rhs : value - rhs;
+		}
+		return value;
+	};
+
+	const parseTerm = (): number => {
+		let value = parseFactor();
+		while (true) {
+			const token = peek();
+			if (
+				!token ||
+				token.type !== "op" ||
+				(token.value !== "*" && token.value !== "/")
+			) {
+				break;
+			}
+			consume();
+			const rhs = parseFactor();
+			value = token.value === "*" ? value * rhs : value / rhs;
+		}
+		return value;
+	};
+
+	const parseFactor = (): number => {
+		const token = peek();
+		if (!token) throw new Error("Unexpected end of expression");
+
+		if (token.type === "op" && (token.value === "+" || token.value === "-")) {
+			consume();
+			const value = parseFactor();
+			return token.value === "-" ? -value : value;
+		}
+
+		if (token.type === "paren" && token.value === "(") {
+			consume();
+			const value = parseExpression();
+			const closing = consume();
+			if (!closing || closing.type !== "paren" || closing.value !== ")") {
+				throw new Error("Expected ')'");
+			}
+			return value;
+		}
+
+		if (token.type === "number") {
+			consume();
+			return token.value;
+		}
+
+		throw new Error("Unexpected token");
+	};
+
+	const result = parseExpression();
+	if (index < tokens.length) {
+		throw new Error("Unexpected extra input");
+	}
+	return result;
+}
+
+// ---------------------------------------------------------------------------
 // Event schema — each record on the stream is one of these.
 // ---------------------------------------------------------------------------
 
@@ -101,8 +234,15 @@ const tools = {
 			required: ["expression"],
 		}),
 		execute: async ({ expression }) => {
-			const result = new Function(`"use strict"; return (${expression})`)();
-			return { expression, result: Number(result) };
+			try {
+				const result = evaluateExpression(expression);
+				return { expression, result };
+			} catch (err) {
+				return {
+					expression,
+					error: err instanceof Error ? err.message : "Invalid expression",
+				};
+			}
 		},
 	}),
 };
