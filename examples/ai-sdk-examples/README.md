@@ -19,7 +19,7 @@ export OPENAI_API_KEY="your-openai-key"
 ## Run
 
 ```bash
-bun run examples/ai-sdk-demo/server.ts
+bun run examples/ai-sdk-examples/server.ts
 ```
 
 Then open [http://localhost:3456](http://localhost:3456).
