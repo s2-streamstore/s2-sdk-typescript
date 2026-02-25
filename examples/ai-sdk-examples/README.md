@@ -1,4 +1,4 @@
-# AI SDK Demo
+# AI SDK Examples
 
 How to use S2 as a durable memory layer for AI applications, built with the [Vercel AI SDK](https://sdk.vercel.ai).
 
