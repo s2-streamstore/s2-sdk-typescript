@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 56 56">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9b9eff"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="56" height="56" rx="14" fill="url(#bg)"/>
+  <text
+    x="28" y="36"
+    font-family="'Inter', 'SF Pro Display', -apple-system, sans-serif"
+    font-weight="700"
+    font-size="22"
+    letter-spacing="-0.5"
+    fill="white"
+    text-anchor="middle"
+    dominant-baseline="auto">S2</text>
+</svg>

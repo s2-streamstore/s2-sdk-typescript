@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Audit Trail — S2</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <div class="header">
+      <div class="header-title">
+        <a href="/" class="logo"><img src="https://raw.githubusercontent.com/s2-streamstore/s2-sdk-rust/main/assets/s2-white.png" alt="S2"></a>
+        <span class="sep">/</span>
+        <span class="page">Agent Audit Trail</span>
+      </div>
+    </div>
+
+    <div class="prompt-bar">
+      <input type="text" id="prompt-input"
+        value="Compare the founding years of S2, Vercel, and Stripe. Which was founded most recently?"
+        placeholder="Enter a prompt for the agent...">
+      <button class="btn btn-primary" id="run-btn">Run</button>
+    </div>
+
+    <div class="main">
+
+      <!-- Steps -->
+      <div class="panel">
+        <div class="panel-header">Agent Steps</div>
+        <div class="panel-body" id="steps-body">
+          <div class="steps" id="steps"></div>
+          <div id="summary" class="hidden"></div>
+        </div>
+      </div>
+
+      <!-- S2 Stream Viewer -->
+      <div class="panel stream-viewer">
+        <div class="panel-header">
+          <span class="live-dot"></span>
+          S2 Stream
+        </div>
+        <div class="panel-body" id="stream-body">
+          <div class="stream-records" id="stream-records"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const stepsEl    = document.getElementById('steps');
+    const summaryEl  = document.getElementById('summary');
+    const streamEl   = document.getElementById('stream-records');
+    const promptIn   = document.getElementById('prompt-input');
+    const runBtn     = document.getElementById('run-btn');
+    const stepsBody  = document.getElementById('steps-body');
+    const streamBody = document.getElementById('stream-body');
+
+    let es = null, running = false;
+
+    const scrollSteps  = () => { stepsBody.scrollTop  = stepsBody.scrollHeight; };
+    const scrollStream = () => { streamBody.scrollTop = streamBody.scrollHeight; };
+
+    function esc(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function addRecord(seq, type, preview) {
+      const row = document.createElement('div');
+      row.className = 'stream-record';
+      row.innerHTML = `
+        <span class="seq">${seq}</span>
+        <span class="rec-type"><span class="rec-label">${type}</span>${preview ? ' · ' + preview : ''}</span>
+        <span class="dot"></span>`;
+      streamEl.appendChild(row);
+      scrollStream();
+    }
+
+    function addStep(data) {
+      const hasCalls = data.toolCalls && data.toolCalls.length > 0;
+      const kind     = hasCalls ? 'tool_use' : 'text';
+
+      const step = document.createElement('div');
+      step.className = 'step';
+
+      let html = `
+        <div class="step-node"></div>
+        <div class="step-meta">Step ${data.index} &nbsp;<span class="step-kind">${kind}</span></div>`;
+
+      if (hasCalls) {
+        for (let i = 0; i < data.toolCalls.length; i++) {
+          const tc = data.toolCalls[i];
+          const tr = data.toolResults?.[i];
+          const argsStr = JSON.stringify(tc.args);
+          html += `<div class="tool-block">
+            <div class="tool-block-head">
+              <span class="tool-fn">${esc(tc.tool)}</span>
+              <span class="tool-args">${esc(argsStr.length > 80 ? argsStr.slice(0,80)+'…' : argsStr)}</span>
+            </div>`;
+          if (tr) {
+            const res = JSON.stringify(tr.result);
+            html += `<div class="tool-result-row">${esc(res.length > 200 ? res.slice(0,200)+'…' : res)}</div>`;
+          }
+          html += `</div>`;
+        }
+      }
+
+      if (data.text) {
+        html += `<div class="step-text-block">${esc(data.text)}</div>`;
+      }
+
+      step.innerHTML = html;
+      stepsEl.appendChild(step);
+      scrollSteps();
+      return step;
+    }
+
+    function markDone() {
+      stepsEl.querySelectorAll('.step').forEach(s => s.classList.add('done'));
+    }
+
+    function showSummary(data) {
+      summaryEl.className = 'run-summary';
+      summaryEl.textContent = `${data.steps} steps · ${data.totalTokens.toLocaleString()} tokens`;
+      scrollSteps();
+    }
+
+    async function runAgent() {
+      const prompt = promptIn.value.trim();
+      if (!prompt || running) return;
+
+      running = true;
+      runBtn.disabled  = true;
+      runBtn.textContent = 'Running…';
+      stepsEl.innerHTML   = '';
+      streamEl.innerHTML  = '';
+      summaryEl.className = 'hidden';
+
+      try {
+        const { runId } = await fetch('/api/agent/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        }).then(r => r.json());
+
+        if (es) es.close();
+        es = new EventSource(`/api/agent/events?run=${runId}`);
+
+        es.addEventListener('step',       e => addStep(JSON.parse(e.data)));
+        es.addEventListener('stream-record', e => { const r = JSON.parse(e.data); addRecord(r.seq, r.type, r.preview); });
+
+        es.addEventListener('run-end', e => {
+          markDone();
+          showSummary(JSON.parse(e.data));
+          running = false;
+          runBtn.disabled  = false;
+          runBtn.textContent = 'Run';
+          es.close();
+        });
+
+        es.addEventListener('error', () => {
+          running = false;
+          runBtn.disabled  = false;
+          runBtn.textContent = 'Run';
+        });
+
+      } catch {
+        running = false;
+        runBtn.disabled  = false;
+        runBtn.textContent = 'Run';
+      }
+    }
+
+    runBtn.addEventListener('click', runAgent);
+    promptIn.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); runAgent(); }
+    });
+  </script>
+</body>
+</html>

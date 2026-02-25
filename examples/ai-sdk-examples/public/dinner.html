@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dinner Party — S2</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <div class="header">
+      <div class="header-title">
+        <a href="/" class="logo"><img src="https://raw.githubusercontent.com/s2-streamstore/s2-sdk-rust/main/assets/s2-white.png" alt="S2"></a>
+        <span class="sep">/</span>
+        <span class="page">Dinner Party</span>
+      </div>
+      <div class="header-actions">
+        <div class="next-badge" id="next-guest"></div>
+      </div>
+    </div>
+
+    <div id="topic-bar" class="topic-bar">
+      <span class="topic-label">Topic</span>
+      <input type="text" id="topic-input" value="What is the meaning of life?" placeholder="Set a conversation topic...">
+      <button class="btn btn-primary" id="set-topic-btn">Start</button>
+    </div>
+
+    <div id="status-bar" class="status-bar hidden">
+      <span class="spinner"></span>
+      <span id="status-text">Starting...</span>
+    </div>
+
+    <div class="main">
+
+      <!-- Feed -->
+      <div class="panel" style="flex:2">
+        <div class="panel-body" id="feed-body">
+          <div class="dinner-feed" id="feed"></div>
+        </div>
+        <div class="dinner-controls" id="controls" style="display:none">
+          <button class="btn btn-primary" id="advance-btn">Advance</button>
+          <button class="btn" id="autoplay-btn">Auto-play</button>
+          <span class="spacer"></span>
+          <input type="text" id="host-input" placeholder="Interject as the host...">
+          <button class="btn" id="host-send-btn">Send</button>
+        </div>
+      </div>
+
+      <!-- S2 Stream Viewer -->
+      <div class="panel stream-viewer">
+        <div class="panel-header">
+          <span class="live-dot"></span>
+          S2 Streams
+        </div>
+        <div class="panel-body" id="stream-body">
+          <div class="stream-records" id="stream-records"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const feedEl       = document.getElementById('feed');
+    const streamEl     = document.getElementById('stream-records');
+    const topicBar     = document.getElementById('topic-bar');
+    const topicInput   = document.getElementById('topic-input');
+    const setTopicBtn  = document.getElementById('set-topic-btn');
+    const controls     = document.getElementById('controls');
+    const advanceBtn   = document.getElementById('advance-btn');
+    const autoplayBtn  = document.getElementById('autoplay-btn');
+    const hostInput    = document.getElementById('host-input');
+    const hostSendBtn  = document.getElementById('host-send-btn');
+    const statusBar    = document.getElementById('status-bar');
+    const statusText   = document.getElementById('status-text');
+    const feedBody     = document.getElementById('feed-body');
+    const streamBody   = document.getElementById('stream-body');
+    const nextGuestEl  = document.getElementById('next-guest');
+
+    let es = null, advancing = false, autoPlaying = false, autoTimer = null;
+
+    const scrollFeed   = () => { feedBody.scrollTop   = feedBody.scrollHeight; };
+    const scrollStream = () => { streamBody.scrollTop = streamBody.scrollHeight; };
+
+    // Guest initials and slot names for CSS
+    const avatarInfo = {
+      'Socrates':    { initials: 'So', cls: 'socrates'    },
+      'Freud':       { initials: 'Fr', cls: 'freud'       },
+      'Genghis Khan':{ initials: 'GK', cls: 'genghis-khan'},
+      'host':        { initials: 'H',  cls: 'host'        },
+    };
+
+    function guestInfo(name) {
+      return avatarInfo[name] || { initials: name.slice(0,2).toUpperCase(), cls: 'host' };
+    }
+
+    function addMessage(from, content, opts = {}) {
+      const info = guestInfo(from);
+      const msg  = document.createElement('div');
+      msg.className = `guest-msg ${info.cls}`;
+      if (opts.fast) msg.style.animationDuration = '80ms';
+
+      msg.innerHTML = `
+        <div class="guest-avatar">${info.initials}</div>
+        <div class="guest-body">
+          <div class="guest-name-row">
+            <span class="guest-name">${from === 'host' ? 'Host' : from}</span>
+          </div>
+          <div class="guest-bubble"></div>
+        </div>`;
+
+      msg.querySelector('.guest-bubble').textContent = content;
+      feedEl.appendChild(msg);
+      scrollFeed();
+    }
+
+    function addRecord(seq, stream, type, preview) {
+      const row = document.createElement('div');
+      row.className = 'stream-record';
+      const label = stream || type;
+      row.innerHTML = `
+        <span class="seq">${seq}</span>
+        <span class="rec-type"><span class="rec-label">${label}</span>${preview ? ' · ' + preview : ''}</span>
+        <span class="dot"></span>`;
+      streamEl.appendChild(row);
+      scrollStream();
+    }
+
+    function updateNext(name) {
+      nextGuestEl.innerHTML = name ? `Next: <span>${name}</span>` : '';
+    }
+
+    function connectSSE() {
+      if (es) es.close();
+      es = new EventSource('/api/dinner/events');
+
+      es.addEventListener('guest-message', e => {
+        const d = JSON.parse(e.data);
+        addMessage(d.from, d.content);
+        if (d.nextGuest) updateNext(d.nextGuest);
+        if (autoPlaying) autoTimer = setTimeout(advance, 1600);
+      });
+
+      es.addEventListener('host-message', e => {
+        addMessage('host', JSON.parse(e.data).content);
+      });
+
+      es.addEventListener('stream-record', e => {
+        const r = JSON.parse(e.data);
+        addRecord(r.seq, r.stream, r.type, r.preview);
+      });
+
+      es.addEventListener('started', e => {
+        const d = JSON.parse(e.data);
+        topicBar.style.display = 'none';
+        controls.style.display = 'flex';
+        statusBar.classList.add('hidden');
+        if (d.nextGuest) updateNext(d.nextGuest);
+      });
+    }
+
+    async function setTopic() {
+      const topic = topicInput.value.trim();
+      if (!topic) return;
+      setTopicBtn.disabled = true;
+      statusBar.classList.remove('hidden');
+      statusText.textContent = 'Setting the table...';
+      try {
+        const d = await fetch('/api/dinner/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topic }),
+        }).then(r => r.json());
+        if (d.ok) {
+          topicBar.style.display = 'none';
+          controls.style.display = 'flex';
+          statusBar.classList.add('hidden');
+          if (d.nextGuest) updateNext(d.nextGuest);
+        }
+      } catch {}
+      setTopicBtn.disabled = false;
+    }
+
+    async function advance() {
+      if (advancing) return;
+      advancing = true;
+      advanceBtn.disabled = true;
+      advanceBtn.textContent = 'Thinking…';
+      try {
+        await fetch('/api/dinner/advance', { method: 'POST' });
+      } catch {}
+      finally {
+        advancing = false;
+        advanceBtn.disabled = false;
+        advanceBtn.textContent = 'Advance';
+      }
+    }
+
+    function toggleAutoPlay() {
+      autoPlaying = !autoPlaying;
+      if (autoPlaying) {
+        autoplayBtn.textContent = 'Stop';
+        autoplayBtn.classList.add('btn-danger');
+        advance();
+      } else {
+        autoplayBtn.textContent = 'Auto-play';
+        autoplayBtn.classList.remove('btn-danger');
+        if (autoTimer) clearTimeout(autoTimer);
+      }
+    }
+
+    async function hostSend() {
+      const text = hostInput.value.trim();
+      if (!text) return;
+      hostInput.value = '';
+      try {
+        await fetch('/api/dinner/host', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+      } catch {}
+    }
+
+    async function checkState() {
+      try {
+        const d = await fetch('/api/dinner/state').then(r => r.json());
+        if (d.started) {
+          topicBar.style.display = 'none';
+          controls.style.display = 'flex';
+          for (const m of d.messages) addMessage(m.from, m.content, { fast: true });
+          if (d.nextGuest) updateNext(d.nextGuest);
+        }
+      } catch {}
+    }
+
+    setTopicBtn.addEventListener('click', setTopic);
+    topicInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); setTopic(); } });
+    advanceBtn.addEventListener('click', advance);
+    autoplayBtn.addEventListener('click', toggleAutoPlay);
+    hostSendBtn.addEventListener('click', hostSend);
+    hostInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); hostSend(); } });
+
+    checkState().then(connectSSE);
+  </script>
+</body>
+</html>
