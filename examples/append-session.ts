@@ -50,4 +50,5 @@ try {
 	);
 } finally {
 	await session.close();
+	await stream.close();
 }
