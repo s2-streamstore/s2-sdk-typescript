@@ -604,7 +604,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private pendingBatches = 0;
 	private consecutiveFailures = 0;
 	private currentAttempt = 0;
-	private wasDormant = true; // Session starts dormant (no pending acks)
 
 	private pumpPromise?: Promise<void>;
 	private pumpStopped = false;
@@ -998,7 +997,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					"[%s] [PUMP] no entries, parking until wakeup",
 					this.streamName,
 				);
-				this.wasDormant = true;
 				await new Promise<void>((resolve) => {
 					this.pumpWakeup = resolve;
 				});
@@ -1159,7 +1157,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// Reset consecutive failures on success
 				this.consecutiveFailures = 0;
 				this.currentAttempt = 0;
-				this.wasDormant = false;
 			} else {
 				// Error result
 				const error = appendResult.error;
@@ -1177,13 +1174,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					return;
 				}
 
-				// Check policy compliance: under noSideEffects, retry when the
-				// error itself guarantees no mutation, or when the session was
-				// dormant (no pending acks) so no data could have been transmitted.
+				// Check policy compliance: under noSideEffects, only retry when
+				// we can determine no mutation occurred. This is true if either:
+				// 1. The error itself guarantees no side effects (e.g. rate_limited, hot_server)
+				// 2. The transport reports no data was sent since the last dormant state
 				if (
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!error.hasNoSideEffects() &&
-					!this.wasDormant
+					(this.session?.effectSignalled() ?? true)
 				) {
 					debugSession(
 						"[%s] error not policy-compliant (noSideEffects), aborting",
@@ -1214,7 +1212,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// Perform recovery
 				this.consecutiveFailures++;
 				this.currentAttempt++;
-				this.wasDormant = false;
 
 				debugSession(
 					"[%s] performing recovery (retry %d/%d)",

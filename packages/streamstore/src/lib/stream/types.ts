@@ -66,6 +66,15 @@ export interface AcksStream
 export interface TransportAppendSession {
 	submit(input: Types.AppendInput): Promise<Result.AppendResult>;
 	close(): Promise<Result.CloseResult>;
+	/**
+	 * Returns true if data may have been sent to the server since the last
+	 * time the session was dormant (zero pending acks).
+	 *
+	 * Used by the retry layer under the `noSideEffects` policy: when false,
+	 * it is safe to retry even errors that could otherwise indicate a
+	 * mutation, because no bytes left the client.
+	 */
+	effectSignalled(): boolean;
 }
 
 export class BatchSubmitTicket {
