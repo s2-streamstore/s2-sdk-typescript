@@ -158,12 +158,9 @@ export class S2Stream {
 			},
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "all") === "noSideEffects") {
-					// Allow retry only when the append is naturally idempotent by containing
-					// a match_seq_num condition.
-					return input.matchSeqNum !== undefined;
-				} else {
-					return true;
+					return error.hasNoSideEffects();
 				}
+				return true;
 			},
 		);
 	}

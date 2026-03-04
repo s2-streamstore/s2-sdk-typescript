@@ -106,6 +106,11 @@ export function isRetryable(error: S2Error): boolean {
 		return true;
 	}
 
+	// Transaction conflicts are transiently retryable
+	if (error.status === 409 && error.code === "transaction_conflict") {
+		return true;
+	}
+
 	// 400-level errors are generally non-retryable (validation, bad request)
 	if (error.status >= 400 && error.status < 500) {
 		return false;
@@ -1169,10 +1174,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					return;
 				}
 
-				// Check policy compliance
+				// Check policy compliance: under noSideEffects, only retry when
+				// the error itself guarantees no mutation occurred.
 				if (
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
-					!this.isIdempotent(head)
+					!error.hasNoSideEffects()
 				) {
 					debugSession(
 						"[%s] error not policy-compliant (noSideEffects), aborting",
@@ -1326,14 +1332,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 
 		debugSession("[%s] recovery complete", this.streamName);
-	}
-
-	/**
-	 * Check if append can be retried under noSideEffects policy.
-	 * For appends, idempotency requires match_seq_num.
-	 */
-	private isIdempotent(entry: InflightEntry): boolean {
-		return entry.input.matchSeqNum !== undefined;
 	}
 
 	/**

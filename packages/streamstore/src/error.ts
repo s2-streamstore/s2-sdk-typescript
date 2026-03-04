@@ -253,6 +253,25 @@ export class S2Error extends Error {
 		this.origin = origin ?? "sdk";
 		this.name = "S2Error";
 	}
+
+	/**
+	 * Returns true if the error guarantees that no mutation occurred.
+	 *
+	 * Certain server errors (`rate_limited`, `hot_server`) and client errors
+	 * (`ECONNREFUSED`) are safe to retry since they guarantee no side effects.
+	 */
+	hasNoSideEffects(): boolean {
+		if (this.origin === "server") {
+			return (
+				(this.status === 429 && this.code === "rate_limited") ||
+				(this.status === 502 && this.code === "hot_server")
+			);
+		}
+		if (this.origin === "sdk") {
+			return this.code === "ECONNREFUSED";
+		}
+		return false;
+	}
 }
 
 /** Helper: construct a non-retryable invariant violation error (status 0). */
