@@ -122,12 +122,15 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	private closed = false;
 	private ackIndex = 0;
 
+	private submitCount = 0;
+
 	constructor(
 		private readonly behavior: {
 			submitError?: S2Error; // if provided, submit() returns error result
 			closeError?: S2Error; // if provided, close() returns error result
 			neverAck?: boolean; // if true, submit() hangs forever (for timeout tests)
 			customAcks?: AppendAck[]; // if provided, return these acks in sequence
+			failAfterN?: { n: number; error: S2Error }; // fail after N successful submits
 		} = {},
 	) {}
 
@@ -139,6 +142,14 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		if (this.behavior.submitError) {
 			return err(this.behavior.submitError);
 		}
+
+		if (
+			this.behavior.failAfterN &&
+			this.submitCount >= this.behavior.failAfterN.n
+		) {
+			return err(this.behavior.failAfterN.error);
+		}
+		this.submitCount++;
 
 		if (this.behavior.neverAck) {
 			// Hang forever (for timeout tests)
@@ -278,14 +289,24 @@ describe("AppendSessionImpl (unit)", () => {
 		});
 	});
 
-	it("does not retry under noSideEffects policy when error may have side effects", async () => {
-		const error = new S2Error({
-			message: "boom",
-			status: 500,
-			origin: "server",
-		});
+	it("retries under noSideEffects policy when session is dormant even with side-effect-y error", async () => {
+		// Session starts dormant (no pending acks). A side-effect-y error on the
+		// first submit is safe to retry because no data could have been transmitted.
+		let call = 0;
 		const session = await AppendSessionImpl.create(
-			async () => new FakeTransportAppendSession({ submitError: error }),
+			async () => {
+				call++;
+				if (call === 1) {
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "boom",
+							status: 500,
+							origin: "server",
+						}),
+					});
+				}
+				return new FakeTransportAppendSession();
+			},
 			undefined,
 			{
 				minBaseDelayMillis: 1,
@@ -295,10 +316,52 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const ticket1 = await session.submit(
+		const p = session.submit(
 			AppendInput.create([AppendRecord.string({ body: "x" })]),
 		);
-		await expect(ticket1.ack()).rejects.toMatchObject({ status: 500 });
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+		const ticket = await p;
+		const ack = await ticket.ack();
+		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
+	});
+
+	it("does not retry under noSideEffects policy when session is not dormant", async () => {
+		// When multiple entries are inflight, the first ack clears dormancy.
+		// A subsequent side-effect-y error on the next entry should not be retried.
+		const submitError = new S2Error({
+			message: "boom",
+			status: 500,
+			origin: "server",
+		});
+		const session = await AppendSessionImpl.create(
+			async () =>
+				new FakeTransportAppendSession({
+					failAfterN: { n: 1, error: submitError },
+				}),
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 3,
+				appendRetryPolicy: "noSideEffects",
+			},
+		);
+
+		// Submit both entries before the pump processes either — both are inflight.
+		// The pump submits both to transport: A succeeds (clears dormancy), B fails.
+		const ticket1 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const ticket2 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
+
+		const ack1 = await ticket1.ack();
+		expect(ack1.end.seqNum - ack1.start.seqNum).toBe(1);
+
+		await expect(ticket2.ack()).rejects.toMatchObject({ status: 500 });
 		expect(session.failureCause()).toMatchObject({ status: 500 });
 	});
 
