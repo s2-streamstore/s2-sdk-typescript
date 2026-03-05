@@ -66,11 +66,12 @@ export class EventStream<T>
 								for (const chunk of item.value) {
 									downstream.enqueue(chunk);
 								}
-							} else if (item.value) {
+							} else if (item.value !== undefined) {
 								downstream.enqueue(item.value);
 							} else if (item.done) {
 								await upstream.cancel("done");
 								downstream.close();
+								return;
 							}
 						}
 					}
@@ -189,8 +190,15 @@ function parseMessage<T>(
 		if (!line || line.startsWith(":")) continue;
 		ignore = false;
 		const i = line.indexOf(":");
-		const field = line.slice(0, i);
-		const value = line[i + 1] === " " ? line.slice(i + 2) : line.slice(i + 1);
+		let field: string;
+		let value: string;
+		if (i === -1) {
+			field = line;
+			value = "";
+		} else {
+			field = line.slice(0, i);
+			value = line[i + 1] === " " ? line.slice(i + 2) : line.slice(i + 1);
+		}
 		if (field === "data") dataLines.push(value);
 		else if (field === "event") ret.event = value;
 		else if (field === "id") ret.id = value;
