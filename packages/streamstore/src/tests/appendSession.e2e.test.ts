@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendInput, AppendRecord, S2 } from "../index.js";
+import { DEFAULT_RETRY_CONFIG } from "../lib/retry.js";
 import type { SessionTransports } from "../lib/stream/types.js";
-import {DEFAULT_RETRY_CONFIG} from "../lib/retry.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
 const ILLEGAL_RECORD_BYTES = 1_100_000;
