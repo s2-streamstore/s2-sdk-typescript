@@ -60,22 +60,23 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 	constructor(args?: BatchTransformOptions) {
 		let controller: TransformStreamDefaultController<BatchOutput>;
-
 		super({
 			start: (c) => {
 				controller = c;
 			},
-			transform: (chunk, c) => {
-				// Store controller reference on first transform
-				if (!this.controller) {
-					this.controller = c;
-				}
+			transform: (chunk) => {
 				this.handleRecord(chunk);
 			},
 			flush: () => {
 				this.flush();
 			},
+			cancel: () => {
+				this.cancelLingerTimer();
+			},
 		});
+
+		// Set controller reference captured during start
+		this.controller = controller;
 
 		// Validate configuration
 		if (args?.maxBatchRecords !== undefined) {
@@ -128,7 +129,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		}
 
 		// Start linger timer on first record added to an empty batch
-		if (this.currentBatch.length === 0 && this.lingerDuration > 0) {
+		if (this.currentBatch.length === 0 && this.lingerDuration >= 0) {
 			this.startLingerTimer();
 		}
 
@@ -141,7 +142,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		if (wouldExceedRecords || wouldExceedBytes) {
 			this.flush();
 			// Restart linger timer for new batch
-			if (this.lingerDuration > 0) {
+			if (this.lingerDuration >= 0) {
 				this.startLingerTimer();
 			}
 		}
@@ -192,7 +193,11 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		this.lingerTimer = setTimeout(() => {
 			this.lingerTimer = null;
 			if (this.currentBatch.length > 0) {
-				this.flush();
+				try {
+					this.flush();
+				} catch {
+					// Stream may be closed/errored; discard silently
+				}
 			}
 		}, this.lingerDuration);
 	}
