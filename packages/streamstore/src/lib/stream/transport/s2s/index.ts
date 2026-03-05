@@ -299,9 +299,28 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			start: async (controller) => {
 				let controllerClosed = false;
 				let responseCode: number | undefined;
+
+				// Listener references for cleanup (issue #142)
+				let abortHandler: (() => void) | undefined;
+				let goawayHandler: ((errorCode: number, lastStreamID: number, opaqueData: Buffer) => void) | undefined;
+				let sessionConnection: ClientHttp2Session | undefined;
+
+				const cleanupListeners = () => {
+					if (abortHandler && options?.signal) {
+						options.signal.removeEventListener("abort", abortHandler);
+					}
+					abortHandler = undefined;
+
+					if (goawayHandler && sessionConnection) {
+						sessionConnection.removeListener("goaway", goawayHandler);
+					}
+					goawayHandler = undefined;
+					sessionConnection = undefined;
+				};
 				const safeClose = () => {
 					if (!controllerClosed) {
 						controllerClosed = true;
+						cleanupListeners();
 						if (timeoutTimer) {
 							clearTimeout(timeoutTimer);
 							timeoutTimer = undefined;
@@ -316,6 +335,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				const safeError = (err: unknown) => {
 					if (!controllerClosed) {
 						controllerClosed = true;
+						cleanupListeners();
 						if (timeoutTimer) {
 							clearTimeout(timeoutTimer);
 							timeoutTimer = undefined;
@@ -386,11 +406,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 					http2Stream = stream;
 
-					options?.signal?.addEventListener("abort", () => {
+					abortHandler = () => {
 						if (!stream.closed) {
 							stream.close();
 						}
-					});
+					};
+					options?.signal?.addEventListener("abort", abortHandler);
 
 					stream.on("response", (headers) => {
 						// Cache the status.
@@ -398,9 +419,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						responseCode = headers[":status"] ?? 500;
 					});
 
-					connection.on("goaway", (errorCode, lastStreamID, opaqueData) => {
+					sessionConnection = connection;
+					goawayHandler = (errorCode, lastStreamID, opaqueData) => {
 						debug("received GOAWAY from server");
-					});
+					};
+					connection.on("goaway", goawayHandler);
 
 					stream.on("error", (err) => {
 						safeError(err);
