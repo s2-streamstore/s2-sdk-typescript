@@ -29,12 +29,14 @@ function isConnectionError(error: unknown): boolean {
 	// Firefox: "NetworkError when attempting to fetch resource"
 	// Safari: "Load failed"
 	const msg = error.message.toLowerCase();
-	if (
-		msg.includes("fetch failed") ||
-		msg.includes("failed to fetch") ||
-		msg.includes("networkerror") ||
-		msg.includes("load failed")
-	) {
+	const knownConnectionMessages = [
+		"fetch failed",
+		"failed to fetch",
+		"networkerror when attempting to fetch resource",
+		"load failed",
+	];
+
+	if (knownConnectionMessages.includes(msg)) {
 		return true;
 	}
 
