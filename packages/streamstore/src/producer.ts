@@ -99,6 +99,7 @@ export class Producer implements AsyncDisposable {
 
 	private readonly debugName: string;
 	private submitCounter = 0;
+	private closePromise: Promise<void> | null = null;
 
 	constructor(
 		batchTransform: BatchTransform,
@@ -377,6 +378,14 @@ export class Producer implements AsyncDisposable {
 	 * If any error occurred during the Producer's lifetime, this method throws it.
 	 */
 	async close(): Promise<void> {
+		if (this.closePromise) {
+			return this.closePromise;
+		}
+		this.closePromise = this._doClose();
+		return this.closePromise;
+	}
+
+	private async _doClose(): Promise<void> {
 		debugProducer("[%s] close requested", this.debugName);
 
 		// Close the writer to signal no more records
