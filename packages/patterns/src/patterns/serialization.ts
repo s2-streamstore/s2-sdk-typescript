@@ -76,12 +76,9 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 				if (self.matchSeqNum !== undefined) {
 					const current = self.matchSeqNum;
 					self.matchSeqNum = current + records.length;
-					await writer.write({
-						records,
-						matchSeqNum: current,
-					});
+					await writer.write(AppendInput.create(records, { matchSeqNum: current }));
 				} else {
-					await writer.write({ records });
+					await writer.write(AppendInput.create(records));
 				}
 			},
 			close: async () => {
