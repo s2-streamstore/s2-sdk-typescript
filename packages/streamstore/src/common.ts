@@ -3,8 +3,11 @@ import { S2Endpoints, type S2EndpointsInit } from "./endpoints.js";
 /**
  * Policy for retrying append operations.
  *
- * - `all`: Retry all append operations, including those that may have side effects (default)
- * - `noSideEffects`: Only retry append operations that are guaranteed to have no side effects
+ * - `all`: Retry all append operations, including those that may have side effects.
+ *   Use when duplicate records on the stream are acceptable.
+ * - `noSideEffects`: Retry when it can be determined that the request had no side effects.
+ *   Certain server errors (`rate_limited`, `hot_server`) and client errors (`ECONNREFUSED`)
+ *   are safe to retry since they guarantee no mutation occurred.
  */
 export type AppendRetryPolicy = "all" | "noSideEffects";
 

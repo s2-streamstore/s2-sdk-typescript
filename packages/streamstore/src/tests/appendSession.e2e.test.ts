@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { AppendInput, AppendRecord, S2 } from "../index.js";
+import { DEFAULT_RETRY_CONFIG } from "../lib/retry.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
@@ -17,6 +18,8 @@ describeIf("AppendSession Integration Tests", () => {
 		const basin = process.env.S2_BASIN;
 		if (!basin) return;
 		const env = S2Environment.parse();
+		env.retry = DEFAULT_RETRY_CONFIG;
+		env.retry.appendRetryPolicy = "noSideEffects";
 		if (!env.accessToken) return;
 		s2 = new S2(env as S2ClientOptions);
 		basinName = basin;

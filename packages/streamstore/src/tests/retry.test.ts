@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
 import { AppendInput, AppendRecord } from "../index.js";
-import { DEFAULT_RETRY_CONFIG, withRetries } from "../lib/retry.js";
+import {
+	DEFAULT_RETRY_CONFIG,
+	isRetryable,
+	withRetries,
+} from "../lib/retry.js";
 
 describe("Retry Logic", () => {
 	describe("withRetry", () => {
@@ -96,6 +100,132 @@ describe("Retry Logic", () => {
 
 			expect(result).toBe("success");
 			expect(fn).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("isRetryable", () => {
+		it("should retry 409 transaction_conflict", () => {
+			const error = new S2Error({
+				message: "transaction conflict",
+				status: 409,
+				code: "transaction_conflict",
+				origin: "server",
+			});
+			expect(isRetryable(error)).toBe(true);
+		});
+
+		it("should not retry 409 without transaction_conflict code", () => {
+			const error = new S2Error({
+				message: "conflict",
+				status: 409,
+				origin: "server",
+			});
+			expect(isRetryable(error)).toBe(false);
+		});
+
+		it("should retry 429", () => {
+			const error = new S2Error({
+				message: "too many requests",
+				status: 429,
+				origin: "server",
+			});
+			expect(isRetryable(error)).toBe(true);
+		});
+
+		it("should retry 502", () => {
+			const error = new S2Error({
+				message: "bad gateway",
+				status: 502,
+				origin: "server",
+			});
+			expect(isRetryable(error)).toBe(true);
+		});
+
+		it("should not retry 400", () => {
+			const error = new S2Error({
+				message: "bad request",
+				status: 400,
+				origin: "server",
+			});
+			expect(isRetryable(error)).toBe(false);
+		});
+	});
+
+	describe("S2Error.hasNoSideEffects", () => {
+		it("returns true for 429 rate_limited from server", () => {
+			const error = new S2Error({
+				message: "rate limited",
+				status: 429,
+				code: "rate_limited",
+				origin: "server",
+			});
+			expect(error.hasNoSideEffects()).toBe(true);
+		});
+
+		it("returns true for 502 hot_server from server", () => {
+			const error = new S2Error({
+				message: "hot server",
+				status: 502,
+				code: "hot_server",
+				origin: "server",
+			});
+			expect(error.hasNoSideEffects()).toBe(true);
+		});
+
+		it("returns true for ECONNREFUSED from sdk", () => {
+			const error = new S2Error({
+				message: "Connection failed: ECONNREFUSED",
+				status: 502,
+				code: "ECONNREFUSED",
+				origin: "sdk",
+			});
+			expect(error.hasNoSideEffects()).toBe(true);
+		});
+
+		it("returns false for 503 from server", () => {
+			const error = new S2Error({
+				message: "unavailable",
+				status: 503,
+				origin: "server",
+			});
+			expect(error.hasNoSideEffects()).toBe(false);
+		});
+
+		it("returns false for 500 from server", () => {
+			const error = new S2Error({
+				message: "internal error",
+				status: 500,
+				origin: "server",
+			});
+			expect(error.hasNoSideEffects()).toBe(false);
+		});
+
+		it("returns false for 429 without rate_limited code", () => {
+			const error = new S2Error({
+				message: "too many requests",
+				status: 429,
+				origin: "server",
+			});
+			expect(error.hasNoSideEffects()).toBe(false);
+		});
+
+		it("returns false for 502 without hot_server code", () => {
+			const error = new S2Error({
+				message: "bad gateway",
+				status: 502,
+				origin: "server",
+			});
+			expect(error.hasNoSideEffects()).toBe(false);
+		});
+
+		it("returns false for ECONNRESET from sdk", () => {
+			const error = new S2Error({
+				message: "Connection failed: ECONNRESET",
+				status: 502,
+				code: "ECONNRESET",
+				origin: "sdk",
+			});
+			expect(error.hasNoSideEffects()).toBe(false);
 		});
 	});
 

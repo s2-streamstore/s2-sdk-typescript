@@ -683,6 +683,7 @@ class S2SAppendSession implements TransportAppendSession {
 		batchSize: number;
 	}> = [];
 	private initPromise?: Promise<void>;
+	private _effectSignalled = false;
 
 	static async create(
 		baseUrl: string,
@@ -753,6 +754,9 @@ class S2SAppendSession implements TransportAppendSession {
 				pending.resolve(err(s2Error(error)));
 			}
 			this.pendingAcks = [];
+			// Note: do NOT reset _effectSignalled here. Data may have been
+			// written to the wire before the error occurred, so the flag
+			// must stay true until the session is recreated.
 		};
 
 		// Capture HTTP response status
@@ -826,6 +830,10 @@ class S2SAppendSession implements TransportAppendSession {
 							if (pending) {
 								pending.resolve(ok(ack));
 							}
+							// Reset effect signal when dormant (no pending acks)
+							if (this.pendingAcks.length === 0) {
+								this._effectSignalled = false;
+							}
 						} catch (parseErr) {
 							queueMicrotask(() =>
 								safeError(
@@ -894,6 +902,7 @@ class S2SAppendSession implements TransportAppendSession {
 			});
 
 			// Send the frame (pipelined - non-blocking)
+			this._effectSignalled = true;
 			this.http2Stream!.write(frame, (writeErr) => {
 				if (writeErr) {
 					// Remove from pending acks on write error
@@ -901,12 +910,23 @@ class S2SAppendSession implements TransportAppendSession {
 					if (idx !== -1) {
 						this.pendingAcks.splice(idx, 1);
 					}
+					// Note: do NOT reset _effectSignalled here. The write call
+					// was attempted, so data may have partially entered the
+					// kernel buffer before the error was reported.
 					// Resolve with error result
 					resolve(err(s2Error(writeErr)));
 				}
 				// Write completed successfully - promise resolves later when ack is received
 			});
 		});
+	}
+
+	/**
+	 * Returns true if data may have been written to the HTTP/2 stream
+	 * since the last time pendingAcks was empty (dormant).
+	 */
+	effectSignalled(): boolean {
+		return this._effectSignalled;
 	}
 
 	/**

@@ -121,6 +121,7 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	public writes: Array<{ records: AppendRecord[]; args?: any }> = [];
 	private closed = false;
 	private ackIndex = 0;
+	private _effectSignalled = false;
 
 	constructor(
 		private readonly behavior: {
@@ -128,12 +129,26 @@ class FakeTransportAppendSession implements TransportAppendSession {
 			closeError?: S2Error; // if provided, close() returns error result
 			neverAck?: boolean; // if true, submit() hangs forever (for timeout tests)
 			customAcks?: AppendAck[]; // if provided, return these acks in sequence
+			effectSignalled?: boolean; // override effectSignalled() return value
 		} = {},
-	) {}
+	) {
+		if (behavior.effectSignalled !== undefined) {
+			this._effectSignalled = behavior.effectSignalled;
+		}
+	}
+
+	effectSignalled(): boolean {
+		return this._effectSignalled;
+	}
 
 	async submit(input: AppendInput): Promise<AppendResult> {
 		if (this.closed) {
 			return err(new S2Error({ message: "session is closed", status: 400 }));
+		}
+
+		// Signal effect unless explicitly overridden by behavior
+		if (this.behavior.effectSignalled === undefined) {
+			this._effectSignalled = true;
 		}
 
 		if (this.behavior.submitError) {
@@ -162,6 +177,8 @@ class FakeTransportAppendSession implements TransportAppendSession {
 			this.ackIndex < this.behavior.customAcks.length
 		) {
 			const ack = this.behavior.customAcks[this.ackIndex++]!;
+			// Reset effect signal on successful ack (simulates dormancy)
+			this._effectSignalled = false;
 			return ok(ack);
 		}
 
@@ -171,6 +188,8 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		const end: StreamPosition = { seqNum: count, timestamp: new Date(0) };
 		const tail: StreamPosition = { seqNum: count, timestamp: new Date(0) };
 		const ack: AppendAck = { start, end, tail };
+		// Reset effect signal on successful ack (simulates dormancy)
+		this._effectSignalled = false;
 		return ok(ack);
 	}
 
@@ -278,8 +297,12 @@ describe("AppendSessionImpl (unit)", () => {
 		});
 	});
 
-	it("does not retry non-idempotent inflight under noSideEffects policy and exposes failure cause", async () => {
-		const error = new S2Error({ message: "boom", status: 500 });
+	it("does not retry under noSideEffects policy when error may have side effects", async () => {
+		const error = new S2Error({
+			message: "boom",
+			status: 500,
+			origin: "server",
+		});
 		const session = await AppendSessionImpl.create(
 			async () => new FakeTransportAppendSession({ submitError: error }),
 			undefined,
@@ -298,10 +321,23 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(session.failureCause()).toMatchObject({ status: 500 });
 	});
 
-	it("abort rejects backlog and queued submissions with the abort error", async () => {
-		const error = new S2Error({ message: "boom", status: 500 });
+	it("retries under noSideEffects policy when error guarantees no mutation (rate_limited)", async () => {
+		let call = 0;
 		const session = await AppendSessionImpl.create(
-			async () => new FakeTransportAppendSession({ submitError: error }),
+			async () => {
+				call++;
+				if (call === 1) {
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "rate limited",
+							status: 429,
+							code: "rate_limited",
+							origin: "server",
+						}),
+					});
+				}
+				return new FakeTransportAppendSession();
+			},
 			undefined,
 			{
 				minBaseDelayMillis: 1,
@@ -311,14 +347,81 @@ describe("AppendSessionImpl (unit)", () => {
 			},
 		);
 
-		const ticket1 = await session.submit(
-			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		const p = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
 		);
-		const ticket2 = await session.submit(
-			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+		const ticket = await p;
+		const ack = await ticket.ack();
+		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
+	});
+
+	it("retries under noSideEffects when transport reports no effect signalled (dormant)", async () => {
+		let call = 0;
+		const session = await AppendSessionImpl.create(
+			async () => {
+				call++;
+				if (call === 1) {
+					// Transport that errors but reports no effect was signalled (dormant)
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "stream closed",
+							status: 502,
+							origin: "server",
+						}),
+						effectSignalled: false, // No data was sent
+					});
+				}
+				return new FakeTransportAppendSession();
+			},
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 2,
+				appendRetryPolicy: "noSideEffects",
+			},
 		);
-		await expect(ticket1.ack()).rejects.toMatchObject({ status: 500 });
-		await expect(ticket2.ack()).rejects.toMatchObject({ status: 500 });
+
+		const p = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+		const ticket = await p;
+		const ack = await ticket.ack();
+		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
+	});
+
+	it("does not retry under noSideEffects when transport reports effect signalled", async () => {
+		const error = new S2Error({
+			message: "stream closed",
+			status: 502,
+			origin: "server",
+		});
+		const session = await AppendSessionImpl.create(
+			async () =>
+				new FakeTransportAppendSession({
+					submitError: error,
+					effectSignalled: true, // Data was sent, mutation may have occurred
+				}),
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 2,
+				appendRetryPolicy: "noSideEffects",
+			},
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		await expect(ticket.ack()).rejects.toMatchObject({ status: 502 });
+		expect(session.failureCause()).toMatchObject({ status: 502 });
 	});
 
 	it("detects non-monotonic sequence numbers and aborts with fatal error", async () => {

@@ -344,6 +344,7 @@ export class FetchAppendSession implements TransportAppendSession {
 		resolve: (result: AppendResult) => void;
 	}> = [];
 	private inFlight = false;
+	private _effectSignalled = false;
 	private readonly options?: S2RequestOptions;
 	private readonly stream: string;
 	private closed = false;
@@ -387,6 +388,15 @@ export class FetchAppendSession implements TransportAppendSession {
 				headers: headers,
 			}),
 		);
+	}
+
+	/**
+	 * Returns true if data may have been sent to the server since the
+	 * last time the session was dormant (queue fully drained with no errors).
+	 * Only resets after the processing loop completes successfully.
+	 */
+	effectSignalled(): boolean {
+		return this._effectSignalled;
 	}
 
 	/**
@@ -511,6 +521,9 @@ export class FetchAppendSession implements TransportAppendSession {
 				input.matchSeqNum ?? "none",
 			);
 
+			// Mark effect before sending — data is about to enter the network
+			this._effectSignalled = true;
+
 			try {
 				const preferProtobuf = input.records.some(
 					(record) => computeAppendRecordFormat(record) === "bytes",
@@ -546,6 +559,11 @@ export class FetchAppendSession implements TransportAppendSession {
 					s2Err.message,
 				);
 
+				// Note: do NOT reset _effectSignalled here. The fetch was
+				// attempted, so data may have reached the server before the
+				// error was reported. The flag stays true until the session
+				// is recreated by the retry layer.
+
 				// Resolve this request with error
 				resolver.resolve(err(s2Err));
 
@@ -572,6 +590,8 @@ export class FetchAppendSession implements TransportAppendSession {
 			this.inFlight = false;
 		}
 
+		// Queue fully drained with no errors — session is dormant
+		this._effectSignalled = false;
 		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
 	}
