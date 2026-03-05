@@ -148,6 +148,7 @@ export class Producer implements AsyncDisposable {
 	 */
 	private async runPump(): Promise<void> {
 		debugProducer("[%s] pump started", this.debugName);
+		const pendingAcks = new Set<Promise<void>>();
 
 		try {
 			while (true) {
@@ -155,6 +156,11 @@ export class Producer implements AsyncDisposable {
 
 				if (done) {
 					debugProducer("[%s] pump done (transform closed)", this.debugName);
+					// Await all pending ack handlers before exiting
+					if (pendingAcks.size > 0) {
+						debugProducer("[%s] pump awaiting %d pending acks", this.debugName, pendingAcks.size);
+						await Promise.all(pendingAcks);
+					}
 					break;
 				}
 
@@ -212,15 +218,19 @@ export class Producer implements AsyncDisposable {
 						record.rejectAck(error);
 					}
 
-					if (this.readableController) {
-						this.readableController.error(error);
+					try {
+						if (this.readableController) {
+							this.readableController.error(error);
+						}
+					} catch {
+						// Controller may be closed/errored
 					}
 
-					continue;
+					break;
 				}
 
-				// Handle ack asynchronously (non-blocking)
-				ticket
+				// Handle ack asynchronously (non-blocking), tracked for awaiting
+				const ackHandler = ticket
 					.ack()
 					.then((ack) => {
 						debugProducer(
@@ -234,8 +244,12 @@ export class Producer implements AsyncDisposable {
 							const indexedAck = new IndexedAppendAck(i, ack);
 							record.resolveAck(indexedAck);
 
-							if (this.readableController) {
-								this.readableController.enqueue(indexedAck);
+							try {
+								if (this.readableController) {
+									this.readableController.enqueue(indexedAck);
+								}
+							} catch {
+								// Controller may be closed
 							}
 						}
 					})
@@ -255,10 +269,18 @@ export class Producer implements AsyncDisposable {
 							record.rejectAck(error);
 						}
 
-						if (this.readableController) {
-							this.readableController.error(error);
+						try {
+							if (this.readableController) {
+								this.readableController.error(error);
+							}
+						} catch {
+							// Controller may be closed/errored
 						}
+					})
+					.finally(() => {
+						pendingAcks.delete(ackHandler);
 					});
+				pendingAcks.add(ackHandler);
 			}
 		} catch (err) {
 			const error = toS2Error(err);
