@@ -1325,6 +1325,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			const attemptStarted = performance.now();
 			entry.attemptStartedMonotonicMs = attemptStarted;
 			entry.innerPromise = session.submit(entry.input);
+			delete entry.needsSubmit;
 			debugSession(
 				"[%s] resubmitted entry (%d records, %d bytes, match_seq_num=%s)",
 				this.streamName,
