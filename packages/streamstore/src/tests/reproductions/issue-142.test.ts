@@ -122,9 +122,7 @@ describe("Issue #142: S2SReadSession leaks event listeners", () => {
 			const handler = () => {};
 			signal.addEventListener("abort", handler);
 			// Cleanup should be safe even after abort
-			expect(() =>
-				signal.removeEventListener("abort", handler),
-			).not.toThrow();
+			expect(() => signal.removeEventListener("abort", handler)).not.toThrow();
 		});
 	});
 
@@ -175,9 +173,7 @@ describe("Issue #142: S2SReadSession leaks event listeners", () => {
 			expect(connection.listenerCount("goaway")).toBe(0);
 
 			// Remove again - should not throw
-			expect(() =>
-				connection.removeListener("goaway", handler),
-			).not.toThrow();
+			expect(() => connection.removeListener("goaway", handler)).not.toThrow();
 			expect(connection.listenerCount("goaway")).toBe(0);
 		});
 	});

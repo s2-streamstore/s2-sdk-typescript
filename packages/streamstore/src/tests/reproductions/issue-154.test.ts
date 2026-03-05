@@ -28,8 +28,7 @@ function simulateReadSessionErrorHandling(
 		"message" in responseError
 			? new S2Error({
 					message: (responseError as { message: string }).message,
-					code:
-						(responseError as { code?: string }).code ?? undefined,
+					code: (responseError as { code?: string }).code ?? undefined,
 					status,
 				})
 			: status === 416

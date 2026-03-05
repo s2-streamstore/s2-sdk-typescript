@@ -59,7 +59,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	private nextMatchSeqNum?: number;
 
 	constructor(args?: BatchTransformOptions) {
-		let controller: TransformStreamDefaultController<BatchOutput>;
+		let controller!: TransformStreamDefaultController<BatchOutput>;
 		super({
 			start: (c) => {
 				controller = c;
@@ -73,7 +73,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			cancel: () => {
 				this.cancelLingerTimer();
 			},
-		});
+		} as Transformer<AppendRecord, BatchOutput> & { cancel: () => void });
 
 		// Set controller reference captured during start
 		this.controller = controller;

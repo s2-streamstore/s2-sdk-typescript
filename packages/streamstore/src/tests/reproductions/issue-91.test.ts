@@ -47,6 +47,8 @@ describe("Issue #91 reproduction", () => {
 		const secret = Redacted.make("ephemeral-secret");
 		expect(Redacted.value(secret)).toBe("ephemeral-secret");
 		expect(Redacted.unsafeWipe(secret)).toBe(true);
-		expect(() => Redacted.value(secret)).toThrow("Unable to get redacted value");
+		expect(() => Redacted.value(secret)).toThrow(
+			"Unable to get redacted value",
+		);
 	});
 });

@@ -302,7 +302,13 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 				// Listener references for cleanup (issue #142)
 				let abortHandler: (() => void) | undefined;
-				let goawayHandler: ((errorCode: number, lastStreamID: number, opaqueData: Buffer) => void) | undefined;
+				let goawayHandler:
+					| ((
+							errorCode: number,
+							lastStreamID: number,
+							opaqueData: Buffer,
+					  ) => void)
+					| undefined;
 				let sessionConnection: ClientHttp2Session | undefined;
 
 				const cleanupListeners = () => {

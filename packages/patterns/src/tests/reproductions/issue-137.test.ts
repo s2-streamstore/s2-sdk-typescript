@@ -1,13 +1,13 @@
-import { describe, expect, it } from "vitest";
 import {
-	AppendInput,
 	type AppendAck,
+	AppendInput,
+	BatchSubmitTicket,
 } from "@s2-dev/streamstore";
 import type {
 	AcksStream,
 	AppendSession,
 } from "@s2-dev/streamstore/lib/stream/types";
-import { BatchSubmitTicket } from "@s2-dev/streamstore";
+import { describe, expect, it } from "vitest";
 import { SerializingAppendSession } from "../../patterns/serialization.js";
 
 const textEncoder = new TextEncoder();
@@ -64,9 +64,8 @@ class CapturingAppendSession implements AppendSession {
 describe("Issue #137: SerializingAppendSession.write must include meteredBytes", () => {
 	it("chunks written via WritableStream have valid meteredBytes (no matchSeqNum)", async () => {
 		const mock = new CapturingAppendSession();
-		const session = new SerializingAppendSession<string>(
-			mock as any,
-			(msg) => textEncoder.encode(msg),
+		const session = new SerializingAppendSession<string>(mock as any, (msg) =>
+			textEncoder.encode(msg),
 		);
 
 		const writer = session.getWriter();

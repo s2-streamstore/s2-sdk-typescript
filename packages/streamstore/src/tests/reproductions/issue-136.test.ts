@@ -43,12 +43,12 @@ describe("issue-136: BatchTransform linger timer bugs", () => {
 		});
 
 		// Pipe through the batcher to a sink, with abort signal
-		const pipePromise = source.pipeThrough(batcher).pipeTo(
-			new WritableStream(),
-			{ signal: ac.signal },
-		).catch(() => {
-			// Expected: abort causes pipeline error
-		});
+		const pipePromise = source
+			.pipeThrough(batcher)
+			.pipeTo(new WritableStream(), { signal: ac.signal })
+			.catch(() => {
+				// Expected: abort causes pipeline error
+			});
 
 		// Wait a tick so the record enters the transform
 		await new Promise((resolve) => setTimeout(resolve, 10));

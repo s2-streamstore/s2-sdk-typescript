@@ -1,8 +1,8 @@
 import {
 	type AppendHeaders,
 	type AppendRecord,
-	type ReadHeaders,
 	meteredBytes,
+	type ReadHeaders,
 } from "@s2-dev/streamstore";
 
 import { DEDUPE_SEQ_HEADER_BYTES, DEDUPE_WRITER_UNIQ_ID } from "./constants.js";

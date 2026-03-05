@@ -158,7 +158,11 @@ export class Producer implements AsyncDisposable {
 					debugProducer("[%s] pump done (transform closed)", this.debugName);
 					// Await all pending ack handlers before exiting
 					if (pendingAcks.size > 0) {
-						debugProducer("[%s] pump awaiting %d pending acks", this.debugName, pendingAcks.size);
+						debugProducer(
+							"[%s] pump awaiting %d pending acks",
+							this.debugName,
+							pendingAcks.size,
+						);
 						await Promise.all(pendingAcks);
 					}
 					break;

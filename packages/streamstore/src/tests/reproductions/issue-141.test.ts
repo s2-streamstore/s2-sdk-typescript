@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { s2Error, S2Error } from "../../error.js";
+import { S2Error, s2Error } from "../../error.js";
 
 describe("Issue #141 reproduction", () => {
 	describe("genuine connection errors are correctly identified", () => {
@@ -48,9 +48,7 @@ describe("Issue #141 reproduction", () => {
 
 	describe("messages containing connection substrings with additional context are NOT misclassified", () => {
 		it("should not match 'Stream failed to fetch not found'", () => {
-			const result = s2Error(
-				new Error("Stream 'failed to fetch' not found"),
-			);
+			const result = s2Error(new Error("Stream 'failed to fetch' not found"));
 			expect(result).toBeInstanceOf(S2Error);
 			expect(result.status).not.toBe(502);
 		});
@@ -64,17 +62,13 @@ describe("Issue #141 reproduction", () => {
 		});
 
 		it("should not match 'The networkerror handler triggered'", () => {
-			const result = s2Error(
-				new Error("The networkerror handler triggered"),
-			);
+			const result = s2Error(new Error("The networkerror handler triggered"));
 			expect(result).toBeInstanceOf(S2Error);
 			expect(result.status).not.toBe(502);
 		});
 
 		it("should not match 'Image load failed for large payload'", () => {
-			const result = s2Error(
-				new Error("Image load failed for large payload"),
-			);
+			const result = s2Error(new Error("Image load failed for large payload"));
 			expect(result).toBeInstanceOf(S2Error);
 			expect(result.status).not.toBe(502);
 		});
