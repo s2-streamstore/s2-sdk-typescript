@@ -1,7 +1,8 @@
-import type {
-	AppendHeaders,
-	AppendRecord,
-	ReadHeaders,
+import {
+	type AppendHeaders,
+	type AppendRecord,
+	type ReadHeaders,
+	meteredBytes,
 } from "@s2-dev/streamstore";
 
 import { DEDUPE_SEQ_HEADER_BYTES, DEDUPE_WRITER_UNIQ_ID } from "./constants.js";
@@ -144,6 +145,7 @@ export function injectDedupeHeaders(
 		}
 
 		(record as any).headers = headers;
+		(record as any).meteredBytes = meteredBytes(record);
 	}
 
 	return seq;
