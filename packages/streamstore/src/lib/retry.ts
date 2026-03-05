@@ -1018,17 +1018,37 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			debugSession("[%s] [PUMP] ensuring session exists", this.streamName);
 			await this.ensureSession();
 			if (!this.session) {
-				// Session creation failed - will retry
+				// Session creation failed - check max attempts before retrying
+				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
+				const allowedRetries = effectiveMax - 1;
+				if (this.currentAttempt >= allowedRetries) {
+					debugSession(
+						"[%s] [PUMP] session creation failed, max attempts reached (%d), aborting",
+						this.streamName,
+						effectiveMax,
+					);
+					const wrappedError = new S2Error({
+						message: `Max attempts (${effectiveMax}) exhausted: connection failed`,
+						status: 502,
+						code: "connection_failed",
+					});
+					await this.abort(wrappedError);
+					return;
+				}
+
 				this.consecutiveFailures++;
+				this.currentAttempt++;
 				const delay = calculateDelay(
 					this.consecutiveFailures - 1,
 					this.retryConfig.minBaseDelayMillis,
 					this.retryConfig.maxBaseDelayMillis,
 				);
 				debugSession(
-					"[%s] [PUMP] session creation failed, backing off for %dms",
+					"[%s] [PUMP] session creation failed, backing off for %dms (retry %d/%d)",
 					this.streamName,
 					delay,
+					this.currentAttempt,
+					allowedRetries,
 				);
 				await sleep(delay);
 				continue;
