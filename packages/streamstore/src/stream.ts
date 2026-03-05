@@ -177,6 +177,7 @@ export class S2Stream {
 		this.ensureOpen();
 		const { as, ...requestOptions } = options ?? {};
 		const transport = await this.getTransport();
+		this.ensureOpen(); // Re-check after async gap
 		// Convert ReadInput to ReadArgs using mapper
 		const readArgs: ReadArgs<Format> = {
 			...toAPIReadQuery(input),
@@ -200,6 +201,7 @@ export class S2Stream {
 	): Promise<AppendSession> {
 		this.ensureOpen();
 		const transport = await this.getTransport();
+		this.ensureOpen(); // Re-check after async gap
 		return await transport.makeAppendSession(
 			this.name,
 			sessionOptions,
