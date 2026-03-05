@@ -33,7 +33,7 @@ export class S2Stream {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
 	private readonly retryConfig?: RetryConfig;
-	private _transport?: SessionTransport;
+	private _transportPromise?: Promise<SessionTransport>;
 	private closed = false;
 	private closePromise?: Promise<void>;
 
@@ -56,10 +56,10 @@ export class S2Stream {
 	 */
 	private async getTransport(): Promise<SessionTransport> {
 		this.ensureOpen();
-		if (!this._transport) {
-			this._transport = await createSessionTransport(this.transportConfig);
+		if (!this._transportPromise) {
+			this._transportPromise = createSessionTransport(this.transportConfig);
 		}
-		return this._transport;
+		return this._transportPromise;
 	}
 
 	private ensureOpen(): void {
@@ -216,11 +216,12 @@ export class S2Stream {
 				return;
 			}
 			this.closed = true;
-			if (this._transport) {
+			if (this._transportPromise) {
 				try {
-					await this._transport.close();
+					const transport = await this._transportPromise;
+					await transport.close();
 				} finally {
-					this._transport = undefined;
+					this._transportPromise = undefined;
 				}
 			}
 		})();
