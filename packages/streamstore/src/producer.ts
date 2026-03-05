@@ -282,6 +282,25 @@ export class Producer implements AsyncDisposable {
 					});
 				pendingAcks.add(ackHandler);
 			}
+
+			// After the loop exits with an error, cancel the transform reader
+			// so pending transformWriter.write() calls are unblocked (they will
+			// reject, causing submit() to throw). Then reject any remaining
+			// inflight records whose ack promises would otherwise hang.
+			if (this.pumpError) {
+				this.transformReader.cancel(this.pumpError).catch(() => {});
+
+				if (this.inflightRecords.length > 0) {
+					debugProducer(
+						"[%s] pump exited with error, rejecting %d remaining inflight records",
+						this.debugName,
+						this.inflightRecords.length,
+					);
+					for (const record of this.inflightRecords.splice(0)) {
+						record.rejectAck(this.pumpError);
+					}
+				}
+			}
 		} catch (err) {
 			const error = toS2Error(err);
 			debugProducer(
@@ -410,8 +429,13 @@ export class Producer implements AsyncDisposable {
 	private async _doClose(): Promise<void> {
 		debugProducer("[%s] close requested", this.debugName);
 
-		// Close the writer to signal no more records
-		await this.transformWriter.close();
+		// Close the writer to signal no more records.
+		// May fail if the pump already errored and cancelled the transform.
+		try {
+			await this.transformWriter.close();
+		} catch {
+			// Writer already errored from pump failure — that's fine.
+		}
 
 		// Wait for the pump to finish processing all batches
 		await this.pump;

@@ -30,6 +30,22 @@ describe("Issue #141 reproduction", () => {
 		});
 	});
 
+	describe("messages with trailing punctuation are still matched", () => {
+		it("Firefox with trailing period: 'NetworkError when attempting to fetch resource.'", () => {
+			const result = s2Error(
+				new Error("NetworkError when attempting to fetch resource."),
+			);
+			expect(result).toBeInstanceOf(S2Error);
+			expect(result.status).toBe(502);
+		});
+
+		it("trailing whitespace: 'fetch failed '", () => {
+			const result = s2Error(new Error("fetch failed "));
+			expect(result).toBeInstanceOf(S2Error);
+			expect(result.status).toBe(502);
+		});
+	});
+
 	describe("messages containing connection substrings with additional context are NOT misclassified", () => {
 		it("should not match 'Stream failed to fetch not found'", () => {
 			const result = s2Error(

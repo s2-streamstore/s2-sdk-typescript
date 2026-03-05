@@ -28,7 +28,8 @@ function isConnectionError(error: unknown): boolean {
 	// Chrome: "Failed to fetch"
 	// Firefox: "NetworkError when attempting to fetch resource"
 	// Safari: "Load failed"
-	const msg = error.message.toLowerCase();
+	// Normalize: lowercase, strip trailing punctuation/whitespace
+	const msg = error.message.toLowerCase().replace(/[\s.!]+$/, "");
 	const knownConnectionMessages = [
 		"fetch failed",
 		"failed to fetch",
