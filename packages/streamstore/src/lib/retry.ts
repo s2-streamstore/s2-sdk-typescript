@@ -1191,6 +1191,27 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					return;
 				}
 
+				// Under noSideEffects, also check that all inflight entries
+				// are idempotent. Non-idempotent entries that were already
+				// sent may have been processed, and resubmitting would cause
+				// duplicates.
+				if (this.retryConfig.appendRetryPolicy === "noSideEffects") {
+					const hasNonIdempotentSent = this.inflight.some(
+						(entry, index) =>
+							index > 0 &&
+							!entry.needsSubmit &&
+							entry.input.matchSeqNum === undefined,
+					);
+					if (hasNonIdempotentSent) {
+						debugSession(
+							"[%s] non-idempotent pipelined entries already sent, aborting under noSideEffects",
+							this.streamName,
+						);
+						await this.abort(error);
+						return;
+					}
+				}
+
 				// Check max attempts (total attempts include initial; retries = max - 1)
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
 				const allowedRetries = effectiveMax - 1;
