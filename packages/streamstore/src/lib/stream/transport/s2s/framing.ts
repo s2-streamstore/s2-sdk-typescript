@@ -3,11 +3,10 @@
  *
  * Message format:
  * - 3 bytes: Length prefix (total message length including flag byte, big-endian)
- * - 1 byte: Flag byte [T][CC][S][RRRR]
+ * - 1 byte: Flag byte [T][CC][RRRRR]
  *   - T (bit 7): Terminal flag (1 = stream ends after this message)
  *   - CC (bits 6-5): Compression (00=none, 01=zstd, 10=gzip)
- *   - S (bit 4): Status code present (1 = 2-byte status code prepended to body)
- *   - RRRR (bits 3-0): Reserved
+ *   - RRRRR (bits 4-0): Reserved
  * - Variable: Body (protobuf message or JSON error for terminal frames)
  */
 
@@ -35,9 +34,6 @@ export function frameMessage(opts: {
 	let flag = 0;
 	if (opts.terminal) {
 		flag |= 0x80; // Set bit 7
-	}
-	if (opts.terminal && opts.statusCode !== undefined) {
-		flag |= 0x10; // Set bit 4 - status code present
 	}
 	if (compression === "zstd") {
 		flag |= 0x20; // Set bit 5
@@ -118,7 +114,6 @@ export class S2SFrameParser {
 		// Read flag byte
 		const flag = this.buffer[3]!;
 		const terminal = (flag & 0x80) !== 0;
-		const hasStatusCode = (flag & 0x10) !== 0;
 		let compression: CompressionType = "none";
 		if ((flag & 0x20) !== 0) {
 			compression = "zstd";
@@ -130,8 +125,8 @@ export class S2SFrameParser {
 		let body = this.buffer.slice(4, 4 + length - 1);
 		let statusCode: number | undefined;
 
-		// For terminal frames, check for status code only when flagged
-		if (terminal && hasStatusCode && body.length >= 2) {
+		// For terminal frames, check for status code
+		if (terminal && body.length >= 2) {
 			statusCode = (body[0]! << 8) | body[1]!;
 			body = body.slice(2);
 		}
