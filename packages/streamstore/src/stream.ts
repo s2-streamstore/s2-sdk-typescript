@@ -57,7 +57,12 @@ export class S2Stream {
 	private async getTransport(): Promise<SessionTransport> {
 		this.ensureOpen();
 		if (!this._transportPromise) {
-			this._transportPromise = createSessionTransport(this.transportConfig);
+			this._transportPromise = createSessionTransport(
+				this.transportConfig,
+			).catch((err) => {
+				this._transportPromise = undefined;
+				throw err;
+			});
 		}
 		return this._transportPromise;
 	}
