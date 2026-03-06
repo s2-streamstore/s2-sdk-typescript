@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.7
+
+### Patch Changes
+
+- 843b6e4: Changes error message for 416 (#158)
+
 ## 0.22.6
 
 ### Patch Changes
