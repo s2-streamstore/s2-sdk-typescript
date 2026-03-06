@@ -46,6 +46,8 @@ const s2 = new S2({
 	...S2Environment.parse(),
 	accessToken,
 	retry: {
+		maxAttempts: 10,
+		maxBaseDelayMillis: 1000,
 		appendRetryPolicy: "all",
 	},
 });

@@ -28,13 +28,16 @@ function isConnectionError(error: unknown): boolean {
 	// Chrome: "Failed to fetch"
 	// Firefox: "NetworkError when attempting to fetch resource"
 	// Safari: "Load failed"
-	const msg = error.message.toLowerCase();
-	if (
-		msg.includes("fetch failed") ||
-		msg.includes("failed to fetch") ||
-		msg.includes("networkerror") ||
-		msg.includes("load failed")
-	) {
+	// Normalize: lowercase, strip trailing punctuation/whitespace
+	const msg = error.message.toLowerCase().replace(/[\s.!]+$/, "");
+	const knownConnectionMessages = [
+		"fetch failed",
+		"failed to fetch",
+		"networkerror when attempting to fetch resource",
+		"load failed",
+	];
+
+	if (knownConnectionMessages.includes(msg)) {
 		return true;
 	}
 

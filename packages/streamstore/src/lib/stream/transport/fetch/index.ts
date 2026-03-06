@@ -78,6 +78,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			// Convert error to S2Error and throw - let caller handle connection errors
 			const status = response.response.status;
 			const error =
+				typeof response.error === "object" &&
+				response.error !== null &&
 				"message" in response.error
 					? new S2Error({
 							message: response.error.message,

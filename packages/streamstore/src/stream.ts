@@ -33,7 +33,7 @@ export class S2Stream {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
 	private readonly retryConfig?: RetryConfig;
-	private _transport?: SessionTransport;
+	private _transportPromise?: Promise<SessionTransport>;
 	private closed = false;
 	private closePromise?: Promise<void>;
 
@@ -56,10 +56,15 @@ export class S2Stream {
 	 */
 	private async getTransport(): Promise<SessionTransport> {
 		this.ensureOpen();
-		if (!this._transport) {
-			this._transport = await createSessionTransport(this.transportConfig);
+		if (!this._transportPromise) {
+			this._transportPromise = createSessionTransport(
+				this.transportConfig,
+			).catch((err) => {
+				this._transportPromise = undefined;
+				throw err;
+			});
 		}
-		return this._transport;
+		return this._transportPromise;
 	}
 
 	private ensureOpen(): void {
@@ -177,6 +182,7 @@ export class S2Stream {
 		this.ensureOpen();
 		const { as, ...requestOptions } = options ?? {};
 		const transport = await this.getTransport();
+		this.ensureOpen(); // Re-check after async gap
 		// Convert ReadInput to ReadArgs using mapper
 		const readArgs: ReadArgs<Format> = {
 			...toAPIReadQuery(input),
@@ -200,6 +206,7 @@ export class S2Stream {
 	): Promise<AppendSession> {
 		this.ensureOpen();
 		const transport = await this.getTransport();
+		this.ensureOpen(); // Re-check after async gap
 		return await transport.makeAppendSession(
 			this.name,
 			sessionOptions,
@@ -216,11 +223,12 @@ export class S2Stream {
 				return;
 			}
 			this.closed = true;
-			if (this._transport) {
+			if (this._transportPromise) {
 				try {
-					await this._transport.close();
+					const transport = await this._transportPromise;
+					await transport.close();
 				} finally {
-					this._transport = undefined;
+					this._transportPromise = undefined;
 				}
 			}
 		})();

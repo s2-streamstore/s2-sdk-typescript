@@ -135,6 +135,12 @@ export namespace AppendRecord {
 		seqNum: number,
 		timestamp?: number | Date,
 	): BytesAppendRecord {
+		if (!Number.isSafeInteger(seqNum) || seqNum < 0) {
+			throw new S2Error({
+				message: "seqNum must be a non-negative safe integer",
+				origin: "sdk",
+			});
+		}
 		const buffer = new Uint8Array(8);
 		const view = new DataView(buffer.buffer);
 		view.setBigUint64(0, BigInt(seqNum), false);
@@ -236,12 +242,19 @@ export namespace AppendInput {
 			}
 		}
 
+		if (
+			options?.matchSeqNum !== undefined &&
+			(!Number.isSafeInteger(options.matchSeqNum) || options.matchSeqNum < 0)
+		) {
+			throw new S2Error({
+				message: "matchSeqNum must be a non-negative safe integer",
+				origin: "sdk",
+			});
+		}
+
 		return {
 			records,
-			matchSeqNum:
-				options?.matchSeqNum === undefined
-					? undefined
-					: Math.floor(options.matchSeqNum),
+			matchSeqNum: options?.matchSeqNum,
 			fencingToken: options?.fencingToken,
 			meteredBytes: totalBytes,
 		};

@@ -6,11 +6,11 @@ export declare namespace Redacted {
 		: never;
 }
 
-export const redactedRegistry = new WeakMap<Redacted<any>, any>();
+const redactedRegistry = new WeakMap<Redacted<any>, any>();
 
 const NodeInspectSymbol = Symbol.for("nodejs.util.inspect.custom");
 
-export const proto = {
+const proto = Object.freeze({
 	toString() {
 		return "<redacted>";
 	},
@@ -20,7 +20,7 @@ export const proto = {
 	[NodeInspectSymbol]() {
 		return "<redacted>";
 	},
-};
+});
 
 export const make = <T>(value: T): Redacted<T> => {
 	const redacted = Object.create(proto);
