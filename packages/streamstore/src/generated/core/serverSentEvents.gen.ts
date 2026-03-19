@@ -125,9 +125,10 @@ export const createSseClient = <TData = unknown>({
       }
 
       try {
+        const { fetch: _fetchOpt, serializedBody: _sb, ...requestOptions } = options;
         const requestInit: RequestInit = {
           redirect: 'follow',
-          ...options,
+          ...requestOptions,
           body: options.serializedBody,
           headers,
           signal,

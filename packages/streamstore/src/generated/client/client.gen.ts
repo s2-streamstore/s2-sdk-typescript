@@ -80,7 +80,17 @@ export const createClient = (config: Config = {}): Client => {
     const { opts, url } = await beforeRequest(options);
     const requestInit: ReqInit = {
       redirect: 'follow',
-      ...opts,
+      cache: opts.cache,
+      credentials: opts.credentials,
+      headers: opts.headers,
+      integrity: opts.integrity,
+      keepalive: opts.keepalive,
+      method: opts.method,
+      mode: opts.mode,
+      priority: opts.priority,
+      referrer: opts.referrer,
+      referrerPolicy: opts.referrerPolicy,
+      signal: opts.signal,
       body: getValidRequestBody(opts),
     };
 

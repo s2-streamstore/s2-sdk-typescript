@@ -37,6 +37,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # local examples
 packages/*/examples/local/*
+examples/local/*
 
 # browser example build output
 packages/*/examples/browser/app.js
