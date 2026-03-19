@@ -16,6 +16,8 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     env: loadEnv(mode, process.cwd(), ''),
+    // Deno tests use `deno test` directly — exclude from vitest
+    exclude: ['**/deno.e2e.test.ts', '**/node_modules/**'],
     // Run e2e tests in a separate pool with limited concurrency
     poolMatchGlobs: [['**/*.e2e.test.ts', 'forks']],
     poolOptions: {

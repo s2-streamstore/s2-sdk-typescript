@@ -17,6 +17,7 @@
     "build:core": "bun run --cwd packages/streamstore build",
     "build:patterns": "bun run --cwd packages/patterns build",
     "test": "vitest --run",
+    "test:deno": "deno test --no-check --allow-env --allow-net --config deno.json packages/streamstore/src/tests/deno.e2e.test.ts",
     "test:core": "bun run --cwd packages/streamstore test",
     "test:patterns": "bun run --cwd packages/patterns test",
     "check": "bun run snippets && bun run check:snippets && biome check && bun run build:core && bun run --cwd packages/streamstore check && bun run --cwd packages/patterns check",
