@@ -60,8 +60,8 @@ patchFile("client/client.gen.ts", [
 			"    };",
 		].join("\n"),
 		to: [
-			"    const requestInit: ReqInit = {",
-			"      redirect: 'follow',",
+			"    const requestInit = {",
+			"      redirect: opts.redirect ?? 'follow',",
 			"      cache: opts.cache,",
 			"      credentials: opts.credentials,",
 			"      headers: opts.headers,",
@@ -74,7 +74,8 @@ patchFile("client/client.gen.ts", [
 			"      referrerPolicy: opts.referrerPolicy,",
 			"      signal: opts.signal,",
 			"      body: getValidRequestBody(opts),",
-			"    };",
+			"      ...('duplex' in opts ? { duplex: (opts as any).duplex } : undefined),",
+			"    } as ReqInit;",
 		].join("\n"),
 	},
 ]);
