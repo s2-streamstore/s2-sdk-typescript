@@ -26,5 +26,5 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "include": ["src/**/*", "examples/**/*"],
-  "exclude": ["src/generated", "dist"]
+  "exclude": ["src/generated", "src/tests/deno.e2e.test.ts", "dist"]
 }

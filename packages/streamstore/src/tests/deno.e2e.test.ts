@@ -11,12 +11,8 @@
  *   S2_ACCESS_TOKEN=... S2_BASIN=... deno test --no-check --allow-env --allow-net --config deno.json packages/streamstore/src/tests/deno.e2e.test.ts
  */
 
-import { S2, AppendInput, AppendRecord, S2Stream } from "@s2-dev/streamstore";
-import {
-	assert,
-	assertEquals,
-	assertExists,
-} from "@std/assert";
+import { AppendInput, AppendRecord, S2, S2Stream } from "@s2-dev/streamstore";
+import { assert, assertEquals, assertExists } from "@std/assert";
 
 const accessToken = Deno.env.get("S2_ACCESS_TOKEN");
 const basinName = Deno.env.get("S2_BASIN");
