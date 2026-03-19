@@ -173,7 +173,7 @@ export type BasinReconfiguration = {
 
 export type BasinScope = 'aws:us-east-1';
 
-export type BasinState = 'active' | 'creating' | 'deleting';
+export type BasinState = 'active' | 'deleting';
 
 export type CreateBasinRequest = {
     /**
