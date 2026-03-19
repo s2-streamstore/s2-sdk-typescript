@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.8
+
+### Patch Changes
+
+- bd3390f: Add Deno support (for fetch transports)
+
 ## 0.22.7
 
 ### Patch Changes
