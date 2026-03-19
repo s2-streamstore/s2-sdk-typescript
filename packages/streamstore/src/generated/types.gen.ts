@@ -187,7 +187,7 @@ export type CreateBasinRequest = {
 };
 
 export type CreateOrReconfigureBasinRequest = {
-    config?: null | BasinConfig;
+    config?: null | BasinReconfiguration;
     scope?: null | BasinScope;
 };
 
@@ -1052,7 +1052,7 @@ export type ReconfigureStreamResponses = {
 export type ReconfigureStreamResponse = ReconfigureStreamResponses[keyof ReconfigureStreamResponses];
 
 export type CreateOrReconfigureStreamData = {
-    body?: null | StreamConfig;
+    body?: null | StreamReconfiguration;
     path: {
         /**
          * Stream name.

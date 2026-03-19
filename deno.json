@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "@s2-dev/streamstore": "./packages/streamstore/dist/esm/index.js",
+    "@std/assert": "jsr:@std/assert@^1",
+    "@protobuf-ts/runtime": "npm:@protobuf-ts/runtime@^2",
+    "debug": "npm:debug@^4"
+  }
+}
