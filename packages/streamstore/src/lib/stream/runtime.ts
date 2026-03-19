@@ -56,8 +56,8 @@ export function supportsHttp2(): boolean {
 			return true;
 
 		case "deno":
-			// Deno's node:http2 is missing setLocalWindowSize and has
-			// data-chunking differences that break the s2s frame parser.
+			// Deno's node:http2 has data-chunking differences that cause
+			// "premature EOF" errors in the s2s frame parser.
 			// Fall back to fetch transport until Deno's compat improves.
 			return false;
 

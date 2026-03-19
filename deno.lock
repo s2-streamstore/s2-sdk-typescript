@@ -18,6 +18,7 @@
   "workspace": {
     "dependencies": [
       "jsr:@std/assert@1",
+      "npm:@protobuf-ts/runtime@2",
       "npm:debug@4"
     ],
     "packageJson": {
