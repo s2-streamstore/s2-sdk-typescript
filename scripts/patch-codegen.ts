@@ -101,6 +101,7 @@ patchFile("core/serverSentEvents.gen.ts", [
 			"          keepalive: options.keepalive,",
 			"          method: options.method,",
 			"          mode: options.mode,",
+			"          priority: options.priority,",
 			"          referrer: options.referrer,",
 			"          referrerPolicy: options.referrerPolicy,",
 			"          body: options.serializedBody,",
