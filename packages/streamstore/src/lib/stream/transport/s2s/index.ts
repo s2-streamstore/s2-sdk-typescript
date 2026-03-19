@@ -172,7 +172,12 @@ export class S2STransport implements SessionTransport {
 				client.once("connect", () => {
 					// Guard against session being destroyed before connect fires
 					if (client.destroyed) return;
-					client.setLocalWindowSize(10 * 1024 * 1024);
+					try {
+						client.setLocalWindowSize(10 * 1024 * 1024);
+					} catch {
+						// Not implemented in all runtimes (e.g. Deno).
+						// This is a performance optimization, not required for correctness.
+					}
 					resolve(client);
 				});
 

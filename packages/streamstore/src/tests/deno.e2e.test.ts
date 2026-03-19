@@ -11,7 +11,7 @@
  *   S2_ACCESS_TOKEN=... S2_BASIN=... deno test --no-check --allow-env --allow-net --config deno.json packages/streamstore/src/tests/deno.e2e.test.ts
  */
 
-import { S2, AppendInput, AppendRecord } from "@s2-dev/streamstore";
+import { S2, AppendInput, AppendRecord, S2Stream } from "@s2-dev/streamstore";
 import {
 	assert,
 	assertEquals,
@@ -102,6 +102,48 @@ Deno.test({
 			assert(batch.records.length >= 2);
 			assertEquals(batch.records[0]!.body, "hello from deno");
 			assertEquals(batch.records[1]!.body, "second record");
+		} finally {
+			await basin.streams.delete({ stream: streamName });
+		}
+	},
+});
+
+Deno.test({
+	name: "read session",
+	ignore: shouldSkip(),
+	...sanitize,
+	async fn() {
+		const s2 = makeClient();
+		const basin = s2.basin(basinName!);
+
+		const streamName = makeStreamName("deno-rs");
+		await basin.streams.create({ stream: streamName });
+
+		try {
+			const stream = basin.stream(streamName);
+
+			// Append some records first
+			const input = AppendInput.create([
+				AppendRecord.string({ body: "rs-record-0" }),
+				AppendRecord.string({ body: "rs-record-1" }),
+				AppendRecord.string({ body: "rs-record-2" }),
+			]);
+			await stream.append(input);
+
+			// Open a read session
+			const session = await stream.readSession({
+				start: { from: { seqNum: 0 }, clamp: true },
+				stop: { limits: { count: 3 } },
+			});
+
+			const records: string[] = [];
+			for await (const record of session) {
+				records.push(record.body as string);
+			}
+
+			assertEquals(records, ["rs-record-0", "rs-record-1", "rs-record-2"]);
+
+			await stream.close();
 		} finally {
 			await basin.streams.delete({ stream: streamName });
 		}
