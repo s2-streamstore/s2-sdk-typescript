@@ -41,7 +41,7 @@ function patchFile(relPath: string, patches: Array<{ from: string; to: string }>
 			console.error(`  Looking for: ${from.slice(0, 80)}...`);
 			process.exit(1);
 		}
-		content = content.replace(from, to);
+		content = content.replaceAll(from, to.replaceAll("$", "$$$$"));
 		patchCount++;
 	}
 
@@ -93,10 +93,16 @@ patchFile("core/serverSentEvents.gen.ts", [
 			"        };",
 		].join("\n"),
 		to: [
-			"        const { fetch: _fetchOpt, serializedBody: _sb, ...requestOptions } = options;",
 			"        const requestInit: RequestInit = {",
-			"          redirect: 'follow',",
-			"          ...requestOptions,",
+			"          redirect: options.redirect ?? 'follow',",
+			"          cache: options.cache,",
+			"          credentials: options.credentials,",
+			"          integrity: options.integrity,",
+			"          keepalive: options.keepalive,",
+			"          method: options.method,",
+			"          mode: options.mode,",
+			"          referrer: options.referrer,",
+			"          referrerPolicy: options.referrerPolicy,",
 			"          body: options.serializedBody,",
 			"          headers,",
 			"          signal,",
