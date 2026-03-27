@@ -20,7 +20,7 @@
     },
     "packages/patterns": {
       "name": "@s2-dev/streamstore-patterns",
-      "version": "2.0.0",
+      "version": "2.1.1",
       "dependencies": {
         "nanoid": "^3.3.11",
       },
@@ -35,9 +35,16 @@
         "@s2-dev/streamstore": ">=0.18.1",
       },
     },
+    "packages/resumable-stream": {
+      "name": "@s2-dev/resumable-stream",
+      "version": "1.10.0",
+      "peerDependencies": {
+        "@s2-dev/streamstore": ">=0.21.0",
+      },
+    },
     "packages/streamstore": {
       "name": "@s2-dev/streamstore",
-      "version": "0.20.0",
+      "version": "0.22.8",
       "dependencies": {
         "@protobuf-ts/runtime": "^2.11.1",
         "debug": "^4.4.3",
@@ -264,6 +271,8 @@
     "@rollup/rollup-win32-x64-gnu": ["@rollup/rollup-win32-x64-gnu@4.52.5", "", { "os": "win32", "cpu": "x64" }, "sha512-UGBUGPFp1vkj6p8wCRraqNhqwX/4kNQPS57BCFc8wYh0g94iVIW33wJtQAx3G7vrjjNtRaxiMUylM0ktp/TRSQ=="],
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.52.5", "", { "os": "win32", "cpu": "x64" }, "sha512-TAcgQh2sSkykPRWLrdyy2AiceMckNf5loITqXxFI5VuQjS5tSuw3WlwdN8qv8vzjLAUTvYaH/mVjSFpbkFbpTg=="],
+
+    "@s2-dev/resumable-stream": ["@s2-dev/resumable-stream@workspace:packages/resumable-stream"],
 
     "@s2-dev/streamstore": ["@s2-dev/streamstore@workspace:packages/streamstore"],
 
