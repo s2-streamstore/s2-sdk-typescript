@@ -125,6 +125,10 @@ for (const record of batch.records) {
 ```
 <!-- snippet:end quick-start -->
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/s2-streamstore-s2-sdk-typescript).
+
 ## Development
 
 Run examples:
