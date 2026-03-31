@@ -11,7 +11,7 @@ const fakeClient: any = {};
 
 const makeStream = (retry?: { maxAttempts?: number }) =>
 	new S2Stream("test-stream", fakeClient, {
-		baseUrl: "https://test.b.aws.s2.dev",
+		baseUrl: "https://test.b.s2.dev",
 		accessToken: Redacted.make("test-access-token"),
 		forceTransport: "fetch",
 		retry,

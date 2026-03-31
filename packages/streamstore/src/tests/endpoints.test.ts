@@ -6,7 +6,7 @@ describe("S2Endpoints", () => {
 		const endpoints = new S2Endpoints();
 		expect(endpoints.accountBaseUrl()).toBe("https://aws.s2.dev/v1");
 		expect(endpoints.basinBaseUrl("my-basin")).toBe(
-			"https://my-basin.b.aws.s2.dev/v1",
+			"https://my-basin.b.s2.dev/v1",
 		);
 		expect(endpoints.includeBasinHeader).toBe(false);
 	});

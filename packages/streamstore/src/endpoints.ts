@@ -134,7 +134,7 @@ export type S2EndpointsInit = {
 };
 
 const DEFAULT_ACCOUNT_ENDPOINT = "aws.s2.dev";
-const DEFAULT_BASIN_ENDPOINT = "{basin}.b.aws.s2.dev";
+const DEFAULT_BASIN_ENDPOINT = "{basin}.b.s2.dev";
 
 /**
  * Endpoint configuration for the S2 environment.
