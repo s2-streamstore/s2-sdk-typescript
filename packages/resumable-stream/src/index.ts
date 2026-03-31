@@ -26,7 +26,7 @@ interface S2Config {
 	readonly batchSize: number;
 	/**
 	 * Maximum time to wait before flushing a batch (in milliseconds).
-	 * Defaults to 100 if not set.
+	 * Defaults to 5000 if not set.
 	 */
 	readonly lingerDuration: number;
 }
