@@ -202,7 +202,13 @@ describe("case-transform", () => {
 			type Response = SDK.ListBasinsResponse;
 
 			const response: Response = {
-				basins: [{ name: "my-basin", scope: "aws:us-east-1", state: "active" }],
+				basins: [
+					{
+						name: "my-basin",
+						scope: "aws:us-east-1",
+						createdAt: "2024-01-01T00:00:00Z",
+					},
+				],
 				hasMore: false,
 			};
 

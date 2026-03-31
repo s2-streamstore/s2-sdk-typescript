@@ -106,7 +106,7 @@ export type S2ClientOptions = {
 	/**
 	 * Endpoint configuration for the S2 environment.
 	 *
-	 * Defaults to AWS (`aws.s2.dev` and `{basin}.b.aws.s2.dev`) with the API base path inferred as `/v1`.
+	 * Defaults to AWS (`aws.s2.dev` and `{basin}.b.s2.dev`) with the API base path inferred as `/v1`.
 	 */
 	endpoints?: S2Endpoints | S2EndpointsInit;
 	/**

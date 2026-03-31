@@ -18,7 +18,7 @@ export class S2Basin {
 	public readonly streams: S2Streams;
 
 	/**
-	 * Create a basin-scoped client that talks to `https://{basin}.b.aws.s2.dev/v1`.
+	 * Create a basin-scoped client that talks to `https://{basin}.b.s2.dev/v1`.
 	 *
 	 * Use this to work with streams inside a single basin.
 	 * @param name Basin name
