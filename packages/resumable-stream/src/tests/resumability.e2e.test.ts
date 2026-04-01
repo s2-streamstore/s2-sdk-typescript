@@ -85,6 +85,7 @@ beforeAll(async () => {
 	await s2.basins.create({ basin: basinName });
 	await waitForBasinReady(s2, basinName);
 	process.env.S2_BASIN = basinName;
+	process.env.S2_LINGER_DURATION = "100";
 }, 120_000);
 
 afterAll(async () => {
@@ -95,6 +96,7 @@ afterAll(async () => {
 		// best-effort cleanup
 	}
 	delete process.env.S2_BASIN;
+	delete process.env.S2_LINGER_DURATION;
 });
 
 test("pub/sub", async () => {

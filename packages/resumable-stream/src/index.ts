@@ -156,7 +156,7 @@ export async function createResumableStream(
 
 	// in case of multiple writers, only one with the given fencing token will succeed
 	try {
-		await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
+		await appendFenceCommand(s2, basin, streamId, null, sessionFencingToken);
 	} catch (error: unknown) {
 		if (error instanceof FencingTokenMismatchError) {
 			debugLog(
