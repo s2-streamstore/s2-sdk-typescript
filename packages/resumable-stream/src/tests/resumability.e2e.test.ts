@@ -1,5 +1,34 @@
-import { expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
+import { S2, S2Environment } from "@s2-dev/streamstore";
 import { createResumableStreamContext } from "../index.js";
+
+const makeBasinName = (): string => {
+	const suffix = Math.random().toString(36).slice(2, 10);
+	return `resumable-${suffix}`.slice(0, 48);
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForBasinReady = async (s2: S2, basin: string): Promise<void> => {
+	const deadline = Date.now() + 60_000;
+	while (Date.now() < deadline) {
+		try {
+			await s2.basins.getConfig({ basin });
+			return;
+		} catch (err) {
+			const status =
+				err && typeof err === "object" && "status" in err
+					? (err as { status?: number }).status
+					: undefined;
+			if (status === 503) {
+				await sleep(500);
+				continue;
+			}
+			throw err;
+		}
+	}
+	throw new Error(`Timed out waiting for basin ${basin} to become active`);
+};
 
 function createStreamFromArray(data: string[]): ReadableStream<string> {
 	let index = 0;
@@ -44,6 +73,29 @@ async function readStreamToArray(
 
 	return result;
 }
+
+let s2: S2;
+let basinName: string;
+
+beforeAll(async () => {
+	const env = S2Environment.parse();
+	if (!env.accessToken) return;
+	s2 = new S2(env as { accessToken: string });
+	basinName = makeBasinName();
+	await s2.basins.create({ basin: basinName });
+	await waitForBasinReady(s2, basinName);
+	process.env.S2_BASIN = basinName;
+}, 120_000);
+
+afterAll(async () => {
+	if (!s2 || !basinName) return;
+	try {
+		await s2.basins.delete({ basin: basinName });
+	} catch {
+		// best-effort cleanup
+	}
+	delete process.env.S2_BASIN;
+});
 
 test("pub/sub", async () => {
 	const context = createResumableStreamContext({

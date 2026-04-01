@@ -1,4 +1,9 @@
-import type { ReadBatch, ReadRecord } from "@s2-dev/streamstore";
+import type {
+	ReadBatch,
+	ReadRecord,
+	S2Endpoints,
+	S2EndpointsInit,
+} from "@s2-dev/streamstore";
 import {
 	AppendInput,
 	AppendRecord,
@@ -7,6 +12,7 @@ import {
 	Producer,
 	RangeNotSatisfiableError,
 	S2,
+	S2Environment,
 	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
 
@@ -29,6 +35,11 @@ interface S2Config {
 	 * Defaults to 5000 if not set.
 	 */
 	readonly lingerDuration: number;
+	/**
+	 * Optional endpoint overrides (e.g. for s2-lite).
+	 * Populated from S2_ACCOUNT_ENDPOINT / S2_BASIN_ENDPOINT env vars.
+	 */
+	readonly endpoints?: S2Endpoints | S2EndpointsInit;
 }
 
 export interface CreateResumableStreamContextOptions {
@@ -83,7 +94,8 @@ function getS2Config(): S2Config {
 	if (!accessToken) throw new Error("S2_ACCESS_TOKEN is not set");
 	if (!basin) throw new Error("S2_BASIN is not set");
 
-	return { accessToken, basin, batchSize, lingerDuration };
+	const { endpoints } = S2Environment.parse();
+	return { accessToken, basin, batchSize, lingerDuration, endpoints };
 }
 
 export function createResumableStreamContext(
@@ -115,8 +127,8 @@ export async function createResumableStream(
 	makeStream: () => ReadableStream<string>,
 	streamId: string,
 ): Promise<ReadableStream<string> | null> {
-	const { accessToken, basin, batchSize, lingerDuration } = getS2Config();
-	const s2 = new S2({ accessToken });
+	const { accessToken, basin, batchSize, lingerDuration, endpoints } = getS2Config();
+	const s2 = new S2({ accessToken, endpoints });
 	const [persistentStream, clientStream] = makeStream().tee();
 	const sessionFencingToken = "session-" + generateFencingToken();
 
@@ -228,8 +240,8 @@ export async function createResumableStream(
 async function resumeStream(
 	streamId: string,
 ): Promise<ReadableStream<string> | null> {
-	const { accessToken, basin } = getS2Config();
-	const s2 = new S2({ accessToken });
+	const { accessToken, basin, endpoints } = getS2Config();
+	const s2 = new S2({ accessToken, endpoints });
 	debugLog("Resuming stream:", streamId);
 	return new ReadableStream({
 		async start(controller) {
@@ -252,8 +264,8 @@ async function resumeStream(
 // appends a fence command with the previous fencing token as null
 // (overriding the previous fencing token)
 async function stopStream(streamId: string): Promise<void> {
-	const { accessToken, basin } = getS2Config();
-	const s2 = new S2({ accessToken });
+	const { accessToken, basin, endpoints } = getS2Config();
+	const s2 = new S2({ accessToken, endpoints });
 	debugLog("Stopping stream:", streamId);
 
 	try {
