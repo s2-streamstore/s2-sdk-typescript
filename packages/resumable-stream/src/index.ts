@@ -127,7 +127,8 @@ export async function createResumableStream(
 	makeStream: () => ReadableStream<string>,
 	streamId: string,
 ): Promise<ReadableStream<string> | null> {
-	const { accessToken, basin, batchSize, lingerDuration, endpoints } = getS2Config();
+	const { accessToken, basin, batchSize, lingerDuration, endpoints } =
+		getS2Config();
 	const s2 = new S2({ accessToken, endpoints });
 	const [persistentStream, clientStream] = makeStream().tee();
 	const sessionFencingToken = "session-" + generateFencingToken();

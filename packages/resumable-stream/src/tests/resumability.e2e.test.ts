@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, expect, test } from "vitest";
 import { S2, S2Environment } from "@s2-dev/streamstore";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import { createResumableStreamContext } from "../index.js";
 
 const makeBasinName = (): string => {
