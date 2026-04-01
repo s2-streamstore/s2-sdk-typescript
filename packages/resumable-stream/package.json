@@ -1,0 +1,38 @@
+{
+  "name": "@s2-dev/resumable-stream",
+  "version": "1.10.0",
+  "description": "Resumable streams based on s2.dev, inspired by Vercel's implementation.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://s2.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/s2-streamstore/s2-sdk-typescript"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit",
+    "format": "biome format --write",
+    "lint": "biome check",
+    "test": "vitest --run"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "@s2-dev/streamstore": ">=0.21.0"
+  }
+}

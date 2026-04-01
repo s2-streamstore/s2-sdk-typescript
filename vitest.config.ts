@@ -12,6 +12,10 @@ export default defineConfig(({ mode }) => ({
         __dirname,
         'packages/streamstore/src/index.ts',
       ),
+      '@s2-dev/resumable-stream': resolve(
+        __dirname,
+        'packages/resumable-stream/src/index.ts',
+      ),
     },
   },
   test: {
