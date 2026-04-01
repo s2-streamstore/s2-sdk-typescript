@@ -82,7 +82,10 @@ beforeAll(async () => {
 	if (!env.accessToken) return;
 	s2 = new S2(env as { accessToken: string });
 	basinName = makeBasinName();
-	await s2.basins.create({ basin: basinName });
+	await s2.basins.create({
+		basin: basinName,
+		config: { createStreamOnAppend: true, createStreamOnRead: true },
+	});
 	await waitForBasinReady(s2, basinName);
 	process.env.S2_BASIN = basinName;
 	process.env.S2_LINGER_DURATION = "100";
