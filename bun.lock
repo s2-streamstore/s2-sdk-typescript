@@ -18,15 +18,15 @@
         "vitest": "^4.0.10",
       },
     },
-    "packages/aisdk-transport": {
-      "name": "@s2-dev/aisdk-transport",
+    "packages/aisdk-durability": {
+      "name": "@s2-dev/aisdk-durability",
       "version": "0.1.0",
       "devDependencies": {
         "ai": "^6.0.142",
       },
       "peerDependencies": {
         "@s2-dev/streamstore": ">=0.21.0",
-        "ai": "^6.0.142",
+        "ai": ">=4.0.0",
       },
     },
     "packages/patterns": {
@@ -48,7 +48,7 @@
     },
     "packages/resumable-stream": {
       "name": "@s2-dev/resumable-stream",
-      "version": "1.10.0",
+      "version": "1.10.1",
       "peerDependencies": {
         "@s2-dev/streamstore": ">=0.21.0",
       },
@@ -283,7 +283,7 @@
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.52.5", "", { "os": "win32", "cpu": "x64" }, "sha512-TAcgQh2sSkykPRWLrdyy2AiceMckNf5loITqXxFI5VuQjS5tSuw3WlwdN8qv8vzjLAUTvYaH/mVjSFpbkFbpTg=="],
 
-    "@s2-dev/aisdk-transport": ["@s2-dev/aisdk-transport@workspace:packages/aisdk-transport"],
+    "@s2-dev/aisdk-durability": ["@s2-dev/aisdk-durability@workspace:packages/aisdk-durability"],
 
     "@s2-dev/resumable-stream": ["@s2-dev/resumable-stream@workspace:packages/resumable-stream"],
 
