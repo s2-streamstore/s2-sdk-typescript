@@ -1,7 +1,7 @@
 import { S2 } from "@s2-dev/streamstore";
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import type { DurableChatTransportConfig, DurableReadConfig } from "./types.js";
 import { isFenceRecord, isTerminalFence } from "./fence.js";
+import type { DurableChatTransportConfig, DurableReadConfig } from "./types.js";
 
 async function startReadSession(
 	s2: S2,
@@ -49,7 +49,8 @@ async function startReadSession(
 
 function flattenHeaders(h?: HeadersInit): Record<string, string> {
 	if (!h) return {};
-	if (h instanceof Headers) return Object.fromEntries(h as unknown as Iterable<[string, string]>);
+	if (h instanceof Headers)
+		return Object.fromEntries(h as unknown as Iterable<[string, string]>);
 	if (Array.isArray(h)) return Object.fromEntries(h);
 	return { ...h };
 }
@@ -57,9 +58,7 @@ function flattenHeaders(h?: HeadersInit): Record<string, string> {
 async function extractStreamName(res: Response): Promise<string> {
 	const body = (await res.json()) as { stream?: string };
 	if (typeof body.stream === "string" && body.stream) return body.stream;
-	throw new Error(
-		"[durable-aisdk] Server response missing { stream } field.",
-	);
+	throw new Error("[durable-aisdk] Server response missing { stream } field.");
 }
 
 /**
@@ -81,9 +80,7 @@ async function extractStreamName(res: Response): Promise<string> {
  * }
  * ```
  */
-export function createS2Transport<
-	UIMessageT extends UIMessage = UIMessage,
->({
+export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 	api,
 	reconnectApi,
 	s2,
@@ -125,9 +122,7 @@ export function createS2Transport<
 
 			if (!res.ok) {
 				const text = await res.text();
-				throw new Error(
-					text || `HTTP ${res.status} ${res.statusText}`,
-				);
+				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
 			}
 
 			const name = await extractStreamName(res);
@@ -136,7 +131,8 @@ export function createS2Transport<
 
 		async reconnectToStream({ chatId, headers: reqHeaders }) {
 			const endpoint =
-				reconnectApi ?? `${api.replace(/\/$/, "")}/${encodeURIComponent(chatId)}/stream`;
+				reconnectApi ??
+				`${api.replace(/\/$/, "")}/${encodeURIComponent(chatId)}/stream`;
 
 			const res = await fetchFn(endpoint, {
 				method: "GET",
@@ -150,9 +146,7 @@ export function createS2Transport<
 
 			if (!res.ok) {
 				const text = await res.text();
-				throw new Error(
-					text || `HTTP ${res.status} ${res.statusText}`,
-				);
+				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
 			}
 
 			const name = await extractStreamName(res);

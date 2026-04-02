@@ -4,16 +4,16 @@ import {
 	BatchTransform,
 	FencingTokenMismatchError,
 	Producer,
+	randomToken,
 	S2,
 	SeqNumMismatchError,
-	randomToken,
 } from "@s2-dev/streamstore";
+import { isFenceRecord, isTerminalFence } from "./fence.js";
 import type {
 	DurableChat,
 	DurableChatConfig,
 	PersistOptions,
 } from "./types.js";
-import { isFenceRecord, isTerminalFence } from "./fence.js";
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
@@ -129,9 +129,7 @@ async function persistChunks(
  * }
  * ```
  */
-export function createDurableChat(
-	config: DurableChatConfig,
-): DurableChat {
+export function createDurableChat(config: DurableChatConfig): DurableChat {
 	const s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
@@ -199,9 +197,7 @@ export function createDurableChat(
 								continue;
 							}
 							if (record.body) {
-								controller.enqueue(
-									encoder.encode(`${record.body}\n`),
-								);
+								controller.enqueue(encoder.encode(`${record.body}\n`));
 							}
 						}
 						controller.close();

@@ -15,8 +15,7 @@ const makeBasinName = (): string => {
 const makeStreamName = (prefix: string): string =>
 	`${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const sleep = (ms: number) =>
-	new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const waitForBasinReady = async (s2: S2, basin: string): Promise<void> => {
 	const deadline = Date.now() + 60_000;
@@ -204,9 +203,7 @@ describeIf("durable-aisdk", () => {
 
 				const res = await chat.replay(streamName);
 				expect(res.status).toBe(200);
-				expect(res.headers.get("Content-Type")).toBe(
-					"application/x-ndjson",
-				);
+				expect(res.headers.get("Content-Type")).toBe("application/x-ndjson");
 
 				const records = await readNdjsonResponse(res);
 				expect(records).toEqual(chunks);
@@ -227,9 +224,7 @@ describeIf("durable-aisdk", () => {
 
 				await chat.persist(streamName, arrayToAsyncIterable(chunks));
 
-				const records = await readNdjsonResponse(
-					await chat.replay(streamName),
-				);
+				const records = await readNdjsonResponse(await chat.replay(streamName));
 
 				// Should only contain data records, no fence commands
 				for (const rec of records) {
@@ -255,18 +250,16 @@ describeIf("durable-aisdk", () => {
 				];
 
 				let bgPromise: Promise<unknown> | undefined;
-				await chat.persist(
-					streamName,
-					arrayToAsyncIterable(chunks),
-					{ waitUntil: (p) => { bgPromise = p; } },
-				);
+				await chat.persist(streamName, arrayToAsyncIterable(chunks), {
+					waitUntil: (p) => {
+						bgPromise = p;
+					},
+				});
 
 				// Wait for background write to finish before replaying
 				await bgPromise;
 
-				const records = await readNdjsonResponse(
-					await chat.replay(streamName),
-				);
+				const records = await readNdjsonResponse(await chat.replay(streamName));
 				expect(records).toEqual(chunks);
 			},
 			TEST_TIMEOUT_MS,
@@ -274,7 +267,9 @@ describeIf("durable-aisdk", () => {
 	});
 });
 
-function s2EndpointsFromEnv(): { endpoints?: { account?: string; basin?: string } } {
+function s2EndpointsFromEnv(): {
+	endpoints?: { account?: string; basin?: string };
+} {
 	const account = process.env.S2_ACCOUNT_ENDPOINT || undefined;
 	const basin = process.env.S2_BASIN_ENDPOINT || undefined;
 	if (account || basin) return { endpoints: { account, basin } };

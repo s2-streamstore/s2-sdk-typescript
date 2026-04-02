@@ -1,5 +1,5 @@
-export { createDurableChat } from "./server.js";
 export { createS2Transport } from "./client.js";
+export { createDurableChat } from "./server.js";
 
 export type {
 	DurableChat,
