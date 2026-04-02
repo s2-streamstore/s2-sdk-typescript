@@ -4,7 +4,6 @@ export { createDurableChat } from "./server.js";
 export type {
 	DurableChat,
 	DurableChatConfig,
-	DurableChatTransportConfig,
-	DurableReadConfig,
 	PersistOptions,
+	S2TransportConfig,
 } from "./types.js";

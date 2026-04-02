@@ -1,51 +1,5 @@
-import { S2 } from "@s2-dev/streamstore";
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import { isFenceRecord, isTerminalFence } from "./fence.js";
-import type { DurableChatTransportConfig, DurableReadConfig } from "./types.js";
-
-async function startReadSession(
-	s2: S2,
-	basin: string,
-	streamName: string,
-): Promise<ReadableStream<UIMessageChunk>> {
-	const handle = s2.basin(basin).stream(streamName);
-	const session = await handle.readSession({
-		start: { from: { seqNum: 0 } },
-	});
-
-	const iter = session[Symbol.asyncIterator]();
-
-	return new ReadableStream<UIMessageChunk>({
-		async pull(ctrl) {
-			const { done, value: record } = await iter.next();
-			if (done) {
-				ctrl.close();
-				await handle.close();
-				return;
-			}
-
-			if (isFenceRecord(record)) {
-				if (isTerminalFence(record)) {
-					ctrl.close();
-					await handle.close();
-					return;
-				}
-				return;
-			}
-
-			if (record.body) {
-				try {
-					ctrl.enqueue(JSON.parse(record.body) as UIMessageChunk);
-				} catch {
-					// skip malformed
-				}
-			}
-		},
-		async cancel() {
-			await handle.close();
-		},
-	});
-}
+import type { S2TransportConfig } from "./types.js";
 
 function flattenHeaders(h?: HeadersInit): Record<string, string> {
 	if (!h) return {};
@@ -55,21 +9,66 @@ function flattenHeaders(h?: HeadersInit): Record<string, string> {
 	return { ...h };
 }
 
-async function extractStreamName(res: Response): Promise<string> {
-	const body = (await res.json()) as { stream?: string };
-	if (typeof body.stream === "string" && body.stream) return body.stream;
-	throw new Error("[durable-aisdk] Server response missing { stream } field.");
+async function readNdjsonStream(
+	res: Response,
+	signal?: AbortSignal,
+): Promise<ReadableStream<UIMessageChunk>> {
+	if (!res.body) throw new Error("[durable-aisdk] Response has no body.");
+
+	const reader = res.body.getReader();
+	const decoder = new TextDecoder();
+	let buf = "";
+
+	signal?.addEventListener("abort", () => reader.cancel(), { once: true });
+
+	return new ReadableStream<UIMessageChunk>({
+		async pull(ctrl) {
+			while (true) {
+				const nl = buf.indexOf("\n");
+				if (nl !== -1) {
+					const line = buf.slice(0, nl).trim();
+					buf = buf.slice(nl + 1);
+					if (line.length > 0) {
+						try {
+							ctrl.enqueue(JSON.parse(line) as UIMessageChunk);
+							return;
+						} catch {}
+					}
+					continue;
+				}
+
+				const { done, value } = await reader.read();
+				if (done) {
+					if (buf.trim().length > 0) {
+						try {
+							ctrl.enqueue(JSON.parse(buf.trim()) as UIMessageChunk);
+						} catch {}
+					}
+					ctrl.close();
+					return;
+				}
+				buf += decoder.decode(value, { stream: true });
+			}
+		},
+		cancel() {
+			reader.cancel();
+		},
+	});
 }
 
 /**
- * Create an AI SDK `ChatTransport` backed by S2.
+ * Create an AI SDK `ChatTransport` that persists generations via your server.
+ *
+ * The server writes AI chunks to S2 (via {@link createDurableChat}) and
+ * exposes a replay endpoint. This transport reads from your server — no
+ * direct S2 connection from the browser.
  *
  * @example
  * ```tsx
  * import { useChat } from "ai/react";
  * import { createS2Transport } from "@s2-dev/durable-aisdk";
  *
- * const transport = createS2Transport();
+ * const transport = createS2Transport({ api: "/api/chat" });
  *
  * export default function Chat() {
  *   const { messages, input, handleSubmit, handleInputChange } = useChat({
@@ -83,15 +82,10 @@ async function extractStreamName(res: Response): Promise<string> {
 export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 	api,
 	reconnectApi,
-	s2,
 	headers,
 	fetchClient,
-}: DurableChatTransportConfig): ChatTransport<UIMessageT> {
+}: S2TransportConfig): ChatTransport<UIMessageT> {
 	const fetchFn = fetchClient ?? fetch;
-	const s2Client = new S2({
-		accessToken: s2.accessToken,
-		endpoints: s2.baseUrl ? { basin: s2.baseUrl } : undefined,
-	});
 
 	return {
 		async sendMessages({
@@ -125,8 +119,33 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
 			}
 
-			const name = await extractStreamName(res);
-			return startReadSession(s2Client, s2.basin, name);
+			const { stream } = (await res.json()) as { stream: string };
+			if (!stream) {
+				throw new Error(
+					"[durable-aisdk] Server response missing { stream } field.",
+				);
+			}
+
+			const endpoint =
+				reconnectApi ??
+				`${api.replace(/\/$/, "")}/${encodeURIComponent(chatId)}/stream`;
+			const replayRes = await fetchFn(endpoint, {
+				method: "GET",
+				headers: {
+					...flattenHeaders(headers),
+					...flattenHeaders(reqHeaders),
+				},
+				signal: abortSignal,
+			});
+
+			if (!replayRes.ok) {
+				const text = await replayRes.text();
+				throw new Error(
+					text || `HTTP ${replayRes.status} ${replayRes.statusText}`,
+				);
+			}
+
+			return readNdjsonStream(replayRes, abortSignal);
 		},
 
 		async reconnectToStream({ chatId, headers: reqHeaders }) {
@@ -149,8 +168,7 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
 			}
 
-			const name = await extractStreamName(res);
-			return startReadSession(s2Client, s2.basin, name);
+			return readNdjsonStream(res);
 		},
 	};
 }

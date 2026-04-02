@@ -53,23 +53,8 @@ export interface DurableChat {
 	replay(streamName: string): Promise<Response>;
 }
 
-/** Client-side read credentials for direct S2 SSE reads. */
-export interface DurableReadConfig {
-	/** S2 access token (ideally a scoped read-only token). */
-	accessToken: string;
-	/** Basin name. */
-	basin: string;
-	/**
-	 * Full base URL of the basin endpoint
-	 * (e.g. `"https://mybasin-world.b.s2.dev"`).
-	 *
-	 * Defaults to `"https://{basin}.b.s2.dev"`.
-	 */
-	baseUrl?: string;
-}
-
-/** Config for {@link createDurableChatTransport}. */
-export interface DurableChatTransportConfig {
+/** Config for {@link createS2Transport}. */
+export interface S2TransportConfig {
 	/** API endpoint for submitting chat messages (POST). */
 	api: string;
 	/**
@@ -77,8 +62,6 @@ export interface DurableChatTransportConfig {
 	 * Falls back to `{api}/{chatId}/stream` when omitted.
 	 */
 	reconnectApi?: string;
-	/** Credentials for direct S2 SSE reads. */
-	s2: DurableReadConfig;
 	/** Default headers included in every request to your API. */
 	headers?: HeadersInit;
 	/** Custom fetch implementation. */

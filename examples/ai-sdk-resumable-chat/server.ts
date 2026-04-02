@@ -2,7 +2,6 @@
 
 import { dirname, join } from "node:path";
 import { openai } from "@ai-sdk/openai";
-import { S2Endpoints } from "@s2-dev/streamstore";
 import { type ModelMessage, streamText } from "ai";
 import { createDurableChat } from "@s2-dev/durable-aisdk";
 
@@ -20,24 +19,13 @@ const endpointsInit = {
 	basin: process.env.S2_BASIN_ENDPOINT || undefined,
 };
 
-const endpoints = new S2Endpoints(
-	endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
-);
-
 const chat = createDurableChat({
 	accessToken,
 	basin,
-	endpoints: endpointsInit.account || endpointsInit.basin
-		? endpointsInit
-		: undefined,
+	endpoints:
+		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
 });
 
-// Resolve the base URL the browser will use for direct S2 SSE reads.
-// - s2-lite:  http://localhost:4000/v1  (no {basin} in host)
-// - S2 Cloud: https://my-basin.b.s2.dev/v1
-const s2BaseUrl = endpoints.basinBaseUrl(basin);
-
-// Track active generation per chat so the reconnect endpoint knows the stream.
 const active = new Map<string, string>();
 
 async function handleChat(req: Request): Promise<Response> {
@@ -62,10 +50,10 @@ async function handleChat(req: Request): Promise<Response> {
 	return chat.persist(streamName, result.fullStream, { waitUntil });
 }
 
-function handleReconnect(chatId: string): Response {
+async function handleReplay(chatId: string): Promise<Response> {
 	const streamName = active.get(chatId);
 	if (!streamName) return new Response(null, { status: 204 });
-	return Response.json({ stream: streamName });
+	return chat.replay(streamName);
 }
 
 const server = Bun.serve({
@@ -78,7 +66,7 @@ const server = Bun.serve({
 				headers: {
 					"Access-Control-Allow-Origin": "*",
 					"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type, Authorization",
+					"Access-Control-Allow-Headers": "Content-Type",
 				},
 			});
 		}
@@ -89,24 +77,17 @@ const server = Bun.serve({
 			return res;
 		}
 
-		const reconnectMatch = url.pathname.match(
+		const replayMatch = url.pathname.match(
 			/^\/api\/chat\/([^/]+)\/stream$/,
 		);
-		if (reconnectMatch && req.method === "GET") {
-			const res = handleReconnect(reconnectMatch[1]!);
+		if (replayMatch && req.method === "GET") {
+			const res = await handleReplay(replayMatch[1]!);
 			res.headers.set("Access-Control-Allow-Origin", "*");
 			return res;
 		}
 
 		if (url.pathname === "/" || url.pathname === "/index.html") {
-			let html = await Bun.file(join(PUBLIC_DIR, "index.html")).text();
-			html = html
-				.replace("%%S2_TOKEN%%", accessToken)
-				.replace("%%S2_BASIN%%", basin)
-				.replace("%%S2_BASE_URL%%", s2BaseUrl);
-			return new Response(html, {
-				headers: { "Content-Type": "text/html" },
-			});
+			return new Response(Bun.file(join(PUBLIC_DIR, "index.html")));
 		}
 		const filePath = join(PUBLIC_DIR, url.pathname);
 		const file = Bun.file(filePath);
@@ -118,7 +99,5 @@ const server = Bun.serve({
 
 console.log(`Resumable chat running at http://localhost:${server.port}`);
 console.log(`Basin: ${basin}`);
-console.log(`S2 read endpoint: ${s2BaseUrl}`);
 console.log();
-console.log("The browser reads AI chunks directly from S2 over SSE.");
 console.log("Try refreshing mid-generation to see resumability in action.");

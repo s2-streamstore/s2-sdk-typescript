@@ -13,7 +13,6 @@
     .header .status { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 99px; }
     .status.idle { background: #1a1a2e; color: #818cf8; }
     .status.streaming { background: #14281e; color: #34d399; }
-    .status.persisting { background: #2a1f0e; color: #fbbf24; }
     .chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
     .msg { max-width: 680px; width: 100%; }
     .msg.user { align-self: flex-end; }
@@ -51,31 +50,20 @@
   </div>
 
   <script>
-    // ── Config ───────────────────────────────────────────────────────────────
-    // Injected by the server at serve-time.
-    const API        = '/api/chat';
-    const S2_TOKEN   = '%%S2_TOKEN%%';
-    const S2_BASIN   = '%%S2_BASIN%%';
-    const S2_BASE    = '%%S2_BASE_URL%%'; // e.g. http://localhost:4000/v1 (lite) or https://mybas.b.s2.dev/v1 (cloud)
-
-    // ── State ────────────────────────────────────────────────────────────────
-    const chatEl  = document.getElementById('chat');
+    const API = '/api/chat';
+    const chatEl = document.getElementById('chat');
     const inputEl = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const statusEl = document.getElementById('status');
 
-    // We generate a chat ID per tab and persist it in sessionStorage so
-    // a refresh can attempt to reconnect.
     let chatId = sessionStorage.getItem('chatId');
     if (!chatId) {
       chatId = crypto.randomUUID();
       sessionStorage.setItem('chatId', chatId);
     }
 
-    const messages = [];   // { role, content }
+    const messages = [];
     let streaming = false;
-
-    // ── UI helpers ───────────────────────────────────────────────────────────
 
     function setStatus(s) {
       statusEl.textContent = s;
@@ -106,88 +94,33 @@
       sendBtn.disabled = !on;
     }
 
-    // ── S2 SSE reader ────────────────────────────────────────────────────────
-    // This is what createS2ChatTransport does under the hood.
+    async function readNdjson(res, bubble) {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', fullText = '';
 
-    function s2ReadUrl(streamName) {
-      const base = S2_BASE.replace(/\/$/, '');
-      return `${base}/streams/${encodeURIComponent(streamName)}/records?seq_num=0`;
-    }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
 
-    /**
-     * Open an SSE connection to S2 and yield UIMessageChunk objects.
-     * Returns a ReadableStream so we can cancel on abort.
-     */
-    function readFromS2(streamName, signal) {
-      return new ReadableStream({
-        async start(ctrl) {
+        let nl;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
           try {
-            const res = await fetch(s2ReadUrl(streamName), {
-              headers: {
-                'Authorization': `Bearer ${S2_TOKEN}`,
-                'Accept': 'text/event-stream',
-                's2-basin': S2_BASIN,  // required for s2-lite, harmless for cloud
-              },
-              signal,
-            });
-            if (!res.ok) {
-              console.error('[s2-sse] HTTP', res.status, res.statusText, await res.text().catch(() => ''));
-              ctrl.close(); return;
+            const chunk = JSON.parse(line);
+            if (chunk.type === 'text-delta' && chunk.text) {
+              fullText += chunk.text;
+              bubble.textContent = fullText;
+              chatEl.scrollTop = chatEl.scrollHeight;
             }
-            console.log('[s2-sse] connected to', s2ReadUrl(streamName));
-
-            const reader = res.body.getReader();
-            const dec = new TextDecoder();
-            let buf = '', event = '', data = [];
-
-            function flush() {
-              const kind = event || 'message';
-              const text = data.join('\n');
-              event = ''; data = [];
-              if (!text || kind !== 'batch') return;
-              try {
-                const batch = JSON.parse(text);
-                for (const rec of (batch.records || [])) {
-                  // Skip fence commands
-                  if (rec.headers?.length === 1 && rec.headers[0][0] === '' && rec.headers[0][1] === 'fence') {
-                    if (rec.body?.startsWith('end-') || rec.body?.startsWith('error-')) {
-                      ctrl.close();
-                      reader.cancel();
-                      return;
-                    }
-                    continue;
-                  }
-                  if (rec.body) {
-                    try { ctrl.enqueue(JSON.parse(rec.body)); } catch {}
-                  }
-                }
-              } catch {}
-            }
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) { ctrl.close(); return; }
-              buf += dec.decode(value, { stream: true });
-
-              let idx;
-              while ((idx = buf.indexOf('\n')) !== -1) {
-                const line = buf.slice(0, idx).replace(/\r$/, '');
-                buf = buf.slice(idx + 1);
-                if (line === '') { flush(); continue; }
-                if (line.startsWith('event:')) event = line.slice(6).trim();
-                else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
-              }
-            }
-          } catch (e) {
-            if (e.name !== 'AbortError') ctrl.error(e);
-            else ctrl.close();
-          }
-        },
-        cancel() { /* signal handles abort */ }
-      });
+          } catch {}
+        }
+      }
+      return fullText;
     }
-
-    // ── Send ─────────────────────────────────────────────────────────────────
 
     async function send() {
       const text = inputEl.value.trim();
@@ -198,10 +131,8 @@
 
       messages.push({ role: 'user', content: text });
       addMessage('user', text);
+      setStatus('streaming');
 
-      setStatus('persisting');
-
-      // POST to our server → persists to S2, returns { stream }
       const res = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -209,76 +140,39 @@
       });
 
       if (!res.ok) {
-        console.error('[send] POST failed:', res.status, await res.text().catch(() => ''));
         setStatus('idle');
         streaming = false;
         setInputEnabled(true);
         return;
       }
 
-      const body = await res.json();
-      const streamName = body.stream;
-      console.log('[send] stream name:', streamName);
-
-      setStatus('streaming');
+      const { stream } = await res.json();
       const bubble = addMessage('assistant', '', { streaming: true });
 
-      // Read directly from S2 over SSE
-      const ac = new AbortController();
-      const s2stream = readFromS2(streamName, ac.signal);
-      const reader = s2stream.getReader();
-      let fullText = '';
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          console.log('[chunk]', value.type, value);
-          if (value.type === 'text-delta') {
-            fullText += value.text;
-            bubble.textContent = fullText;
-            chatEl.scrollTop = chatEl.scrollHeight;
-          }
-        }
-      } catch (e) { console.error('[send] stream error:', e); }
+      const replayRes = await fetch(`${API}/${encodeURIComponent(chatId)}/stream`);
+      if (replayRes.ok) {
+        const fullText = await readNdjson(replayRes, bubble);
+        messages.push({ role: 'assistant', content: fullText });
+      }
 
       bubble.classList.remove('streaming');
-      messages.push({ role: 'assistant', content: fullText });
       streaming = false;
       setInputEnabled(true);
       setStatus('idle');
       inputEl.focus();
     }
 
-    // ── Reconnect on page load ───────────────────────────────────────────────
-
     async function tryReconnect() {
       try {
-        const res = await fetch(`${API}/${chatId}/stream`);
-        if (res.status === 204) return;  // nothing to resume
-        if (!res.ok) return;
-
-        const { stream: streamName } = await res.json();
-        if (!streamName) return;
+        const res = await fetch(`${API}/${encodeURIComponent(chatId)}/stream`);
+        if (res.status === 204 || !res.ok) return;
 
         setStatus('streaming');
         streaming = true;
         setInputEnabled(false);
         const bubble = addMessage('assistant', '', { streaming: true });
 
-        const s2stream = readFromS2(streamName);
-        const reader = s2stream.getReader();
-        let fullText = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value.type === 'text-delta') {
-            fullText += value.text;
-            bubble.textContent = fullText;
-            chatEl.scrollTop = chatEl.scrollHeight;
-          }
-        }
+        const fullText = await readNdjson(res, bubble);
 
         bubble.classList.remove('streaming');
         if (fullText) messages.push({ role: 'assistant', content: fullText });
@@ -287,8 +181,6 @@
         setStatus('idle');
       } catch {}
     }
-
-    // ── Boot ─────────────────────────────────────────────────────────────────
 
     sendBtn.addEventListener('click', send);
     inputEl.addEventListener('keydown', e => {

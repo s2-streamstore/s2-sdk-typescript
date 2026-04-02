@@ -7,7 +7,7 @@
   </p>
 </div>
 
-This package provides a durability layer for AI SDK based chats, for example, when a user refreshes the page mid response, the response is lost. This package fixes that by routing the stream through [S2](https://s2.dev) as the server writes chunks to an S2 stream, and the client reads them back directly over SSE. If the connection drops, the client reconnects to the same S2 stream and picks up where it left off.
+This package provides a durability layer for AI SDK based chats. When a user refreshes the page mid-response, the response is lost. This package fixes that by routing the stream through [S2](https://s2.dev) — the server writes chunks to an S2 stream and exposes a replay endpoint. If the connection drops, the client reconnects to the replay endpoint and picks up where it left off.
 
 ## Setup
 
@@ -65,14 +65,14 @@ export async function POST(req: Request) {
 }
 ```
 
-Add a reconnect endpoint so clients can resume after a refresh:
+Add a replay endpoint so clients can read the persisted stream and resume after a refresh:
 
 ```ts
 // app/api/chat/[id]/stream/route.ts
+import { chat } from "@/lib/s2";
+
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const streamName = getActiveStream(params.id); // your lookup
-  if (!streamName) return new Response(null, { status: 204 });
-  return Response.json({ stream: streamName });
+  return chat.replay(params.id);
 }
 ```
 
@@ -85,13 +85,7 @@ Drop in `createS2Transport` as the transport for `useChat`:
 import { useChat } from "ai/react";
 import { createS2Transport } from "@s2-dev/durable-aisdk";
 
-const transport = createS2Transport({
-  api: "/api/chat",
-  s2: {
-    accessToken: process.env.NEXT_PUBLIC_S2_READ_TOKEN!,
-    basin: "my-basin",
-  },
-});
+const transport = createS2Transport({ api: "/api/chat" });
 
 export default function Chat() {
   const { messages, input, handleSubmit, handleInputChange } = useChat({
@@ -110,6 +104,8 @@ export default function Chat() {
 }
 ```
 
+No S2 credentials or SDK needed on the client — it only talks to your server.
+
 ## How it works
 
 ### Writing (server)
@@ -119,13 +115,39 @@ export default function Chat() {
 3. When the source completes, a terminal fence (`end-*`) is written. On error, an `error-*` fence is written instead.
 4. The response (`{ stream }`) is returned immediately when `waitUntil` is provided, or after the write completes otherwise.
 
-### Reading (client)
+### Reading (server replay)
 
-1. `createS2Transport` receives the stream name from your server's JSON response.
-2. It opens a read session directly to S2.
-3. Fence records are skipped. Data record bodies are parsed as `UIMessageChunk` and fed into `useChat`.
-4. When a terminal fence is reached, the stream closes.
+1. `replay()` opens a read session from S2 starting at sequence number 0.
+2. Fence records are skipped. Data record bodies are streamed back as NDJSON.
+3. When a terminal fence is reached, the response ends.
 
-### Reconnecting
+### Reconnecting (client)
 
-On page refresh, `useChat` calls `reconnectToStream` which hits your reconnect endpoint. If a generation is still in flight, the endpoint returns `{ stream }` and the client re-opens the S2 read session from the beginning getting all chunks including the ones it missed.
+On page refresh, `useChat` calls `reconnectToStream` which hits your replay endpoint. If a generation is still in flight, the server streams the NDJSON response and the client parses it as `UIMessageChunk`s — getting all chunks including the ones it missed.
+
+## API
+
+### `createDurableChat(config)`
+
+Creates a server-side persistence context.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `accessToken` | `string` | required | S2 access token |
+| `basin` | `string` | required | Basin name |
+| `endpoints` | `S2Endpoints \| S2EndpointsInit` | S2 Cloud | Endpoint overrides (for s2-lite) |
+| `batchSize` | `number` | `10` | Records per batch |
+| `lingerDuration` | `number` | `50` | Max ms before flushing a batch |
+
+Returns `{ persist, replay }`.
+
+### `createS2Transport(config)`
+
+Creates a client-side `ChatTransport` for `useChat`.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `api` | `string` | required | Your chat API endpoint (POST) |
+| `reconnectApi` | `string` | `{api}/{chatId}/stream` | Replay endpoint (GET) |
+| `headers` | `HeadersInit` | — | Default headers for API requests |
+| `fetchClient` | `typeof fetch` | `fetch` | Custom fetch implementation |
