@@ -1,45 +1,5 @@
 #!/usr/bin/env bun
 
-/**
- * Resumable AI chat — S2 + AI SDK transport example.
- *
- * A minimal chat server that persists every generation to S2. The browser
- * reads chunks **directly from S2 over SSE** — if you refresh mid-stream
- * the UI picks up right where it left off.
- *
- * Works with both S2 Cloud and s2-lite (local).
- *
- *   ┌──────────┐   POST /api/chat    ┌──────────┐
- *   │ Browser  │ ──────────────────►  │  Server  │
- *   │          │  ◄─ { stream: id }   │   (Bun)  │
- *   └────┬─────┘                      └────┬─────┘
- *        │                                 │
- *        │  SSE: GET .../records?seq_num=0  │  appendSession
- *        │◄──────────────────────── S2  ◄──┘
- *        │      (direct, no proxy)
- *
- * ── S2 Cloud ────────────────────────────────────────────────────
- *   export S2_ACCESS_TOKEN="..."
- *   export S2_BASIN="my-basin"          # createStreamOnAppend enabled
- *   export OPENAI_API_KEY="..."
- *   bun run examples/ai-sdk-resumable-chat/server.ts
- *
- * ── s2-lite (local) ─────────────────────────────────────────────
- *   # terminal 1 — start s2-lite
- *   cargo run -p s2-cli -- lite --port 4000
- *
- *   # terminal 2 — create a basin, then run this example
- *   export S2_ACCOUNT_ENDPOINT="http://localhost:4000"
- *   export S2_BASIN_ENDPOINT="http://localhost:4000"
- *   export S2_ACCESS_TOKEN="ignored"
- *   s2 create-basin my-basin --create-stream-on-append
- *   export S2_BASIN="my-basin"
- *   export OPENAI_API_KEY="..."
- *   bun run examples/ai-sdk-resumable-chat/server.ts
- *
- * Then open http://localhost:3457
- */
-
 import { dirname, join } from "node:path";
 import { openai } from "@ai-sdk/openai";
 import { S2Endpoints } from "@s2-dev/streamstore";
