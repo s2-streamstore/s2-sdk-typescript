@@ -3,19 +3,12 @@ import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 import type { DurableChatTransportConfig, DurableReadConfig } from "./types.js";
 import { isFenceRecord, isTerminalFence } from "./fence.js";
 
-// Open an S2 read session and return a ReadableStream of UIMessageChunks.
 async function startReadSession(
+	s2: S2,
+	basin: string,
 	streamName: string,
-	cfg: DurableReadConfig,
 ): Promise<ReadableStream<UIMessageChunk>> {
-	const s2 = new S2({
-		accessToken: cfg.accessToken,
-		endpoints: cfg.baseUrl
-			? { basin: cfg.baseUrl }
-			: undefined,
-	});
-
-	const handle = s2.basin(cfg.basin).stream(streamName);
+	const handle = s2.basin(basin).stream(streamName);
 	const session = await handle.readSession({
 		start: { from: { seqNum: 0 } },
 	});
@@ -98,6 +91,10 @@ export function createS2Transport<
 	fetchClient,
 }: DurableChatTransportConfig): ChatTransport<UIMessageT> {
 	const fetchFn = fetchClient ?? fetch;
+	const s2Client = new S2({
+		accessToken: s2.accessToken,
+		endpoints: s2.baseUrl ? { basin: s2.baseUrl } : undefined,
+	});
 
 	return {
 		async sendMessages({
@@ -134,7 +131,7 @@ export function createS2Transport<
 			}
 
 			const name = await extractStreamName(res);
-			return startReadSession(name, s2);
+			return startReadSession(s2Client, s2.basin, name);
 		},
 
 		async reconnectToStream({ chatId, headers: reqHeaders }) {
@@ -159,7 +156,7 @@ export function createS2Transport<
 			}
 
 			const name = await extractStreamName(res);
-			return startReadSession(name, s2);
+			return startReadSession(s2Client, s2.basin, name);
 		},
 	};
 }
