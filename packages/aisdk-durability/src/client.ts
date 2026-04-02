@@ -1,17 +1,12 @@
 import { S2 } from "@s2-dev/streamstore";
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import type { S2ChatTransportConfig, S2ReadConfig } from "./types.js";
+import type { DurableChatTransportConfig, DurableReadConfig } from "./types.js";
 import { isFenceRecord, isTerminalFence } from "./fence.js";
 
-/**
- * Open an S2 read session and return a ReadableStream of UIMessageChunks.
- *
- * Uses the S2 SDK directly — SSE parsing, retries, and ping timeouts are
- * handled by `@s2-dev/streamstore` under the hood.
- */
-async function openS2Stream(
+// Open an S2 read session and return a ReadableStream of UIMessageChunks.
+async function startReadSession(
 	streamName: string,
-	cfg: S2ReadConfig,
+	cfg: DurableReadConfig,
 ): Promise<ReadableStream<UIMessageChunk>> {
 	const s2 = new S2({
 		accessToken: cfg.accessToken,
@@ -61,7 +56,7 @@ async function openS2Stream(
 
 function flattenHeaders(h?: HeadersInit): Record<string, string> {
 	if (!h) return {};
-	if (h instanceof Headers) return Object.fromEntries(h.entries());
+	if (h instanceof Headers) return Object.fromEntries(h as unknown as Iterable<[string, string]>);
 	if (Array.isArray(h)) return Object.fromEntries(h);
 	return { ...h };
 }
@@ -70,29 +65,19 @@ async function extractStreamName(res: Response): Promise<string> {
 	const body = (await res.json()) as { stream?: string };
 	if (typeof body.stream === "string" && body.stream) return body.stream;
 	throw new Error(
-		"[s2/aisdk-transport] Server response missing { stream } field.",
+		"[aisdk-durability] Server response missing { stream } field.",
 	);
 }
 
 /**
- * Create a Vercel AI SDK `ChatTransport` backed by S2.
- *
- * Your server writes AI chunks to S2 (via {@link createS2ChatPersistence})
- * and responds with `{ stream: "name" }`. This transport reads them back
- * using the S2 SDK's built-in SSE reader — no custom parsing needed.
+ * Create an AI SDK `ChatTransport` backed by S2.
  *
  * @example
  * ```tsx
  * import { useChat } from "ai/react";
- * import { createS2ChatTransport } from "@s2-dev/aisdk-transport";
+ * import { createS2Transport } from "@s2-dev/aisdk-durability";
  *
- * const transport = createS2ChatTransport({
- *   api: "/api/chat",
- *   s2: {
- *     accessToken: process.env.NEXT_PUBLIC_S2_READ_TOKEN!,
- *     basin: "my-basin",
- *   },
- * });
+ * const transport = createS2Transport();
  *
  * export default function Chat() {
  *   const { messages, input, handleSubmit, handleInputChange } = useChat({
@@ -103,7 +88,7 @@ async function extractStreamName(res: Response): Promise<string> {
  * }
  * ```
  */
-export function createS2ChatTransport<
+export function createS2Transport<
 	UIMessageT extends UIMessage = UIMessage,
 >({
 	api,
@@ -111,7 +96,7 @@ export function createS2ChatTransport<
 	s2,
 	headers,
 	fetchClient,
-}: S2ChatTransportConfig): ChatTransport<UIMessageT> {
+}: DurableChatTransportConfig): ChatTransport<UIMessageT> {
 	const fetchFn = fetchClient ?? fetch;
 
 	return {
@@ -149,7 +134,7 @@ export function createS2ChatTransport<
 			}
 
 			const name = await extractStreamName(res);
-			return openS2Stream(name, s2);
+			return startReadSession(name, s2);
 		},
 
 		async reconnectToStream({ chatId, headers: reqHeaders }) {
@@ -174,7 +159,7 @@ export function createS2ChatTransport<
 			}
 
 			const name = await extractStreamName(res);
-			return openS2Stream(name, s2);
+			return startReadSession(name, s2);
 		},
 	};
 }

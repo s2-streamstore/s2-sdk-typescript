@@ -9,8 +9,8 @@ import {
 	randomToken,
 } from "@s2-dev/streamstore";
 import type {
-	S2ChatPersistence,
-	S2ChatPersistenceConfig,
+	DurableChat,
+	DurableChatConfig,
 	PersistOptions,
 } from "./types.js";
 import { isFenceRecord, isTerminalFence } from "./fence.js";
@@ -108,9 +108,9 @@ async function persistChunks(
  * @example
  * ```ts
  * // lib/s2.ts — create once, import everywhere
- * import { createS2ChatPersistence } from "@s2-dev/aisdk-transport";
+ * import { createDurableChat } from "@s2-dev/aisdk-durability";
  *
- * export const chat = createS2ChatPersistence({
+ * export const chat = createDurableChat({
  *   accessToken: process.env.S2_ACCESS_TOKEN!,
  *   basin: process.env.S2_BASIN!,
  * });
@@ -120,18 +120,18 @@ async function persistChunks(
  * // app/api/chat/route.ts
  * import { after } from "next/server";
  * import { streamText } from "ai";
- * import { chat } from "@/lib/s2";
+ * import { durableChat } from "@/lib/s2";
  *
  * export async function POST(req: Request) {
  *   const { id, messages } = await req.json();
  *   const result = streamText({ model, messages });
- *   return chat.persist(id, result.fullStream, { waitUntil: after });
+ *   return durableChat.persist(id, result.fullStream, { waitUntil: after });
  * }
  * ```
  */
-export function createS2ChatPersistence(
-	config: S2ChatPersistenceConfig,
-): S2ChatPersistence {
+export function createDurableChat(
+	config: DurableChatConfig,
+): DurableChat {
 	const s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
@@ -171,7 +171,7 @@ export function createS2ChatPersistence(
 			if (options?.waitUntil) {
 				options.waitUntil(
 					write.catch((err) =>
-						console.error("[s2/aisdk-transport] persist failed:", err),
+						console.error("[aisdk-durability] persist failed:", err),
 					),
 				);
 			} else {

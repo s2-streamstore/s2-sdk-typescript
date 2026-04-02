@@ -1,4 +1,4 @@
-/** Check if a record is a fence command (single header with empty key and "fence" value). */
+// Check if a record is a fence command (single header with empty key and "fence" value).
 export function isFenceRecord(record: {
 	headers?:
 		| ReadonlyArray<readonly [string, string]>
@@ -12,7 +12,7 @@ export function isFenceRecord(record: {
 	);
 }
 
-/** Check if a fence record body indicates stream completion (`end-*` or `error-*`). */
+// Check if a fence record body indicates stream completion (`end-*` or `error-*`).
 export function isTerminalFence(record: { body?: string | null }): boolean {
 	return Boolean(
 		record.body?.startsWith("end-") || record.body?.startsWith("error-"),

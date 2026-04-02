@@ -44,9 +44,7 @@ import { dirname, join } from "node:path";
 import { openai } from "@ai-sdk/openai";
 import { S2Endpoints } from "@s2-dev/streamstore";
 import { type ModelMessage, streamText } from "ai";
-import { createS2ChatPersistence } from "@s2-dev/aisdk-durability";
-
-// ── Config ───────────────────────────────────────────────────────────────────
+import { createDurableChat } from "@s2-dev/aisdk-durability";
 
 const PORT = Number.parseInt(process.env.PORT || "3457", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");
@@ -57,17 +55,16 @@ if (!accessToken) throw new Error("Set S2_ACCESS_TOKEN");
 const basin = process.env.S2_BASIN;
 if (!basin) throw new Error("Set S2_BASIN");
 
-// Build an S2EndpointsInit from env vars (raw strings, not class instances).
-// This avoids class-identity issues when Bun mixes source and dist imports.
 const endpointsInit = {
 	account: process.env.S2_ACCOUNT_ENDPOINT || undefined,
 	basin: process.env.S2_BASIN_ENDPOINT || undefined,
 };
+
 const endpoints = new S2Endpoints(
 	endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
 );
 
-const chat = createS2ChatPersistence({
+const chat = createDurableChat({
 	accessToken,
 	basin,
 	endpoints: endpointsInit.account || endpointsInit.basin
@@ -83,16 +80,12 @@ const s2BaseUrl = endpoints.basinBaseUrl(basin);
 // Track active generation per chat so the reconnect endpoint knows the stream.
 const active = new Map<string, string>();
 
-// ── Routes ───────────────────────────────────────────────────────────────────
-
 async function handleChat(req: Request): Promise<Response> {
 	const { id, messages } = (await req.json()) as {
 		id: string;
 		messages: ModelMessage[];
 	};
 
-	// Unique per generation — the chat ID is reused across refreshes but each
-	// generation gets its own S2 stream so fencing tokens don't collide.
 	const streamName = `resumable-chat-${id}-${Date.now()}`;
 
 	const result = streamText({
@@ -114,8 +107,6 @@ function handleReconnect(chatId: string): Response {
 	if (!streamName) return new Response(null, { status: 204 });
 	return Response.json({ stream: streamName });
 }
-
-// ── Server ───────────────────────────────────────────────────────────────────
 
 const server = Bun.serve({
 	port: PORT,
@@ -147,7 +138,6 @@ const server = Bun.serve({
 			return res;
 		}
 
-		// Serve index.html with config injected
 		if (url.pathname === "/" || url.pathname === "/index.html") {
 			let html = await Bun.file(join(PUBLIC_DIR, "index.html")).text();
 			html = html

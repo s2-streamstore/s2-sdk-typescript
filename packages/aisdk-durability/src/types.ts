@@ -1,7 +1,7 @@
 import type { S2Endpoints, S2EndpointsInit } from "@s2-dev/streamstore";
 
-/** Server-side S2 config shared across all persist/replay calls. */
-export interface S2ChatPersistenceConfig {
+/** Server-side config shared across all persist/replay calls. */
+export interface DurableChatConfig {
 	/** S2 access token. */
 	accessToken: string;
 	/** Basin name. */
@@ -14,7 +14,7 @@ export interface S2ChatPersistenceConfig {
 	lingerDuration?: number;
 }
 
-/** Options passed per-request to {@link S2ChatPersistence.persist}. */
+/** Options passed per-request to {@link DurableChat.persist}. */
 export interface PersistOptions {
 	/**
 	 * Keep the background write alive after the response is sent.
@@ -28,8 +28,8 @@ export interface PersistOptions {
 	waitUntil?: (promise: Promise<unknown>) => void;
 }
 
-/** Returned by {@link createS2ChatPersistence}. */
-export interface S2ChatPersistence {
+/** Returned by {@link createDurableChat}. */
+export interface DurableChat {
 	/**
 	 * Persist an AI SDK stream to S2 and return a JSON response containing
 	 * the stream name (`{ stream }`).
@@ -53,8 +53,8 @@ export interface S2ChatPersistence {
 	replay(streamName: string): Promise<Response>;
 }
 
-/** Client-side S2 read credentials. */
-export interface S2ReadConfig {
+/** Client-side read credentials for direct S2 SSE reads. */
+export interface DurableReadConfig {
 	/** S2 access token (ideally a scoped read-only token). */
 	accessToken: string;
 	/** Basin name. */
@@ -68,8 +68,8 @@ export interface S2ReadConfig {
 	baseUrl?: string;
 }
 
-/** Config for {@link createS2ChatTransport}. */
-export interface S2ChatTransportConfig {
+/** Config for {@link createDurableChatTransport}. */
+export interface DurableChatTransportConfig {
 	/** API endpoint for submitting chat messages (POST). */
 	api: string;
 	/**
@@ -77,8 +77,8 @@ export interface S2ChatTransportConfig {
 	 * Falls back to `{api}/{chatId}/stream` when omitted.
 	 */
 	reconnectApi?: string;
-	/** S2 credentials for direct SSE reads. */
-	s2: S2ReadConfig;
+	/** Credentials for direct S2 SSE reads. */
+	s2: DurableReadConfig;
 	/** Default headers included in every request to your API. */
 	headers?: HeadersInit;
 	/** Custom fetch implementation. */

@@ -1,15 +1,11 @@
 # Resumable Chat — S2 + AI SDK Transport
 
-AI chat that survives page refreshes. The server persists every generation to S2, and the browser reads chunks **directly from S2 over SSE** — no server proxy on the read path.
-
-Works with both **S2 Cloud** and **s2-lite** (local).
-
 ## How it works
 
 1. **Browser** sends a message via `POST /api/chat`
 2. **Server** calls `streamText()` and passes the result to `chat.persist(id, stream)` which writes chunks to S2 and responds with `{ stream: "name" }`
 3. **Browser** opens an SSE connection straight to S2 and renders chunks as they arrive
-4. On page refresh, the browser hits `GET /api/chat/{id}/stream` — if a generation is still in flight, the server returns `{ stream }` and the browser reconnects to S2
+4. On page refresh, the browser hits `GET /api/chat/{id}/stream`, if a generation is still in flight, the server returns `{ stream }` and the browser reconnects to S2
 
 ## Run with s2-lite (local)
 
@@ -43,13 +39,11 @@ bun run examples/ai-sdk-resumable-chat/server.ts
 
 ## Using with Next.js + useChat
 
-The example uses vanilla JS to show what happens under the hood. In a real app:
-
 ```ts
 // lib/s2.ts (server — create once)
-import { createS2ChatPersistence } from "@s2-dev/aisdk-transport";
+import { createDurableChat } from "@s2-dev/aisdk-durability";
 
-export const chat = createS2ChatPersistence({
+export const chat = createDurableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
 });
@@ -72,9 +66,9 @@ export async function POST(req: Request) {
 ```tsx
 // app/page.tsx
 import { useChat } from "ai/react";
-import { createS2ChatTransport } from "@s2-dev/aisdk-transport";
+import { createS2Transport } from "@s2-dev/aisdk-durability";
 
-const transport = createS2ChatTransport({
+const transport = createS2Transport({
   api: "/api/chat",
   s2: {
     accessToken: process.env.NEXT_PUBLIC_S2_READ_TOKEN!,
