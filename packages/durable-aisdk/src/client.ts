@@ -136,7 +136,7 @@ export function createS2Transport<
 
 		async reconnectToStream({ chatId, headers: reqHeaders }) {
 			const endpoint =
-				reconnectApi ?? `${api.replace(/\/$/, "")}/${chatId}/stream`;
+				reconnectApi ?? `${api.replace(/\/$/, "")}/${encodeURIComponent(chatId)}/stream`;
 
 			const res = await fetchFn(endpoint, {
 				method: "GET",
