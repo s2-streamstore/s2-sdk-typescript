@@ -44,7 +44,7 @@ import { dirname, join } from "node:path";
 import { openai } from "@ai-sdk/openai";
 import { S2Endpoints } from "@s2-dev/streamstore";
 import { type ModelMessage, streamText } from "ai";
-import { createDurableChat } from "@s2-dev/aisdk-durability";
+import { createDurableChat } from "@s2-dev/durable-aisdk";
 
 const PORT = Number.parseInt(process.env.PORT || "3457", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");

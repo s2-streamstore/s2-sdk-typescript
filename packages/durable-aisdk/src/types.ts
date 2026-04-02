@@ -61,7 +61,7 @@ export interface DurableReadConfig {
 	basin: string;
 	/**
 	 * Full base URL of the basin endpoint
-	 * (e.g. `"https://mybas.b.s2.dev"`).
+	 * (e.g. `"https://mybasin-world.b.s2.dev"`).
 	 *
 	 * Defaults to `"https://{basin}.b.s2.dev"`.
 	 */

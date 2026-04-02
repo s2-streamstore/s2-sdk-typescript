@@ -1,5 +1,5 @@
 {
-	"name": "@s2-dev/aisdk-durability",
+	"name": "@s2-dev/durable-aisdk",
 	"version": "0.1.0",
 	"description": "Vercel AI SDK transport adapters for S2.",
 	"license": "MIT",

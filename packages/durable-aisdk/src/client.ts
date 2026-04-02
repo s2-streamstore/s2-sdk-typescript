@@ -65,7 +65,7 @@ async function extractStreamName(res: Response): Promise<string> {
 	const body = (await res.json()) as { stream?: string };
 	if (typeof body.stream === "string" && body.stream) return body.stream;
 	throw new Error(
-		"[aisdk-durability] Server response missing { stream } field.",
+		"[durable-aisdk] Server response missing { stream } field.",
 	);
 }
 
@@ -75,7 +75,7 @@ async function extractStreamName(res: Response): Promise<string> {
  * @example
  * ```tsx
  * import { useChat } from "ai/react";
- * import { createS2Transport } from "@s2-dev/aisdk-durability";
+ * import { createS2Transport } from "@s2-dev/durable-aisdk";
  *
  * const transport = createS2Transport();
  *

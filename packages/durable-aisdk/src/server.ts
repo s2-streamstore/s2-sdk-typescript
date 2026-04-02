@@ -108,7 +108,7 @@ async function persistChunks(
  * @example
  * ```ts
  * // lib/s2.ts — create once, import everywhere
- * import { createDurableChat } from "@s2-dev/aisdk-durability";
+ * import { createDurableChat } from "@s2-dev/durable-aisdk";
  *
  * export const chat = createDurableChat({
  *   accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -171,7 +171,7 @@ export function createDurableChat(
 			if (options?.waitUntil) {
 				options.waitUntil(
 					write.catch((err) =>
-						console.error("[aisdk-durability] persist failed:", err),
+						console.error("[durable-aisdk] persist failed:", err),
 					),
 				);
 			} else {

@@ -41,7 +41,7 @@ bun run examples/ai-sdk-resumable-chat/server.ts
 
 ```ts
 // lib/s2.ts (server — create once)
-import { createDurableChat } from "@s2-dev/aisdk-durability";
+import { createDurableChat } from "@s2-dev/durable-aisdk";
 
 export const chat = createDurableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -66,7 +66,7 @@ export async function POST(req: Request) {
 ```tsx
 // app/page.tsx
 import { useChat } from "ai/react";
-import { createS2Transport } from "@s2-dev/aisdk-durability";
+import { createS2Transport } from "@s2-dev/durable-aisdk";
 
 const transport = createS2Transport({
   api: "/api/chat",
