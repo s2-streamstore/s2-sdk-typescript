@@ -1,7 +1,4 @@
-import type {
-	S2Endpoints,
-	S2EndpointsInit,
-} from "@s2-dev/streamstore";
+import type { S2Endpoints, S2EndpointsInit } from "@s2-dev/streamstore";
 import {
 	AppendInput,
 	AppendRecord,
@@ -115,16 +112,18 @@ function withQueryParam(url: string, key: string, value: string): string {
 	return search ? `${pathname}?${search}` : pathname;
 }
 
-function buildReplayEndpoint(api: string, reconnectApi: string | undefined, stream: string): string {
+function buildReplayEndpoint(
+	api: string,
+	reconnectApi: string | undefined,
+	stream: string,
+): string {
 	const base = reconnectApi ?? `${api.replace(/\/$/, "")}/stream`;
 	return withQueryParam(base, "stream", stream);
 }
 
 function isTerminalChunk(chunk: UIMessageChunk): boolean {
 	return (
-		chunk.type === "finish" ||
-		chunk.type === "abort" ||
-		chunk.type === "error"
+		chunk.type === "finish" || chunk.type === "abort" || chunk.type === "error"
 	);
 }
 
@@ -382,13 +381,16 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 			const stream = streamStateStore.get(chatId);
 			if (!stream) return null;
 
-			const res = await fetchFn(buildReplayEndpoint(api, reconnectApi, stream), {
-				method: "GET",
-				headers: {
-					...flattenHeaders(headers),
-					...flattenHeaders(reqHeaders),
+			const res = await fetchFn(
+				buildReplayEndpoint(api, reconnectApi, stream),
+				{
+					method: "GET",
+					headers: {
+						...flattenHeaders(headers),
+						...flattenHeaders(reqHeaders),
+					},
 				},
-			});
+			);
 
 			if (res.status === 204) {
 				streamStateStore.delete(chatId);

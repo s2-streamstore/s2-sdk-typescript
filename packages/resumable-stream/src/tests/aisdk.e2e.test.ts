@@ -137,11 +137,15 @@ describeIf("resumable-stream/aisdk", () => {
 
 				let bgPromise: Promise<unknown> | undefined;
 
-				const res = await chat.persist(streamName, arrayToAsyncIterable(sampleChunks()), {
-					waitUntil: (promise) => {
-						bgPromise = promise;
+				const res = await chat.persist(
+					streamName,
+					arrayToAsyncIterable(sampleChunks()),
+					{
+						waitUntil: (promise) => {
+							bgPromise = promise;
+						},
 					},
-				});
+				);
 
 				expect(res.status).toBe(200);
 				const body = (await res.json()) as { stream: string };

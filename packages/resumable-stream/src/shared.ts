@@ -15,7 +15,9 @@ type FenceLikeRecord = {
 	body?: string | null;
 };
 
-export function isFenceRecord(record: Pick<FenceLikeRecord, "headers">): boolean {
+export function isFenceRecord(
+	record: Pick<FenceLikeRecord, "headers">,
+): boolean {
 	return (
 		record.headers?.length === 1 &&
 		record.headers[0]![0] === "" &&
@@ -23,7 +25,9 @@ export function isFenceRecord(record: Pick<FenceLikeRecord, "headers">): boolean
 	);
 }
 
-export function isTerminalFence(record: Pick<FenceLikeRecord, "body">): boolean {
+export function isTerminalFence(
+	record: Pick<FenceLikeRecord, "body">,
+): boolean {
 	return Boolean(
 		record.body?.startsWith("end-") || record.body?.startsWith("error-"),
 	);
@@ -83,13 +87,11 @@ export async function persistToS2<T>({
 		let sourceError: unknown;
 		try {
 			for await (const value of source) {
-				producer
-					.submit(toRecord(value))
-					.catch((err: unknown) => {
-						if (err instanceof SeqNumMismatchError) {
-							onSeqNumMismatch?.(err);
-						}
-					});
+				producer.submit(toRecord(value)).catch((err: unknown) => {
+					if (err instanceof SeqNumMismatchError) {
+						onSeqNumMismatch?.(err);
+					}
+				});
 			}
 		} catch (err) {
 			sourceError = err;
