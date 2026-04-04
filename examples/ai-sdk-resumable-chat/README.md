@@ -3,9 +3,9 @@
 ## How it works
 
 1. **Browser** sends a message via `POST /api/chat`
-2. **Server** calls `streamText()` and passes the result to `chat.persist(id, stream)` which writes chunks to S2 and responds with `{ stream: "name" }`
-3. **Browser** opens an SSE connection straight to S2 and renders chunks as they arrive
-4. On page refresh, the browser hits `GET /api/chat/{id}/stream`, if a generation is still in flight, the server returns `{ stream }` and the browser reconnects to S2
+2. **Server** calls `streamText()` and passes `result.toUIMessageStream()` to `chat.persist(streamName, stream)` which writes UI chunks to S2 and responds with `{ stream: "name" }`
+3. **Browser** stores that stream name in `sessionStorage` and reads `GET /api/chat/stream?stream=...`
+4. On page refresh, the browser reuses the stored stream ID and reconnects to the same replay endpoint
 
 ## Run with s2-lite (local)
 
@@ -41,7 +41,7 @@ bun run examples/ai-sdk-resumable-chat/server.ts
 
 ```ts
 // lib/s2.ts (server — create once)
-import { createDurableChat } from "@s2-dev/durable-aisdk";
+import { createDurableChat } from "@s2-dev/resumable-stream/aisdk";
 
 export const chat = createDurableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -57,8 +57,13 @@ import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-  return chat.persist(id, streamText({ model, messages }).fullStream, {
-    waitUntil: after,
+  const streamName = `chat-${id}-${Date.now()}`;
+  return chat.persist(streamName, streamText({ model, messages }).toUIMessageStream(), {
+    waitUntil: (promise) => {
+      after(async () => {
+        await promise;
+      });
+    },
   });
 }
 ```
@@ -66,15 +71,11 @@ export async function POST(req: Request) {
 ```tsx
 // app/page.tsx
 import { useChat } from "ai/react";
-import { createS2Transport } from "@s2-dev/durable-aisdk";
+import { createS2Transport } from "@s2-dev/resumable-stream/aisdk";
 
 const transport = createS2Transport({
   api: "/api/chat",
-  s2: {
-    accessToken: process.env.NEXT_PUBLIC_S2_READ_TOKEN!,
-    basin: "my-basin",
-    // For s2-lite, set baseUrl: "http://localhost:4000/v1"
-  },
+  reconnectApi: "/api/chat/stream",
 });
 
 export default function Chat() {

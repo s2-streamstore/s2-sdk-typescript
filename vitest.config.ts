@@ -16,9 +16,9 @@ export default defineConfig(({ mode }) => ({
         __dirname,
         'packages/resumable-stream/src/index.ts',
       ),
-      '@s2-dev/durable-aisdk': resolve(
+      '@s2-dev/resumable-stream/aisdk': resolve(
         __dirname,
-        'packages/durable-aisdk/src/index.ts',
+        'packages/resumable-stream/src/aisdk.ts',
       ),
     },
   },

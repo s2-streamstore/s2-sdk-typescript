@@ -1,6 +1,7 @@
 import { S2, S2Environment } from "@s2-dev/streamstore";
+import type { UIMessageChunk } from "ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDurableChat } from "../server.js";
+import { createDurableChat } from "../aisdk.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 
@@ -9,7 +10,7 @@ const describeIf = hasEnv ? describe : describe.skip;
 
 const makeBasinName = (): string => {
 	const suffix = Math.random().toString(36).slice(2, 10);
-	return `durability-${suffix}`.slice(0, 48);
+	return `resumable-aisdk-${suffix}`.slice(0, 48);
 };
 
 const makeStreamName = (prefix: string): string =>
@@ -52,10 +53,21 @@ async function readNdjsonResponse(res: Response): Promise<unknown[]> {
 		.map((line) => JSON.parse(line));
 }
 
+function sampleChunks(): UIMessageChunk[] {
+	return [
+		{ type: "start" },
+		{ type: "text-start", id: "text-1" },
+		{ type: "text-delta", id: "text-1", delta: "Hello" },
+		{ type: "text-delta", id: "text-1", delta: " world" },
+		{ type: "text-end", id: "text-1" },
+		{ type: "finish", finishReason: "stop" },
+	];
+}
+
 let s2: S2;
 let basinName: string;
 
-describeIf("durable-aisdk", () => {
+describeIf("resumable-stream/aisdk", () => {
 	beforeAll(async () => {
 		const env = S2Environment.parse();
 		s2 = new S2(env as { accessToken: string });
@@ -98,11 +110,7 @@ describeIf("durable-aisdk", () => {
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("persist-basic");
-				const chunks = [
-					{ type: "text-delta", text: "Hello" },
-					{ type: "text-delta", text: " world" },
-					{ type: "finish", finishReason: "stop" },
-				];
+				const chunks = sampleChunks();
 
 				const res = await chat.persist(
 					streamName,
@@ -129,26 +137,15 @@ describeIf("durable-aisdk", () => {
 
 				let bgPromise: Promise<unknown> | undefined;
 
-				const chunks = [
-					{ type: "text-delta", text: "bg" },
-					{ type: "finish", finishReason: "stop" },
-				];
-
-				const res = await chat.persist(
-					streamName,
-					arrayToAsyncIterable(chunks),
-					{
-						waitUntil: (p) => {
-							bgPromise = p;
-						},
+				const res = await chat.persist(streamName, arrayToAsyncIterable(sampleChunks()), {
+					waitUntil: (promise) => {
+						bgPromise = promise;
 					},
-				);
+				});
 
 				expect(res.status).toBe(200);
 				const body = (await res.json()) as { stream: string };
 				expect(body.stream).toBe(streamName);
-
-				// The background write should eventually complete
 				expect(bgPromise).toBeDefined();
 				await bgPromise;
 			},
@@ -165,17 +162,15 @@ describeIf("durable-aisdk", () => {
 				});
 				const streamName = makeStreamName("persist-conflict");
 
-				// First persist claims the stream
 				const res1 = await chat.persist(
 					streamName,
-					arrayToAsyncIterable([{ type: "text-delta", text: "first" }]),
+					arrayToAsyncIterable(sampleChunks()),
 				);
 				expect(res1.status).toBe(200);
 
-				// Second persist on the same stream should get 409
 				const res2 = await chat.persist(
 					streamName,
-					arrayToAsyncIterable([{ type: "text-delta", text: "second" }]),
+					arrayToAsyncIterable(sampleChunks()),
 				);
 				expect(res2.status).toBe(409);
 			},
@@ -193,11 +188,7 @@ describeIf("durable-aisdk", () => {
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("replay-basic");
-				const chunks = [
-					{ type: "text-delta", text: "Hello" },
-					{ type: "text-delta", text: " world" },
-					{ type: "finish", finishReason: "stop" },
-				];
+				const chunks = sampleChunks();
 
 				await chat.persist(streamName, arrayToAsyncIterable(chunks));
 
@@ -212,30 +203,6 @@ describeIf("durable-aisdk", () => {
 		);
 
 		it(
-			"skips fence records in output",
-			async () => {
-				const chat = createDurableChat({
-					accessToken: process.env.S2_ACCESS_TOKEN!,
-					basin: basinName,
-					...s2EndpointsFromEnv(),
-				});
-				const streamName = makeStreamName("replay-fences");
-				const chunks = [{ type: "text-delta", text: "only-this" }];
-
-				await chat.persist(streamName, arrayToAsyncIterable(chunks));
-
-				const records = await readNdjsonResponse(await chat.replay(streamName));
-
-				// Should only contain data records, no fence commands
-				for (const rec of records) {
-					expect(rec).toHaveProperty("type");
-				}
-				expect(records).toEqual(chunks);
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
 			"works with waitUntil persist followed by replay",
 			async () => {
 				const chat = createDurableChat({
@@ -244,19 +211,15 @@ describeIf("durable-aisdk", () => {
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("replay-bg");
-				const chunks = [
-					{ type: "text-delta", text: "async" },
-					{ type: "finish", finishReason: "stop" },
-				];
+				const chunks = sampleChunks();
 
 				let bgPromise: Promise<unknown> | undefined;
 				await chat.persist(streamName, arrayToAsyncIterable(chunks), {
-					waitUntil: (p) => {
-						bgPromise = p;
+					waitUntil: (promise) => {
+						bgPromise = promise;
 					},
 				});
 
-				// Wait for background write to finish before replaying
 				await bgPromise;
 
 				const records = await readNdjsonResponse(await chat.replay(streamName));

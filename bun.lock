@@ -18,17 +18,6 @@
         "vitest": "^4.0.10",
       },
     },
-    "packages/durable-aisdk": {
-      "name": "@s2-dev/durable-aisdk",
-      "version": "0.1.0",
-      "devDependencies": {
-        "ai": "^6.0.142",
-      },
-      "peerDependencies": {
-        "@s2-dev/streamstore": ">=0.21.0",
-        "ai": ">=4.0.0",
-      },
-    },
     "packages/patterns": {
       "name": "@s2-dev/streamstore-patterns",
       "version": "2.1.1",
@@ -49,9 +38,16 @@
     "packages/resumable-stream": {
       "name": "@s2-dev/resumable-stream",
       "version": "1.10.1",
+      "devDependencies": {
+        "ai": "^6.0.142",
+      },
       "peerDependencies": {
         "@s2-dev/streamstore": ">=0.21.0",
+        "ai": ">=4.0.0",
       },
+      "optionalPeers": [
+        "ai",
+      ],
     },
     "packages/streamstore": {
       "name": "@s2-dev/streamstore",
@@ -282,8 +278,6 @@
     "@rollup/rollup-win32-x64-gnu": ["@rollup/rollup-win32-x64-gnu@4.52.5", "", { "os": "win32", "cpu": "x64" }, "sha512-UGBUGPFp1vkj6p8wCRraqNhqwX/4kNQPS57BCFc8wYh0g94iVIW33wJtQAx3G7vrjjNtRaxiMUylM0ktp/TRSQ=="],
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.52.5", "", { "os": "win32", "cpu": "x64" }, "sha512-TAcgQh2sSkykPRWLrdyy2AiceMckNf5loITqXxFI5VuQjS5tSuw3WlwdN8qv8vzjLAUTvYaH/mVjSFpbkFbpTg=="],
-
-    "@s2-dev/durable-aisdk": ["@s2-dev/durable-aisdk@workspace:packages/durable-aisdk"],
 
     "@s2-dev/resumable-stream": ["@s2-dev/resumable-stream@workspace:packages/resumable-stream"],
 

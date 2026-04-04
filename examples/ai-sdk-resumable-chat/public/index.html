@@ -53,21 +53,22 @@
     const API = '/api/chat';
     const chatEl = document.getElementById('chat');
     const inputEl = document.getElementById('input');
-    const sendBtn = document.getElementById('send');
-    const statusEl = document.getElementById('status');
+	    const sendBtn = document.getElementById('send');
+	    const statusEl = document.getElementById('status');
 
-    let chatId = sessionStorage.getItem('chatId');
+	    let chatId = sessionStorage.getItem('chatId');
     if (!chatId) {
       chatId = crypto.randomUUID();
       sessionStorage.setItem('chatId', chatId);
-    }
+	    }
 
-    const messages = [];
-    let streaming = false;
+	    const messages = [];
+	    let streaming = false;
+	    const streamKey = () => `chat-stream:${chatId}`;
 
-    function setStatus(s) {
-      statusEl.textContent = s;
-      statusEl.className = 'status ' + s;
+	    function setStatus(s) {
+	      statusEl.textContent = s;
+	      statusEl.className = 'status ' + s;
     }
 
     function addMessage(role, content, opts = {}) {
@@ -94,33 +95,36 @@
       sendBtn.disabled = !on;
     }
 
-    async function readNdjson(res, bubble) {
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '', fullText = '';
+	    async function readNdjson(res, bubble) {
+	      const reader = res.body.getReader();
+	      const dec = new TextDecoder();
+	      let buf = '', fullText = '', errorText = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+	      while (true) {
+	        const { done, value } = await reader.read();
+	        if (done) break;
         buf += dec.decode(value, { stream: true });
 
         let nl;
         while ((nl = buf.indexOf('\n')) !== -1) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
-          if (!line) continue;
-          try {
-            const chunk = JSON.parse(line);
-            if (chunk.type === 'text-delta' && chunk.text) {
-              fullText += chunk.text;
-              bubble.textContent = fullText;
-              chatEl.scrollTop = chatEl.scrollHeight;
-            }
-          } catch {}
-        }
-      }
-      return fullText;
-    }
+	          if (!line) continue;
+	          try {
+	            const chunk = JSON.parse(line);
+	            if (chunk.type === 'text-delta' && chunk.delta) {
+	              fullText += chunk.delta;
+	              bubble.textContent = fullText;
+	              chatEl.scrollTop = chatEl.scrollHeight;
+	            }
+	            if (chunk.type === 'error' && chunk.errorText) {
+	              errorText = chunk.errorText;
+	            }
+	          } catch {}
+	        }
+	      }
+	      return { fullText, errorText };
+	    }
 
     async function send() {
       const text = inputEl.value.trim();
@@ -146,40 +150,59 @@
         return;
       }
 
-      const { stream } = await res.json();
-      const bubble = addMessage('assistant', '', { streaming: true });
+	      const { stream } = await res.json();
+	      sessionStorage.setItem(streamKey(), stream);
+	      const bubble = addMessage('assistant', '', { streaming: true });
 
-      const replayRes = await fetch(`${API}/${encodeURIComponent(chatId)}/stream`);
-      if (replayRes.ok) {
-        const fullText = await readNdjson(replayRes, bubble);
-        messages.push({ role: 'assistant', content: fullText });
-      }
+	      const replayRes = await fetch(`${API}/stream?stream=${encodeURIComponent(stream)}`);
+	      if (replayRes.ok) {
+	        const { fullText, errorText } = await readNdjson(replayRes, bubble);
+	        if (errorText) {
+	          bubble.textContent = fullText
+	            ? `${fullText}\n\n[error] ${errorText}`
+	            : `[error] ${errorText}`;
+	        }
+	        messages.push({ role: 'assistant', content: fullText });
+	        sessionStorage.removeItem(streamKey());
+	      }
 
-      bubble.classList.remove('streaming');
-      streaming = false;
+	      bubble.classList.remove('streaming');
+	      streaming = false;
       setInputEnabled(true);
       setStatus('idle');
       inputEl.focus();
     }
 
-    async function tryReconnect() {
-      try {
-        const res = await fetch(`${API}/${encodeURIComponent(chatId)}/stream`);
-        if (res.status === 204 || !res.ok) return;
+	    async function tryReconnect() {
+	      try {
+	        const stream = sessionStorage.getItem(streamKey());
+	        if (!stream) return;
 
-        setStatus('streaming');
-        streaming = true;
-        setInputEnabled(false);
-        const bubble = addMessage('assistant', '', { streaming: true });
+	        const res = await fetch(`${API}/stream?stream=${encodeURIComponent(stream)}`);
+	        if (res.status === 204 || !res.ok) {
+	          sessionStorage.removeItem(streamKey());
+	          return;
+	        }
 
-        const fullText = await readNdjson(res, bubble);
+	        setStatus('streaming');
+	        streaming = true;
+	        setInputEnabled(false);
+	        const bubble = addMessage('assistant', '', { streaming: true });
 
-        bubble.classList.remove('streaming');
-        if (fullText) messages.push({ role: 'assistant', content: fullText });
-        streaming = false;
-        setInputEnabled(true);
-        setStatus('idle');
-      } catch {}
+	        const { fullText, errorText } = await readNdjson(res, bubble);
+
+	        bubble.classList.remove('streaming');
+	        if (errorText) {
+	          bubble.textContent = fullText
+	            ? `${fullText}\n\n[error] ${errorText}`
+	            : `[error] ${errorText}`;
+	        }
+	        if (fullText) messages.push({ role: 'assistant', content: fullText });
+	        sessionStorage.removeItem(streamKey());
+	        streaming = false;
+	        setInputEnabled(true);
+	        setStatus('idle');
+	      } catch {}
     }
 
     sendBtn.addEventListener('click', send);

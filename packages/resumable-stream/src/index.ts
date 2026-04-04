@@ -1,20 +1,22 @@
 import type {
 	ReadBatch,
-	ReadRecord,
 	S2Endpoints,
 	S2EndpointsInit,
 } from "@s2-dev/streamstore";
 import {
-	AppendInput,
 	AppendRecord,
-	BatchTransform,
 	FencingTokenMismatchError,
-	Producer,
 	RangeNotSatisfiableError,
 	S2,
 	S2Environment,
-	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
+import {
+	appendFenceRecord,
+	isFenceRecord,
+	isTerminalFence,
+	persistToS2,
+	replayStringBodies,
+} from "./shared.js";
 
 interface S2Config {
 	/**
@@ -157,7 +159,7 @@ export async function createResumableStream(
 
 	// in case of multiple writers, only one with the given fencing token will succeed
 	try {
-		await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
+		await appendFenceRecord(s2, basin, streamId, "", sessionFencingToken);
 	} catch (error: unknown) {
 		if (error instanceof FencingTokenMismatchError) {
 			debugLog(
@@ -172,65 +174,24 @@ export async function createResumableStream(
 	}
 
 	const persistStream = async () => {
-		const reader = persistentStream.getReader();
-
-		const stream = s2.basin(basin).stream(streamId);
-		const session = await stream.appendSession();
-		const batchTransform = new BatchTransform({
-			lingerDurationMillis: lingerDuration,
-			maxBatchRecords: batchSize,
-			fencingToken: sessionFencingToken,
-			matchSeqNum: 1, // First data record after fence command at seq_num 0
-		});
-		const producer = new Producer(batchTransform, session);
-
 		try {
-			let terminated = false;
-
-			while (!terminated) {
-				const { done, value } = await reader.read();
-
-				if (done) {
-					terminated = true;
-					break;
-				}
-
-				producer
-					.submit(AppendRecord.string({ body: value }))
-					.catch((error: unknown) => {
-						if (error instanceof SeqNumMismatchError) {
-							debugLog("seqNum mismatch, skipping record");
-							return;
-						}
-						throw error;
-					});
-			}
-
-			await producer.close();
-
-			await appendFenceCommand(
+			await persistToS2({
 				s2,
 				basin,
-				streamId,
-				sessionFencingToken,
-				"end-" + generateFencingToken(),
-			);
+				stream: streamId,
+				source: readableStreamToAsyncIterable(persistentStream),
+				fencingToken: sessionFencingToken,
+				batchSize,
+				lingerDuration,
+				toRecord: (value) => AppendRecord.string({ body: value }),
+				terminalFenceBody: (failed) =>
+					`${failed ? "error" : "end"}-${generateFencingToken()}`,
+				onSeqNumMismatch: () => {
+					debugLog("seqNum mismatch, skipping record");
+				},
+			});
 		} catch (error) {
 			debugLog("Error processing stream:", error);
-			try {
-				await producer.close();
-				await appendFenceCommand(
-					s2,
-					basin,
-					streamId,
-					sessionFencingToken,
-					"error-" + generateFencingToken(),
-				);
-			} catch (fenceError) {
-				debugLog("Error appending fence command:", fenceError);
-			}
-		} finally {
-			reader.releaseLock();
 		}
 	};
 
@@ -247,13 +208,27 @@ async function resumeStream(
 	return new ReadableStream({
 		async start(controller) {
 			try {
-				const session = await s2
-					.basin(basin)
-					.stream(streamId)
-					.readSession({
-						start: { from: { seqNum: 0 } },
-					});
-				await processStream(streamId, session, controller);
+				for await (const value of replayStringBodies({
+					s2,
+					basin,
+					stream: streamId,
+				})) {
+					try {
+						controller.enqueue(value);
+					} catch (error: unknown) {
+						if (
+							error instanceof Error &&
+							"code" in error &&
+							(error as NodeJS.ErrnoException).code === "ERR_INVALID_STATE"
+						) {
+							debugLog("Likely page refresh caused stream closure:", streamId);
+							return;
+						}
+						throw error;
+					}
+				}
+				debugLog("Closing stream due to completion:", streamId);
+				controller.close();
 			} catch (error) {
 				debugLog("Error reading stream:", error);
 				return null;
@@ -270,7 +245,7 @@ async function stopStream(streamId: string): Promise<void> {
 	debugLog("Stopping stream:", streamId);
 
 	try {
-		await appendFenceCommand(
+		await appendFenceRecord(
 			s2,
 			basin,
 			streamId,
@@ -283,78 +258,32 @@ async function stopStream(streamId: string): Promise<void> {
 	}
 }
 
-async function appendFenceCommand(
-	s2: S2,
-	basin: string,
-	streamId: string,
-	prevFencingToken: string | null,
-	newFencingToken: string,
-): Promise<void> {
-	const record = AppendRecord.fence(newFencingToken);
-	const input = AppendInput.create([record], {
-		fencingToken: prevFencingToken ?? undefined,
-	});
-	await s2.basin(basin).stream(streamId).append(input);
-}
-
-async function processStream(
-	streamID: string,
-	session: AsyncIterable<ReadRecord>,
-	controller: ReadableStreamDefaultController<string>,
-): Promise<void> {
-	for await (const rec of session) {
-		if (isFenceCommand(rec)) {
-			if (rec.body?.startsWith("end")) {
-				debugLog("Closing stream due to fence(end) command:", streamID);
-				controller.close();
-				return;
-			}
-			continue;
-		}
-		if (rec.body) {
-			try {
-				controller.enqueue(rec.body);
-			} catch (error: unknown) {
-				if (
-					error instanceof Error &&
-					"code" in error &&
-					(error as NodeJS.ErrnoException).code === "ERR_INVALID_STATE"
-				) {
-					debugLog("Likely page refresh caused stream closure:", streamID);
-					return;
-				}
-				throw error;
-			}
-		}
-	}
-	debugLog("Closing stream due to completion:", streamID);
-	controller.close();
-}
-
-function isFenceCommand(record: ReadRecord): boolean {
-	return (
-		record.headers?.length === 1 &&
-		record.headers[0][0] === "" &&
-		record.headers[0][1] === "fence"
-	);
-}
-
 function isStreamDone(readBatch: ReadBatch): boolean {
 	if (!readBatch.records || readBatch.records.length === 0) {
 		return false;
 	}
 
 	const lastRecord = readBatch.records[0];
-	if (!isFenceCommand(lastRecord)) {
+	if (!isFenceRecord(lastRecord)) {
 		return false;
 	}
 
-	const fenceBody = lastRecord.body;
-	return (
-		fenceBody !== null &&
-		fenceBody !== undefined &&
-		(fenceBody.startsWith("end-") || fenceBody.startsWith("error-"))
-	);
+	return isTerminalFence(lastRecord);
+}
+
+async function* readableStreamToAsyncIterable(
+	stream: ReadableStream<string>,
+): AsyncIterable<string> {
+	const reader = stream.getReader();
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) return;
+			yield value;
+		}
+	} finally {
+		reader.releaseLock();
+	}
 }
 
 function debugLog(...messages: unknown[]) {

@@ -3,7 +3,7 @@
 import { dirname, join } from "node:path";
 import { openai } from "@ai-sdk/openai";
 import { type ModelMessage, streamText } from "ai";
-import { createDurableChat } from "@s2-dev/durable-aisdk";
+import { createDurableChat } from "@s2-dev/resumable-stream/aisdk";
 
 const PORT = Number.parseInt(process.env.PORT || "3457", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");
@@ -26,8 +26,6 @@ const chat = createDurableChat({
 		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
 });
 
-const active = new Map<string, string>();
-
 async function handleChat(req: Request): Promise<Response> {
 	const { id, messages } = (await req.json()) as {
 		id: string;
@@ -41,18 +39,16 @@ async function handleChat(req: Request): Promise<Response> {
 		messages,
 	});
 
-	active.set(id, streamName);
-
-	const waitUntil = (p: Promise<unknown>) => {
-		p.finally(() => active.delete(id));
-	};
-
-	return chat.persist(streamName, result.fullStream, { waitUntil });
+	return chat.persist(streamName, result.toUIMessageStream(), {
+		waitUntil: (promise) => {
+			promise.catch((err) => {
+				console.error("[example] persist failed:", err);
+			});
+		},
+	});
 }
 
-async function handleReplay(chatId: string): Promise<Response> {
-	const streamName = active.get(chatId);
-	if (!streamName) return new Response(null, { status: 204 });
+async function handleReplay(streamName: string): Promise<Response> {
 	return chat.replay(streamName);
 }
 
@@ -77,11 +73,12 @@ const server = Bun.serve({
 			return res;
 		}
 
-		const replayMatch = url.pathname.match(
-			/^\/api\/chat\/([^/]+)\/stream$/,
-		);
-		if (replayMatch && req.method === "GET") {
-			const res = await handleReplay(replayMatch[1]!);
+		if (url.pathname === "/api/chat/stream" && req.method === "GET") {
+			const streamName = url.searchParams.get("stream");
+			if (!streamName) {
+				return new Response("Missing stream query parameter", { status: 400 });
+			}
+			const res = await handleReplay(streamName);
 			res.headers.set("Access-Control-Allow-Origin", "*");
 			return res;
 		}
