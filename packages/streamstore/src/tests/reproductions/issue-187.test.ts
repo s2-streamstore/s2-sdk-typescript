@@ -81,9 +81,7 @@ describe("issue-187: Oversized record with pending linger timer crashes process"
 		);
 
 		// Submit a good record — this starts the linger timer.
-		const ticket = await producer.submit(
-			AppendRecord.string({ body: "good" }),
-		);
+		const ticket = await producer.submit(AppendRecord.string({ body: "good" }));
 
 		// Submit an oversized record — this should throw, not crash.
 		const oversized = AppendRecord.string({ body: "x".repeat(200) });
@@ -162,18 +160,14 @@ describe("issue-187: Oversized record with pending linger timer crashes process"
 
 		// Submit oversized record — errors the stream.
 		await expect(
-			producer.submit(
-				AppendRecord.string({ body: "x".repeat(200) }),
-			),
+			producer.submit(AppendRecord.string({ body: "x".repeat(200) })),
 		).rejects.toThrow(/exceeds maximum batch size/);
 
 		// Wait for timer and async settlement.
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
 		// Every good record's ack must settle (reject, not hang).
-		const results = await Promise.allSettled(
-			tickets.map((t) => t.ack()),
-		);
+		const results = await Promise.allSettled(tickets.map((t) => t.ack()));
 		for (const result of results) {
 			expect(result.status).toBe("rejected");
 		}
