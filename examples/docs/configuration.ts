@@ -23,10 +23,10 @@ import { S2 } from "@s2-dev/streamstore";
 }
 
 {
-	const token = process.env.S2_ACCESS_TOKEN!;
+	const accessToken = process.env.S2_ACCESS_TOKEN!;
 	// ANCHOR: retry-config
 	const client = new S2({
-		accessToken: token,
+		accessToken: accessToken,
 		retry: {
 			maxAttempts: 5,
 			minBaseDelayMillis: 100,
@@ -38,12 +38,12 @@ import { S2 } from "@s2-dev/streamstore";
 }
 
 {
-	const token = process.env.S2_ACCESS_TOKEN!;
+	const accessToken = process.env.S2_ACCESS_TOKEN!;
 	// ANCHOR: timeout-config
 	const client = new S2({
-		accessToken: token,
-		connectionTimeoutMillis: 3000,
-		requestTimeoutMillis: 5000,
+		accessToken: accessToken,
+		connectionTimeoutMillis: 5000,
+		requestTimeoutMillis: 10000,
 	});
 	// ANCHOR_END: timeout-config
 	void client;
