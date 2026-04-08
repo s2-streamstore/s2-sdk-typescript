@@ -158,7 +158,7 @@ void accessTokenReadOnly;
 void accessTokenGranular;
 void accessTokenAutoPrefix;
 
-// Pagination example - not executed by default
+// Pagination examples - not executed by default
 async function paginationExample() {
 	// ANCHOR: pagination
 	// Iterate through all streams with automatic pagination
@@ -168,3 +168,23 @@ async function paginationExample() {
 	// ANCHOR_END: pagination
 }
 void paginationExample;
+
+async function paginationFilteringExample() {
+	// ANCHOR: pagination-filtering
+	// List streams with a prefix filter
+	for await (const stream of basin.streams.listAll({ prefix: "events/" })) {
+		console.log(stream.name);
+	}
+	// ANCHOR_END: pagination-filtering
+}
+void paginationFilteringExample;
+
+async function paginationDeletedExample() {
+	// ANCHOR: pagination-deleted
+	// Include streams that are being deleted
+	for await (const stream of basin.streams.listAll({ includeDeleted: true })) {
+		console.log(stream.name, stream.deletedAt);
+	}
+	// ANCHOR_END: pagination-deleted
+}
+void paginationDeletedExample;
