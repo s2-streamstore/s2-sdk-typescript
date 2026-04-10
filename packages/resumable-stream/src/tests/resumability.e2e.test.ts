@@ -1,6 +1,9 @@
 import { S2, S2Environment } from "@s2-dev/streamstore";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createResumableStreamContext } from "../index.js";
+
+const hasEnv = !!process.env.S2_ACCESS_TOKEN;
+const describeIf = hasEnv ? describe : describe.skip;
 
 const makeBasinName = (): string => {
 	const suffix = Math.random().toString(36).slice(2, 10);
@@ -77,9 +80,10 @@ async function readStreamToArray(
 let s2: S2;
 let basinName: string;
 
+describeIf("resumable-stream", () => {
+
 beforeAll(async () => {
 	const env = S2Environment.parse();
-	if (!env.accessToken) return;
 	s2 = new S2(env as { accessToken: string });
 	basinName = makeBasinName();
 	await s2.basins.create({
@@ -102,7 +106,7 @@ afterAll(async () => {
 	delete process.env.S2_LINGER_DURATION;
 });
 
-test("pub/sub", async () => {
+it("pub/sub", async () => {
 	const context = createResumableStreamContext({
 		waitUntil: async (promise) => {
 			await promise;
@@ -127,7 +131,7 @@ test("pub/sub", async () => {
 	expect(subscriberData).toEqual(originalData);
 }, 30_000);
 
-test("concurrent creators result in a single stream with consistent ordered data", async () => {
+it("concurrent creators result in a single stream with consistent ordered data", async () => {
 	const context = createResumableStreamContext({
 		waitUntil: async (promise) => {
 			await promise;
@@ -162,7 +166,7 @@ test("concurrent creators result in a single stream with consistent ordered data
 	expect(finalStreamData).toEqual(initialMessages);
 }, 30_000);
 
-test("concurrent readers", async () => {
+it("concurrent readers", async () => {
 	const context = createResumableStreamContext({
 		waitUntil: async (promise) => {
 			await promise;
@@ -198,3 +202,5 @@ test("concurrent readers", async () => {
 	expect(readerData[1]).toEqual(messages);
 	expect(readerData[2]).toEqual(messages);
 }, 30_000);
+
+}); // describeIf
