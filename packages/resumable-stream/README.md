@@ -136,7 +136,7 @@ export async function GET(req: Request) {
 
 ```tsx
 // app/page.tsx
-import { useChat } from "ai/react";
+import { useChat } from "@ai-sdk/react";
 import { createS2Transport } from "@s2-dev/resumable-stream/aisdk";
 
 const transport = createS2Transport({
@@ -145,7 +145,7 @@ const transport = createS2Transport({
 });
 
 export default function Chat() {
-  const chat = useChat({ transport, experimental_resume: true });
+  const chat = useChat({ transport, resume: true });
   return null;
 }
 ```

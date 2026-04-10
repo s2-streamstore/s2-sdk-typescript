@@ -41,7 +41,7 @@
   </div>
 
   <div class="chat" id="chat">
-    <div class="info">Send a message. Try <kbd>F5</kbd> mid-generation — the stream resumes from S2.</div>
+    <div class="info">Send a message. Try <kbd>F5</kbd> mid-generation the stream resumes from S2, and completed messages reload from the transcript stream.</div>
   </div>
 
   <div class="input-row">
@@ -51,6 +51,7 @@
 
   <script>
     const API = '/api/chat';
+    const HISTORY_API = `${API}/history`;
     const chatEl = document.getElementById('chat');
     const inputEl = document.getElementById('input');
 	    const sendBtn = document.getElementById('send');
@@ -65,13 +66,24 @@
 	    const messages = [];
 	    let streaming = false;
 	    const streamKey = () => `chat-stream:${chatId}`;
+	    const emptyStateHtml = '<div class="info">Send a message. Try <kbd>F5</kbd> mid-generation — the stream resumes from S2, and completed messages reload from the transcript stream.</div>';
 
 	    function setStatus(s) {
 	      statusEl.textContent = s;
 	      statusEl.className = 'status ' + s;
     }
 
+	    function showEmptyState() {
+	      chatEl.innerHTML = emptyStateHtml;
+	    }
+
+	    function clearEmptyState() {
+	      const info = chatEl.querySelector('.info');
+	      if (info) info.remove();
+	    }
+
     function addMessage(role, content, opts = {}) {
+      clearEmptyState();
       const wrap = document.createElement('div');
       wrap.className = `msg ${role}`;
 
@@ -126,21 +138,49 @@
 	      return { fullText, errorText };
 	    }
 
+	    async function loadHistory() {
+	      const res = await fetch(`${HISTORY_API}?id=${encodeURIComponent(chatId)}`);
+	      if (!res.ok) {
+	        showEmptyState();
+	        return;
+	      }
+
+	      const payload = await res.json();
+	      const history = Array.isArray(payload.messages) ? payload.messages : [];
+	      messages.splice(0, messages.length, ...history);
+	      chatEl.innerHTML = '';
+
+	      if (history.length === 0) {
+	        showEmptyState();
+	        return;
+	      }
+
+	      for (const message of history) {
+	        addMessage(message.role, message.content);
+	      }
+	    }
+
+	    const initPromise = loadHistory().catch(() => {
+	      showEmptyState();
+	    });
+
     async function send() {
+      await initPromise;
       const text = inputEl.value.trim();
       if (!text || streaming) return;
       inputEl.value = '';
       streaming = true;
       setInputEnabled(false);
 
-      messages.push({ role: 'user', content: text });
+      const userMessage = { role: 'user', content: text };
+      messages.push(userMessage);
       addMessage('user', text);
       setStatus('streaming');
 
       const res = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: chatId, messages }),
+        body: JSON.stringify({ id: chatId, message: userMessage }),
       });
 
       if (!res.ok) {
@@ -174,6 +214,7 @@
     }
 
 	    async function tryReconnect() {
+	      await initPromise;
 	      try {
 	        const stream = sessionStorage.getItem(streamKey());
 	        if (!stream) return;
@@ -205,12 +246,12 @@
 	      } catch {}
     }
 
-    sendBtn.addEventListener('click', send);
+	    sendBtn.addEventListener('click', send);
     inputEl.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
     });
 
-    tryReconnect();
+    initPromise.then(() => tryReconnect());
   </script>
 </body>
 </html>

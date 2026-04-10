@@ -2,10 +2,20 @@
 
 ## How it works
 
-1. **Browser** sends a message via `POST /api/chat`
-2. **Server** calls `streamText()` and passes `result.toUIMessageStream()` to `chat.persist(streamName, stream)` which writes UI chunks to S2 and responds with `{ stream: "name" }`
-3. **Browser** stores that stream name in `sessionStorage` and reads `GET /api/chat/stream?stream=...`
-4. On page refresh, the browser reuses the stored stream ID and reconnects to the same replay endpoint
+This demo now uses two S2 stream shapes per chat:
+
+1. A **transcript stream** stores completed `user` and `assistant` messages.
+2. A **token stream** stores the in-flight AI SDK `UIMessageChunk`s for the current assistant turn.
+
+The request flow is:
+
+1. **Browser** loads `GET /api/chat/history?id=...` on startup and renders the completed transcript.
+2. **Browser** sends a new user message via `POST /api/chat`.
+3. **Server** appends that user message to the transcript stream, loads prior history from S2, and calls `streamText()`.
+4. **Server** passes `result.toUIMessageStream()` through `chat.persist(streamName, stream)` to write the in-flight token stream to S2.
+5. When the assistant finishes, the server appends the completed assistant message to the transcript stream before yielding the terminal `finish` chunk.
+6. **Browser** stores the active token stream name in `sessionStorage` and reads `GET /api/chat/stream?stream=...`.
+7. On page refresh, the browser reloads the transcript first and then reconnects to the in-flight token stream if one is still active.
 
 ## Run with s2-lite (local)
 
@@ -70,7 +80,7 @@ export async function POST(req: Request) {
 
 ```tsx
 // app/page.tsx
-import { useChat } from "ai/react";
+import { useChat } from "@ai-sdk/react";
 import { createS2Transport } from "@s2-dev/resumable-stream/aisdk";
 
 const transport = createS2Transport({
@@ -79,7 +89,7 @@ const transport = createS2Transport({
 });
 
 export default function Chat() {
-  const chat = useChat({ transport, experimental_resume: true });
+  const chat = useChat({ transport, resume: true });
   // ...
 }
 ```
