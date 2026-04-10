@@ -119,8 +119,11 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	private handleRecord(record: AppendRecord): void {
 		const recordSize = meteredBytes(record);
 
-		// Reject individual records that exceed the max batch size
+		// Reject individual records that exceed the max batch size.
+		// Cancel the linger timer first — the throw will error the stream,
+		// and we don't want the timer to fire on an errored controller.
 		if (recordSize > this.maxBatchBytes) {
+			this.cancelLingerTimer();
 			throw new S2Error({
 				message: `Record size ${recordSize} bytes exceeds maximum batch size of ${this.maxBatchBytes} bytes`,
 				status: 400,
@@ -195,8 +198,18 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			if (this.currentBatch.length > 0) {
 				try {
 					this.flush();
-				} catch {
-					// Stream may be closed/errored; discard silently
+				} catch (err) {
+					if (err instanceof TypeError) {
+						// Stream lifecycle issue (closed/errored controller) — safe to discard.
+						return;
+					}
+					// Validation or application error (e.g. S2Error from AppendInput.create) —
+					// propagate to the readable side so downstream consumers see the failure.
+					try {
+						this.controller?.error(err);
+					} catch {
+						// controller.error() itself may throw if already errored
+					}
 				}
 			}
 		}, this.lingerDuration);
