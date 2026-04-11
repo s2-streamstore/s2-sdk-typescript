@@ -45,6 +45,18 @@ async function* arrayToAsyncIterable<T>(items: T[]): AsyncIterable<T> {
 	}
 }
 
+async function* delayedAsyncIterable<T>(
+	items: T[],
+	delayMs = 25,
+): AsyncIterable<T> {
+	for (let index = 0; index < items.length; index += 1) {
+		yield items[index]!;
+		if (index < items.length - 1) {
+			await sleep(delayMs);
+		}
+	}
+}
+
 async function readNdjsonResponse(res: Response): Promise<unknown[]> {
 	const text = await res.text();
 	return text
@@ -53,12 +65,15 @@ async function readNdjsonResponse(res: Response): Promise<unknown[]> {
 		.map((line) => JSON.parse(line));
 }
 
-function sampleChunks(): UIMessageChunk[] {
+function sampleChunks(text = "Hello world"): UIMessageChunk[] {
+	const [head = "", ...rest] = text.split(" ");
 	return [
 		{ type: "start" },
 		{ type: "text-start", id: "text-1" },
-		{ type: "text-delta", id: "text-1", delta: "Hello" },
-		{ type: "text-delta", id: "text-1", delta: " world" },
+		{ type: "text-delta", id: "text-1", delta: head },
+		...(rest.length > 0
+			? [{ type: "text-delta", id: "text-1", delta: ` ${rest.join(" ")}` }]
+			: []),
 		{ type: "text-end", id: "text-1" },
 		{ type: "finish", finishReason: "stop" },
 	];
@@ -184,7 +199,7 @@ describeIf("resumable-stream/aisdk", () => {
 
 	describe("replay", () => {
 		it(
-			"returns persisted chunks as NDJSON",
+			"returns 204 once a single-use stream has completed",
 			async () => {
 				const chat = createDurableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -197,17 +212,40 @@ describeIf("resumable-stream/aisdk", () => {
 				await chat.persist(streamName, arrayToAsyncIterable(chunks));
 
 				const res = await chat.replay(streamName);
-				expect(res.status).toBe(200);
-				expect(res.headers.get("Content-Type")).toBe("application/x-ndjson");
-
-				const records = await readNdjsonResponse(res);
-				expect(records).toEqual(chunks);
+				expect(res.status).toBe(204);
 			},
 			TEST_TIMEOUT_MS,
 		);
 
 		it(
-			"works with waitUntil persist followed by replay",
+			"replays a just-completed generation when fromSeqNum is provided",
+			async () => {
+				const chat = createDurableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("replay-from");
+				const chunks = sampleChunks();
+
+				const persistRes = await chat.persist(
+					streamName,
+					arrayToAsyncIterable(chunks),
+				);
+				const body = (await persistRes.json()) as {
+					fromSeqNum: number;
+					stream: string;
+				};
+
+				const replayRes = await chat.replay(streamName, body.fromSeqNum);
+				expect(replayRes.status).toBe(200);
+				expect(await readNdjsonResponse(replayRes)).toEqual(chunks);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"streams the active generation while persist runs in the background",
 			async () => {
 				const chat = createDurableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -218,16 +256,101 @@ describeIf("resumable-stream/aisdk", () => {
 				const chunks = sampleChunks();
 
 				let bgPromise: Promise<unknown> | undefined;
-				await chat.persist(streamName, arrayToAsyncIterable(chunks), {
+				await chat.persist(streamName, delayedAsyncIterable(chunks), {
 					waitUntil: (promise) => {
 						bgPromise = promise;
 					},
 				});
 
+				const res = await chat.replay(streamName);
+				expect(res.status).toBe(200);
+				expect(res.headers.get("Content-Type")).toBe("application/x-ndjson");
+
+				const records = await readNdjsonResponse(res);
+				expect(records).toEqual(chunks);
+
+				await bgPromise;
+			},
+			TEST_TIMEOUT_MS,
+		);
+	});
+
+	describe("shared streams", () => {
+		it(
+			"reuses a completed stream and replays the active generation",
+			async () => {
+				const chat = createDurableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					streamReuse: "shared",
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("shared-reuse");
+				const firstChunks = sampleChunks("Hello world");
+				const secondChunks = sampleChunks("Second pass");
+
+				const res1 = await chat.persist(
+					streamName,
+					arrayToAsyncIterable(firstChunks),
+				);
+				expect(res1.status).toBe(200);
+
+				let bgPromise: Promise<unknown> | undefined;
+				const res2 = await chat.persist(
+					streamName,
+					delayedAsyncIterable(secondChunks),
+					{
+						waitUntil: (promise) => {
+							bgPromise = promise;
+						},
+					},
+				);
+				expect(res2.status).toBe(200);
+
+				const latest = await chat.replay(streamName);
+				expect(latest.status).toBe(200);
+				expect(await readNdjsonResponse(latest)).toEqual(secondChunks);
+
 				await bgPromise;
 
-				const records = await readNdjsonResponse(await chat.replay(streamName));
-				expect(records).toEqual(chunks);
+				const raw = await s2.basin(basinName).stream(streamName).read(
+					{
+						start: { from: { seqNum: 0 }, clamp: true },
+						stop: { limits: { count: 50 } },
+					},
+					{ as: "string" },
+				);
+				expect(
+					raw.records.some(
+						(record) =>
+							record.headers.length === 1 &&
+							record.headers[0]?.[0] === "" &&
+							record.headers[0]?.[1] === "trim",
+						),
+				).toBe(true);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"returns 204 once a shared stream is idle",
+			async () => {
+				const chat = createDurableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					streamReuse: "shared",
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("shared-idle");
+
+				const res = await chat.persist(
+					streamName,
+					arrayToAsyncIterable(sampleChunks("Idle latest")),
+				);
+				expect(res.status).toBe(200);
+
+				const replay = await chat.replay(streamName);
+				expect(replay.status).toBe(204);
 			},
 			TEST_TIMEOUT_MS,
 		);

@@ -9,14 +9,15 @@ import {
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 import {
 	appendFenceRecord,
+	appendTrimRecord,
+	getReusableFenceToken,
 	persistToS2,
-	replayStringBodies,
+	replayActiveStringBodies,
+	replayGenerationStringBodies,
 } from "./shared.js";
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
-const STORE_KEY_PREFIX = "s2-resumable-stream:";
-const fallbackStreamStore = new Map<string, string>();
 
 export interface DurableChatConfig {
 	accessToken: string;
@@ -24,6 +25,7 @@ export interface DurableChatConfig {
 	endpoints?: S2Endpoints | S2EndpointsInit;
 	batchSize?: number;
 	lingerDuration?: number;
+	streamReuse?: "single-use" | "shared";
 }
 
 export interface PersistOptions {
@@ -36,13 +38,7 @@ export interface DurableChat {
 		source: AsyncIterable<UIMessageChunk>,
 		options?: PersistOptions,
 	): Promise<Response>;
-	replay(streamName: string): Promise<Response>;
-}
-
-export interface StreamStateStore {
-	get(chatId: string): string | null;
-	set(chatId: string, streamName: string): void;
-	delete(chatId: string): void;
+	replay(streamName: string, fromSeqNum?: number): Promise<Response>;
 }
 
 export interface S2TransportConfig {
@@ -50,7 +46,6 @@ export interface S2TransportConfig {
 	reconnectApi?: string;
 	headers?: HeadersInit;
 	fetchClient?: typeof fetch;
-	streamStateStore?: StreamStateStore;
 }
 
 function flattenHeaders(h?: HeadersInit): Record<string, string> {
@@ -61,77 +56,34 @@ function flattenHeaders(h?: HeadersInit): Record<string, string> {
 	return { ...h };
 }
 
-function storageKey(chatId: string): string {
-	return `${STORE_KEY_PREFIX}${chatId}`;
-}
-
-function defaultStreamStateStore(): StreamStateStore {
-	return {
-		get(chatId) {
-			const key = storageKey(chatId);
-			try {
-				if (typeof sessionStorage !== "undefined") {
-					return sessionStorage.getItem(key);
-				}
-			} catch {
-				// Fall back to process-local memory when sessionStorage is unavailable.
-			}
-			return fallbackStreamStore.get(key) ?? null;
-		},
-		set(chatId, streamName) {
-			const key = storageKey(chatId);
-			try {
-				if (typeof sessionStorage !== "undefined") {
-					sessionStorage.setItem(key, streamName);
-					return;
-				}
-			} catch {
-				// Fall back to process-local memory when sessionStorage is unavailable.
-			}
-			fallbackStreamStore.set(key, streamName);
-		},
-		delete(chatId) {
-			const key = storageKey(chatId);
-			try {
-				if (typeof sessionStorage !== "undefined") {
-					sessionStorage.removeItem(key);
-				}
-			} catch {
-				// Fall back to process-local memory when sessionStorage is unavailable.
-			}
-			fallbackStreamStore.delete(key);
-		},
-	};
-}
-
-function withQueryParam(url: string, key: string, value: string): string {
-	const [pathname, query = ""] = url.split("?", 2);
-	const params = new URLSearchParams(query);
-	params.set(key, value);
-	const search = params.toString();
-	return search ? `${pathname}?${search}` : pathname;
-}
-
-function buildReplayEndpoint(
+function buildReconnectEndpoint(
 	api: string,
 	reconnectApi: string | undefined,
-	stream: string,
+	chatId: string,
+	fromSeqNum?: number,
 ): string {
-	const base = reconnectApi ?? `${api.replace(/\/$/, "")}/stream`;
-	return withQueryParam(base, "stream", stream);
+	const base = reconnectApi ?? defaultReconnectApi(api);
+	const params = new URLSearchParams({ id: chatId });
+	if (fromSeqNum !== undefined) {
+		params.set("from", String(fromSeqNum));
+	}
+	const separator = base.includes("?") ? "&" : "?";
+	return `${base}${separator}${params.toString()}`;
 }
 
-function isTerminalChunk(chunk: UIMessageChunk): boolean {
-	return (
-		chunk.type === "finish" || chunk.type === "abort" || chunk.type === "error"
-	);
+function defaultReconnectApi(api: string): string {
+	if (api.includes("?") || api.includes("#")) {
+		throw new Error(
+			"[resumable-stream] Pass reconnectApi explicitly when api contains a query string or hash.",
+		);
+	}
+	return `${api.replace(/\/$/, "")}/stream`;
 }
 
 async function readNdjsonStream(
 	res: Response,
 	options?: {
 		signal?: AbortSignal;
-		onTerminalChunk?: () => void;
 	},
 ): Promise<ReadableStream<UIMessageChunk>> {
 	if (!res.body) throw new Error("[resumable-stream] Response has no body.");
@@ -139,12 +91,16 @@ async function readNdjsonStream(
 	const reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	let buf = "";
-	let handledTerminal = false;
+	let readerDone = false;
 
-	const markTerminal = () => {
-		if (handledTerminal) return;
-		handledTerminal = true;
-		options?.onTerminalChunk?.();
+	const parseChunk = (line: string): UIMessageChunk => {
+		try {
+			return JSON.parse(line) as UIMessageChunk;
+		} catch {
+			throw new Error(
+				`[resumable-stream] Invalid NDJSON chunk: ${line.slice(0, 200)}`,
+			);
+		}
 	};
 
 	options?.signal?.addEventListener("abort", () => reader.cancel(), {
@@ -159,29 +115,27 @@ async function readNdjsonStream(
 					const line = buf.slice(0, nl).trim();
 					buf = buf.slice(nl + 1);
 					if (line.length === 0) continue;
-					try {
-						const chunk = JSON.parse(line) as UIMessageChunk;
-						if (isTerminalChunk(chunk)) markTerminal();
-						ctrl.enqueue(chunk);
+					ctrl.enqueue(parseChunk(line));
+					return;
+				}
+
+				if (readerDone) {
+					buf += decoder.decode();
+					const line = buf.trim();
+					buf = "";
+					if (line.length === 0) {
+						ctrl.close();
 						return;
-					} catch {
-						continue;
 					}
+					ctrl.enqueue(parseChunk(line));
+					ctrl.close();
+					return;
 				}
 
 				const { done, value } = await reader.read();
 				if (done) {
-					if (buf.trim().length > 0) {
-						try {
-							const chunk = JSON.parse(buf.trim()) as UIMessageChunk;
-							if (isTerminalChunk(chunk)) markTerminal();
-							ctrl.enqueue(chunk);
-						} catch {
-							// Ignore malformed trailing data.
-						}
-					}
-					ctrl.close();
-					return;
+					readerDone = true;
+					continue;
 				}
 
 				buf += decoder.decode(value, { stream: true });
@@ -217,6 +171,7 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 	const basin = config.basin;
 	const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
+	const streamReuse = config.streamReuse ?? "single-use";
 
 	return {
 		async persist(
@@ -225,9 +180,49 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 			options?: PersistOptions,
 		): Promise<Response> {
 			const fencingToken = `session-${randomToken(8)}`;
+			let matchSeqNumStart = 1;
+			let fromSeqNum = 0;
 
 			try {
-				await appendFenceRecord(s2, basin, streamName, "", fencingToken);
+				if (streamReuse === "shared") {
+					const state = await getReusableFenceToken({
+						s2,
+						basin,
+						stream: streamName,
+					});
+					if (state.fencingToken === null) {
+						return new Response("Stream already in use", { status: 409 });
+					}
+					const ack = await appendFenceRecord(
+						s2,
+						basin,
+						streamName,
+						state.fencingToken,
+						fencingToken,
+					);
+					fromSeqNum = ack.start.seqNum;
+					matchSeqNumStart = ack.end.seqNum;
+					if (state.nextSeqNum > 0) {
+						const trimAck = await appendTrimRecord(
+							s2,
+							basin,
+							streamName,
+							fencingToken,
+							ack.start.seqNum,
+						);
+						matchSeqNumStart = trimAck.end.seqNum;
+					}
+				} else {
+					const ack = await appendFenceRecord(
+						s2,
+						basin,
+						streamName,
+						"",
+						fencingToken,
+					);
+					fromSeqNum = ack.start.seqNum;
+					matchSeqNumStart = ack.end.seqNum;
+				}
 			} catch (err) {
 				if (err instanceof FencingTokenMismatchError) {
 					return new Response("Stream already in use", { status: 409 });
@@ -243,6 +238,7 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 				fencingToken,
 				batchSize,
 				lingerDuration,
+				matchSeqNumStart,
 				toRecord: (chunk) =>
 					AppendRecord.string({ body: JSON.stringify(chunk) }),
 				terminalFenceBody: (failed) =>
@@ -262,22 +258,43 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 			}
 
 			return Response.json(
-				{ stream: streamName },
+				{ stream: streamName, fromSeqNum },
 				{ headers: { "Cache-Control": "no-store" } },
 			);
 		},
 
-		async replay(streamName: string): Promise<Response> {
+		async replay(streamName: string, fromSeqNum?: number): Promise<Response> {
+			const iterator = (
+				fromSeqNum === undefined
+					? replayActiveStringBodies({
+							s2,
+							basin,
+							stream: streamName,
+						})
+					: replayGenerationStringBodies({
+							s2,
+							basin,
+							stream: streamName,
+							fromSeqNum,
+						})
+			)[Symbol.asyncIterator]();
+			const first = await iterator.next();
+			if (first.done) {
+				return new Response(null, {
+					status: 204,
+					headers: { "Cache-Control": "no-store" },
+				});
+			}
+
 			const encoder = new TextEncoder();
 			const body = new ReadableStream<Uint8Array>({
 				async start(controller) {
 					try {
-						for await (const record of replayStringBodies({
-							s2,
-							basin,
-							stream: streamName,
-						})) {
-							controller.enqueue(encoder.encode(`${record}\n`));
+						controller.enqueue(encoder.encode(`${first.value}\n`));
+						while (true) {
+							const next = await iterator.next();
+							if (next.done) break;
+							controller.enqueue(encoder.encode(`${next.value}\n`));
 						}
 						controller.close();
 					} catch (err) {
@@ -302,7 +319,6 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 	reconnectApi,
 	headers,
 	fetchClient,
-	streamStateStore = defaultStreamStateStore(),
 }: S2TransportConfig): ChatTransport<UIMessageT> {
 	const fetchFn = fetchClient ?? fetch;
 
@@ -338,17 +354,22 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
 			}
 
-			const { stream } = (await res.json()) as { stream: string };
-			if (!stream) {
-				throw new Error(
-					"[resumable-stream] Server response missing { stream } field.",
-				);
+			let fromSeqNum: number | undefined;
+			try {
+				const body = (await res.json()) as { fromSeqNum?: unknown };
+				if (
+					typeof body.fromSeqNum === "number" &&
+					Number.isSafeInteger(body.fromSeqNum) &&
+					body.fromSeqNum >= 0
+				) {
+					fromSeqNum = body.fromSeqNum;
+				}
+			} catch {
+				// Backward compatibility: older handlers may not return JSON metadata.
 			}
 
-			streamStateStore.set(chatId, stream);
-
 			const replayRes = await fetchFn(
-				buildReplayEndpoint(api, reconnectApi, stream),
+				buildReconnectEndpoint(api, reconnectApi, chatId, fromSeqNum),
 				{
 					method: "GET",
 					headers: {
@@ -360,7 +381,6 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 			);
 
 			if (replayRes.status === 204) {
-				streamStateStore.delete(chatId);
 				throw new Error("No active stream found for the requested chat.");
 			}
 
@@ -371,18 +391,12 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 				);
 			}
 
-			return readNdjsonStream(replayRes, {
-				signal: abortSignal,
-				onTerminalChunk: () => streamStateStore.delete(chatId),
-			});
+			return readNdjsonStream(replayRes, { signal: abortSignal });
 		},
 
 		async reconnectToStream({ chatId, headers: reqHeaders }) {
-			const stream = streamStateStore.get(chatId);
-			if (!stream) return null;
-
 			const res = await fetchFn(
-				buildReplayEndpoint(api, reconnectApi, stream),
+				buildReconnectEndpoint(api, reconnectApi, chatId),
 				{
 					method: "GET",
 					headers: {
@@ -393,7 +407,6 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 			);
 
 			if (res.status === 204) {
-				streamStateStore.delete(chatId);
 				return null;
 			}
 
@@ -402,9 +415,7 @@ export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
 			}
 
-			return readNdjsonStream(res, {
-				onTerminalChunk: () => streamStateStore.delete(chatId),
-			});
+			return readNdjsonStream(res);
 		},
 	};
 }

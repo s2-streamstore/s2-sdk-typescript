@@ -1,4 +1,4 @@
-# Resumable Chat — S2 + AI SDK Transport
+# Resumable Chat with S2 + AI SDK Transport
 
 ## How it works
 
