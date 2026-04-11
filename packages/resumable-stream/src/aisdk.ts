@@ -7,10 +7,7 @@ import {
 	S2,
 } from "@s2-dev/streamstore";
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import {
-	persistToS2,
-	appendFenceRecord,
-} from "./protocol.js";
+import { appendFenceRecord, persistToS2 } from "./protocol.js";
 import {
 	claimSharedGeneration,
 	replayActiveGenerationStringBodies,

@@ -313,20 +313,23 @@ describeIf("resumable-stream/aisdk", () => {
 
 				await bgPromise;
 
-				const raw = await s2.basin(basinName).stream(streamName).read(
-					{
-						start: { from: { seqNum: 0 }, clamp: true },
-						stop: { limits: { count: 50 } },
-					},
-					{ as: "string" },
-				);
+				const raw = await s2
+					.basin(basinName)
+					.stream(streamName)
+					.read(
+						{
+							start: { from: { seqNum: 0 }, clamp: true },
+							stop: { limits: { count: 50 } },
+						},
+						{ as: "string" },
+					);
 				expect(
 					raw.records.some(
 						(record) =>
 							record.headers.length === 1 &&
 							record.headers[0]?.[0] === "" &&
 							record.headers[0]?.[1] === "trim",
-						),
+					),
 				).toBe(true);
 			},
 			TEST_TIMEOUT_MS,
