@@ -8,12 +8,13 @@ import {
 } from "@s2-dev/streamstore";
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
 import {
-	appendFenceRecord,
-	appendTrimRecord,
-	getReusableFenceToken,
 	persistToS2,
-	replayActiveStringBodies,
-	replayGenerationStringBodies,
+	appendFenceRecord,
+} from "./protocol.js";
+import {
+	claimSharedGeneration,
+	replayActiveGenerationStringBodies,
+	replayGenerationStringBodiesFromSeqNum,
 } from "./shared.js";
 
 const DEFAULT_BATCH_SIZE = 10;
@@ -185,33 +186,17 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 
 			try {
 				if (streamReuse === "shared") {
-					const state = await getReusableFenceToken({
+					const claim = await claimSharedGeneration({
 						s2,
 						basin,
 						stream: streamName,
+						fencingToken,
 					});
-					if (state.fencingToken === null) {
+					if (!claim) {
 						return new Response("Stream already in use", { status: 409 });
 					}
-					const ack = await appendFenceRecord(
-						s2,
-						basin,
-						streamName,
-						state.fencingToken,
-						fencingToken,
-					);
-					fromSeqNum = ack.start.seqNum;
-					matchSeqNumStart = ack.end.seqNum;
-					if (state.nextSeqNum > 0) {
-						const trimAck = await appendTrimRecord(
-							s2,
-							basin,
-							streamName,
-							fencingToken,
-							ack.start.seqNum,
-						);
-						matchSeqNumStart = trimAck.end.seqNum;
-					}
+					fromSeqNum = claim.fromSeqNum;
+					matchSeqNumStart = claim.matchSeqNumStart;
 				} else {
 					const ack = await appendFenceRecord(
 						s2,
@@ -266,12 +251,12 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 		async replay(streamName: string, fromSeqNum?: number): Promise<Response> {
 			const iterator = (
 				fromSeqNum === undefined
-					? replayActiveStringBodies({
+					? replayActiveGenerationStringBodies({
 							s2,
 							basin,
 							stream: streamName,
 						})
-					: replayGenerationStringBodies({
+					: replayGenerationStringBodiesFromSeqNum({
 							s2,
 							basin,
 							stream: streamName,

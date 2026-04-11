@@ -11,12 +11,12 @@ import {
 	S2Environment,
 } from "@s2-dev/streamstore";
 import {
-	appendFenceRecord,
 	isFenceRecord,
 	isTerminalFence,
 	persistToS2,
 	replayStringBodies,
-} from "./shared.js";
+	appendFenceRecord,
+} from "./protocol.js";
 
 interface S2Config {
 	/**
