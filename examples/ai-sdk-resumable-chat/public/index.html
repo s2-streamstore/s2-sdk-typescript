@@ -7,9 +7,13 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #e5e5e5; height: 100vh; display: flex; flex-direction: column; }
-    .header { padding: 12px 20px; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 12px; }
+    .header { padding: 12px 20px; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     .header img { height: 22px; filter: invert(1); }
     .header h1 { font-size: 15px; font-weight: 500; opacity: .7; }
+    .header .chat-link { max-width: min(44vw, 360px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #a5b4fc; text-decoration: none; padding: 4px 10px; border-radius: 999px; border: 1px solid #312e81; background: #161329; }
+    .header .chat-link:hover { background: #1d1840; }
+    .header .copy-link { padding: 6px 12px; background: #171717; color: #d4d4d8; border: 1px solid #2a2a2a; font-size: 12px; }
+    .header .copy-link:hover { background: #222; }
     .header .status { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 99px; }
     .status.idle { background: #1a1a2e; color: #818cf8; }
     .status.streaming { background: #14281e; color: #34d399; }
@@ -31,17 +35,23 @@
     button:disabled { opacity: .4; cursor: default; }
     .info { text-align: center; padding: 40px 20px; opacity: .3; font-size: 13px; }
     .info kbd { background: #222; padding: 2px 6px; border-radius: 4px; font-family: inherit; }
+    @media (max-width: 640px) {
+      .header .status { margin-left: 0; }
+      .header .chat-link { max-width: calc(100vw - 150px); }
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <img src="https://raw.githubusercontent.com/s2-streamstore/s2-sdk-rust/main/assets/s2-white.png" alt="S2">
     <h1>Resumable Chat</h1>
+    <a class="chat-link" id="chat-link" href="/" title="Share this chat URL"></a>
+    <button class="copy-link" id="copy-link" type="button">Copy link</button>
     <span class="status idle" id="status">idle</span>
   </div>
 
   <div class="chat" id="chat">
-    <div class="info">Send a message. Try <kbd>F5</kbd> mid-generation the stream resumes from S2, and completed messages reload from the transcript stream.</div>
+    <div class="info">Send a message. Try <kbd>F5</kbd> mid-generation. The stream resumes from S2, completed messages reload from the transcript stream, and this URL stays pinned to the same chat.</div>
   </div>
 
   <div class="input-row">
@@ -52,38 +62,73 @@
   <script>
     const API = '/api/chat';
     const HISTORY_API = `${API}/history`;
+    const EMPTY_STATE_HTML = '<div class="info">Send a message. Try <kbd>F5</kbd> mid-generation. The stream resumes from S2, completed messages reload from the transcript stream, and this URL will reopen the same chat.</div>';
+    const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
     const chatEl = document.getElementById('chat');
     const inputEl = document.getElementById('input');
-	    const sendBtn = document.getElementById('send');
-	    const statusEl = document.getElementById('status');
+    const sendBtn = document.getElementById('send');
+    const statusEl = document.getElementById('status');
+    const chatLinkEl = document.getElementById('chat-link');
+    const copyLinkEl = document.getElementById('copy-link');
 
-	    let chatId = sessionStorage.getItem('chatId');
-    if (!chatId) {
-      chatId = crypto.randomUUID();
-      sessionStorage.setItem('chatId', chatId);
-	    }
+    let streaming = false;
 
-	    const messages = [];
-	    let streaming = false;
-	    const streamKey = () => `chat-stream:${chatId}`;
-	    const emptyStateHtml = '<div class="info">Send a message. Try <kbd>F5</kbd> mid-generation — the stream resumes from S2, and completed messages reload from the transcript stream.</div>';
-
-	    function setStatus(s) {
-	      statusEl.textContent = s;
-	      statusEl.className = 'status ' + s;
+    function isValidChatId(value) {
+      return typeof value === 'string' && CHAT_ID_PATTERN.test(value);
     }
 
-	    function showEmptyState() {
-	      chatEl.innerHTML = emptyStateHtml;
-	    }
+    function resolveChatId() {
+      const url = new URL(window.location.href);
+      const fromQuery = url.searchParams.get('chat');
+      if (isValidChatId(fromQuery)) return fromQuery;
 
-	    function clearEmptyState() {
-	      const info = chatEl.querySelector('.info');
-	      if (info) info.remove();
-	    }
+      const fromSession = sessionStorage.getItem('chatId');
+      if (isValidChatId(fromSession)) return fromSession;
 
-    function addMessage(role, content, opts = {}) {
+      return crypto.randomUUID();
+    }
+
+    const chatId = resolveChatId();
+    sessionStorage.setItem('chatId', chatId);
+
+    function chatUrl() {
+      const url = new URL(window.location.href);
+      url.searchParams.set('chat', chatId);
+      return url;
+    }
+
+    function syncChatUrl() {
+      const url = chatUrl();
+      const relativeUrl = `${url.pathname}?${url.searchParams.toString()}`;
+      window.history.replaceState(null, '', relativeUrl);
+      chatLinkEl.href = relativeUrl;
+      chatLinkEl.textContent = `chat=${chatId}`;
+      chatLinkEl.title = url.toString();
+    }
+
+    function setStatus(status) {
+      statusEl.textContent = status;
+      statusEl.className = `status ${status}`;
+    }
+
+    function setInputEnabled(enabled) {
+      inputEl.disabled = !enabled;
+      sendBtn.disabled = !enabled;
+    }
+
+    function showEmptyState() {
+      chatEl.innerHTML = EMPTY_STATE_HTML;
+    }
+
+    function clearEmptyState() {
+      const info = chatEl.querySelector('.info');
+      if (info) info.remove();
+    }
+
+    function addMessage(role, content, options = {}) {
       clearEmptyState();
+
       const wrap = document.createElement('div');
       wrap.className = `msg ${role}`;
 
@@ -92,7 +137,7 @@
       label.textContent = role;
 
       const body = document.createElement('div');
-      body.className = 'msg-body' + (opts.streaming ? ' streaming' : '');
+      body.className = `msg-body${options.streaming ? ' streaming' : ''}`;
       body.textContent = content;
 
       wrap.appendChild(label);
@@ -102,153 +147,171 @@
       return body;
     }
 
-    function setInputEnabled(on) {
-      inputEl.disabled = !on;
-      sendBtn.disabled = !on;
+    async function copyChatUrl() {
+      const url = chatUrl().toString();
+      try {
+        await navigator.clipboard.writeText(url);
+        copyLinkEl.textContent = 'Copied';
+        window.setTimeout(() => {
+          copyLinkEl.textContent = 'Copy link';
+        }, 1200);
+      } catch {
+        window.prompt('Copy chat URL', url);
+      }
     }
 
-	    async function readNdjson(res, bubble) {
-	      const reader = res.body.getReader();
-	      const dec = new TextDecoder();
-	      let buf = '', fullText = '', errorText = '';
+    async function readNdjson(res, bubble) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let fullText = '';
+      let errorText = '';
 
-	      while (true) {
-	        const { done, value } = await reader.read();
-	        if (done) break;
-        buf += dec.decode(value, { stream: true });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-        let nl;
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-	          if (!line) continue;
-	          try {
-	            const chunk = JSON.parse(line);
-	            if (chunk.type === 'text-delta' && chunk.delta) {
-	              fullText += chunk.delta;
-	              bubble.textContent = fullText;
-	              chatEl.scrollTop = chatEl.scrollHeight;
-	            }
-	            if (chunk.type === 'error' && chunk.errorText) {
-	              errorText = chunk.errorText;
-	            }
-	          } catch {}
-	        }
-	      }
-	      return { fullText, errorText };
-	    }
+        buf += decoder.decode(value, { stream: true });
 
-	    async function loadHistory() {
-	      const res = await fetch(`${HISTORY_API}?id=${encodeURIComponent(chatId)}`);
-	      if (!res.ok) {
-	        showEmptyState();
-	        return;
-	      }
+        let newlineIndex;
+        while ((newlineIndex = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, newlineIndex).trim();
+          buf = buf.slice(newlineIndex + 1);
+          if (!line) continue;
 
-	      const payload = await res.json();
-	      const history = Array.isArray(payload.messages) ? payload.messages : [];
-	      messages.splice(0, messages.length, ...history);
-	      chatEl.innerHTML = '';
+          try {
+            const chunk = JSON.parse(line);
+            if (chunk.type === 'text-delta' && chunk.delta) {
+              fullText += chunk.delta;
+              bubble.textContent = fullText;
+              chatEl.scrollTop = chatEl.scrollHeight;
+            }
+            if (chunk.type === 'error' && chunk.errorText) {
+              errorText = chunk.errorText;
+            }
+          } catch {}
+        }
+      }
 
-	      if (history.length === 0) {
-	        showEmptyState();
-	        return;
-	      }
+      return { fullText, errorText };
+    }
 
-	      for (const message of history) {
-	        addMessage(message.role, message.content);
-	      }
-	    }
+    async function loadHistory() {
+      const res = await fetch(`${HISTORY_API}?id=${encodeURIComponent(chatId)}`);
+      if (!res.ok) {
+        showEmptyState();
+        return;
+      }
 
-	    const initPromise = loadHistory().catch(() => {
-	      showEmptyState();
-	    });
+      const payload = await res.json();
+      const history = Array.isArray(payload.messages) ? payload.messages : [];
+      chatEl.innerHTML = '';
+
+      if (history.length === 0) {
+        showEmptyState();
+        return;
+      }
+
+      for (const message of history) {
+        addMessage(message.role, message.content);
+      }
+    }
+
+    async function replayActiveStream(fromSeqNum) {
+      const params = new URLSearchParams({ id: chatId });
+      if (Number.isSafeInteger(fromSeqNum) && fromSeqNum >= 0) {
+        params.set('from', String(fromSeqNum));
+      }
+
+      const res = await fetch(`${API}/stream?${params.toString()}`);
+      if (res.status === 204 || !res.ok) {
+        return null;
+      }
+
+      const bubble = addMessage('assistant', '', { streaming: true });
+      try {
+        const { fullText, errorText } = await readNdjson(res, bubble);
+        if (errorText) {
+          bubble.textContent = fullText
+            ? `${fullText}\n\n[error] ${errorText}`
+            : `[error] ${errorText}`;
+        }
+        return bubble;
+      } catch (error) {
+        bubble.parentElement?.remove();
+        throw error;
+      }
+    }
+
+    const initPromise = loadHistory().catch(() => {
+      showEmptyState();
+    });
 
     async function send() {
       await initPromise;
       const text = inputEl.value.trim();
       if (!text || streaming) return;
+
       inputEl.value = '';
       streaming = true;
       setInputEnabled(false);
-
-      const userMessage = { role: 'user', content: text };
-      messages.push(userMessage);
-      addMessage('user', text);
       setStatus('streaming');
+      addMessage('user', text);
 
-      const res = await fetch(API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: chatId, message: userMessage }),
-      });
+      try {
+        const userMessage = { role: 'user', content: text };
+        const res = await fetch(API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: chatId, message: userMessage }),
+        });
 
-      if (!res.ok) {
-        setStatus('idle');
+        if (!res.ok) {
+          return;
+        }
+
+        const payload = await res.json();
+        const bubble = await replayActiveStream(payload.fromSeqNum);
+        if (bubble) {
+          bubble.classList.remove('streaming');
+        }
+      } finally {
         streaming = false;
         setInputEnabled(true);
-        return;
+        setStatus('idle');
+        inputEl.focus();
       }
-
-	      const { stream } = await res.json();
-	      sessionStorage.setItem(streamKey(), stream);
-	      const bubble = addMessage('assistant', '', { streaming: true });
-
-	      const replayRes = await fetch(`${API}/stream?stream=${encodeURIComponent(stream)}`);
-	      if (replayRes.ok) {
-	        const { fullText, errorText } = await readNdjson(replayRes, bubble);
-	        if (errorText) {
-	          bubble.textContent = fullText
-	            ? `${fullText}\n\n[error] ${errorText}`
-	            : `[error] ${errorText}`;
-	        }
-	        messages.push({ role: 'assistant', content: fullText });
-	        sessionStorage.removeItem(streamKey());
-	      }
-
-	      bubble.classList.remove('streaming');
-	      streaming = false;
-      setInputEnabled(true);
-      setStatus('idle');
-      inputEl.focus();
     }
 
-	    async function tryReconnect() {
-	      await initPromise;
-	      try {
-	        const stream = sessionStorage.getItem(streamKey());
-	        if (!stream) return;
+    async function tryReconnect() {
+      await initPromise;
 
-	        const res = await fetch(`${API}/stream?stream=${encodeURIComponent(stream)}`);
-	        if (res.status === 204 || !res.ok) {
-	          sessionStorage.removeItem(streamKey());
-	          return;
-	        }
+      try {
+        setStatus('streaming');
+        streaming = true;
+        setInputEnabled(false);
 
-	        setStatus('streaming');
-	        streaming = true;
-	        setInputEnabled(false);
-	        const bubble = addMessage('assistant', '', { streaming: true });
-
-	        const { fullText, errorText } = await readNdjson(res, bubble);
-
-	        bubble.classList.remove('streaming');
-	        if (errorText) {
-	          bubble.textContent = fullText
-	            ? `${fullText}\n\n[error] ${errorText}`
-	            : `[error] ${errorText}`;
-	        }
-	        if (fullText) messages.push({ role: 'assistant', content: fullText });
-	        sessionStorage.removeItem(streamKey());
-	        streaming = false;
-	        setInputEnabled(true);
-	        setStatus('idle');
-	      } catch {}
+        const bubble = await replayActiveStream();
+        if (bubble) {
+          bubble.classList.remove('streaming');
+        }
+      } catch {
+        // best-effort reconnect
+      } finally {
+        streaming = false;
+        setInputEnabled(true);
+        setStatus('idle');
+      }
     }
 
-	    sendBtn.addEventListener('click', send);
-    inputEl.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    syncChatUrl();
+    copyLinkEl.addEventListener('click', copyChatUrl);
+    sendBtn.addEventListener('click', send);
+    inputEl.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        send();
+      }
     });
 
     initPromise.then(() => tryReconnect());

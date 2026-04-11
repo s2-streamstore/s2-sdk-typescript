@@ -15,6 +15,14 @@ const PORT = Number.parseInt(process.env.PORT || "3457", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");
 const HISTORY_STREAM_PREFIX =
 	process.env.S2_CHAT_HISTORY_PREFIX || "resumable-chat-history";
+const LIVE_STREAM_PREFIX =
+	process.env.S2_CHAT_LIVE_PREFIX || "resumable-chat-live";
+const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+
+type ChatMessage = {
+	role: "user" | "assistant";
+	content: string;
+};
 
 const accessToken = process.env.S2_ACCESS_TOKEN;
 if (!accessToken) throw new Error("Set S2_ACCESS_TOKEN");
@@ -25,11 +33,6 @@ if (!basin) throw new Error("Set S2_BASIN");
 const endpointsInit = {
 	account: process.env.S2_ACCOUNT_ENDPOINT || undefined,
 	basin: process.env.S2_BASIN_ENDPOINT || undefined,
-};
-
-type ChatMessage = {
-	role: "user" | "assistant";
-	content: string;
 };
 
 const s2 = new S2({
@@ -45,10 +48,26 @@ const chat = createDurableChat({
 	basin,
 	endpoints:
 		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
+	streamReuse: "shared",
 });
 
 function historyStreamName(chatId: string): string {
 	return `${HISTORY_STREAM_PREFIX}-${chatId}`;
+}
+
+function liveStreamName(chatId: string): string {
+	return `${LIVE_STREAM_PREFIX}-${chatId}`;
+}
+
+function isValidChatId(value: unknown): value is string {
+	return typeof value === "string" && CHAT_ID_PATTERN.test(value);
+}
+
+function parseFromSeqNum(value: string | null): number | undefined {
+	if (value === null) return undefined;
+	const num = Number(value);
+	if (!Number.isSafeInteger(num) || num < 0) return undefined;
+	return num;
 }
 
 function isChatMessage(value: unknown): value is ChatMessage {
@@ -84,15 +103,14 @@ async function readHistory(chatId: string): Promise<ChatMessage[]> {
 		);
 
 		for await (const record of session) {
-			if (typeof record.body === "string") {
-				try {
-					const message = JSON.parse(record.body);
-					if (isChatMessage(message)) {
-						messages.push(message);
-					}
-				} catch {
-					// Ignore malformed history records.
+			if (typeof record.body !== "string") continue;
+			try {
+				const message = JSON.parse(record.body);
+				if (isChatMessage(message)) {
+					messages.push(message);
 				}
+			} catch {
+				// Ignore malformed history records.
 			}
 		}
 
@@ -123,12 +141,15 @@ async function appendHistoryMessage(
 
 function persistCompletedAssistantMessage(
 	chatId: string,
+	userMessage: ChatMessage,
 	source: AsyncIterable<UIMessageChunk>,
 ): AsyncIterable<UIMessageChunk> {
 	let fullText = "";
 	let persisted = false;
 
 	return (async function* () {
+		await appendHistoryMessage(chatId, userMessage);
+
 		for await (const chunk of source) {
 			if (chunk.type === "text-delta") {
 				fullText += chunk.delta;
@@ -153,17 +174,15 @@ async function handleChat(req: Request): Promise<Response> {
 		message?: ChatMessage;
 	};
 
-	if (!id || !isChatMessage(message) || message.role !== "user") {
+	if (!isValidChatId(id) || !isChatMessage(message) || message.role !== "user") {
 		return new Response("Expected { id, message } with a user message.", {
 			status: 400,
 		});
 	}
 
 	const history = await readHistory(id);
-	await appendHistoryMessage(id, message);
 
-	const streamName = `resumable-chat-${id}-${Date.now()}`;
-
+	const streamName = liveStreamName(id);
 	const result = streamText({
 		model: openai("gpt-4o-mini"),
 		messages: [...history, message],
@@ -171,7 +190,7 @@ async function handleChat(req: Request): Promise<Response> {
 
 	return chat.persist(
 		streamName,
-		persistCompletedAssistantMessage(id, result.toUIMessageStream()),
+		persistCompletedAssistantMessage(id, message, result.toUIMessageStream()),
 		{
 			waitUntil: (promise) => {
 				promise.catch((err) => {
@@ -182,8 +201,11 @@ async function handleChat(req: Request): Promise<Response> {
 	);
 }
 
-async function handleReplay(streamName: string): Promise<Response> {
-	return chat.replay(streamName);
+async function handleReplay(
+	streamName: string,
+	fromSeqNum?: number,
+): Promise<Response> {
+	return chat.replay(streamName, fromSeqNum);
 }
 
 async function handleHistory(chatId: string): Promise<Response> {
@@ -215,20 +237,31 @@ const server = Bun.serve({
 		}
 
 		if (url.pathname === "/api/chat/stream" && req.method === "GET") {
-			const streamName = url.searchParams.get("stream");
-			if (!streamName) {
-				return new Response("Missing stream query parameter", { status: 400 });
+			const chatId = url.searchParams.get("id");
+			if (!isValidChatId(chatId)) {
+				return new Response("Missing id query parameter", { status: 400 });
 			}
-			const res = await handleReplay(streamName);
+			if (
+				url.searchParams.has("from") &&
+				parseFromSeqNum(url.searchParams.get("from")) === undefined
+			) {
+				return new Response("Invalid from query parameter", { status: 400 });
+			}
+
+			const res = await handleReplay(
+				liveStreamName(chatId),
+				parseFromSeqNum(url.searchParams.get("from")),
+			);
 			res.headers.set("Access-Control-Allow-Origin", "*");
 			return res;
 		}
 
 		if (url.pathname === "/api/chat/history" && req.method === "GET") {
 			const chatId = url.searchParams.get("id");
-			if (!chatId) {
+			if (!isValidChatId(chatId)) {
 				return new Response("Missing id query parameter", { status: 400 });
 			}
+
 			const res = await handleHistory(chatId);
 			res.headers.set("Access-Control-Allow-Origin", "*");
 			return res;
@@ -237,6 +270,7 @@ const server = Bun.serve({
 		if (url.pathname === "/" || url.pathname === "/index.html") {
 			return new Response(Bun.file(join(PUBLIC_DIR, "index.html")));
 		}
+
 		const filePath = join(PUBLIC_DIR, url.pathname);
 		const file = Bun.file(filePath);
 		if (await file.exists()) return new Response(file);
