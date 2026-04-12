@@ -20,12 +20,12 @@ The request flow is:
 ## Run with s2-lite (local)
 
 ```bash
-# terminal 1 — start s2-lite (from s2-oss/s2 repo)
-cargo run -p s2-cli -- lite --port 4000
+# terminal 1 — start s2-lite using s2 CLI (http://s2.dev/docs/cli)
+s2 lite
 
 # terminal 2
-export S2_ACCOUNT_ENDPOINT="http://localhost:4000"
-export S2_BASIN_ENDPOINT="http://localhost:4000"
+export S2_ACCOUNT_ENDPOINT="http://localhost:80"
+export S2_BASIN_ENDPOINT="http://localhost:80"
 export S2_ACCESS_TOKEN="ignored"
 
 # create a basin with auto-stream creation
