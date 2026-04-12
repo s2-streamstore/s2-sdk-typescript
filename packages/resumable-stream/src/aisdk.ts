@@ -7,7 +7,7 @@ import {
 	S2,
 } from "@s2-dev/streamstore";
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import { appendFenceRecord, persistToS2 } from "./protocol.js";
+import { appendFenceCommand, persistToS2 } from "./protocol.js";
 import {
 	claimSharedGeneration,
 	replayActiveGenerationStringBodies,
@@ -17,32 +17,63 @@ import {
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
 
-export interface DurableChatConfig {
+/**
+ * Configuration for creating a resumable AI SDK chat helper.
+ */
+export interface ResumableChatConfig {
+	/** S2 access token. */
 	accessToken: string;
+	/** Basin used for resumable streams. */
 	basin: string;
+	/** Optional endpoint overrides, for example when using `s2-lite`. */
 	endpoints?: S2Endpoints | S2EndpointsInit;
+	/** Maximum number of chunks to append in one batch. Defaults to `10`. */
 	batchSize?: number;
+	/** Maximum time to buffer a batch before flushing, in milliseconds. Defaults to `50`. */
 	lingerDuration?: number;
+	/** Whether each generation uses its own stream or reuses one stream name sequentially. */
 	streamReuse?: "single-use" | "shared";
 }
 
-export interface PersistOptions {
+/**
+ * Options for `makeResumable`.
+ */
+export interface MakeResumableOptions {
+	/** Runs the S2 write in the background instead of awaiting it inline. */
 	waitUntil?: (promise: Promise<unknown>) => void;
 }
 
-export interface DurableChat {
-	persist(
+/**
+ * Server-side helpers for writing and replaying resumable AI SDK streams.
+ */
+export interface ResumableChat {
+	/**
+	 * Starts making a `UIMessageChunk` stream resumable in S2.
+	 * The response body contains `{ stream, fromSeqNum }`.
+	 */
+	makeResumable(
 		streamName: string,
 		source: AsyncIterable<UIMessageChunk>,
-		options?: PersistOptions,
+		options?: MakeResumableOptions,
 	): Promise<Response>;
+	/**
+	 * Replays a resumable stream as NDJSON.
+	 * Returns `204` when there is no active generation to replay.
+	 */
 	replay(streamName: string, fromSeqNum?: number): Promise<Response>;
 }
 
+/**
+ * Configuration for `createS2Transport`.
+ */
 export interface S2TransportConfig {
+	/** Chat POST endpoint. */
 	api: string;
+	/** Optional reconnect endpoint. Defaults to `${api}/stream`. */
 	reconnectApi?: string;
+	/** Default headers sent on both POST and reconnect requests. */
 	headers?: HeadersInit;
+	/** Optional fetch implementation override. */
 	fetchClient?: typeof fetch;
 }
 
@@ -161,7 +192,12 @@ async function writeErrorChunk(
 	await s2.basin(basin).stream(stream).append(input);
 }
 
-export function createDurableChat(config: DurableChatConfig): DurableChat {
+/**
+ * Creates server-side helpers for making AI SDK streams resumable in S2.
+ */
+export function createResumableChat(
+	config: ResumableChatConfig,
+): ResumableChat {
 	const s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
@@ -171,79 +207,80 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
 	const streamReuse = config.streamReuse ?? "single-use";
 
-	return {
-		async persist(
-			streamName: string,
-			source: AsyncIterable<UIMessageChunk>,
-			options?: PersistOptions,
-		): Promise<Response> {
-			const fencingToken = `session-${randomToken(8)}`;
-			let matchSeqNumStart = 1;
-			let fromSeqNum = 0;
+	const makeResumable = async (
+		streamName: string,
+		source: AsyncIterable<UIMessageChunk>,
+		options?: MakeResumableOptions,
+	): Promise<Response> => {
+		const fencingToken = `session-${randomToken(8)}`;
+		let matchSeqNumStart = 1;
+		let fromSeqNum = 0;
 
-			try {
-				if (streamReuse === "shared") {
-					const claim = await claimSharedGeneration({
-						s2,
-						basin,
-						stream: streamName,
-						fencingToken,
-					});
-					if (!claim) {
-						return new Response("Stream already in use", { status: 409 });
-					}
-					fromSeqNum = claim.fromSeqNum;
-					matchSeqNumStart = claim.matchSeqNumStart;
-				} else {
-					const ack = await appendFenceRecord(
-						s2,
-						basin,
-						streamName,
-						"",
-						fencingToken,
-					);
-					fromSeqNum = ack.start.seqNum;
-					matchSeqNumStart = ack.end.seqNum;
-				}
-			} catch (err) {
-				if (err instanceof FencingTokenMismatchError) {
+		try {
+			if (streamReuse === "shared") {
+				const claim = await claimSharedGeneration({
+					s2,
+					basin,
+					stream: streamName,
+					fencingToken,
+				});
+				if (!claim) {
 					return new Response("Stream already in use", { status: 409 });
 				}
-				throw err;
-			}
-
-			const write = persistToS2({
-				s2,
-				basin,
-				stream: streamName,
-				source,
-				fencingToken,
-				batchSize,
-				lingerDuration,
-				matchSeqNumStart,
-				toRecord: (chunk) =>
-					AppendRecord.string({ body: JSON.stringify(chunk) }),
-				terminalFenceBody: (failed) =>
-					failed ? `error-${randomToken(4)}` : `end-${randomToken(4)}`,
-				onFailureBeforeFence: () =>
-					writeErrorChunk(s2, basin, streamName, fencingToken),
-			});
-
-			if (options?.waitUntil) {
-				options.waitUntil(
-					write.catch((err) =>
-						console.error("[resumable-stream] persist failed:", err),
-					),
-				);
+				fromSeqNum = claim.fromSeqNum;
+				matchSeqNumStart = claim.matchSeqNumStart;
 			} else {
-				await write;
+				const ack = await appendFenceCommand(
+					s2,
+					basin,
+					streamName,
+					"",
+					fencingToken,
+				);
+				fromSeqNum = ack.start.seqNum;
+				matchSeqNumStart = ack.end.seqNum;
 			}
+		} catch (err) {
+			if (err instanceof FencingTokenMismatchError) {
+				return new Response("Stream already in use", { status: 409 });
+			}
+			throw err;
+		}
 
-			return Response.json(
-				{ stream: streamName, fromSeqNum },
-				{ headers: { "Cache-Control": "no-store" } },
+		const write = persistToS2({
+			s2,
+			basin,
+			stream: streamName,
+			source,
+			fencingToken,
+			batchSize,
+			lingerDuration,
+			matchSeqNumStart,
+			toRecord: (chunk) => AppendRecord.string({ body: JSON.stringify(chunk) }),
+			terminalFenceBody: (failed) =>
+				failed ? `error-${randomToken(4)}` : `end-${randomToken(4)}`,
+			onFailureBeforeFence: () =>
+				writeErrorChunk(s2, basin, streamName, fencingToken),
+		});
+
+		if (options?.waitUntil) {
+			options.waitUntil(
+				write.catch((err) =>
+					console.error("[resumable-stream] makeResumable failed:", err),
+				),
 			);
-		},
+		} else {
+			await write;
+		}
+
+		return Response.json(
+			{ stream: streamName, fromSeqNum },
+			{ headers: { "Cache-Control": "no-store" } },
+		);
+	};
+
+	return {
+		makeResumable,
 
 		async replay(streamName: string, fromSeqNum?: number): Promise<Response> {
 			const iterator = (
@@ -296,6 +333,9 @@ export function createDurableChat(config: DurableChatConfig): DurableChat {
 	};
 }
 
+/**
+ * Creates an AI SDK chat transport that reconnects by chat id.
+ */
 export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
 	api,
 	reconnectApi,

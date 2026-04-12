@@ -177,7 +177,7 @@ describe("createS2Transport", () => {
 		]);
 	});
 
-	it("falls back to active-only replay when persist metadata is missing", async () => {
+	it("falls back to active-only replay when durability metadata is missing", async () => {
 		const fetchClient = vi
 			.fn<typeof fetch>()
 			.mockResolvedValueOnce(jsonResponse({ ok: true }))

@@ -11,7 +11,7 @@ import {
 	S2Environment,
 } from "@s2-dev/streamstore";
 import {
-	appendFenceRecord,
+	appendFenceCommand,
 	isFenceRecord,
 	isTerminalFence,
 	persistToS2,
@@ -159,7 +159,7 @@ export async function createResumableStream(
 
 	// in case of multiple writers, only one with the given fencing token will succeed
 	try {
-		await appendFenceRecord(s2, basin, streamId, "", sessionFencingToken);
+		await appendFenceCommand(s2, basin, streamId, "", sessionFencingToken);
 	} catch (error: unknown) {
 		if (error instanceof FencingTokenMismatchError) {
 			debugLog(
@@ -245,7 +245,7 @@ async function stopStream(streamId: string): Promise<void> {
 	debugLog("Stopping stream:", streamId);
 
 	try {
-		await appendFenceRecord(
+		await appendFenceCommand(
 			s2,
 			basin,
 			streamId,

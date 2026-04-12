@@ -9,7 +9,7 @@ import {
 	S2,
 	S2Error,
 } from "@s2-dev/streamstore";
-import { createDurableChat } from "@s2-dev/resumable-stream/aisdk";
+import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 
 const PORT = Number.parseInt(process.env.PORT || "3457", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");
@@ -43,7 +43,7 @@ const s2 = new S2({
 
 const basinClient = s2.basin(basin);
 
-const chat = createDurableChat({
+const chat = createResumableChat({
 	accessToken,
 	basin,
 	endpoints:
@@ -188,13 +188,13 @@ async function handleChat(req: Request): Promise<Response> {
 		messages: [...history, message],
 	});
 
-	return chat.persist(
+	return chat.makeResumable(
 		streamName,
 		persistCompletedAssistantMessage(id, message, result.toUIMessageStream()),
 		{
 			waitUntil: (promise) => {
 				promise.catch((err) => {
-					console.error("[example] persist failed:", err);
+					console.error("[example] makeResumable failed:", err);
 				});
 			},
 		},

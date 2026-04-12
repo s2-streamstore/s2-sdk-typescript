@@ -1,7 +1,7 @@
 import { S2Error } from "@s2-dev/streamstore";
 import {
-	appendFenceRecord,
-	appendTrimRecord,
+	appendFenceCommand,
+	appendTrimCommand,
 	isFenceRecord,
 	isTerminalFence,
 	isTrimRecord,
@@ -90,7 +90,7 @@ export async function claimSharedGeneration({
 		return null;
 	}
 
-	const fenceAck = await appendFenceRecord(
+	const fenceAck = await appendFenceCommand(
 		s2,
 		basin,
 		stream,
@@ -100,7 +100,7 @@ export async function claimSharedGeneration({
 	let matchSeqNumStart = fenceAck.end.seqNum;
 
 	if (state.nextSeqNum > 0) {
-		const trimAck = await appendTrimRecord(
+		const trimAck = await appendTrimCommand(
 			s2,
 			basin,
 			stream,

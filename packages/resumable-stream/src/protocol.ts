@@ -37,30 +37,30 @@ export function isTerminalFence(
 	);
 }
 
-export async function appendFenceRecord(
+export async function appendFenceCommand(
 	s2: S2,
 	basin: string,
 	stream: string,
 	currentToken: string | null | undefined,
 	newToken: string,
 ): Promise<AppendAck> {
-	const record = AppendInput.create([AppendRecord.fence(newToken)], {
+	const command = AppendInput.create([AppendRecord.fence(newToken)], {
 		fencingToken: currentToken ?? undefined,
 	});
-	return await s2.basin(basin).stream(stream).append(record);
+	return await s2.basin(basin).stream(stream).append(command);
 }
 
-export async function appendTrimRecord(
+export async function appendTrimCommand(
 	s2: S2,
 	basin: string,
 	stream: string,
 	currentToken: string | null | undefined,
 	trimBeforeSeqNum: number,
 ): Promise<AppendAck> {
-	const record = AppendInput.create([AppendRecord.trim(trimBeforeSeqNum)], {
+	const command = AppendInput.create([AppendRecord.trim(trimBeforeSeqNum)], {
 		fencingToken: currentToken ?? undefined,
 	});
-	return await s2.basin(basin).stream(stream).append(record);
+	return await s2.basin(basin).stream(stream).append(command);
 }
 
 export interface PersistToS2Options<T> {
@@ -133,7 +133,7 @@ export async function persistToS2<T>({
 		}
 
 		try {
-			await appendFenceRecord(
+			await appendFenceCommand(
 				s2,
 				basin,
 				stream,

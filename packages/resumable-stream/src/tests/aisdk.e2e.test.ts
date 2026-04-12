@@ -1,7 +1,7 @@
 import { S2, S2Environment } from "@s2-dev/streamstore";
 import type { UIMessageChunk } from "ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDurableChat } from "../aisdk.js";
+import { createResumableChat } from "../aisdk.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 
@@ -115,19 +115,19 @@ describeIf("resumable-stream/aisdk", () => {
 		}
 	}, TEST_TIMEOUT_MS);
 
-	describe("persist", () => {
+	describe("makeResumable", () => {
 		it(
 			"writes chunks and returns { stream } response",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					...s2EndpointsFromEnv(),
 				});
-				const streamName = makeStreamName("persist-basic");
+				const streamName = makeStreamName("resumable-basic");
 				const chunks = sampleChunks();
 
-				const res = await chat.persist(
+				const res = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(chunks),
 				);
@@ -143,16 +143,16 @@ describeIf("resumable-stream/aisdk", () => {
 		it(
 			"returns 200 immediately with waitUntil and completes in background",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					...s2EndpointsFromEnv(),
 				});
-				const streamName = makeStreamName("persist-bg");
+				const streamName = makeStreamName("resumable-bg");
 
 				let bgPromise: Promise<unknown> | undefined;
 
-				const res = await chat.persist(
+				const res = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(sampleChunks()),
 					{
@@ -174,20 +174,20 @@ describeIf("resumable-stream/aisdk", () => {
 		it(
 			"returns 409 when stream is already claimed",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					...s2EndpointsFromEnv(),
 				});
-				const streamName = makeStreamName("persist-conflict");
+				const streamName = makeStreamName("resumable-conflict");
 
-				const res1 = await chat.persist(
+				const res1 = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(sampleChunks()),
 				);
 				expect(res1.status).toBe(200);
 
-				const res2 = await chat.persist(
+				const res2 = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(sampleChunks()),
 				);
@@ -201,7 +201,7 @@ describeIf("resumable-stream/aisdk", () => {
 		it(
 			"returns 204 once a single-use stream has completed",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					...s2EndpointsFromEnv(),
@@ -209,7 +209,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const streamName = makeStreamName("replay-basic");
 				const chunks = sampleChunks();
 
-				await chat.persist(streamName, arrayToAsyncIterable(chunks));
+				await chat.makeResumable(streamName, arrayToAsyncIterable(chunks));
 
 				const res = await chat.replay(streamName);
 				expect(res.status).toBe(204);
@@ -220,7 +220,7 @@ describeIf("resumable-stream/aisdk", () => {
 		it(
 			"replays a just-completed generation when fromSeqNum is provided",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					...s2EndpointsFromEnv(),
@@ -228,11 +228,11 @@ describeIf("resumable-stream/aisdk", () => {
 				const streamName = makeStreamName("replay-from");
 				const chunks = sampleChunks();
 
-				const persistRes = await chat.persist(
+				const makeResumableRes = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(chunks),
 				);
-				const body = (await persistRes.json()) as {
+				const body = (await makeResumableRes.json()) as {
 					fromSeqNum: number;
 					stream: string;
 				};
@@ -245,9 +245,9 @@ describeIf("resumable-stream/aisdk", () => {
 		);
 
 		it(
-			"streams the active generation while persist runs in the background",
+			"streams the active generation while makeResumable runs in the background",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					...s2EndpointsFromEnv(),
@@ -256,7 +256,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chunks = sampleChunks();
 
 				let bgPromise: Promise<unknown> | undefined;
-				await chat.persist(streamName, delayedAsyncIterable(chunks), {
+				await chat.makeResumable(streamName, delayedAsyncIterable(chunks), {
 					waitUntil: (promise) => {
 						bgPromise = promise;
 					},
@@ -279,7 +279,7 @@ describeIf("resumable-stream/aisdk", () => {
 		it(
 			"reuses a completed stream and replays the active generation",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					streamReuse: "shared",
@@ -289,14 +289,14 @@ describeIf("resumable-stream/aisdk", () => {
 				const firstChunks = sampleChunks("Hello world");
 				const secondChunks = sampleChunks("Second pass");
 
-				const res1 = await chat.persist(
+				const res1 = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(firstChunks),
 				);
 				expect(res1.status).toBe(200);
 
 				let bgPromise: Promise<unknown> | undefined;
-				const res2 = await chat.persist(
+				const res2 = await chat.makeResumable(
 					streamName,
 					delayedAsyncIterable(secondChunks),
 					{
@@ -338,7 +338,7 @@ describeIf("resumable-stream/aisdk", () => {
 		it(
 			"returns 204 once a shared stream is idle",
 			async () => {
-				const chat = createDurableChat({
+				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					streamReuse: "shared",
@@ -346,7 +346,7 @@ describeIf("resumable-stream/aisdk", () => {
 				});
 				const streamName = makeStreamName("shared-idle");
 
-				const res = await chat.persist(
+				const res = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(sampleChunks("Idle latest")),
 				);

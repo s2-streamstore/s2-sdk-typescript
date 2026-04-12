@@ -176,8 +176,12 @@ describeIf("resumable-stream", () => {
 		const messages = ["msg1", "msg2", "msg3", "msg4"];
 
 		const inputStream = createStreamFromArray(messages);
-
-		context.resumableStream(streamId, () => inputStream);
+		const publisherStream = await context.resumableStream(
+			streamId,
+			() => inputStream,
+		);
+		expect(publisherStream).not.toBeNull();
+		const publisherRead = readStreamToArray(publisherStream, 30000);
 
 		const resumedStream1 = await context.resumeStream(streamId);
 		const resumedStream2 = await context.resumeStream(streamId);
@@ -202,5 +206,6 @@ describeIf("resumable-stream", () => {
 		expect(readerData[0]).toEqual(messages);
 		expect(readerData[1]).toEqual(messages);
 		expect(readerData[2]).toEqual(messages);
+		await expect(publisherRead).resolves.toEqual(messages);
 	}, 30_000);
 }); // describeIf
