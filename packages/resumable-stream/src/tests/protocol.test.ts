@@ -1,10 +1,10 @@
-import { AppendRecord } from "@s2-dev/streamstore";
 import type {
 	AppendAck,
 	AppendInput,
 	AppendRecord as AppendRecordType,
 	S2,
 } from "@s2-dev/streamstore";
+import { AppendRecord } from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
 import { persistToS2 } from "../protocol.js";
 
