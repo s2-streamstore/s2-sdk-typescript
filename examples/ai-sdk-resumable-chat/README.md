@@ -5,7 +5,7 @@
 This demo now uses two S2 stream shapes per chat:
 
 1. A **transcript stream** stores completed `user` and `assistant` messages.
-2. A **token stream** stores the in-flight AI SDK `UIMessageChunk`s for the current assistant turn.
+2. A reusable **token stream** stores the in-flight AI SDK `UIMessageChunk`s for the current assistant turn.
 
 The request flow is:
 
@@ -36,7 +36,7 @@ export OPENAI_API_KEY="..."
 bun run examples/ai-sdk-resumable-chat/server.ts
 ```
 
-Open [http://localhost:3457](http://localhost:3457), send a message, hit F5 mid-generation.
+Open [http://localhost:3457](http://localhost:3457), send a message, hit your browser refresh button mid-generation.
 
 ## Run with S2 Cloud
 
