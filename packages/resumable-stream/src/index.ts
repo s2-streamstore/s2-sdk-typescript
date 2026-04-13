@@ -184,8 +184,11 @@ export async function createResumableStream(
 				batchSize,
 				lingerDuration,
 				toRecord: (value) => AppendRecord.string({ body: value }),
-				terminalFenceBody: (failed) =>
-					`${failed ? "error" : "end"}-${generateFencingToken()}`,
+				finalRecords: (failed) => [
+					AppendRecord.fence(
+						`${failed ? "error" : "end"}-${generateFencingToken()}`,
+					),
+				],
 				onSeqNumMismatch: () => {
 					debugLog("seqNum mismatch, skipping record");
 				},

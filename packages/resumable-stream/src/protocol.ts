@@ -72,10 +72,19 @@ export interface PersistToS2Options<T> {
 	batchSize: number;
 	lingerDuration: number;
 	toRecord: (value: T) => AppendRecord;
-	terminalFenceBody: (failed: boolean) => string;
+	finalRecords: (failed: boolean) => ReadonlyArray<AppendRecord>;
 	matchSeqNumStart?: number;
 	onSeqNumMismatch?: (error: SeqNumMismatchError) => void;
-	onFailureBeforeFence?: () => Promise<void> | void;
+}
+
+function combineErrors(errors: ReadonlyArray<unknown>): unknown | undefined {
+	const failures = errors.filter((error) => error !== undefined);
+	if (failures.length === 0) return undefined;
+	if (failures.length === 1) return failures[0];
+	return new AggregateError(
+		failures,
+		"[resumable-stream] Failed to persist and finalize stream.",
+	);
 }
 
 export async function persistToS2<T>({
@@ -87,10 +96,9 @@ export async function persistToS2<T>({
 	batchSize,
 	lingerDuration,
 	toRecord,
-	terminalFenceBody,
+	finalRecords,
 	matchSeqNumStart,
 	onSeqNumMismatch,
-	onFailureBeforeFence,
 }: PersistToS2Options<T>): Promise<void> {
 	const handle = s2.basin(basin).stream(stream);
 	try {
@@ -103,7 +111,7 @@ export async function persistToS2<T>({
 		});
 		const producer = new Producer(transform, session);
 
-		let sourceError: unknown;
+		let sourceError: unknown | undefined;
 		try {
 			for await (const value of source) {
 				producer.submit(toRecord(value)).catch((err: unknown) => {
@@ -116,35 +124,26 @@ export async function persistToS2<T>({
 			sourceError = err;
 		}
 
-		let closeError: unknown;
+		let finalizationError: unknown | undefined;
+		try {
+			for (const record of finalRecords(Boolean(sourceError))) {
+				await producer.submit(record);
+			}
+		} catch (err) {
+			finalizationError = err;
+		}
+
+		let closeError: unknown | undefined;
 		try {
 			await producer.close();
 		} catch (err) {
 			closeError = err;
 		}
 
-		const failed = sourceError ?? closeError;
-		if (failed) {
-			try {
-				await onFailureBeforeFence?.();
-			} catch {
-				// best-effort
-			}
+		const failure = combineErrors([sourceError, finalizationError, closeError]);
+		if (failure !== undefined) {
+			throw failure;
 		}
-
-		try {
-			await appendFenceCommand(
-				s2,
-				basin,
-				stream,
-				fencingToken,
-				terminalFenceBody(Boolean(failed)),
-			);
-		} catch {
-			// best-effort
-		}
-
-		if (failed) throw failed;
 	} finally {
 		await handle.close();
 	}

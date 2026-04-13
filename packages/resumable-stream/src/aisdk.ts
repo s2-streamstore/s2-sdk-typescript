@@ -1,6 +1,5 @@
 import type { S2Endpoints, S2EndpointsInit } from "@s2-dev/streamstore";
 import {
-	AppendInput,
 	AppendRecord,
 	FencingTokenMismatchError,
 	randomToken,
@@ -176,20 +175,13 @@ async function readNdjsonStream(
 	});
 }
 
-async function writeErrorChunk(
-	s2: S2,
-	basin: string,
-	stream: string,
-	fencingToken: string,
-): Promise<void> {
-	const record = AppendRecord.string({
+function makeErrorChunkRecord(): AppendRecord {
+	return AppendRecord.string({
 		body: JSON.stringify({
 			type: "error",
 			errorText: "The generation ended before the stream completed.",
 		} satisfies UIMessageChunk),
 	});
-	const input = AppendInput.create([record], { fencingToken });
-	await s2.basin(basin).stream(stream).append(input);
 }
 
 /**
@@ -257,18 +249,17 @@ export function createResumableChat(
 			lingerDuration,
 			matchSeqNumStart,
 			toRecord: (chunk) => AppendRecord.string({ body: JSON.stringify(chunk) }),
-			terminalFenceBody: (failed) =>
-				failed ? `error-${randomToken(4)}` : `end-${randomToken(4)}`,
-			onFailureBeforeFence: () =>
-				writeErrorChunk(s2, basin, streamName, fencingToken),
+			finalRecords: (failed) =>
+				failed
+					? [
+							makeErrorChunkRecord(),
+							AppendRecord.fence(`error-${randomToken(4)}`),
+						]
+					: [AppendRecord.fence(`end-${randomToken(4)}`)],
 		});
 
 		if (options?.waitUntil) {
-			options.waitUntil(
-				write.catch((err) =>
-					console.error("[resumable-stream] makeResumable failed:", err),
-				),
-			);
+			options.waitUntil(write);
 		} else {
 			await write;
 		}
