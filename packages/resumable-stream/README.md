@@ -109,7 +109,7 @@ import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-  const streamName = `chat-${id}-${Date.now()}`;
+  const streamName = `chat-${id}`;
   const result = streamText({ model: openai("gpt-4o-mini"), messages });
 
   return chat.makeResumable(streamName, result.toUIMessageStream(), {

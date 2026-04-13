@@ -67,7 +67,7 @@ import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-  const streamName = `chat-${id}-${Date.now()}`;
+  const streamName = `chat-${id}`;
   return chat.makeResumable(streamName, streamText({ model, messages }).toUIMessageStream(), {
     waitUntil: (promise) => {
       after(async () => {
