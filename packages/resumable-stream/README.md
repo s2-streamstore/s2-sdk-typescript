@@ -128,9 +128,10 @@ import { chat } from "@/lib/s2";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const stream = url.searchParams.get("stream");
-  if (!stream) return new Response("Missing stream", { status: 400 });
-  return chat.replay(stream);
+  const id = url.searchParams.get("id");
+  if (!id) return new Response("Missing id", { status: 400 });
+  const from = url.searchParams.get("from");
+  return chat.replay(`chat-${id}`, from != null ? Number(from) : undefined);
 }
 ```
 

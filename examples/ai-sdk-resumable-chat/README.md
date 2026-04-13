@@ -12,10 +12,10 @@ The request flow is:
 1. **Browser** loads `GET /api/chat/history?id=...` on startup and renders the completed transcript.
 2. **Browser** sends a new user message via `POST /api/chat`.
 3. **Server** appends that user message to the transcript stream, loads prior history from S2, and calls `streamText()`.
-4. **Server** passes `result.toUIMessageStream()` through `chat.persist(streamName, stream)` to write the in-flight token stream to S2.
+4. **Server** passes `result.toUIMessageStream()` through `chat.makeResumable(streamName, stream)` to write the in-flight token stream to S2.
 5. When the assistant finishes, the server appends the completed assistant message to the transcript stream before yielding the terminal `finish` chunk.
-6. **Browser** stores the active token stream name in `sessionStorage` and reads `GET /api/chat/stream?stream=...`.
-7. On page refresh, the browser reloads the transcript first and then reconnects to the in-flight token stream if one is still active.
+6. **Browser** reads the token stream via `GET /api/chat/stream?id=...` using the chat id.
+7. On page refresh, the browser reloads the transcript first and then reconnects to the in-flight token stream by chat id if one is still active.
 
 ## Run with s2-lite (local)
 
