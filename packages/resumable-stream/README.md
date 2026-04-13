@@ -92,9 +92,9 @@ The `./aisdk` subpath adds a transport-oriented layer for `useChat`. It persists
 
 ```ts
 // lib/s2.ts
-import { createDurableChat } from "@s2-dev/resumable-stream/aisdk";
+import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 
-export const chat = createDurableChat({
+export const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
 });
@@ -112,7 +112,7 @@ export async function POST(req: Request) {
   const streamName = `chat-${id}-${Date.now()}`;
   const result = streamText({ model: openai("gpt-4o-mini"), messages });
 
-  return chat.persist(streamName, result.toUIMessageStream(), {
+  return chat.makeResumable(streamName, result.toUIMessageStream(), {
     waitUntil: (promise) => {
       after(async () => {
         await promise;

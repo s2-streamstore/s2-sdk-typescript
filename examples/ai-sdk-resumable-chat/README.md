@@ -51,9 +51,9 @@ bun run examples/ai-sdk-resumable-chat/server.ts
 
 ```ts
 // lib/s2.ts (server — create once)
-import { createDurableChat } from "@s2-dev/resumable-stream/aisdk";
+import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 
-export const chat = createDurableChat({
+export const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
 });
@@ -68,7 +68,7 @@ import { chat } from "@/lib/s2";
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
   const streamName = `chat-${id}-${Date.now()}`;
-  return chat.persist(streamName, streamText({ model, messages }).toUIMessageStream(), {
+  return chat.makeResumable(streamName, streamText({ model, messages }).toUIMessageStream(), {
     waitUntil: (promise) => {
       after(async () => {
         await promise;
