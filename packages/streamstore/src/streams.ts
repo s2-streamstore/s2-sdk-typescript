@@ -234,15 +234,16 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureStreamResponse> {
 		// Convert SDK config to API format (ageSecs → age)
+		const { stream, ...reconfigArgs } = args;
 		const apiArgs = {
-			...args,
+			...reconfigArgs,
 			retentionPolicy: toAPIRetentionPolicy(args.retentionPolicy),
 		};
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureStream({
 					client: this.client,
-					path: args,
+					path: { stream },
 					body: toSnakeCase(apiArgs),
 					...options,
 				}),
