@@ -99,6 +99,12 @@ export class FrameAssembler {
 		}
 
 		if (this.buffer && record.body) {
+			const remainingSpace = this.buffer.length - this.writtenBytes;
+			if (record.body.length > remainingSpace) {
+				// Body exceeds declared frame size — drop this frame.
+				this.reset();
+				return completed;
+			}
 			this.buffer.set(record.body, this.writtenBytes);
 			this.writtenBytes += record.body.length;
 			this.remainingRecords -= 1;
