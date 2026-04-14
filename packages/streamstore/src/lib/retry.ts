@@ -734,6 +734,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				throw this.fatalError;
 			}
 
+			// Reject if session is closing/closed so blocked submits fail fast
+			// instead of producing tickets whose ack() can hang (#177)
+			if (this.closing || this.closed) {
+				throw new S2Error({ message: "AppendSession is closed" });
+			}
+
 			// Byte-based gating
 			if (this.queuedBytes + this.pendingBytes + bytes <= this.maxQueuedBytes) {
 				// Batch-based gating (if configured)
@@ -1484,6 +1490,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		debugSession("[%s] close requested", this.streamName);
 		this.closing = true;
+
+		// Wake capacity waiters so blocked submits check closing flag and
+		// fail fast instead of producing tickets whose ack() hangs (#177)
+		for (const waiter of this.capacityWaiters) {
+			waiter.resolve();
+		}
+		this.capacityWaiters = [];
 
 		// Wake pump if it's sleeping so it can check closing flag
 		if (this.pumpWakeup) {
