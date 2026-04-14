@@ -106,6 +106,13 @@ export class S2SFrameParser {
 		const length =
 			(this.buffer[0]! << 16) | (this.buffer[1]! << 8) | this.buffer[2]!;
 
+		// The protocol requires at least a flag byte, so length must be >= 1
+		if (length < 1) {
+			throw new Error(
+				`Invalid S2S frame: length prefix is 0, but the flag byte is mandatory (minimum length is 1)`,
+			);
+		}
+
 		// Check if we have the full message
 		if (this.buffer.length < 3 + length) {
 			return null;
