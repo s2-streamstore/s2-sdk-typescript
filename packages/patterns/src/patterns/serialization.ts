@@ -173,30 +173,36 @@ export class DeserializingReadSession<Message> extends ReadableStream<Message> {
 				const assembler = new FrameAssembler();
 				const dedupe = new DedupeFilter();
 
-				while (true) {
-					const { done, value: record } = await reader.read();
-					if (done) {
-						reader.releaseLock();
-						controller.close();
-						return;
-					}
+				try {
+					while (true) {
+						const { done, value: record } = await reader.read();
+						if (done) {
+							reader.releaseLock();
+							controller.close();
+							return;
+						}
 
-					if (
-						options?.enableDedupe !== false &&
-						!dedupe.shouldAccept(record!.headers as any)
-					) {
-						continue;
-					}
+						if (
+							options?.enableDedupe !== false &&
+							!dedupe.shouldAccept(record!.headers as any)
+						) {
+							continue;
+						}
 
-					const frames: CompletedFrame[] = assembler.push({
-						headers: (record!.headers ?? []) as any,
-						body: record!.body ?? undefined,
-					});
+						const frames: CompletedFrame[] = assembler.push({
+							headers: (record!.headers ?? []) as any,
+							body: record!.body ?? undefined,
+						});
 
-					for (const frame of frames) {
-						const message = deserialize(frame.payload);
-						controller.enqueue(message);
+						for (const frame of frames) {
+							const message = deserialize(frame.payload);
+							controller.enqueue(message);
+						}
 					}
+				} catch (e) {
+					controller.error(e);
+					reader.releaseLock();
+					await session.cancel(e);
 				}
 			},
 			cancel: async () => {
