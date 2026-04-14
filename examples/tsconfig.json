@@ -15,7 +15,9 @@
 			"@s2-dev/streamstore": ["packages/streamstore/src/index.ts"],
 			"@s2-dev/streamstore/*": ["packages/streamstore/src/*"],
 			"@s2-dev/streamstore-patterns": ["packages/patterns/src/index.ts"],
-			"@s2-dev/streamstore-patterns/*": ["packages/patterns/src/*"]
+			"@s2-dev/streamstore-patterns/*": ["packages/patterns/src/*"],
+			"@s2-dev/resumable-stream": ["packages/resumable-stream/src/index.ts"],
+			"@s2-dev/resumable-stream/aisdk": ["packages/resumable-stream/src/aisdk.ts"]
 		}
 	},
 	"include": ["./**/*.ts"],

@@ -24,7 +24,7 @@ import {
 	S2Environment,
 	S2Error,
 } from "@s2-dev/streamstore";
-import { type CoreMessage, streamText } from "ai";
+import { type ModelMessage, streamText } from "ai";
 
 // ---------------------------------------------------------------------------
 // Message <-> S2 Record encoding
@@ -37,7 +37,7 @@ const MAX_CONTEXT_MESSAGES = Number(
 	process.env.AI_SDK_MAX_CONTEXT_MESSAGES ?? 40,
 );
 
-function pruneMessages(messages: CoreMessage[]) {
+function pruneMessages(messages: ModelMessage[]) {
 	if (!Number.isFinite(MAX_CONTEXT_MESSAGES) || MAX_CONTEXT_MESSAGES <= 0)
 		return;
 	const system = messages[0]?.role === "system" ? messages[0] : undefined;
@@ -48,15 +48,15 @@ function pruneMessages(messages: CoreMessage[]) {
 	messages.splice(0, messages.length, ...(system ? [system] : []), ...trimmed);
 }
 
-function messageToRecord(msg: CoreMessage): AppendRecord {
+function messageToRecord(msg: ModelMessage): AppendRecord {
 	return AppendRecord.bytes({
 		body: enc.encode(JSON.stringify(msg)),
 		headers: [[enc.encode("role"), enc.encode(msg.role)]],
 	});
 }
 
-function recordToMessage(body: Uint8Array): CoreMessage {
-	return JSON.parse(dec.decode(body)) as CoreMessage;
+function recordToMessage(body: Uint8Array): ModelMessage {
+	return JSON.parse(dec.decode(body)) as ModelMessage;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ const stream = basin.stream(streamName);
 
 console.log("Loading conversation history from S2...");
 
-const messages: CoreMessage[] = [];
+const messages: ModelMessage[] = [];
 const { tail } = await stream.checkTail();
 
 if (tail.seqNum > 0) {
@@ -168,7 +168,7 @@ try {
 		if (!userInput.trim()) continue;
 
 		// Append the user message.
-		const userMsg: CoreMessage = { role: "user", content: userInput };
+		const userMsg: ModelMessage = { role: "user", content: userInput };
 		messages.push(userMsg);
 		pruneMessages(messages);
 		const userTicket = await producer.submit(messageToRecord(userMsg));
@@ -189,7 +189,7 @@ try {
 		console.log("\n");
 
 		// Append the assistant message.
-		const assistantMsg: CoreMessage = {
+		const assistantMsg: ModelMessage = {
 			role: "assistant",
 			content: fullText,
 		};

@@ -18,6 +18,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./aisdk": {
+      "types": "./dist/aisdk.d.ts",
+      "default": "./dist/aisdk.js"
     }
   },
   "files": [
@@ -33,6 +37,15 @@
   },
   "sideEffects": false,
   "peerDependencies": {
-    "@s2-dev/streamstore": ">=0.21.0"
+    "@s2-dev/streamstore": ">=0.21.0",
+    "ai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "ai": "^6.0.142"
   }
 }

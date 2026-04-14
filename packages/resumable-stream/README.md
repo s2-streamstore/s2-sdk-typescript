@@ -24,14 +24,18 @@ To use this package, you need to create an S2 [access token](https://s2.dev/docs
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`. The maximum time to wait before flushing a batch can be tweaked by setting `S2_LINGER_DURATION` to a duration in milliseconds.
 
-To integrate this package with the Chat SDK, just update your imports to use this package or check [this](https://github.com/s2-streamstore/ai-chatbot) fork.
+For AI SDK chat resumability, import the AI helpers from `@s2-dev/resumable-stream/aisdk`.
 
 ```ts
 import { createResumableStreamContext } from "@s2-dev/resumable-stream";
 import { after } from "next/server";
 
 const streamContext = createResumableStreamContext({
-  waitUntil: after,
+  waitUntil: (promise) => {
+    after(async () => {
+      await promise;
+    });
+  },
 });
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ streamId: string }> }) {
@@ -81,3 +85,68 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
    - Data is read from the S2 stream from the beginning. S2 streams are also created on read (configured at the basin level) if a read happens before an append to prevent any races.
    - Data records are enqueued to the output stream controller for consumption.
    - If a sentinel fence command is encountered, the stream is closed.
+
+## AI SDK
+
+The `./aisdk` subpath adds a transport-oriented layer for `useChat`. It persists `UIMessageChunk`s to S2 on the server and replays them back over a simple NDJSON endpoint.
+
+```ts
+// lib/s2.ts
+import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
+
+export const chat = createResumableChat({
+  accessToken: process.env.S2_ACCESS_TOKEN!,
+  basin: process.env.S2_BASIN!,
+});
+```
+
+```ts
+// app/api/chat/route.ts
+import { after } from "next/server";
+import { streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { chat } from "@/lib/s2";
+
+export async function POST(req: Request) {
+  const { id, messages } = await req.json();
+  const streamName = `chat-${id}`;
+  const result = streamText({ model: openai("gpt-4o-mini"), messages });
+
+  return chat.makeResumable(streamName, result.toUIMessageStream(), {
+    waitUntil: (promise) => {
+      after(async () => {
+        await promise;
+      });
+    },
+  });
+}
+```
+
+```ts
+// app/api/chat/stream/route.ts
+import { chat } from "@/lib/s2";
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const id = url.searchParams.get("id");
+  if (!id) return new Response("Missing id", { status: 400 });
+  const from = url.searchParams.get("from");
+  return chat.replay(`chat-${id}`, from != null ? Number(from) : undefined);
+}
+```
+
+```tsx
+// app/page.tsx
+import { useChat } from "@ai-sdk/react";
+import { createS2Transport } from "@s2-dev/resumable-stream/aisdk";
+
+const transport = createS2Transport({
+  api: "/api/chat",
+  reconnectApi: "/api/chat/stream",
+});
+
+export default function Chat() {
+  const chat = useChat({ transport, resume: true });
+  return null;
+}
+```

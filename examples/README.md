@@ -53,6 +53,15 @@ export OPENAI_API_KEY="sk-proj-XXXXX"
 npx tsx ai-sdk-chat-persistence.ts
 ```
 
+#### Resumable chat
+
+A browser chat demo with two S2 layers: one transcript stream for completed messages, and one token stream for the currently streaming assistant response. Refreshing mid-generation resumes the active turn, and refreshing after completion reloads prior chat history.
+
+```bash
+export OPENAI_API_KEY="sk-proj-XXXXX"
+bun run ai-sdk-resumable-chat/server.ts
+```
+
 #### Dinner party
 
 A multi-agent conversation where N guests (each an LLM with a distinct persona) sit around a table and discuss a topic. Each guest has their own S2 stream for working memory, and they communicate through a shared bus stream. The conversation is fully resumable.

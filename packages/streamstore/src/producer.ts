@@ -225,6 +225,7 @@ export class Producer implements AsyncDisposable {
 					try {
 						if (this.readableController) {
 							this.readableController.error(error);
+							this.readableController = null;
 						}
 					} catch {
 						// Controller may be closed/errored
@@ -276,6 +277,7 @@ export class Producer implements AsyncDisposable {
 						try {
 							if (this.readableController) {
 								this.readableController.error(error);
+								this.readableController = null;
 							}
 						} catch {
 							// Controller may be closed/errored

@@ -1,6 +1,9 @@
 import { S2, S2Environment } from "@s2-dev/streamstore";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createResumableStreamContext } from "../index.js";
+
+const hasEnv = !!process.env.S2_ACCESS_TOKEN;
+const describeIf = hasEnv ? describe : describe.skip;
 
 const makeBasinName = (): string => {
 	const suffix = Math.random().toString(36).slice(2, 10);
@@ -77,124 +80,132 @@ async function readStreamToArray(
 let s2: S2;
 let basinName: string;
 
-beforeAll(async () => {
-	const env = S2Environment.parse();
-	if (!env.accessToken) return;
-	s2 = new S2(env as { accessToken: string });
-	basinName = makeBasinName();
-	await s2.basins.create({
-		basin: basinName,
-		config: { createStreamOnAppend: true, createStreamOnRead: true },
-	});
-	await waitForBasinReady(s2, basinName);
-	process.env.S2_BASIN = basinName;
-	process.env.S2_LINGER_DURATION = "100";
-}, 120_000);
+describeIf("resumable-stream", () => {
+	beforeAll(async () => {
+		const env = S2Environment.parse();
+		s2 = new S2(env as { accessToken: string });
+		basinName = makeBasinName();
+		await s2.basins.create({
+			basin: basinName,
+			config: { createStreamOnAppend: true, createStreamOnRead: true },
+		});
+		await waitForBasinReady(s2, basinName);
+		process.env.S2_BASIN = basinName;
+		process.env.S2_LINGER_DURATION = "100";
+	}, 120_000);
 
-afterAll(async () => {
-	if (!s2 || !basinName) return;
-	try {
-		await s2.basins.delete({ basin: basinName });
-	} catch {
-		// best-effort cleanup
-	}
-	delete process.env.S2_BASIN;
-	delete process.env.S2_LINGER_DURATION;
-});
-
-test("pub/sub", async () => {
-	const context = createResumableStreamContext({
-		waitUntil: async (promise) => {
-			await promise;
-		},
+	afterAll(async () => {
+		if (!s2 || !basinName) return;
+		try {
+			await s2.basins.delete({ basin: basinName });
+		} catch {
+			// best-effort cleanup
+		}
+		delete process.env.S2_BASIN;
+		delete process.env.S2_LINGER_DURATION;
 	});
 
-	const originalData = ["msg1", "msg2", "msg3", "msg4", "msg5"];
-	const streamId = `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	it("pub/sub", async () => {
+		const context = createResumableStreamContext({
+			waitUntil: async (promise) => {
+				await promise;
+			},
+		});
 
-	const inputStream = createStreamFromArray(originalData);
-	const publisherStream = await context.resumableStream(
-		streamId,
-		() => inputStream,
-	);
+		const originalData = ["msg1", "msg2", "msg3", "msg4", "msg5"];
+		const streamId = `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-	const publisherData = await readStreamToArray(publisherStream!);
+		const inputStream = createStreamFromArray(originalData);
+		const publisherStream = await context.resumableStream(
+			streamId,
+			() => inputStream,
+		);
 
-	const resumedStream = await context.resumeStream(streamId);
-	const subscriberData = await readStreamToArray(resumedStream);
+		const publisherData = await readStreamToArray(publisherStream!);
 
-	expect(publisherData).toEqual(originalData);
-	expect(subscriberData).toEqual(originalData);
-}, 30_000);
+		const resumedStream = await context.resumeStream(streamId);
+		const subscriberData = await readStreamToArray(resumedStream);
 
-test("concurrent creators result in a single stream with consistent ordered data", async () => {
-	const context = createResumableStreamContext({
-		waitUntil: async (promise) => {
-			await promise;
-		},
-	});
+		expect(publisherData).toEqual(originalData);
+		expect(subscriberData).toEqual(originalData);
+	}, 30_000);
 
-	const streamId = `concurrent-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-	const initialMessages = ["msg1", "msg2", "msg3", "msg4"];
+	it("concurrent creators result in a single stream with consistent ordered data", async () => {
+		const context = createResumableStreamContext({
+			waitUntil: async (promise) => {
+				await promise;
+			},
+		});
 
-	const inputStream1 = createStreamFromArray([...initialMessages]);
-	const inputStream2 = createStreamFromArray([...initialMessages]);
-	const inputStream3 = createStreamFromArray([...initialMessages]);
+		const streamId = `concurrent-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const initialMessages = ["msg1", "msg2", "msg3", "msg4"];
 
-	const writers = [
-		context.resumableStream(streamId, () => inputStream1),
-		context.resumableStream(streamId, () => inputStream2),
-		context.resumableStream(streamId, () => inputStream3),
-	];
+		const inputStream1 = createStreamFromArray([...initialMessages]);
+		const inputStream2 = createStreamFromArray([...initialMessages]);
+		const inputStream3 = createStreamFromArray([...initialMessages]);
 
-	const results = await Promise.allSettled(writers);
+		const writers = [
+			context.resumableStream(streamId, () => inputStream1),
+			context.resumableStream(streamId, () => inputStream2),
+			context.resumableStream(streamId, () => inputStream3),
+		];
 
-	console.log("Results:", results);
+		const results = await Promise.allSettled(writers);
 
-	const successful = results.filter(
-		(result) => result.status === "fulfilled" && result.value !== null,
-	);
-	expect(successful.length).toBeGreaterThanOrEqual(1);
+		console.log("Results:", results);
 
-	const resumedStream = await context.resumeStream(streamId);
-	const finalStreamData = await readStreamToArray(resumedStream, 20000);
+		const successful = results.filter(
+			(result) => result.status === "fulfilled" && result.value !== null,
+		);
+		expect(successful.length).toBeGreaterThanOrEqual(1);
 
-	expect(finalStreamData).toEqual(initialMessages);
-}, 30_000);
+		const resumedStream = await context.resumeStream(streamId);
+		const finalStreamData = await readStreamToArray(resumedStream, 20000);
 
-test("concurrent readers", async () => {
-	const context = createResumableStreamContext({
-		waitUntil: async (promise) => {
-			await promise;
-		},
-	});
+		expect(finalStreamData).toEqual(initialMessages);
+	}, 30_000);
 
-	const streamId = `concurrent-reader-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-	const messages = ["msg1", "msg2", "msg3", "msg4"];
+	it("concurrent readers", async () => {
+		const context = createResumableStreamContext({
+			waitUntil: async (promise) => {
+				await promise;
+			},
+		});
 
-	const inputStream = createStreamFromArray(messages);
+		const streamId = `concurrent-reader-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const messages = ["msg1", "msg2", "msg3", "msg4"];
 
-	context.resumableStream(streamId, () => inputStream);
+		const inputStream = createStreamFromArray(messages);
+		const publisherStream = await context.resumableStream(
+			streamId,
+			() => inputStream,
+		);
+		expect(publisherStream).not.toBeNull();
+		const publisherRead = readStreamToArray(publisherStream, 30000);
 
-	const resumedStream1 = await context.resumeStream(streamId);
-	const resumedStream2 = await context.resumeStream(streamId);
-	const resumedStream3 = await context.resumeStream(streamId);
+		const resumedStream1 = await context.resumeStream(streamId);
+		const resumedStream2 = await context.resumeStream(streamId);
+		const resumedStream3 = await context.resumeStream(streamId);
 
-	const results = await Promise.allSettled([
-		readStreamToArray(resumedStream1, 30000),
-		readStreamToArray(resumedStream2, 30000),
-		readStreamToArray(resumedStream3, 30000),
-	]);
+		const results = await Promise.allSettled([
+			readStreamToArray(resumedStream1, 30000),
+			readStreamToArray(resumedStream2, 30000),
+			readStreamToArray(resumedStream3, 30000),
+		]);
 
-	console.log("Concurrent reader results:", results);
-	const successful = results.filter((result) => result.status === "fulfilled");
-	expect(successful.length).toBe(3);
+		console.log("Concurrent reader results:", results);
+		const successful = results.filter(
+			(result) => result.status === "fulfilled",
+		);
+		expect(successful.length).toBe(3);
 
-	const readerData = results.map((result) =>
-		result.status === "fulfilled" ? result.value : [],
-	);
+		const readerData = results.map((result) =>
+			result.status === "fulfilled" ? result.value : [],
+		);
 
-	expect(readerData[0]).toEqual(messages);
-	expect(readerData[1]).toEqual(messages);
-	expect(readerData[2]).toEqual(messages);
-}, 30_000);
+		expect(readerData[0]).toEqual(messages);
+		expect(readerData[1]).toEqual(messages);
+		expect(readerData[2]).toEqual(messages);
+		await expect(publisherRead).resolves.toEqual(messages);
+	}, 30_000);
+}); // describeIf

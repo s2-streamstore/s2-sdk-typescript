@@ -30,7 +30,7 @@ import {
 	S2Environment,
 	S2Error,
 } from "@s2-dev/streamstore";
-import { type CoreMessage, generateText } from "ai";
+import { generateText, type ModelMessage } from "ai";
 
 // ---------------------------------------------------------------------------
 // Guest definitions — swap these to change the cast!
@@ -127,7 +127,7 @@ const MAX_CONTEXT_MESSAGES = Number(
 	process.env.AI_SDK_MAX_CONTEXT_MESSAGES ?? 40,
 );
 
-function pruneMessages(messages: CoreMessage[]) {
+function pruneMessages(messages: ModelMessage[]) {
 	if (!Number.isFinite(MAX_CONTEXT_MESSAGES) || MAX_CONTEXT_MESSAGES <= 0)
 		return;
 	const system = messages[0]?.role === "system" ? messages[0] : undefined;
@@ -151,7 +151,7 @@ async function ensureStream(name: string) {
 type GuestState = {
 	guest: Guest;
 	/** Full LLM messages array (system + user/assistant turns). */
-	messages: CoreMessage[];
+	messages: ModelMessage[];
 	/** Bus seqNum of the last message this guest has seen. */
 	lastBusSeqNum: number;
 	/** S2 stream client for this guest's memory. */
@@ -171,7 +171,7 @@ async function createGuestState(guest: Guest): Promise<GuestState> {
 	);
 
 	// Restore from the guest's memory stream.
-	const messages: CoreMessage[] = [];
+	const messages: ModelMessage[] = [];
 	let lastBusSeqNum = -1;
 
 	const { tail } = await stream.checkTail();
@@ -209,7 +209,7 @@ async function createGuestState(guest: Guest): Promise<GuestState> {
 	// If fresh start, write the system prompt (persona + shared setting).
 	if (messages.length === 0) {
 		const fullSystem = `${guest.system}\n\n${setting}`;
-		const systemMsg: CoreMessage = { role: "system", content: fullSystem };
+		const systemMsg: ModelMessage = { role: "system", content: fullSystem };
 		messages.push(systemMsg);
 		const rec: MemoryRecord = {
 			type: "message",
