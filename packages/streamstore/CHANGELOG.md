@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.22.9
+
+### Patch Changes
+
+- af0ea65: bugfix: BatchTransform.flush() error propagation
+
 ## 0.22.8
 
 ### Patch Changes
