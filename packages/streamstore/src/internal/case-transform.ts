@@ -75,7 +75,14 @@ export type SnakeCaseKeys<T> = T extends object
  * Convert a snake_case string to camelCase at runtime.
  */
 function snakeToCamelString(str: string): string {
-	return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+	const parts = str.split("_");
+	return (
+		parts[0] +
+		parts
+			.slice(1)
+			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+			.join("")
+	);
 }
 
 /**
@@ -110,6 +117,12 @@ export function toCamelCase<T>(obj: unknown): CamelCaseKeys<T> {
 		return obj as CamelCaseKeys<T>;
 	}
 
+	// Don't transform non-plain objects (Date, Map, Set, custom classes, etc.)
+	const proto = Object.getPrototypeOf(obj);
+	if (proto !== Object.prototype && proto !== null) {
+		return obj as CamelCaseKeys<T>;
+	}
+
 	const result: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(obj)) {
 		result[snakeToCamelString(key)] = toCamelCase(value);
@@ -139,6 +152,12 @@ export function toSnakeCase<T>(obj: unknown): SnakeCaseKeys<T> {
 
 	// Handle Uint8Array and other typed arrays - don't transform
 	if (ArrayBuffer.isView(obj)) {
+		return obj as SnakeCaseKeys<T>;
+	}
+
+	// Don't transform non-plain objects (Date, Map, Set, custom classes, etc.)
+	const proto = Object.getPrototypeOf(obj);
+	if (proto !== Object.prototype && proto !== null) {
 		return obj as SnakeCaseKeys<T>;
 	}
 
