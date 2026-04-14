@@ -1415,6 +1415,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.fatalError = error;
 		this.pumpStopped = true;
 
+		// Wake pump if it's sleeping so it can check the pumpStopped flag
+		if (this.pumpWakeup) {
+			this.pumpWakeup();
+		}
+
 		// Resolve all inflight entries with error
 		debugSession(
 			"[%s] rejecting %d inflight entries",
