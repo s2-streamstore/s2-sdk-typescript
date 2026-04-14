@@ -1,5 +1,11 @@
 # @s2-dev/resumable-stream
 
+## 1.10.2
+
+### Patch Changes
+
+- cb14923: feat: add AI SDK durability support
+
 ## 1.10.1
 
 ### Patch Changes
