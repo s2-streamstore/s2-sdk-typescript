@@ -79,17 +79,14 @@ export function supportsHttp2(): boolean {
 
 /**
  * Check if the current runtime allows setting a custom User-Agent header.
+ *
+ * Only browsers enforce the Fetch spec's "forbidden header name" restriction
+ * that prevents setting User-Agent. All server-side runtimes (Node, Bun,
+ * Deno, Cloudflare Workers, etc.) allow it.
  */
-export function canSetUserAgentHeader(): boolean {
-	const runtime = detectRuntime();
-
-	switch (runtime) {
-		case "node":
-		case "bun":
-			return true;
-		default:
-			return false;
-	}
+export function canSetUserAgentHeader(runtime?: Runtime): boolean {
+	const rt = runtime ?? detectRuntime();
+	return rt !== "browser";
 }
 
 /**
