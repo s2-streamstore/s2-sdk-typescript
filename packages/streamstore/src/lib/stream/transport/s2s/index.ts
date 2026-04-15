@@ -662,7 +662,14 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			ReadResult<Format>
 		>;
 		const fn = proto[Symbol.asyncIterator];
-		if (typeof fn === "function") return fn.call(this);
+		if (typeof fn === "function") {
+			try {
+				return fn.call(this);
+			} catch {
+				// Native method may throw "Illegal invocation" when called on subclass
+				// Fall through to manual implementation
+			}
+		}
 		const reader = this.getReader();
 		return {
 			next: async () => {
