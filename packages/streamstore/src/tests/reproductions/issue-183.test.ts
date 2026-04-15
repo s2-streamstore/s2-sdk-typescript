@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../generated/index.js", async () => {
-	const actual = await vi.importActual<typeof import("../../generated/index.js")>(
-		"../../generated/index.js",
-	);
+	const actual = await vi.importActual<
+		typeof import("../../generated/index.js")
+	>("../../generated/index.js");
 	return {
 		...actual,
 		reconfigureStream: vi.fn(),
@@ -37,7 +37,8 @@ describe("Issue #183: streams.reconfigure must normalize deleteOnEmpty.minAgeSec
 			deleteOnEmpty: { minAgeSecs: 3.7 },
 		});
 
-		const call = vi.mocked(Generated.reconfigureStream).mock.calls[0]![0] as any;
+		const call = vi.mocked(Generated.reconfigureStream).mock
+			.calls[0]![0] as any;
 		expect(call.path).toEqual({ stream: "test-stream" });
 		expect(call.body.delete_on_empty.min_age_secs).toBe(3);
 	});
@@ -50,7 +51,8 @@ describe("Issue #183: streams.reconfigure must normalize deleteOnEmpty.minAgeSec
 			deleteOnEmpty: { minAgeSecs: -5 },
 		});
 
-		const call = vi.mocked(Generated.reconfigureStream).mock.calls[0]![0] as any;
+		const call = vi.mocked(Generated.reconfigureStream).mock
+			.calls[0]![0] as any;
 		expect(call.path).toEqual({ stream: "test-stream" });
 		expect(call.body.delete_on_empty.min_age_secs).toBe(0);
 	});

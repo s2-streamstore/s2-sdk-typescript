@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../generated/index.js", async () => {
-	const actual = await vi.importActual<typeof import("../../generated/index.js")>(
-		"../../generated/index.js",
-	);
+	const actual = await vi.importActual<
+		typeof import("../../generated/index.js")
+	>("../../generated/index.js");
 	return {
 		...actual,
 		reconfigureBasin: vi.fn(),
@@ -43,7 +43,8 @@ describe("Issue #196: reconfigure body must not include path parameters", () => 
 			storageClass: "express",
 		});
 
-		const call = vi.mocked(Generated.reconfigureStream).mock.calls[0]![0] as any;
+		const call = vi.mocked(Generated.reconfigureStream).mock
+			.calls[0]![0] as any;
 		expect(call.path).toEqual({ stream: "my-test-stream" });
 		expect(call.body).not.toHaveProperty("stream");
 		expect(call.body.storage_class).toBe("express");
