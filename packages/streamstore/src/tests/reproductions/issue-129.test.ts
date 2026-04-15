@@ -112,4 +112,20 @@ describe("Issue #129: maxInflightBytes below 1 MiB should throw S2Error", () => 
 			}),
 		).rejects.toThrow(S2Error);
 	});
+
+	it("rejects NaN maxInflightBytes", async () => {
+		await expect(
+			RetryAppendSession.create(async () => createMockTransport(), {
+				maxInflightBytes: Number.NaN,
+			}),
+		).rejects.toThrow(S2Error);
+	});
+
+	it("rejects Infinity maxInflightBytes", async () => {
+		await expect(
+			RetryAppendSession.create(async () => createMockTransport(), {
+				maxInflightBytes: Number.POSITIVE_INFINITY,
+			}),
+		).rejects.toThrow(S2Error);
+	});
 });
