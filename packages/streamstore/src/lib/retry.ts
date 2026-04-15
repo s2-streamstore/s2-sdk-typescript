@@ -326,7 +326,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						try {
 							session = await generator(nextArgs);
 							if (cancelled) {
-								try { await session.cancel?.("cancelled"); } catch {}
+								try {
+									await session.cancel?.("cancelled");
+								} catch {}
 								return;
 							}
 						} catch (err) {
@@ -1050,7 +1052,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			debugSession("[%s] [PUMP] ensuring session exists", this.streamName);
 			await this.ensureSession();
 			if (this.pumpStopped) {
-				debugSession("[%s] [PUMP] stopped after ensureSession", this.streamName);
+				debugSession(
+					"[%s] [PUMP] stopped after ensureSession",
+					this.streamName,
+				);
 				return;
 			}
 			if (!this.session) {
@@ -1383,7 +1388,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		// Create new session
 		await this.ensureSession();
 		if (this.pumpStopped) {
-			debugSession("[%s] stopped after ensureSession in recovery", this.streamName);
+			debugSession(
+				"[%s] stopped after ensureSession in recovery",
+				this.streamName,
+			);
 			return;
 		}
 		if (!this.session) {

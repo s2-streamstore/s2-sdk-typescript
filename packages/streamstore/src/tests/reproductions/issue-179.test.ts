@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppendInput, AppendRecord } from "../../index.js";
+import type { AppendResult, CloseResult } from "../../lib/result.js";
 import { RetryAppendSession as AppendSessionImpl } from "../../lib/retry.js";
 import type { TransportAppendSession } from "../../lib/stream/types.js";
-import type { AppendResult, CloseResult } from "../../lib/result.js";
 
 /**
  * Issue #179: Aborting an idle RetryAppendSession can hang close() indefinitely.

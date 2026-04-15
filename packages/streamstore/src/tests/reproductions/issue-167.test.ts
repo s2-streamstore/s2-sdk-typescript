@@ -21,17 +21,17 @@ describe("Issue #167: endpoints without explicit path must not silently drop que
 		// Before the fix: `host?q=1` → URL becomes `https://host/v1`
 		// (query silently dropped, no error thrown)
 		// After the fix: throws immediately with a clear message
-		expect(
-			() => new EndpointTemplate({ endpoint: "host?q=1" }),
-		).toThrow(/query string or hash fragment/);
+		expect(() => new EndpointTemplate({ endpoint: "host?q=1" })).toThrow(
+			/query string or hash fragment/,
+		);
 	});
 
 	it("rejects endpoint with hash fragment and no path (host#section)", () => {
 		// Before the fix: `host#section` → URL becomes `https://host/v1`
 		// (hash silently dropped)
-		expect(
-			() => new EndpointTemplate({ endpoint: "host#section" }),
-		).toThrow(/query string or hash fragment/);
+		expect(() => new EndpointTemplate({ endpoint: "host#section" })).toThrow(
+			/query string or hash fragment/,
+		);
 	});
 
 	it("rejects endpoint with query and hash but no path", () => {
@@ -44,8 +44,7 @@ describe("Issue #167: endpoints without explicit path must not silently drop que
 		// `https://host?token=secret` has no path after authority,
 		// so hasExplicitPath would have returned false
 		expect(
-			() =>
-				new EndpointTemplate({ endpoint: "https://host?token=secret" }),
+			() => new EndpointTemplate({ endpoint: "https://host?token=secret" }),
 		).toThrow(/query string or hash fragment/);
 	});
 

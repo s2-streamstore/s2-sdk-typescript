@@ -18,33 +18,29 @@ import { AppendRecord } from "../../types.js";
 
 describe("Issue #193: NaN batch configuration should be rejected", () => {
 	it("rejects NaN for maxBatchRecords", () => {
-		expect(
-			() => new BatchTransform({ maxBatchRecords: NaN }),
-		).toThrow(S2Error);
+		expect(() => new BatchTransform({ maxBatchRecords: NaN })).toThrow(S2Error);
 	});
 
 	it("rejects NaN for maxBatchBytes", () => {
-		expect(
-			() => new BatchTransform({ maxBatchBytes: NaN }),
-		).toThrow(S2Error);
+		expect(() => new BatchTransform({ maxBatchBytes: NaN })).toThrow(S2Error);
 	});
 
 	it("rejects NaN for lingerDurationMillis", () => {
-		expect(
-			() => new BatchTransform({ lingerDurationMillis: NaN }),
-		).toThrow(S2Error);
+		expect(() => new BatchTransform({ lingerDurationMillis: NaN })).toThrow(
+			S2Error,
+		);
 	});
 
 	it("rejects Infinity for maxBatchRecords", () => {
-		expect(
-			() => new BatchTransform({ maxBatchRecords: Infinity }),
-		).toThrow(S2Error);
+		expect(() => new BatchTransform({ maxBatchRecords: Infinity })).toThrow(
+			S2Error,
+		);
 	});
 
 	it("rejects Infinity for maxBatchBytes", () => {
-		expect(
-			() => new BatchTransform({ maxBatchBytes: Infinity }),
-		).toThrow(S2Error);
+		expect(() => new BatchTransform({ maxBatchBytes: Infinity })).toThrow(
+			S2Error,
+		);
 	});
 
 	it("rejects Infinity for lingerDurationMillis", () => {
@@ -63,27 +59,25 @@ describe("Issue #193: NaN batch configuration should be rejected", () => {
 		// Before the fix, this would NOT throw, and the linger timer would
 		// never start because `NaN >= 0` is false.
 		// After the fix, this throws at construction time.
-		expect(
-			() => new BatchTransform({ lingerDurationMillis: NaN }),
-		).toThrow(/lingerDurationMillis/);
+		expect(() => new BatchTransform({ lingerDurationMillis: NaN })).toThrow(
+			/lingerDurationMillis/,
+		);
 	});
 
 	it("NaN maxBatchRecords would allow unbounded batches (verifies the bug)", async () => {
 		// Before the fix, this would NOT throw, and records would accumulate
 		// indefinitely because `batch.length + 1 > NaN` is always false.
 		// After the fix, this throws at construction time.
-		expect(
-			() => new BatchTransform({ maxBatchRecords: NaN }),
-		).toThrow(/maxBatchRecords/);
+		expect(() => new BatchTransform({ maxBatchRecords: NaN })).toThrow(
+			/maxBatchRecords/,
+		);
 	});
 
 	it("valid configuration values still work", () => {
 		// Ensure the fix doesn't break valid inputs
 		expect(() => new BatchTransform({ maxBatchRecords: 100 })).not.toThrow();
 		expect(() => new BatchTransform({ maxBatchBytes: 512 })).not.toThrow();
-		expect(
-			() => new BatchTransform({ lingerDurationMillis: 0 }),
-		).not.toThrow();
+		expect(() => new BatchTransform({ lingerDurationMillis: 0 })).not.toThrow();
 		expect(
 			() => new BatchTransform({ lingerDurationMillis: 10 }),
 		).not.toThrow();

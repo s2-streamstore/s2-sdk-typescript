@@ -91,10 +91,7 @@ function createTestStream(
 
 describe("Issue #166: fetch transport iterator must cancel on early termination", () => {
 	it("buggy variant: return() does NOT cancel the underlying stream", async () => {
-		const { stream, cancelCalled } = createTestStream(
-			["a", "b", "c"],
-			"buggy",
-		);
+		const { stream, cancelCalled } = createTestStream(["a", "b", "c"], "buggy");
 		const iter = stream[Symbol.asyncIterator]();
 
 		// Read one item then early-return
@@ -108,10 +105,7 @@ describe("Issue #166: fetch transport iterator must cancel on early termination"
 	});
 
 	it("fixed variant: return() cancels the underlying stream", async () => {
-		const { stream, cancelCalled } = createTestStream(
-			["a", "b", "c"],
-			"fixed",
-		);
+		const { stream, cancelCalled } = createTestStream(["a", "b", "c"], "fixed");
 		const iter = stream[Symbol.asyncIterator]();
 
 		// Read one item then early-return
@@ -125,10 +119,7 @@ describe("Issue #166: fetch transport iterator must cancel on early termination"
 	});
 
 	it("fixed variant: throw() cancels the underlying stream", async () => {
-		const { stream, cancelCalled } = createTestStream(
-			["a", "b", "c"],
-			"fixed",
-		);
+		const { stream, cancelCalled } = createTestStream(["a", "b", "c"], "fixed");
 		const iter = stream[Symbol.asyncIterator]();
 
 		// Read one item then throw
@@ -141,10 +132,7 @@ describe("Issue #166: fetch transport iterator must cancel on early termination"
 	});
 
 	it("fixed variant: for-await break cancels the stream", async () => {
-		const { stream, cancelCalled } = createTestStream(
-			["a", "b", "c"],
-			"fixed",
-		);
+		const { stream, cancelCalled } = createTestStream(["a", "b", "c"], "fixed");
 
 		const collected: string[] = [];
 		for await (const item of stream) {

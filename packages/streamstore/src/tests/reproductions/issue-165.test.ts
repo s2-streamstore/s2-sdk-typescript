@@ -3,7 +3,7 @@ import { BatchTransform } from "../../batch-transform.js";
 import { S2Error } from "../../error.js";
 import { BatchSubmitTicket } from "../../lib/stream/types.js";
 import { Producer } from "../../producer.js";
-import { AppendRecord, type AppendAck, type AppendInput } from "../../types.js";
+import { type AppendAck, type AppendInput, AppendRecord } from "../../types.js";
 
 /**
  * Issue #165: Producer.close() masks append/ack failures with TypeError during cleanup.
@@ -34,11 +34,7 @@ function makeMockAppendSession(opts: {
 							end: { seqNum: input.records.length, timestamp: new Date() },
 						} as AppendAck);
 
-			return new BatchSubmitTicket(
-				ackPromise,
-				100,
-				input.records.length,
-			);
+			return new BatchSubmitTicket(ackPromise, 100, input.records.length);
 		},
 		close: async () => {},
 		readable: new ReadableStream(),

@@ -19,9 +19,7 @@ describe("Issue #163: case conversion corrupts non-plain objects", () => {
 		const input = { created_at: date };
 		const result = toCamelCase<typeof input>(input);
 		expect((result as any).createdAt).toBeInstanceOf(Date);
-		expect((result as any).createdAt.toISOString()).toBe(
-			date.toISOString(),
-		);
+		expect((result as any).createdAt.toISOString()).toBe(date.toISOString());
 	});
 
 	it("should preserve Date objects in toSnakeCase", () => {
@@ -29,9 +27,7 @@ describe("Issue #163: case conversion corrupts non-plain objects", () => {
 		const input = { createdAt: date };
 		const result = toSnakeCase<typeof input>(input);
 		expect((result as any).created_at).toBeInstanceOf(Date);
-		expect((result as any).created_at.toISOString()).toBe(
-			date.toISOString(),
-		);
+		expect((result as any).created_at.toISOString()).toBe(date.toISOString());
 	});
 
 	it("should preserve nested Date objects", () => {

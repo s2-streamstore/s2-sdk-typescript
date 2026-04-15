@@ -42,9 +42,9 @@ describe("Issue #178: endpoints with query/hash should be rejected", () => {
 	});
 
 	it("rejects endpoint with hash but no explicit path", () => {
-		expect(
-			() => new EndpointTemplate({ endpoint: "host#section" }),
-		).toThrow(/query string or hash fragment/);
+		expect(() => new EndpointTemplate({ endpoint: "host#section" })).toThrow(
+			/query string or hash fragment/,
+		);
 	});
 
 	it("allows normal endpoints without query/hash", () => {

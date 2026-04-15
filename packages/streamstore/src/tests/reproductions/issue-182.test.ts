@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-	S2SFrameParser,
 	frameMessage,
+	S2SFrameParser,
 } from "../../lib/stream/transport/s2s/framing.js";
 
 /**
@@ -42,9 +42,7 @@ describe("Issue #182: zero-length frame desynchronizes S2S parser", () => {
 			body: new Uint8Array([0x01, 0x02, 0x03]),
 		});
 
-		const combined = new Uint8Array(
-			zeroLengthFrame.length + validFrame.length,
-		);
+		const combined = new Uint8Array(zeroLengthFrame.length + validFrame.length);
 		combined.set(zeroLengthFrame, 0);
 		combined.set(validFrame, zeroLengthFrame.length);
 		parser.push(combined);

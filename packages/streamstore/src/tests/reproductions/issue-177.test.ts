@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppendInput, AppendRecord, S2Error } from "../../index.js";
+import type { AppendResult, CloseResult } from "../../lib/result.js";
 import { RetryAppendSession as AppendSessionImpl } from "../../lib/retry.js";
 import type { TransportAppendSession } from "../../lib/stream/types.js";
-import type { AppendResult, CloseResult } from "../../lib/result.js";
 
 /**
  * Issue #177: ticket.ack() can hang forever if close() happens during
@@ -70,9 +70,7 @@ describe("Issue #177: ticket.ack() hangs when close() races with backpressure", 
 		// Second submit should block on capacity (maxInflightBatches=1)
 		let submit2Error: Error | undefined;
 		const submit2Promise = session
-			.submit(
-				AppendInput.create([AppendRecord.string({ body: "second" })]),
-			)
+			.submit(AppendInput.create([AppendRecord.string({ body: "second" })]))
 			.catch((err: Error) => {
 				submit2Error = err;
 				return undefined;
@@ -131,9 +129,7 @@ describe("Issue #177: ticket.ack() hangs when close() races with backpressure", 
 		// Block on capacity
 		let submit2Settled = false;
 		const submit2Promise = session
-			.submit(
-				AppendInput.create([AppendRecord.string({ body: "blocked" })]),
-			)
+			.submit(AppendInput.create([AppendRecord.string({ body: "blocked" })]))
 			.then((ticket) => {
 				submit2Settled = true;
 				return ticket;

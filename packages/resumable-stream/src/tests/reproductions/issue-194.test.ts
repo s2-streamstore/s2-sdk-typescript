@@ -14,16 +14,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Mock S2 so readSession throws immediately (simulating 404/403)
 vi.mock("@s2-dev/streamstore", async () => {
-	const actual =
-		await vi.importActual<typeof import("@s2-dev/streamstore")>(
-			"@s2-dev/streamstore",
-		);
+	const actual = await vi.importActual<typeof import("@s2-dev/streamstore")>(
+		"@s2-dev/streamstore",
+	);
 	class MockS2 {
 		basin() {
 			return {
 				stream: () => ({
-					readSession: () =>
-						Promise.reject(new Error("Not Found (404)")),
+					readSession: () => Promise.reject(new Error("Not Found (404)")),
 				}),
 			};
 		}
@@ -98,9 +96,7 @@ describe("Issue #194: resumeStream returns null on session creation failure", ()
 			const timeout = new Promise<never>((_, reject) =>
 				setTimeout(() => reject(new Error("Stream read hung")), 3_000),
 			);
-			await expect(
-				Promise.race([reader.read(), timeout]),
-			).rejects.toThrow();
+			await expect(Promise.race([reader.read(), timeout])).rejects.toThrow();
 			reader.releaseLock();
 		} else {
 			expect(result).toBeNull();

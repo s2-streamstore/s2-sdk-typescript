@@ -49,7 +49,7 @@ export class EventStream<T>
 		super({
 			async pull(downstream) {
 				try {
-					while (downstream.desiredSize > 0) {
+					while ((downstream.desiredSize ?? 0) > 0) {
 						debug("pull loop, eventstream=%s", eventStreamId);
 						const match = findBoundary(buffer);
 						if (!match) {

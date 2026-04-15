@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { DeserializingReadSession } from "../../patterns/serialization.js";
-import { makeFrameHeaders } from "../../patterns/framing.js";
 import type { ReadSession } from "@s2-dev/streamstore";
+import { describe, expect, it } from "vitest";
+import { makeFrameHeaders } from "../../patterns/framing.js";
+import { DeserializingReadSession } from "../../patterns/serialization.js";
 
 /**
  * Issue #180: DeserializingReadSession leaks reader lock and does not cancel

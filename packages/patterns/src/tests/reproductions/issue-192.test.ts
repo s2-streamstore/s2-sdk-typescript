@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	FrameAssembler,
-	makeFrameHeaders,
-} from "../../patterns/framing.js";
+import { FrameAssembler, makeFrameHeaders } from "../../patterns/framing.js";
 
 /**
  * Issue #192: FrameAssembler.push() throws an unhandled RangeError when a

@@ -13,8 +13,8 @@ import {
 import {
 	appendFenceCommand,
 	isFenceRecord,
-	isTrimRecord,
 	isTerminalFence,
+	isTrimRecord,
 	persistToS2,
 } from "./protocol.js";
 
@@ -237,7 +237,10 @@ async function resumeStream(
 								"code" in error &&
 								(error as NodeJS.ErrnoException).code === "ERR_INVALID_STATE"
 							) {
-								debugLog("Likely page refresh caused stream closure:", streamId);
+								debugLog(
+									"Likely page refresh caused stream closure:",
+									streamId,
+								);
 								return;
 							}
 							throw error;

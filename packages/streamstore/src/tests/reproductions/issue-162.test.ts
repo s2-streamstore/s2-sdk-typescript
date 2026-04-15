@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { S2Error } from "../../error.js";
 import { AppendInput, AppendRecord } from "../../index.js";
+import type { AppendResult, CloseResult } from "../../lib/result.js";
 import {
 	RetryAppendSession as AppendSessionImpl,
 	RetryReadSession as ReadSessionImpl,
@@ -8,8 +10,6 @@ import type {
 	TransportAppendSession,
 	TransportReadSession,
 } from "../../lib/stream/types.js";
-import type { AppendResult, CloseResult } from "../../lib/result.js";
-import { S2Error } from "../../error.js";
 
 /**
  * Issue #162: RetryReadSession and RetryAppendSession continue retrying
@@ -79,11 +79,15 @@ describe("Issue #162: retry sessions should stop on cancel/abort", () => {
 				});
 			};
 
-			const session = await ReadSessionImpl.create(generator, {}, {
-				maxAttempts: 10,
-				minBaseDelayMillis: 100,
-				maxBaseDelayMillis: 500,
-			});
+			const session = await ReadSessionImpl.create(
+				generator,
+				{},
+				{
+					maxAttempts: 10,
+					minBaseDelayMillis: 100,
+					maxBaseDelayMillis: 500,
+				},
+			);
 
 			expect(generatorCallCount).toBe(1);
 
@@ -193,15 +197,11 @@ describe("Issue #162: retry sessions should stop on cancel/abort", () => {
 				});
 			};
 
-			const session = await AppendSessionImpl.create(
-				generator,
-				undefined,
-				{
-					maxAttempts: 10,
-					minBaseDelayMillis: 50,
-					maxBaseDelayMillis: 200,
-				},
-			);
+			const session = await AppendSessionImpl.create(generator, undefined, {
+				maxAttempts: 10,
+				minBaseDelayMillis: 50,
+				maxBaseDelayMillis: 200,
+			});
 
 			// Submit a record to start the pump
 			const ticket = await session.submit(

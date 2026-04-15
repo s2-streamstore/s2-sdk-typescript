@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { S2Error } from "../../error.js";
-import { AppendInput, AppendRecord } from "../../types.js";
+import type { AppendResult, CloseResult } from "../../lib/result.js";
 import { RetryAppendSession } from "../../lib/retry.js";
 import type { TransportAppendSession } from "../../lib/stream/types.js";
-import type { AppendResult, CloseResult } from "../../lib/result.js";
+import { AppendInput, AppendRecord } from "../../types.js";
 
 /**
  * Issue #129: enforce 1 MiB minimum for maxInflightBytes.
@@ -37,10 +37,9 @@ function createMockTransport(): TransportAppendSession {
 describe("Issue #129: maxInflightBytes below 1 MiB should throw S2Error", () => {
 	it("rejects maxInflightBytes of 0", async () => {
 		await expect(
-			RetryAppendSession.create(
-				async () => createMockTransport(),
-				{ maxInflightBytes: 0 },
-			),
+			RetryAppendSession.create(async () => createMockTransport(), {
+				maxInflightBytes: 0,
+			}),
 		).rejects.toThrow(S2Error);
 	});
 
@@ -56,19 +55,17 @@ describe("Issue #129: maxInflightBytes below 1 MiB should throw S2Error", () => 
 	it("rejects maxInflightBytes of exactly 1 byte below 1 MiB", async () => {
 		const oneMiB = 1024 * 1024;
 		await expect(
-			RetryAppendSession.create(
-				async () => createMockTransport(),
-				{ maxInflightBytes: oneMiB - 1 },
-			),
+			RetryAppendSession.create(async () => createMockTransport(), {
+				maxInflightBytes: oneMiB - 1,
+			}),
 		).rejects.toThrow(S2Error);
 	});
 
 	it("error has origin 'sdk' and descriptive message", async () => {
 		try {
-			await RetryAppendSession.create(
-				async () => createMockTransport(),
-				{ maxInflightBytes: 100 },
-			);
+			await RetryAppendSession.create(async () => createMockTransport(), {
+				maxInflightBytes: 100,
+			});
 			expect.unreachable("should have thrown");
 		} catch (err) {
 			expect(err).toBeInstanceOf(S2Error);
@@ -110,10 +107,9 @@ describe("Issue #129: maxInflightBytes below 1 MiB should throw S2Error", () => 
 
 	it("rejects negative maxInflightBytes", async () => {
 		await expect(
-			RetryAppendSession.create(
-				async () => createMockTransport(),
-				{ maxInflightBytes: -1 },
-			),
+			RetryAppendSession.create(async () => createMockTransport(), {
+				maxInflightBytes: -1,
+			}),
 		).rejects.toThrow(S2Error);
 	});
 });
