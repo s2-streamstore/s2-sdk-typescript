@@ -1,95 +1,65 @@
-import { describe, expect, it } from "vitest";
-import { toSnakeCase } from "../../internal/case-transform.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../generated/index.js", async () => {
+	const actual = await vi.importActual<typeof import("../../generated/index.js")>(
+		"../../generated/index.js",
+	);
+	return {
+		...actual,
+		reconfigureBasin: vi.fn(),
+		reconfigureStream: vi.fn(),
+	};
+});
+
+import * as Generated from "../../generated/index.js";
+import { S2Basins } from "../../basins.js";
+import { S2Streams } from "../../streams.js";
 
 /**
  * Issue #196: reconfigure methods send path params (basin/stream) in the request body.
  *
- * The OpenAPI spec defines:
- *  - ReconfigureBasinData.body = BasinReconfiguration (no `basin` field)
- *  - ReconfigureStreamData.body = StreamReconfiguration (no `stream` field)
- *
- * But basins.ts and streams.ts spread the full `args` (including path params)
- * into the body payload via `{ ...args, ... }`, so `basin`/`stream` leak into
- * the JSON body, violating the API contract.
- *
- * The fix destructures out path params before building the body:
- *  - `const { basin, ...reconfigArgs } = args;`
- *  - `const { stream, ...reconfigArgs } = args;`
+ * These tests hit the actual `reconfigure()` methods and inspect the generated
+ * client calls to ensure the identifiers stay in `path`, not `body`.
  */
 
 describe("Issue #196: reconfigure body must not include path parameters", () => {
-	it("basin reconfigure body should not contain 'basin' key", () => {
-		// Simulate the fixed body construction from basins.ts
-		const args = {
+	beforeEach(() => {
+		vi.resetAllMocks();
+		vi.mocked(Generated.reconfigureBasin).mockResolvedValue({
+			data: {},
+			response: { status: 200 },
+		} as any);
+		vi.mocked(Generated.reconfigureStream).mockResolvedValue({
+			data: {},
+			response: { status: 200 },
+		} as any);
+	});
+
+	it("actual streams.reconfigure sends the stream name only in path", async () => {
+		const streams = new S2Streams({} as any);
+
+		await streams.reconfigure({
+			stream: "my-test-stream",
+			storageClass: "express",
+		});
+
+		const call = vi.mocked(Generated.reconfigureStream).mock.calls[0]![0] as any;
+		expect(call.path).toEqual({ stream: "my-test-stream" });
+		expect(call.body).not.toHaveProperty("stream");
+		expect(call.body.storage_class).toBe("express");
+	});
+
+	it("actual basins.reconfigure sends the basin name only in path", async () => {
+		const basins = new S2Basins({} as any, {} as any);
+
+		await basins.reconfigure({
 			basin: "my-test-basin",
 			createStreamOnAppend: true,
-			defaultStreamConfig: undefined,
-		};
+		});
 
-		const { basin, ...reconfigArgs } = args;
-		const apiArgs = {
-			...reconfigArgs,
-			defaultStreamConfig: args.defaultStreamConfig,
-		};
-		const body = toSnakeCase(apiArgs);
-
-		// The body must NOT contain the path param
-		expect(body).not.toHaveProperty("basin");
-		expect(body).toHaveProperty("create_stream_on_append", true);
-	});
-
-	it("stream reconfigure body should not contain 'stream' key", () => {
-		// Simulate the fixed body construction from streams.ts
-		const args = {
-			stream: "my-test-stream",
-			storageClass: "express" as const,
-			retentionPolicy: undefined,
-		};
-
-		const { stream, ...reconfigArgs } = args;
-		const apiArgs = {
-			...reconfigArgs,
-			retentionPolicy: args.retentionPolicy,
-		};
-		const body = toSnakeCase(apiArgs);
-
-		// The body must NOT contain the path param
-		expect(body).not.toHaveProperty("stream");
-		expect(body).toHaveProperty("storage_class", "express");
-	});
-
-	it("demonstrates the bug: spreading full args leaks path params into body", () => {
-		// This shows what the old (buggy) code did — spread `...args` into body
-		const args = {
-			basin: "my-test-basin",
-			createStreamOnAppend: true,
-			defaultStreamConfig: undefined,
-		};
-
-		const buggyApiArgs = {
-			...args, // BUG: basin is included
-			defaultStreamConfig: args.defaultStreamConfig,
-		};
-		const buggyBody = toSnakeCase(buggyApiArgs);
-
-		// The buggy body DOES contain the path param — this is the violation
-		expect(buggyBody).toHaveProperty("basin", "my-test-basin");
-	});
-
-	it("demonstrates the bug: spreading full stream args leaks path params", () => {
-		const args = {
-			stream: "my-test-stream",
-			storageClass: "express" as const,
-			retentionPolicy: undefined,
-		};
-
-		const buggyApiArgs = {
-			...args, // BUG: stream is included
-			retentionPolicy: args.retentionPolicy,
-		};
-		const buggyBody = toSnakeCase(buggyApiArgs);
-
-		// The buggy body DOES contain the path param
-		expect(buggyBody).toHaveProperty("stream", "my-test-stream");
+		const call = vi.mocked(Generated.reconfigureBasin).mock.calls[0]![0] as any;
+		expect(call.path).toEqual({ basin: "my-test-basin" });
+		expect(call.body).not.toHaveProperty("basin");
+		expect(call.body.create_stream_on_append).toBe(true);
 	});
 });
