@@ -76,6 +76,13 @@ describe("Issue #179: aborting idle RetryAppendSession hangs close()", () => {
 		const pumpPromise = (session as any).pumpPromise as Promise<void>;
 		expect(pumpPromise).toBeDefined();
 
+		// Register a settlement flag BEFORE abort so we capture the
+		// resolution during microtask flushing.
+		let pumpSettled = false;
+		pumpPromise.then(() => {
+			pumpSettled = true;
+		});
+
 		// Trigger abort directly via the private abort method to bypass
 		// WritableStream's internal async machinery which interacts poorly
 		// with fake timers.
@@ -87,21 +94,15 @@ describe("Issue #179: aborting idle RetryAppendSession hangs close()", () => {
 		// Without the fix, pumpPromise stays pending because pumpWakeup was
 		// never called by abort().
 		// The pump needs several microtask cycles to: wake → check flag → return
-		// → resolve pumpPromise → resolve .catch() wrapper.
+		// → resolve pumpPromise → settle .then() handler.
 		for (let i = 0; i < 10; i++) {
 			await vi.advanceTimersByTimeAsync(0);
 			await Promise.resolve();
 		}
 
-		// Check if pumpPromise has settled by racing against a sentinel.
-		const result = await Promise.race([
-			pumpPromise.then(() => "settled"),
-			Promise.resolve("pending"),
-		]);
-
-		// With fix: "settled" (pump exited after abort woke it)
-		// Without fix: "pending" (pump still parked, awaiting pumpWakeup)
-		expect(result).toBe("settled");
+		// With fix: pumpSettled is true (pump exited after abort woke it)
+		// Without fix: pumpSettled is false (pump still parked, awaiting pumpWakeup)
+		expect(pumpSettled).toBe(true);
 	}, 10000);
 
 	it("close() resolves promptly after abort() on a parked pump", async () => {
