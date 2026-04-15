@@ -61,7 +61,6 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 				status,
 				tail: err?.tail,
 				code: err?.code,
-				clampHint: !queryParams.clamp && (queryParams.wait ?? 0) > 0,
 			});
 		}
 		throw makeServerError(

@@ -398,19 +398,14 @@ export class RangeNotSatisfiableError extends S2Error {
 		code,
 		status = 416,
 		tail,
-		clampHint = false,
 	}: {
 		code?: string;
 		status?: number;
 		tail?: { seq_num: number; timestamp: number };
-		clampHint?: boolean;
 	} = {}) {
-		let message = tail
+		const message = tail
 			? `Range not satisfiable: starting point is out of range (tail seq_num=${tail.seq_num}).`
 			: "Range not satisfiable: starting point is out of range.";
-		if (clampHint) {
-			message += " Consider using `clamp` to start from the tail.";
-		}
 		super({
 			message,
 			code,
