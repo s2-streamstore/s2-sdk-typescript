@@ -209,9 +209,10 @@ describe("AppendSession", () => {
 	it("applies backpressure when queue exceeds maxQueuedBytes", async () => {
 		const stream = makeStream();
 
-		// Create a session with very small max queued bytes (100 bytes)
+		const ONE_MIB = 1024 * 1024;
+		// Create a session with the minimum allowed max inflight bytes (1 MiB)
 		const session = await stream.appendSession({
-			maxInflightBytes: 100,
+			maxInflightBytes: ONE_MIB,
 		});
 
 		// Control when appends resolve
@@ -227,18 +228,18 @@ describe("AppendSession", () => {
 		// Use the WritableStream interface (session is a ReadableWritablePair)
 		const writer = session.writable.getWriter();
 
-		// Submit first batch (50 bytes) - should succeed immediately
-		const largeBody = "x".repeat(42); // ~50 bytes with overhead
+		// Submit first batch (~600 KiB) - should succeed immediately
+		const largeBody = "x".repeat(600 * 1024);
 		const p1 = writer.write(
 			AppendInput.create([AppendRecord.string({ body: largeBody })]),
 		);
 
-		// Submit second batch (50 bytes) - should also queue
+		// Submit second batch (~600 KiB) - should also queue
 		const p2 = writer.write(
 			AppendInput.create([AppendRecord.string({ body: largeBody })]),
 		);
 
-		// Submit third batch (50 bytes) - should block due to backpressure
+		// Submit third batch (~600 KiB) - should block due to backpressure
 		let thirdWriteStarted = false;
 		const p3 = (async () => {
 			await writer.write(

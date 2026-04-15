@@ -302,6 +302,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		};
 		const format = (args?.as ?? "string") as Format;
 		let session: TransportReadSession<Format> | undefined = initialSession;
+		let cancelled = false;
 		super({
 			start: async (controller) => {
 				let nextArgs = { ...args } as ReadArgs<Format>;
@@ -312,6 +313,11 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				let attempt = 0;
 
 				while (true) {
+					// Check cancellation at the top of each iteration
+					if (cancelled) {
+						return;
+					}
+
 					// Use pre-established session on first iteration if provided
 					if (!session) {
 						debugRead("starting read session with args: %o", nextArgs);
@@ -319,6 +325,12 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						// Try to create session - may throw on connection errors
 						try {
 							session = await generator(nextArgs);
+							if (cancelled) {
+								try {
+									await session.cancel?.("cancelled");
+								} catch {}
+								return;
+							}
 						} catch (err) {
 							// Convert to S2Error if needed
 							const error = s2Error(err);
@@ -337,6 +349,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 									error.status,
 								);
 								await sleep(delay);
+								if (cancelled) {
+									return;
+								}
 								attempt++;
 								continue; // Retry creating session
 							}
@@ -429,6 +444,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 									error.status,
 								);
 								await sleep(delay);
+								if (cancelled) {
+									return;
+								}
 								attempt++;
 								break; // Break inner loop to retry
 							}
@@ -457,6 +475,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				}
 			},
 			cancel: async (reason) => {
+				cancelled = true;
 				try {
 					await session?.cancel(reason);
 				} catch (err) {
@@ -642,11 +661,19 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			...config,
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
-		// Clamp maxInflightBytes to at least 1 MiB
-		this.maxQueuedBytes = Math.max(
-			MIN_MAX_INFLIGHT_BYTES,
-			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES,
-		);
+		// Validate maxInflightBytes is finite and >= 1 MiB (matches Rust SDK behavior)
+		const configuredBytes =
+			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
+		if (
+			!Number.isFinite(configuredBytes) ||
+			configuredBytes < MIN_MAX_INFLIGHT_BYTES
+		) {
+			throw new S2Error({
+				message: `maxInflightBytes must be a finite number at least 1 MiB (${MIN_MAX_INFLIGHT_BYTES} bytes), got ${configuredBytes}`,
+				origin: "sdk",
+			});
+		}
+		this.maxQueuedBytes = configuredBytes;
 		// Clamp maxInflightBatches to at least 1 if set
 		this.maxInflightBatches =
 			this.sessionOptions?.maxInflightBatches !== undefined
@@ -656,6 +683,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.readable = new ReadableStream<Types.AppendAck>({
 			start: (controller) => {
 				this.acksController = controller;
+			},
+			cancel: async (reason) => {
+				const error = abortedError(`AppendSession acks cancelled: ${reason}`);
+				await this.abort(error);
 			},
 		});
 
@@ -732,6 +763,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					this.fatalError.message,
 				);
 				throw this.fatalError;
+			}
+
+			// Reject if session is closing/closed so blocked submits fail fast
+			// instead of producing tickets whose ack() can hang (#177)
+			if (this.closing || this.closed) {
+				throw new S2Error({ message: "AppendSession is closed" });
 			}
 
 			// Byte-based gating
@@ -1017,6 +1054,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Ensure session exists
 			debugSession("[%s] [PUMP] ensuring session exists", this.streamName);
 			await this.ensureSession();
+			if (this.pumpStopped) {
+				debugSession(
+					"[%s] [PUMP] stopped after ensureSession",
+					this.streamName,
+				);
+				return;
+			}
 			if (!this.session) {
 				// Session creation failed - check max attempts before retrying
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
@@ -1317,6 +1361,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);
 
+		// Check if aborted during backoff sleep
+		if (this.pumpStopped) {
+			debugSession("[%s] stopped during recovery backoff", this.streamName);
+			return;
+		}
+
 		// Teardown old session
 		if (this.session) {
 			try {
@@ -1340,6 +1390,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Create new session
 		await this.ensureSession();
+		if (this.pumpStopped) {
+			debugSession(
+				"[%s] stopped after ensureSession in recovery",
+				this.streamName,
+			);
+			return;
+		}
 		if (!this.session) {
 			debugSession(
 				"[%s] failed to create new session during recovery",
@@ -1415,6 +1472,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.fatalError = error;
 		this.pumpStopped = true;
 
+		// Wake pump if it's sleeping so it can check the pumpStopped flag
+		if (this.pumpWakeup) {
+			this.pumpWakeup();
+		}
+
 		// Resolve all inflight entries with error
 		debugSession(
 			"[%s] rejecting %d inflight entries",
@@ -1479,6 +1541,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		debugSession("[%s] close requested", this.streamName);
 		this.closing = true;
+
+		// Wake capacity waiters so blocked submits check closing flag and
+		// fail fast instead of producing tickets whose ack() hangs (#177)
+		for (const waiter of this.capacityWaiters) {
+			waiter.resolve();
+		}
+		this.capacityWaiters = [];
 
 		// Wake pump if it's sleeping so it can check closing flag
 		if (this.pumpWakeup) {

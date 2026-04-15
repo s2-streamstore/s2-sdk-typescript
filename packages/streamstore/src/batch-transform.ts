@@ -80,9 +80,13 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 		// Validate configuration
 		if (args?.maxBatchRecords !== undefined) {
-			if (args.maxBatchRecords < 1 || args.maxBatchRecords > 1000) {
+			if (
+				!Number.isFinite(args.maxBatchRecords) ||
+				args.maxBatchRecords < 1 ||
+				args.maxBatchRecords > 1000
+			) {
 				throw new S2Error({
-					message: `maxBatchRecords must be between 1 and 1000 (inclusive); got ${args.maxBatchRecords}`,
+					message: `maxBatchRecords must be a finite number between 1 and 1000 (inclusive); got ${args.maxBatchRecords}`,
 					status: 400,
 					origin: "sdk",
 				});
@@ -90,18 +94,25 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		}
 		if (args?.maxBatchBytes !== undefined) {
 			const max = 1024 * 1024;
-			if (args.maxBatchBytes < 1 || args.maxBatchBytes > max) {
+			if (
+				!Number.isFinite(args.maxBatchBytes) ||
+				args.maxBatchBytes < 1 ||
+				args.maxBatchBytes > max
+			) {
 				throw new S2Error({
-					message: `maxBatchBytes must be between 1 and ${max} (1 MiB) bytes (inclusive); got ${args.maxBatchBytes}`,
+					message: `maxBatchBytes must be a finite number between 1 and ${max} (1 MiB) bytes (inclusive); got ${args.maxBatchBytes}`,
 					status: 400,
 					origin: "sdk",
 				});
 			}
 		}
 		if (args?.lingerDurationMillis !== undefined) {
-			if (args.lingerDurationMillis < 0) {
+			if (
+				!Number.isFinite(args.lingerDurationMillis) ||
+				args.lingerDurationMillis < 0
+			) {
 				throw new S2Error({
-					message: `lingerDurationMillis must be >= 0; got ${args.lingerDurationMillis}`,
+					message: `lingerDurationMillis must be a finite number >= 0; got ${args.lingerDurationMillis}`,
 					status: 400,
 					origin: "sdk",
 				});

@@ -314,10 +314,20 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 				return { done: false, value: r.value };
 			},
 			return: async (value?: any) => {
+				try {
+					await reader.cancel();
+				} catch (err: any) {
+					if (err?.code !== "ERR_INVALID_STATE") throw err;
+				}
 				reader.releaseLock();
 				return { done: true, value };
 			},
 			throw: async (e?: any) => {
+				try {
+					await reader.cancel(e);
+				} catch (err: any) {
+					if (err?.code !== "ERR_INVALID_STATE") throw err;
+				}
 				reader.releaseLock();
 				throw e;
 			},

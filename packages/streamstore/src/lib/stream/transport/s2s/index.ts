@@ -662,7 +662,14 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			ReadResult<Format>
 		>;
 		const fn = proto[Symbol.asyncIterator];
-		if (typeof fn === "function") return fn.call(this);
+		if (typeof fn === "function") {
+			try {
+				return fn.call(this);
+			} catch {
+				// Native method may throw "Illegal invocation" when called on subclass
+				// Fall through to manual implementation
+			}
+		}
 		const reader = this.getReader();
 		return {
 			next: async () => {
@@ -674,12 +681,20 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				return { done: false, value: r.value };
 			},
 			throw: async (e) => {
-				await reader.cancel(e);
+				try {
+					await reader.cancel(e);
+				} catch (err: any) {
+					if (err?.code !== "ERR_INVALID_STATE") throw err;
+				}
 				reader.releaseLock();
 				return { done: true, value: undefined };
 			},
 			return: async () => {
-				await reader.cancel("done");
+				try {
+					await reader.cancel("done");
+				} catch (err: any) {
+					if (err?.code !== "ERR_INVALID_STATE") throw err;
+				}
 				reader.releaseLock();
 				return { done: true, value: undefined };
 			},

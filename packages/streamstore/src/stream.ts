@@ -111,30 +111,44 @@ export class S2Stream {
 		this.ensureOpen();
 		const { as, ...requestOptions } = options ?? {};
 		return await withRetries(this.retryConfig, async () => {
-			// Convert ReadInput to ReadArgs using mapper
-			const readArgs: ReadArgs<Format> = {
-				...toAPIReadQuery(input),
-				as,
-			} as ReadArgs<Format>;
-			const genBatch = await streamRead(
-				this.name,
-				this.client,
-				readArgs,
-				requestOptions,
-			);
-			// Convert from API to SDK ReadBatch
-			const batch = (
-				as === "bytes"
-					? fromAPIReadBatchBytes(genBatch)
-					: fromAPIReadBatchString(genBatch)
-			) as Types.ReadBatch<Format>;
-			if (input?.ignoreCommandRecords) {
-				return {
-					...batch,
-					records: batch.records.filter((r) => !isCommandRecord(r)),
+			let currentInput = input;
+			while (true) {
+				// Convert ReadInput to ReadArgs using mapper
+				const readArgs: ReadArgs<Format> = {
+					...toAPIReadQuery(currentInput),
+					as,
+					ignore_command_records: input?.ignoreCommandRecords,
+				} as ReadArgs<Format>;
+				const genBatch = await streamRead(
+					this.name,
+					this.client,
+					readArgs,
+					requestOptions,
+				);
+				// Convert from API to SDK ReadBatch
+				const batch = (
+					as === "bytes"
+						? fromAPIReadBatchBytes(genBatch)
+						: fromAPIReadBatchString(genBatch)
+				) as Types.ReadBatch<Format>;
+				if (!input?.ignoreCommandRecords) {
+					return batch;
+				}
+				const filtered = batch.records.filter((r) => !isCommandRecord(r));
+				if (filtered.length > 0 || batch.records.length === 0) {
+					return { ...batch, records: filtered };
+				}
+				// All records in this batch were command records.
+				// Advance past them and read again.
+				const lastRecord = batch.records[batch.records.length - 1]!;
+				currentInput = {
+					...input,
+					start: {
+						from: { seqNum: lastRecord.seqNum + 1 },
+						clamp: input?.start?.clamp,
+					},
 				};
 			}
-			return batch;
 		});
 	}
 	/**

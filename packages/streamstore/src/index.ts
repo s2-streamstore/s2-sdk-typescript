@@ -169,12 +169,12 @@ export type {
 	AcksStream,
 	AppendHeaders,
 	AppendSession,
-	BatchSubmitTicket,
 	ReadHeaders,
 	ReadSession,
 	SessionTransports,
 	TransportConfig,
 } from "./lib/stream/types.js";
+export { BatchSubmitTicket } from "./lib/stream/types.js";
 
 // =============================================================================
 // Utilities

@@ -121,6 +121,14 @@ export namespace AppendRecord {
 		fencingToken: string,
 		timestamp?: number | Date,
 	): StringAppendRecord {
+		const tokenBytes = utf8ByteLength(fencingToken);
+		if (tokenBytes > 36) {
+			throw new S2Error({
+				message: "fencing token must not exceed 36 bytes in length",
+				origin: "sdk",
+				status: 422,
+			});
+		}
 		return string({
 			body: fencingToken,
 			headers: [["", "fence"]],

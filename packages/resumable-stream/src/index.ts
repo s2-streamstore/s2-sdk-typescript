@@ -14,8 +14,8 @@ import {
 	appendFenceCommand,
 	isFenceRecord,
 	isTerminalFence,
+	isTrimRecord,
 	persistToS2,
-	replayStringBodies,
 } from "./protocol.js";
 
 interface S2Config {
@@ -208,36 +208,60 @@ async function resumeStream(
 	const { accessToken, basin, endpoints } = getS2Config();
 	const s2 = new S2({ accessToken, endpoints });
 	debugLog("Resuming stream:", streamId);
-	return new ReadableStream({
-		async start(controller) {
-			try {
-				for await (const value of replayStringBodies({
-					s2,
-					basin,
-					stream: streamId,
-				})) {
-					try {
-						controller.enqueue(value);
-					} catch (error: unknown) {
-						if (
-							error instanceof Error &&
-							"code" in error &&
-							(error as NodeJS.ErrnoException).code === "ERR_INVALID_STATE"
-						) {
-							debugLog("Likely page refresh caused stream closure:", streamId);
-							return;
+	const handle = s2.basin(basin).stream(streamId);
+
+	try {
+		const session = await handle.readSession(
+			{
+				start: { from: { seqNum: 0 } },
+			},
+			{ as: "string" },
+		);
+
+		return new ReadableStream({
+			async start(controller) {
+				try {
+					for await (const record of session) {
+						if (isFenceRecord(record)) {
+							if (isTerminalFence(record)) break;
+							continue;
 						}
-						throw error;
+						if (isTrimRecord(record)) continue;
+						if (!record.body) continue;
+
+						try {
+							controller.enqueue(record.body);
+						} catch (error: unknown) {
+							if (
+								error instanceof Error &&
+								"code" in error &&
+								(error as NodeJS.ErrnoException).code === "ERR_INVALID_STATE"
+							) {
+								debugLog(
+									"Likely page refresh caused stream closure:",
+									streamId,
+								);
+								return;
+							}
+							throw error;
+						}
 					}
+
+					debugLog("Closing stream due to completion:", streamId);
+					controller.close();
+				} catch (error: unknown) {
+					debugLog("Error processing stream:", streamId, error);
+					controller.error(error);
+				} finally {
+					await handle.close?.();
 				}
-				debugLog("Closing stream due to completion:", streamId);
-				controller.close();
-			} catch (error) {
-				debugLog("Error reading stream:", error);
-				return null;
-			}
-		},
-	});
+			},
+		});
+	} catch (error: unknown) {
+		debugLog("Error reading stream:", error);
+		await handle.close?.();
+		return null;
+	}
 }
 
 // appends a fence command with the previous fencing token as null

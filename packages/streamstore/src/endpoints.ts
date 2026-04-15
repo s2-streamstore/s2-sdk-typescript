@@ -77,22 +77,19 @@ export class EndpointTemplate {
 		);
 		this.port = parsed.port;
 
+		if (parsed.search || parsed.hash) {
+			throw new Error(
+				`Endpoint cannot include query string or hash fragment: "${raw}". ` +
+					`Use headers for authentication or path prefixes for routing.`,
+			);
+		}
+
 		const parsedPath = parsed.pathname.replaceAll(
 			BASIN_PLACEHOLDER_SENTINEL,
 			"{basin}",
 		);
-		const parsedQuery = parsed.search.replaceAll(
-			BASIN_PLACEHOLDER_SENTINEL,
-			"{basin}",
-		);
-		const parsedHash = parsed.hash.replaceAll(
-			BASIN_PLACEHOLDER_SENTINEL,
-			"{basin}",
-		);
 
-		this.pathTemplate = explicitPathProvided
-			? `${parsedPath}${parsedQuery}${parsedHash}`
-			: DEFAULT_API_PATH;
+		this.pathTemplate = explicitPathProvided ? parsedPath : DEFAULT_API_PATH;
 		this.explicitPathProvided = explicitPathProvided;
 		this.hasBasinPlaceholder =
 			this.raw.includes("{basin}") ||

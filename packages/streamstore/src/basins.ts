@@ -235,15 +235,16 @@ export class S2Basins {
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureBasinResponse> {
 		// Convert SDK config to API format (ageSecs → age)
+		const { basin, ...reconfigArgs } = args;
 		const apiArgs = {
-			...args,
+			...reconfigArgs,
 			defaultStreamConfig: toAPIStreamConfig(args.defaultStreamConfig),
 		};
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureBasin({
 					client: this.client,
-					path: args,
+					path: { basin },
 					body: toSnakeCase(apiArgs),
 					...options,
 				}),

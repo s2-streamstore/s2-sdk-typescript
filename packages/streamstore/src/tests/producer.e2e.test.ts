@@ -150,7 +150,7 @@ describeIf("Producer Integration Tests", () => {
 			});
 
 			const appendSession = await stream.appendSession({
-				maxInflightBytes: 512 * 1024,
+				maxInflightBytes: 1024 * 1024,
 				maxInflightBatches: 2,
 			});
 			const producer = new Producer(
