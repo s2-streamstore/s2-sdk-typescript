@@ -447,6 +447,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 								const errorText = textDecoder.decode(chunk);
 								debug("error response: status=%d body=%s", status, errorText);
 								if (status === 416) {
+									const clampHint =
+										!readParams.clamp &&
+										!readParams.count &&
+										!readParams.bytes &&
+										!readParams.until;
 									try {
 										const errorJson = JSON.parse(errorText);
 										safeError(
@@ -454,10 +459,13 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 												status,
 												code: errorJson.code,
 												tail: errorJson.tail,
+												clampHint,
 											}),
 										);
 									} catch {
-										safeError(new RangeNotSatisfiableError({ status }));
+										safeError(
+											new RangeNotSatisfiableError({ status, clampHint }),
+										);
 									}
 									return;
 								}
@@ -501,6 +509,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 														status,
 														code: errorJson.code,
 														tail: errorJson.tail,
+														clampHint:
+															!readParams.clamp &&
+															!readParams.count &&
+															!readParams.bytes &&
+															!readParams.until,
 													}),
 												);
 											} else {

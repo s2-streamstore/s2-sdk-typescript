@@ -89,6 +89,11 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					: status === 416
 						? new RangeNotSatisfiableError({
 								status,
+								clampHint:
+									!queryParams.clamp &&
+									!queryParams.count &&
+									!queryParams.bytes &&
+									!queryParams.until,
 							})
 						: new S2Error({
 								message: response.response.statusText ?? "Request failed",
