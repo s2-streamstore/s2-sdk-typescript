@@ -302,6 +302,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		};
 		const format = (args?.as ?? "string") as Format;
 		let session: TransportReadSession<Format> | undefined = initialSession;
+		let cancelled = false;
 		super({
 			start: async (controller) => {
 				let nextArgs = { ...args } as ReadArgs<Format>;
@@ -312,6 +313,11 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				let attempt = 0;
 
 				while (true) {
+					// Check cancellation at the top of each iteration
+					if (cancelled) {
+						return;
+					}
+
 					// Use pre-established session on first iteration if provided
 					if (!session) {
 						debugRead("starting read session with args: %o", nextArgs);
@@ -319,6 +325,10 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						// Try to create session - may throw on connection errors
 						try {
 							session = await generator(nextArgs);
+							if (cancelled) {
+								try { await session.cancel?.("cancelled"); } catch {}
+								return;
+							}
 						} catch (err) {
 							// Convert to S2Error if needed
 							const error = s2Error(err);
@@ -337,6 +347,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 									error.status,
 								);
 								await sleep(delay);
+								if (cancelled) {
+									return;
+								}
 								attempt++;
 								continue; // Retry creating session
 							}
@@ -429,6 +442,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 									error.status,
 								);
 								await sleep(delay);
+								if (cancelled) {
+									return;
+								}
 								attempt++;
 								break; // Break inner loop to retry
 							}
@@ -457,6 +473,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				}
 			},
 			cancel: async (reason) => {
+				cancelled = true;
 				try {
 					await session?.cancel(reason);
 				} catch (err) {
@@ -656,6 +673,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.readable = new ReadableStream<Types.AppendAck>({
 			start: (controller) => {
 				this.acksController = controller;
+			},
+			cancel: async (reason) => {
+				const error = abortedError(`AppendSession acks cancelled: ${reason}`);
+				await this.abort(error);
 			},
 		});
 
@@ -1023,6 +1044,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Ensure session exists
 			debugSession("[%s] [PUMP] ensuring session exists", this.streamName);
 			await this.ensureSession();
+			if (this.pumpStopped) {
+				debugSession("[%s] [PUMP] stopped after ensureSession", this.streamName);
+				return;
+			}
 			if (!this.session) {
 				// Session creation failed - check max attempts before retrying
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
@@ -1323,6 +1348,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);
 
+		// Check if aborted during backoff sleep
+		if (this.pumpStopped) {
+			debugSession("[%s] stopped during recovery backoff", this.streamName);
+			return;
+		}
+
 		// Teardown old session
 		if (this.session) {
 			try {
@@ -1346,6 +1377,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Create new session
 		await this.ensureSession();
+		if (this.pumpStopped) {
+			debugSession("[%s] stopped after ensureSession in recovery", this.streamName);
+			return;
+		}
 		if (!this.session) {
 			debugSession(
 				"[%s] failed to create new session during recovery",
