@@ -85,7 +85,7 @@ describeIf("Correctness Integration Tests", () => {
 			try {
 				const appendSession = await stream.appendSession({
 					maxInflightBatches: 4,
-					maxInflightBytes: 512 * 1024,
+					maxInflightBytes: 1024 * 1024,
 				});
 
 				const producer = new Producer(
