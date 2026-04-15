@@ -53,20 +53,26 @@ function toSDKRetentionPolicy(
 	return policy; // { infinite: ... } passes through
 }
 
+/** Normalize deleteOnEmpty.minAgeSecs (floor and clamp to >= 0). */
+function toAPIDeleteOnEmpty(
+	deleteOnEmpty: Types.DeleteOnEmptyConfig | null | undefined,
+): any {
+	if (!deleteOnEmpty) return deleteOnEmpty;
+	return {
+		...deleteOnEmpty,
+		minAgeSecs:
+			deleteOnEmpty.minAgeSecs === undefined
+				? undefined
+				: Math.max(0, Math.floor(deleteOnEmpty.minAgeSecs)),
+	};
+}
+
 /** Convert SDK StreamConfig to API format (handles retentionPolicy.ageSecs → age). */
 function toAPIStreamConfig(config: Types.StreamConfig | null | undefined): any {
 	if (config === null || config === undefined) return config;
 	return {
 		...config,
-		deleteOnEmpty: config.deleteOnEmpty
-			? {
-					...config.deleteOnEmpty,
-					minAgeSecs:
-						config.deleteOnEmpty.minAgeSecs === undefined
-							? undefined
-							: Math.max(0, Math.floor(config.deleteOnEmpty.minAgeSecs)),
-				}
-			: config.deleteOnEmpty,
+		deleteOnEmpty: toAPIDeleteOnEmpty(config.deleteOnEmpty),
 		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
 	};
 }
@@ -237,6 +243,7 @@ export class S2Streams {
 		const { stream, ...reconfigArgs } = args;
 		const apiArgs = {
 			...reconfigArgs,
+			deleteOnEmpty: toAPIDeleteOnEmpty(reconfigArgs.deleteOnEmpty),
 			retentionPolicy: toAPIRetentionPolicy(args.retentionPolicy),
 		};
 		const response = await withRetries(this.retryConfig, async () => {
