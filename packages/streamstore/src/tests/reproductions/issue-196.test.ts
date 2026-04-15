@@ -11,8 +11,8 @@ vi.mock("../../generated/index.js", async () => {
 	};
 });
 
-import * as Generated from "../../generated/index.js";
 import { S2Basins } from "../../basins.js";
+import * as Generated from "../../generated/index.js";
 import { S2Streams } from "../../streams.js";
 
 /**
