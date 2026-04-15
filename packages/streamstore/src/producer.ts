@@ -464,7 +464,11 @@ export class Producer implements AsyncDisposable {
 
 		// Close the readable stream
 		if (this.readableController) {
-			this.readableController.close();
+			try {
+				this.readableController.close();
+			} catch {
+				// Controller may already be errored or closed
+			}
 			this.readableController = null;
 		}
 
