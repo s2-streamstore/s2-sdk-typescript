@@ -6,7 +6,7 @@
 - `replay` no longer accepts a `fromSeqNum` argument.
 - `createS2Transport` and `S2TransportConfig` are removed. Use `new DefaultChatTransport({ api })` from `ai` — the default reconnect URL (`${api}/${chatId}/stream`) matches `chat.replay(...)`. Customize via `prepareReconnectToStreamRequest` if needed.
 - Error chunks now include the upstream error message instead of a hardcoded string.
-- Shared-mode streams now use a time-based lease: if a generation dies without writing a terminal fence, a new claim can take over after `leaseDurationMs` (defaults to 5 minutes). Previously, an abandoned non-terminal fence locked the stream forever. Lease comparisons use client-supplied timestamps on fence records to avoid clock skew.
+- Shared-mode streams now use a time-based lease: if a generation dies without writing a terminal fence, a new claim can take over after `leaseDurationMs` (defaults to 1 minute). Previously, an abandoned non-terminal fence locked the stream forever. Lease comparisons use client-supplied timestamps on fence records to avoid clock skew.
 - The generic `S2_LINGER_DURATION` default (`createResumableStreamContext`) dropped from 5000ms to 500ms. The AI SDK path already defaults to 50ms.
 
 Migration:
