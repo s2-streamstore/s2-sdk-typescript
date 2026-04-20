@@ -35,7 +35,11 @@ export interface ResumableChatConfig {
 	batchSize?: number;
 	/** Maximum time to buffer a batch before flushing, in milliseconds. Defaults to `50`. */
 	lingerDuration?: number;
-	/** Whether each generation uses its own stream or reuses one stream name sequentially. */
+	/** How to map token generations to S2 streams.
+	 *  - `single-use`: Each generation gets a dedicated, single-writer S2 stream.
+	 *  - `shared`: Multiple subsequent generations append to the same shared S2 stream.
+	 *    - S2 fencing enforces that the shared stream is only appended to by a single writer at a time.
+	 * */
 	streamReuse?: "single-use" | "shared";
 	/**
 	 * Only applies to `streamReuse: "shared"`.
