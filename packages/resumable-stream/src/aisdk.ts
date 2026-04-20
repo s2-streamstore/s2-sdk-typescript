@@ -244,7 +244,6 @@ export function createResumableChat(
 						if (next.done) {
 							controller.enqueue(encoder.encode("data: [DONE]\n\n"));
 							controller.close();
-							await iterator.return?.();
 							return;
 						}
 						controller.enqueue(encoder.encode(`data: ${next.value}\n\n`));
