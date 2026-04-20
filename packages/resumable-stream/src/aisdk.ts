@@ -18,6 +18,7 @@ import {
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
+const DEFAULT_LEASE_DURATION_MS = 5 * 60 * 1000;
 
 /**
  * Configuration for creating a resumable AI SDK chat helper.
@@ -35,10 +36,36 @@ export interface ResumableChatConfig {
 	lingerDuration?: number;
 	/** Whether each generation uses its own stream or reuses one stream name sequentially. */
 	streamReuse?: "single-use" | "shared";
+	/**
+	 * Only applies to `streamReuse: "shared"`.
+	 *
+	 * If a previous generation crashed or was aborted without writing a
+	 * terminal fence, its non-terminal fence still "owns" the stream. After
+	 * `leaseDurationMs` have elapsed since that fence was written (by the
+	 * coordinator's clock), the next claim takes it over. Set this longer
+	 * than your longest expected generation. Defaults to 5 minutes.
+	 *
+	 * Timestamps on fence records come from the coordinator (`Date.now()`),
+	 * which relies on S2's default `client-prefer` timestamping mode. The
+	 * other modes behave as follows:
+	 *  - `client-prefer` (default): lease works as documented.
+	 *  - `arrival`: lease compares coordinator `Date.now()` to s2's server
+	 *    arrival time — small clock skew, benign at minute-scale leases.
+	 *  - `client-require`: NOT supported — data and trim records don't
+	 *    carry client timestamps and appends will be rejected.
+	 */
+	leaseDurationMs?: number;
 }
 
 /**
  * Options for `makeResumable`.
+ *
+ * Backpressure note: the source is teed into a client branch and a persist
+ * branch. Client throughput is independent of S2 write latency — the default
+ * `ReadableStream.tee()` does not couple backpressure across branches — but
+ * if S2 writes fall significantly behind (e.g. sustained network congestion),
+ * the persist branch's queue grows with unacked chunks until writes catch up.
+ * For typical AI SDK streams (small chunks, bounded turns) this is negligible.
  */
 export interface MakeResumableOptions {
 	/**
@@ -137,6 +164,7 @@ export function createResumableChat(
 	const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
 	const streamReuse = config.streamReuse ?? "single-use";
+	const leaseDurationMs = config.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
 
 	const makeResumable = async (
 		streamName: string,
@@ -153,6 +181,7 @@ export function createResumableChat(
 					basin,
 					stream: streamName,
 					fencingToken,
+					leaseDurationMs,
 				});
 				if (!claim) {
 					return new Response("Stream already in use", { status: 409 });

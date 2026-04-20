@@ -1,4 +1,9 @@
-import { S2, S2Environment } from "@s2-dev/streamstore";
+import {
+	AppendInput,
+	AppendRecord,
+	S2,
+	S2Environment,
+} from "@s2-dev/streamstore";
 import type { UIMessageChunk } from "ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createResumableChat } from "../aisdk.js";
@@ -312,6 +317,72 @@ describeIf("resumable-stream/aisdk", () => {
 							record.headers[0]?.[1] === "trim",
 					),
 				).toBe(true);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"returns 409 when a non-terminal fence is still within its lease",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					streamReuse: "shared",
+					leaseDurationMs: 60_000,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("shared-held");
+
+				// Simulate an in-flight generation: fence now, no terminal.
+				await s2
+					.basin(basinName)
+					.stream(streamName)
+					.append(
+						AppendInput.create([AppendRecord.fence("holder-abcd", Date.now())]),
+					);
+
+				const blocked = await chat.makeResumable(
+					streamName,
+					arrayToAsyncIterable(sampleChunks()),
+				);
+				expect(blocked.status).toBe(409);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"takes over a shared stream whose lease has expired",
+			async () => {
+				const leaseDurationMs = 60_000;
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					streamReuse: "shared",
+					leaseDurationMs,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("shared-expired");
+
+				// Simulate a crashed generation: fence with a timestamp well in
+				// the past, no terminal fence, no data. s2 preserves past
+				// client timestamps under the default ClientPrefer mode.
+				const staleTimestamp = Date.now() - leaseDurationMs - 10_000;
+				await s2
+					.basin(basinName)
+					.stream(streamName)
+					.append(
+						AppendInput.create([
+							AppendRecord.fence("stale-holder", staleTimestamp),
+						]),
+					);
+
+				const chunks = sampleChunks("Took over");
+				const res = await chat.makeResumable(
+					streamName,
+					arrayToAsyncIterable(chunks),
+				);
+				expect(res.status).toBe(200);
+				expect(await readSseResponse(res)).toEqual(chunks);
 			},
 			TEST_TIMEOUT_MS,
 		);

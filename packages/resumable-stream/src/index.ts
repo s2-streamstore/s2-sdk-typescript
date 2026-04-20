@@ -34,7 +34,7 @@ interface S2Config {
 	readonly batchSize: number;
 	/**
 	 * Maximum time to wait before flushing a batch (in milliseconds).
-	 * Defaults to 5000 if not set.
+	 * Defaults to 500 if not set.
 	 */
 	readonly lingerDuration: number;
 	/**
@@ -89,7 +89,7 @@ function getS2Config(): S2Config {
 	const basin = process.env.S2_BASIN;
 	const batchSize = Number.parseInt(process.env.S2_BATCH_SIZE ?? "10", 10);
 	const lingerDuration = Number.parseInt(
-		process.env.S2_LINGER_DURATION ?? "5000",
+		process.env.S2_LINGER_DURATION ?? "500",
 		10,
 	);
 
