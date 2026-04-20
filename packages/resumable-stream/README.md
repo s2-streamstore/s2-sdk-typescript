@@ -24,7 +24,12 @@ To use this package, you need to create an S2 [access token](https://s2.dev/docs
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`. The maximum time to wait before flushing a batch can be tweaked by setting `S2_LINGER_DURATION` to a duration in milliseconds.
 
-For AI SDK chat resumability, import the AI helpers from `@s2-dev/resumable-stream/aisdk`.
+The package exposes two entry points:
+
+- **`@s2-dev/resumable-stream`** — a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams or anything that isn't AI SDK.
+- **`@s2-dev/resumable-stream/aisdk`** — a thin helper over `UIMessageChunk` streams for the AI SDK's `useChat`. See the [AI SDK section](#ai-sdk) below.
+
+### Generic resumer
 
 ```ts
 import { createResumableStreamContext } from "@s2-dev/resumable-stream";
@@ -88,7 +93,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
 
 ## AI SDK
 
-The `./aisdk` subpath adds a transport-oriented layer for `useChat`. It persists `UIMessageChunk`s to S2 on the server and replays them back over a simple NDJSON endpoint.
+The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResumable` tees the `UIMessageChunk` stream: one branch streams directly back to the client as SSE, the other is persisted to S2 for resumption. The wire format matches the AI SDK's `createUIMessageStreamResponse`, so the stock `DefaultChatTransport` works out of the box.
+
+A runnable end-to-end demo (Bun server + vanilla-JS client) lives in [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
 
 ```ts
 // lib/s2.ts
@@ -123,26 +130,28 @@ export async function POST(req: Request) {
 ```
 
 ```ts
-// app/api/chat/stream/route.ts
+// app/api/chat/[id]/stream/route.ts
 import { chat } from "@/lib/s2";
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const id = url.searchParams.get("id");
-  if (!id) return new Response("Missing id", { status: 400 });
-  const from = url.searchParams.get("from");
-  return chat.replay(`chat-${id}`, from != null ? Number(from) : undefined);
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  return chat.replay(`chat-${id}`);
 }
 ```
 
 ```tsx
 // app/page.tsx
+"use client";
 import { useChat } from "@ai-sdk/react";
-import { createS2Transport } from "@s2-dev/resumable-stream/aisdk";
+import { DefaultChatTransport } from "ai";
 
-const transport = createS2Transport({
+const transport = new DefaultChatTransport({
   api: "/api/chat",
-  reconnectApi: "/api/chat/stream",
+  // `DefaultChatTransport` defaults reconnect to `${api}/${chatId}/stream`;
+  // override via `prepareReconnectToStreamRequest` if your route shape differs.
 });
 
 export default function Chat() {

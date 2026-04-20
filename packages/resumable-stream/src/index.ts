@@ -184,9 +184,9 @@ export async function createResumableStream(
 				batchSize,
 				lingerDuration,
 				toRecord: (value) => AppendRecord.string({ body: value }),
-				finalRecords: (failed) => [
+				finalRecords: (sourceError) => [
 					AppendRecord.fence(
-						`${failed ? "error" : "end"}-${generateFencingToken()}`,
+						`${sourceError !== undefined ? "error" : "end"}-${generateFencingToken()}`,
 					),
 				],
 				onSeqNumMismatch: () => {

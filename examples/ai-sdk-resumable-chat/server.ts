@@ -63,13 +63,6 @@ function isValidChatId(value: unknown): value is string {
 	return typeof value === "string" && CHAT_ID_PATTERN.test(value);
 }
 
-function parseFromSeqNum(value: string | null): number | undefined {
-	if (value === null) return undefined;
-	const num = Number(value);
-	if (!Number.isSafeInteger(num) || num < 0) return undefined;
-	return num;
-}
-
 function isChatMessage(value: unknown): value is ChatMessage {
 	return (
 		typeof value === "object" &&
@@ -201,11 +194,8 @@ async function handleChat(req: Request): Promise<Response> {
 	);
 }
 
-async function handleReplay(
-	streamName: string,
-	fromSeqNum?: number,
-): Promise<Response> {
-	return chat.replay(streamName, fromSeqNum);
+async function handleReplay(streamName: string): Promise<Response> {
+	return chat.replay(streamName);
 }
 
 async function handleHistory(chatId: string): Promise<Response> {
@@ -241,17 +231,8 @@ const server = Bun.serve({
 			if (!isValidChatId(chatId)) {
 				return new Response("Missing id query parameter", { status: 400 });
 			}
-			if (
-				url.searchParams.has("from") &&
-				parseFromSeqNum(url.searchParams.get("from")) === undefined
-			) {
-				return new Response("Invalid from query parameter", { status: 400 });
-			}
 
-			const res = await handleReplay(
-				liveStreamName(chatId),
-				parseFromSeqNum(url.searchParams.get("from")),
-			);
+			const res = await handleReplay(liveStreamName(chatId));
 			res.headers.set("Access-Control-Allow-Origin", "*");
 			return res;
 		}

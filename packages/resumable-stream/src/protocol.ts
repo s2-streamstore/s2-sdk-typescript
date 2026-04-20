@@ -72,7 +72,7 @@ export interface PersistToS2Options<T> {
 	batchSize: number;
 	lingerDuration: number;
 	toRecord: (value: T) => AppendRecord;
-	finalRecords: (failed: boolean) => ReadonlyArray<AppendRecord>;
+	finalRecords: (sourceError: unknown) => ReadonlyArray<AppendRecord>;
 	matchSeqNumStart?: number;
 	onSeqNumMismatch?: (error: SeqNumMismatchError) => void;
 }
@@ -126,7 +126,7 @@ export async function persistToS2<T>({
 
 		let finalizationError: unknown | undefined;
 		try {
-			for (const record of finalRecords(Boolean(sourceError))) {
+			for (const record of finalRecords(sourceError)) {
 				await producer.submit(record);
 			}
 		} catch (err) {

@@ -59,7 +59,9 @@
     <button id="send">Send</button>
   </div>
 
-  <script>
+  <script type="module">
+    import { EventSourceParserStream } from 'https://esm.sh/eventsource-parser@3/stream';
+
     const API = '/api/chat';
     const HISTORY_API = `${API}/history`;
     const EMPTY_STATE_HTML = '<div class="info">Send a message. Try <kbd>F5</kbd> mid-generation. The stream resumes from S2, completed messages reload from the transcript stream, and this URL will reopen the same chat.</div>';
@@ -160,37 +162,39 @@
       }
     }
 
-    async function readNdjson(res, bubble) {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
+    async function readSse(res, bubble) {
+      const events = res.body
+        .pipeThrough(new TextDecoderStream())
+        .pipeThrough(new EventSourceParserStream());
+      const reader = events.getReader();
       let fullText = '';
       let errorText = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || typeof value.data !== 'string') continue;
+          if (value.data === '[DONE]') continue;
 
-        buf += decoder.decode(value, { stream: true });
-
-        let newlineIndex;
-        while ((newlineIndex = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, newlineIndex).trim();
-          buf = buf.slice(newlineIndex + 1);
-          if (!line) continue;
-
+          let chunk;
           try {
-            const chunk = JSON.parse(line);
-            if (chunk.type === 'text-delta' && chunk.delta) {
-              fullText += chunk.delta;
-              bubble.textContent = fullText;
-              chatEl.scrollTop = chatEl.scrollHeight;
-            }
-            if (chunk.type === 'error' && chunk.errorText) {
-              errorText = chunk.errorText;
-            }
-          } catch {}
+            chunk = JSON.parse(value.data);
+          } catch {
+            continue;
+          }
+
+          if (chunk.type === 'text-delta' && chunk.delta) {
+            fullText += chunk.delta;
+            bubble.textContent = fullText;
+            chatEl.scrollTop = chatEl.scrollHeight;
+          }
+          if (chunk.type === 'error' && chunk.errorText) {
+            errorText = chunk.errorText;
+          }
         }
+      } finally {
+        reader.releaseLock();
       }
 
       return { fullText, errorText };
@@ -217,20 +221,10 @@
       }
     }
 
-    async function replayActiveStream(fromSeqNum) {
-      const params = new URLSearchParams({ id: chatId });
-      if (Number.isSafeInteger(fromSeqNum) && fromSeqNum >= 0) {
-        params.set('from', String(fromSeqNum));
-      }
-
-      const res = await fetch(`${API}/stream?${params.toString()}`);
-      if (res.status === 204 || !res.ok) {
-        return null;
-      }
-
+    async function consumeSseInto(res) {
       const bubble = addMessage('assistant', '', { streaming: true });
       try {
-        const { fullText, errorText } = await readNdjson(res, bubble);
+        const { fullText, errorText } = await readSse(res, bubble);
         if (errorText) {
           bubble.textContent = fullText
             ? `${fullText}\n\n[error] ${errorText}`
@@ -241,6 +235,12 @@
         bubble.parentElement?.remove();
         throw error;
       }
+    }
+
+    async function reconnectToActiveStream() {
+      const res = await fetch(`${API}/stream?id=${encodeURIComponent(chatId)}`);
+      if (res.status === 204 || !res.ok) return null;
+      return await consumeSseInto(res);
     }
 
     const initPromise = loadHistory().catch(() => {
@@ -266,15 +266,10 @@
           body: JSON.stringify({ id: chatId, message: userMessage }),
         });
 
-        if (!res.ok) {
-          return;
-        }
+        if (!res.ok) return;
 
-        const payload = await res.json();
-        const bubble = await replayActiveStream(payload.fromSeqNum);
-        if (bubble) {
-          bubble.classList.remove('streaming');
-        }
+        const bubble = await consumeSseInto(res);
+        if (bubble) bubble.classList.remove('streaming');
       } finally {
         streaming = false;
         setInputEnabled(true);
@@ -291,10 +286,8 @@
         streaming = true;
         setInputEnabled(false);
 
-        const bubble = await replayActiveStream();
-        if (bubble) {
-          bubble.classList.remove('streaming');
-        }
+        const bubble = await reconnectToActiveStream();
+        if (bubble) bubble.classList.remove('streaming');
       } catch {
         // best-effort reconnect
       } finally {
