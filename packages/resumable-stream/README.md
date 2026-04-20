@@ -26,8 +26,8 @@ The incoming stream is batched and the batch size can be changed by setting `S2_
 
 The package exposes two entry points:
 
-- **`@s2-dev/resumable-stream`** — a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams or anything that isn't AI SDK.
-- **`@s2-dev/resumable-stream/aisdk`** — a thin helper over `UIMessageChunk` streams for the AI SDK's `useChat`. See the [AI SDK section](#ai-sdk) below.
+- **`@s2-dev/resumable-stream`**: a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams or anything that isn't AI SDK.
+- **`@s2-dev/resumable-stream/aisdk`**: a thin helper over `UIMessageChunk` streams for the AI SDK's `useChat`. See the [AI SDK section](#ai-sdk) below.
 
 ### Generic resumer
 

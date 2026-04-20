@@ -186,6 +186,51 @@ describeIf("resumable-stream/aisdk", () => {
 		);
 
 		it(
+			"appends a trim after a single-use generation for self-cleanup",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("single-use-trim");
+
+				let bgPromise: Promise<unknown> | undefined;
+				const res = await chat.makeResumable(
+					streamName,
+					arrayToAsyncIterable(sampleChunks()),
+					{
+						waitUntil: (promise) => {
+							bgPromise = promise;
+						},
+					},
+				);
+				expect(res.status).toBe(200);
+				await res.text();
+				await bgPromise;
+
+				const raw = await s2
+					.basin(basinName)
+					.stream(streamName)
+					.read(
+						{
+							start: { from: { seqNum: 0 }, clamp: true },
+							stop: { limits: { count: 50 } },
+						},
+						{ as: "string" },
+					);
+				const hasTrim = raw.records.some(
+					(record) =>
+						record.headers.length === 1 &&
+						record.headers[0]?.[0] === "" &&
+						record.headers[0]?.[1] === "trim",
+				);
+				expect(hasTrim).toBe(true);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
 			"returns 409 when a single-use stream is already claimed",
 			async () => {
 				const chat = createResumableChat({

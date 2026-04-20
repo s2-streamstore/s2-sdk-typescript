@@ -16,12 +16,12 @@ Request flow:
 3. **Server** appends the user message to the transcript stream, calls `streamText()`, passes the chunk stream to `chat.makeResumable(liveStreamName, stream)`.
 4. **Server** returns the response immediately as an SSE body. The browser streams and renders chunks live; in parallel the server writes the same chunks to S2.
 5. When the assistant finishes, the server appends the completed assistant message to the transcript stream.
-6. **Refresh mid-generation?** The browser calls `GET /api/chat/stream?id=...` — the server replays the active generation from S2 (tails the live chunks until the terminal fence).
+6. **Refresh mid-generation?** The browser calls `GET /api/chat/stream?id=...`, and the server replays the active generation from S2 (tails the live chunks until the terminal fence).
 
 ## Run with s2-lite (local)
 
 ```bash
-# terminal 1 — start s2-lite (https://s2.dev/docs/cli)
+# terminal 1: start s2-lite (https://s2.dev/docs/cli)
 s2 lite
 
 # terminal 2
@@ -36,7 +36,7 @@ export OPENAI_API_KEY="..."
 bun run examples/ai-sdk-resumable-chat/server.ts
 ```
 
-Open [http://localhost:3457](http://localhost:3457), send a message, hit browser refresh mid-generation — the response resumes from where it left off.
+Open [http://localhost:3457](http://localhost:3457), send a message, hit browser refresh mid-generation. The response resumes from where it left off.
 
 ## Run with S2 Cloud
 
@@ -52,7 +52,7 @@ bun run examples/ai-sdk-resumable-chat/server.ts
 The wire format (`text/event-stream` carrying `UIMessageChunk`s) matches the AI SDK's own convention, so stock `DefaultChatTransport` talks to it without a custom transport.
 
 ```ts
-// lib/s2.ts (server — create once)
+// lib/s2.ts (server: create once)
 import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 
 export const chat = createResumableChat({
@@ -105,4 +105,4 @@ export default function Chat() {
 }
 ```
 
-`resume: true` makes `useChat` call `reconnectToStream` on mount. `DefaultChatTransport`'s default reconnect URL is `${api}/${chatId}/stream` — which matches the GET route above. If your URL shape differs, pass `prepareReconnectToStreamRequest`.
+`resume: true` makes `useChat` call `reconnectToStream` on mount. `DefaultChatTransport`'s default reconnect URL is `${api}/${chatId}/stream`, which matches the GET route above. If your URL shape differs, pass `prepareReconnectToStreamRequest`.

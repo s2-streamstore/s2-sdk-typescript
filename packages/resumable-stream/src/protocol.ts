@@ -43,10 +43,14 @@ export async function appendFenceCommand(
 	stream: string,
 	currentToken: string | null | undefined,
 	newToken: string,
+	options?: { matchSeqNum?: number },
 ): Promise<AppendAck> {
 	const command = AppendInput.create(
 		[AppendRecord.fence(newToken, Date.now())],
-		{ fencingToken: currentToken ?? undefined },
+		{
+			fencingToken: currentToken ?? undefined,
+			matchSeqNum: options?.matchSeqNum,
+		},
 	);
 	return await s2.basin(basin).stream(stream).append(command);
 }

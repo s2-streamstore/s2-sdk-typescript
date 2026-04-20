@@ -18,8 +18,13 @@ interface SharedStreamState {
 	activeGenerationStartSeqNum: number | null;
 	hasActiveGeneration: boolean;
 	nextSeqNum: number;
-	/** Unix-ms timestamp of the most recent fence record, or null if none. */
-	lastFenceTimestamp: number | null;
+	/**
+	 * Unix-ms timestamp of the most recent record of any kind, or null if the
+	 * stream is empty. Used as the liveness signal for the lease check: as
+	 * long as the generation keeps writing records, the lease keeps sliding
+	 * forward.
+	 */
+	lastRecordTimestamp: number | null;
 }
 
 function createEmptySharedStreamState(): SharedStreamState {
@@ -29,7 +34,7 @@ function createEmptySharedStreamState(): SharedStreamState {
 		activeGenerationStartSeqNum: null,
 		hasActiveGeneration: false,
 		nextSeqNum: 0,
-		lastFenceTimestamp: null,
+		lastRecordTimestamp: null,
 	};
 }
 
@@ -65,10 +70,10 @@ async function readSharedStreamState({
 		const state = createEmptySharedStreamState();
 		for await (const record of session) {
 			state.nextSeqNum = record.seqNum + 1;
+			state.lastRecordTimestamp = record.timestamp.getTime();
 			if (!isFenceRecord(record)) {
 				continue;
 			}
-			state.lastFenceTimestamp = record.timestamp.getTime();
 			if (isTerminalFence(record)) {
 				state.hasActiveGeneration = false;
 				state.reusableFenceToken = record.body;
@@ -109,11 +114,11 @@ export async function claimSharedGeneration({
 	if (
 		currentToken === null &&
 		state.heldFenceToken !== null &&
-		state.lastFenceTimestamp !== null &&
-		now() - state.lastFenceTimestamp >= leaseDurationMs
+		state.lastRecordTimestamp !== null &&
+		now() - state.lastRecordTimestamp >= leaseDurationMs
 	) {
-		// Previous generation abandoned without writing a terminal fence and
-		// its lease has expired; take it over.
+		// Active generation hasn't written anything for at least
+		// leaseDurationMs, so treat it as abandoned and take it over.
 		currentToken = state.heldFenceToken;
 	}
 

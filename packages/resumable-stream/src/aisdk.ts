@@ -4,6 +4,7 @@ import {
 	FencingTokenMismatchError,
 	randomToken,
 	S2,
+	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
 import {
 	JsonToSseTransformStream,
@@ -39,14 +40,19 @@ export interface ResumableChatConfig {
 	/**
 	 * Only applies to `streamReuse: "shared"`.
 	 *
-	 * If a previous generation crashed or was aborted without writing a
-	 * terminal fence, its non-terminal fence still "owns" the stream. After
-	 * `leaseDurationMs` have elapsed since that fence was written (by the
-	 * coordinator's clock), the next claim takes it over. Set this longer
-	 * than your longest expected generation. Defaults to 1 minute.
+	 * Measures the maximum allowed pause *within* an active generation. If an
+	 * active generation hasn't written a record (fence, data, or otherwise)
+	 * for this many milliseconds, the next claim takes it over. Long-running
+	 * generations that keep streaming are unaffected, the lease slides
+	 * forward with every record.
 	 *
-	 * Timestamps on fence records come from the coordinator (`Date.now()`),
-	 * which relies on S2's default `client-prefer` timestamping mode.
+	 * Defaults to 1 minute. Set this longer than the longest pause you
+	 * expect *between* tokens in a live generation.
+	 *
+	 * Timestamps come from s2's `client-prefer` default: the opening fence
+	 * carries a coordinator-supplied `Date.now()`; data records use s2's
+	 * arrival time. Both end up on effectively the same clock for lease
+	 * comparisons.
 	 */
 	leaseDurationMs?: number;
 }
@@ -69,7 +75,7 @@ export interface MakeResumableOptions {
 export interface ResumableChat {
 	/**
 	 * Starts making a `UIMessageChunk` stream resumable in S2 and returns the
-	 * stream as an SSE `Response` body. The underlying source is teed — one
+	 * stream as an SSE `Response` body. The underlying source is teed: one
 	 * branch streams to the client, the other is persisted to S2.
 	 */
 	makeResumable(
@@ -175,17 +181,24 @@ export function createResumableChat(
 				}
 				matchSeqNumStart = claim.matchSeqNumStart;
 			} else {
+				// Single-use: require matchSeqNum=0 so any prior usage of this
+				// stream name (even a completed generation whose trim has
+				// propagated) rejects the claim with SeqNumMismatchError.
 				const ack = await appendFenceCommand(
 					s2,
 					basin,
 					streamName,
 					"",
 					fencingToken,
+					{ matchSeqNum: 0 },
 				);
 				matchSeqNumStart = ack.end.seqNum;
 			}
 		} catch (err) {
-			if (err instanceof FencingTokenMismatchError) {
+			if (
+				err instanceof FencingTokenMismatchError ||
+				err instanceof SeqNumMismatchError
+			) {
 				return new Response("Stream already in use", { status: 409 });
 			}
 			throw err;
@@ -203,13 +216,26 @@ export function createResumableChat(
 			lingerDuration,
 			matchSeqNumStart,
 			toRecord: (chunk) => AppendRecord.string({ body: JSON.stringify(chunk) }),
-			finalRecords: (sourceError) =>
-				sourceError !== undefined
-					? [
-							makeErrorChunkRecord(sourceError),
-							AppendRecord.fence(`error-${randomToken(4)}`),
-						]
-					: [AppendRecord.fence(`end-${randomToken(4)}`)],
+			finalRecords: (sourceError) => {
+				const fenceToken =
+					sourceError !== undefined
+						? `error-${randomToken(4)}`
+						: `end-${randomToken(4)}`;
+				const records: AppendRecord[] =
+					sourceError !== undefined
+						? [
+								makeErrorChunkRecord(sourceError),
+								AppendRecord.fence(fenceToken),
+							]
+						: [AppendRecord.fence(fenceToken)];
+				// Single-use: follow the terminal fence with a trim so
+				// delete-on-empty can GC the stream. Shared streams rely on
+				// the next claim's trim instead.
+				if (streamReuse === "single-use") {
+					records.push(AppendRecord.trim(Number.MAX_SAFE_INTEGER));
+				}
+				return records;
+			},
 		});
 
 		if (options?.waitUntil) {
