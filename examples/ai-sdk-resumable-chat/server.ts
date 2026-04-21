@@ -19,6 +19,10 @@ const LIVE_STREAM_PREFIX =
 	process.env.S2_CHAT_LIVE_PREFIX || "resumable-chat-live";
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
+// Toggle between "shared" and "single-use"
+type StreamReuse = "single-use" | "shared";
+const STREAM_REUSE = "single-use" as StreamReuse;
+
 type ChatMessage = {
 	role: "user" | "assistant";
 	content: string;
@@ -48,15 +52,36 @@ const chat = createResumableChat({
 	basin,
 	endpoints:
 		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
-	streamReuse: "shared",
+	streamReuse: STREAM_REUSE,
 });
 
 function historyStreamName(chatId: string): string {
 	return `${HISTORY_STREAM_PREFIX}-${chatId}`;
 }
 
-function liveStreamName(chatId: string): string {
-	return `${LIVE_STREAM_PREFIX}-${chatId}`;
+// Shared mode reuses one S2 stream across all turns of a chat; single-use
+// needs a fresh stream per turn so the `matchSeqNum: 0` re-claim guard
+// doesn't reject subsequent turns.
+function liveStreamName(chatId: string, turnIndex: number): string {
+	return STREAM_REUSE === "shared"
+		? `${LIVE_STREAM_PREFIX}-${chatId}`
+		: `${LIVE_STREAM_PREFIX}-${chatId}-${turnIndex}`;
+}
+
+// The turn index for a new POST is the number of user messages written so
+// far (each completed turn contributes one user + one assistant). Reading
+// the transcript is the source of truth.
+function turnIndexForNewTurn(history: ChatMessage[]): number {
+	return history.filter((m) => m.role === "user").length;
+}
+
+// For reconnect: the "active" turn is one where the user message was
+// appended but the matching assistant hasn't landed yet. That index is
+// `userCount - 1`. If counts match, no active turn exists.
+function activeTurnIndex(history: ChatMessage[]): number | null {
+	const userCount = history.filter((m) => m.role === "user").length;
+	const assistantCount = history.filter((m) => m.role === "assistant").length;
+	return userCount > assistantCount ? userCount - 1 : null;
 }
 
 function isValidChatId(value: unknown): value is string {
@@ -174,8 +199,7 @@ async function handleChat(req: Request): Promise<Response> {
 	}
 
 	const history = await readHistory(id);
-
-	const streamName = liveStreamName(id);
+	const streamName = liveStreamName(id, turnIndexForNewTurn(history));
 	const result = streamText({
 		model: openai("gpt-4o-mini"),
 		messages: [...history, message],
@@ -232,7 +256,21 @@ const server = Bun.serve({
 				return new Response("Missing id query parameter", { status: 400 });
 			}
 
-			const res = await handleReplay(liveStreamName(chatId));
+			let streamName: string;
+			if (STREAM_REUSE === "shared") {
+				streamName = liveStreamName(chatId, 0);
+			} else {
+				const history = await readHistory(chatId);
+				const idx = activeTurnIndex(history);
+				if (idx === null) {
+					const res = new Response(null, { status: 204 });
+					res.headers.set("Access-Control-Allow-Origin", "*");
+					return res;
+				}
+				streamName = liveStreamName(chatId, idx);
+			}
+
+			const res = await handleReplay(streamName);
 			res.headers.set("Access-Control-Allow-Origin", "*");
 			return res;
 		}

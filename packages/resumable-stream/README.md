@@ -110,14 +110,17 @@ export const chat = createResumableChat({
 ```ts
 // app/api/chat/route.ts
 import { after } from "next/server";
-import { streamText } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
-  const { id, messages } = await req.json();
+  const { id, messages } = (await req.json()) as { id: string; messages: UIMessage[] };
   const streamName = `chat-${id}`;
-  const result = streamText({ model: openai("gpt-4o-mini"), messages });
+  const result = streamText({
+    model: openai("gpt-4o-mini"),
+    messages: await convertToModelMessages(messages),
+  });
 
   return chat.makeResumable(streamName, result.toUIMessageStream(), {
     waitUntil: (promise) => {
