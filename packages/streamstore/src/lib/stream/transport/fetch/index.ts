@@ -21,6 +21,7 @@ import { read } from "../../../../generated/index.js";
 import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
+import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import { EventStream } from "../../../event-stream.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
@@ -390,6 +391,9 @@ export class FetchAppendSession implements TransportAppendSession {
 		if (transportConfig.basinName) {
 			headers["s2-basin"] = transportConfig.basinName;
 		}
+		if (transportConfig.encryptionKey) {
+			headers[S2_ENCRYPTION_KEY_HEADER] = transportConfig.encryptionKey;
+		}
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
@@ -632,6 +636,9 @@ export class FetchTransport implements SessionTransport {
 		const headers: Record<string, string> = {};
 		if (config.basinName) {
 			headers["s2-basin"] = config.basinName;
+		}
+		if (config.encryptionKey) {
+			headers[S2_ENCRYPTION_KEY_HEADER] = config.encryptionKey;
 		}
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
