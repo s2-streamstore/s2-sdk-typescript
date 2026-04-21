@@ -212,20 +212,12 @@ describeIf("resumable-stream/aisdk", () => {
 
 				// Opening fence + N data chunks + terminal fence + trim.
 				// The trim itself may already be trimmed by the time we read,
-				// but `tail.seqNum` is preserved even for trimmed records, so
-				// we assert on the tail position rather than record presence.
+				// but the stream's tail seqnum is preserved even after records
+				// are trimmed, so we assert on that rather than on record
+				// presence.
 				const expectedAppendCount = 1 + chunks.length + 1 + 1;
-				const raw = await s2
-					.basin(basinName)
-					.stream(streamName)
-					.read(
-						{
-							start: { from: { seqNum: 0 }, clamp: true },
-							stop: { limits: { count: 50 } },
-						},
-						{ as: "string" },
-					);
-				expect(raw.tail?.seqNum).toBe(expectedAppendCount);
+				const tail = await s2.basin(basinName).stream(streamName).checkTail();
+				expect(tail.tail.seqNum).toBe(expectedAppendCount);
 			},
 			TEST_TIMEOUT_MS,
 		);
