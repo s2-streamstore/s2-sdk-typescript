@@ -8,11 +8,6 @@ import {
 	fromAPITailResponse,
 	toAPIReadQuery,
 } from "./internal/mappers.js";
-import {
-	type EncryptionKeyInput,
-	resolveEncryptionKey,
-	S2_ENCRYPTION_KEY_HEADER,
-} from "./lib/encryption.js";
 import { withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
@@ -28,10 +23,6 @@ import type {
 } from "./lib/stream/types.js";
 import type * as Types from "./types.js";
 import { isCommandRecord } from "./utils.js";
-
-type RequestOptionsWithHeaders = S2RequestOptions & {
-	headers?: Record<string, string>;
-};
 
 /**
  * Basin-scoped stream helper for append/read operations.
@@ -80,39 +71,6 @@ export class S2Stream {
 		if (this.closed) {
 			throw new S2Error({ message: "S2Stream is closed" });
 		}
-	}
-
-	private withEncryptionHeaders(
-		options?: S2RequestOptions,
-	): RequestOptionsWithHeaders | undefined {
-		const encryptionKey = this.transportConfig.encryptionKey;
-		if (!encryptionKey) {
-			return options;
-		}
-
-		const requestOptions = (options ?? {}) as RequestOptionsWithHeaders;
-		return {
-			...requestOptions,
-			headers: {
-				...(requestOptions.headers ?? {}),
-				[S2_ENCRYPTION_KEY_HEADER]: encryptionKey,
-			},
-		};
-	}
-
-	/**
-	 * Return a new stream handle that sends the supplied encryption key on append/read requests.
-	 */
-	public withEncryptionKey(encryptionKey: EncryptionKeyInput): S2Stream {
-		return new S2Stream(
-			this.name,
-			this.client,
-			{
-				...this.transportConfig,
-				encryptionKey: resolveEncryptionKey(encryptionKey),
-			},
-			this.retryConfig,
-		);
 	}
 
 	/**
@@ -165,7 +123,7 @@ export class S2Stream {
 					this.name,
 					this.client,
 					readArgs,
-					this.withEncryptionHeaders(requestOptions),
+					requestOptions,
 				);
 				// Convert from API to SDK ReadBatch
 				const batch = (
@@ -215,12 +173,7 @@ export class S2Stream {
 		return await withRetries(
 			this.retryConfig,
 			async () => {
-				return await streamAppend(
-					this.name,
-					this.client,
-					input,
-					this.withEncryptionHeaders(options),
-				);
+				return await streamAppend(this.name, this.client, input, options);
 			},
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "all") === "noSideEffects") {

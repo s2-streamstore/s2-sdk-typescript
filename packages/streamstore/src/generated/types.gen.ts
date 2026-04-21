@@ -141,10 +141,6 @@ export type BasinConfig = {
      */
     create_stream_on_read?: boolean;
     default_stream_config?: null | StreamConfig;
-    /**
-     * Encryption algorithm to apply to newly created streams in the basin.
-     */
-    stream_cipher?: null | EncryptionAlgorithm;
 };
 
 export type BasinInfo = {
@@ -177,10 +173,6 @@ export type BasinReconfiguration = {
      */
     create_stream_on_read?: boolean | null;
     default_stream_config?: null | StreamReconfiguration;
-    /**
-     * Encryption algorithm to apply to newly created streams in the basin.
-     */
-    stream_cipher?: null | EncryptionAlgorithm;
 };
 
 export type BasinScope = 'aws:us-east-1';
@@ -232,8 +224,6 @@ export type ErrorInfo = {
     code: string;
     message: string;
 };
-
-export type EncryptionAlgorithm = 'aegis-256' | 'aes-256-gcm';
 
 export type FencingToken = string;
 

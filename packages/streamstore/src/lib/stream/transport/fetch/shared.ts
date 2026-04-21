@@ -27,31 +27,13 @@ import {
 	protoAppendAckToJson,
 } from "../proto.js";
 
-type RequestOptionsWithHeaders = S2RequestOptions & {
-	headers?: Record<string, string>;
-};
-
-function mergeHeaders(
-	...headersList: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-	const merged = Object.assign(
-		{},
-		...headersList.filter((headers): headers is Record<string, string> =>
-			Boolean(headers),
-		),
-	);
-
-	return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 export async function streamRead<Format extends "string" | "bytes" = "string">(
 	stream: string,
 	client: Client,
 	args?: ReadArgs<Format>,
-	options?: RequestOptionsWithHeaders,
+	options?: S2RequestOptions,
 ) {
 	const { as, ignore_command_records, ...queryParams } = args ?? {};
-	const { headers: customHeaders, ...requestOptions } = options ?? {};
 	const wantsBytes = (as ?? "string") === "bytes";
 	let response: any;
 	try {
@@ -60,13 +42,10 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 			path: {
 				stream,
 			},
-			headers: mergeHeaders(
-				customHeaders,
-				wantsBytes ? { Accept: "application/protobuf" } : undefined,
-			),
+			headers: wantsBytes ? { Accept: "application/protobuf" } : undefined,
 			query: queryParams,
 			parseAs: wantsBytes ? "arrayBuffer" : undefined,
-			...requestOptions,
+			...options,
 		});
 	} catch (error) {
 		throw s2Error(error);
@@ -106,7 +85,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	return res as ReadBatch<Format>;
 }
 
-type FetchAppendOptions = RequestOptionsWithHeaders & {
+type FetchAppendOptions = S2RequestOptions & {
 	preferProtobuf?: boolean;
 };
 
@@ -116,11 +95,7 @@ export async function streamAppend(
 	input: Types.AppendInput,
 	options?: FetchAppendOptions,
 ) {
-	const {
-		preferProtobuf,
-		headers: customHeaders,
-		...requestOptions
-	} = options ?? {};
+	const { preferProtobuf, ...requestOptions } = options ?? {};
 
 	const hasAnyBytesRecords = input.records.some(
 		(record) => computeAppendRecordFormat(record) === "bytes",
@@ -132,10 +107,10 @@ export async function streamAppend(
 	if (useProtobuf) {
 		const protoBody = encodeProtoAppendInput(input);
 
-		const headers = mergeHeaders(customHeaders, {
+		const headers = {
 			Accept: "application/protobuf",
 			"Content-Type": "application/protobuf",
-		});
+		};
 
 		try {
 			response = await append({
@@ -182,7 +157,6 @@ export async function streamAppend(
 				match_seq_num: input.matchSeqNum,
 				records: encodedRecords,
 			},
-			headers: customHeaders,
 			...requestOptions,
 		});
 	} catch (error) {

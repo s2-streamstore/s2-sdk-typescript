@@ -235,10 +235,6 @@ export type SessionTransports = "fetch" | "s2s";
 export interface TransportConfig {
 	baseUrl: string;
 	accessToken: Redacted.Redacted;
-	/**
-	 * Optional base64-encoded customer-supplied encryption key for data-plane requests.
-	 */
-	encryptionKey?: string;
 	forceTransport?: SessionTransports;
 	/**
 	 * Basin name to include in s2-basin header when using account endpoint

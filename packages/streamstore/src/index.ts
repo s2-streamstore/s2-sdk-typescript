@@ -54,8 +54,6 @@ export type {
 	DeleteBasinInput,
 	DeleteOnEmptyConfig,
 	DeleteStreamInput,
-	EncryptionAlgorithm,
-	EncryptionKeyInput,
 	GaugeMetric,
 	GetBasinConfigInput,
 	GetStreamConfigInput,
@@ -104,7 +102,6 @@ export type {
 export {
 	AppendInput,
 	AppendRecord,
-	EncryptionKey,
 	MAX_APPEND_BYTES,
 	MAX_APPEND_RECORDS,
 } from "./types.js";
