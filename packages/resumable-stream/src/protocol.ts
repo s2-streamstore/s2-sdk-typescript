@@ -43,10 +43,15 @@ export async function appendFenceCommand(
 	stream: string,
 	currentToken: string | null | undefined,
 	newToken: string,
+	options?: { matchSeqNum?: number },
 ): Promise<AppendAck> {
-	const command = AppendInput.create([AppendRecord.fence(newToken)], {
-		fencingToken: currentToken ?? undefined,
-	});
+	const command = AppendInput.create(
+		[AppendRecord.fence(newToken, Date.now())],
+		{
+			fencingToken: currentToken ?? undefined,
+			matchSeqNum: options?.matchSeqNum,
+		},
+	);
 	return await s2.basin(basin).stream(stream).append(command);
 }
 
@@ -72,7 +77,7 @@ export interface PersistToS2Options<T> {
 	batchSize: number;
 	lingerDuration: number;
 	toRecord: (value: T) => AppendRecord;
-	finalRecords: (failed: boolean) => ReadonlyArray<AppendRecord>;
+	finalRecords: (sourceError: unknown) => ReadonlyArray<AppendRecord>;
 	matchSeqNumStart?: number;
 	onSeqNumMismatch?: (error: SeqNumMismatchError) => void;
 }
@@ -126,7 +131,7 @@ export async function persistToS2<T>({
 
 		let finalizationError: unknown | undefined;
 		try {
-			for (const record of finalRecords(Boolean(sourceError))) {
+			for (const record of finalRecords(sourceError)) {
 				await producer.submit(record);
 			}
 		} catch (err) {

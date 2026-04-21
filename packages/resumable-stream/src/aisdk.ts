@@ -4,17 +4,22 @@ import {
 	FencingTokenMismatchError,
 	randomToken,
 	S2,
+	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
-import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
+import {
+	JsonToSseTransformStream,
+	UI_MESSAGE_STREAM_HEADERS,
+	type UIMessageChunk,
+} from "ai";
 import { appendFenceCommand, persistToS2 } from "./protocol.js";
 import {
 	claimSharedGeneration,
 	replayActiveGenerationStringBodies,
-	replayGenerationStringBodiesFromSeqNum,
 } from "./shared.js";
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
+const DEFAULT_LEASE_DURATION_MS = 5 * 1000;
 
 /**
  * Configuration for creating a resumable AI SDK chat helper.
@@ -30,15 +35,48 @@ export interface ResumableChatConfig {
 	batchSize?: number;
 	/** Maximum time to buffer a batch before flushing, in milliseconds. Defaults to `50`. */
 	lingerDuration?: number;
-	/** Whether each generation uses its own stream or reuses one stream name sequentially. */
+	/** How to map token generations to S2 streams.
+	 *  - `single-use`: Each generation gets a dedicated, single-writer S2 stream.
+	 *  - `shared`: Multiple subsequent generations append to the same shared S2 stream.
+	 *    - S2 fencing enforces that the shared stream is only appended to by a single writer at a time.
+	 * */
 	streamReuse?: "single-use" | "shared";
+	/**
+	 * Only applies to `streamReuse: "shared"`.
+	 *
+	 * Measures the maximum allowed pause *within* an active generation. If an
+	 * active generation hasn't written a record (fence, data, or otherwise)
+	 * for this many milliseconds, the next claim takes it over. Long-running
+	 * generations that keep streaming are unaffected, the lease slides
+	 * forward with every record.
+	 *
+	 * Defaults to 5 seconds. Set this longer than the longest pause you
+	 * expect *between* tokens in a live generation.
+	 *
+	 * Timestamps come from s2's `client-prefer` default: the opening fence
+	 * carries a coordinator-supplied `Date.now()`; data records use s2's
+	 * arrival time. Both end up on effectively the same clock for lease
+	 * comparisons.
+	 */
+	leaseDurationMs?: number;
+	/**
+	 * Maps an upstream error to the `errorText` shown to the client when a
+	 * generation fails mid-stream.
+	 *
+	 * @default () => "An error occurred."
+	 */
+	onError?: (error: unknown) => string;
 }
 
 /**
  * Options for `makeResumable`.
  */
 export interface MakeResumableOptions {
-	/** Runs the S2 write in the background instead of awaiting it inline. */
+	/**
+	 * Keeps the background S2 persistence alive after the response returns.
+	 * On platforms like Vercel / Cloudflare, pass the platform-provided
+	 * `waitUntil` (e.g. `after` from `next/server`).
+	 */
 	waitUntil?: (promise: Promise<unknown>) => void;
 }
 
@@ -47,8 +85,9 @@ export interface MakeResumableOptions {
  */
 export interface ResumableChat {
 	/**
-	 * Starts making a `UIMessageChunk` stream resumable in S2.
-	 * The response body contains `{ stream, fromSeqNum }`.
+	 * Starts making a `UIMessageChunk` stream resumable in S2 and returns the
+	 * stream as an SSE `Response` body. The underlying source is teed: one
+	 * branch streams to the client, the other is persisted to S2.
 	 */
 	makeResumable(
 		streamName: string,
@@ -56,131 +95,64 @@ export interface ResumableChat {
 		options?: MakeResumableOptions,
 	): Promise<Response>;
 	/**
-	 * Replays a resumable stream as NDJSON.
+	 * Replays the currently active generation as an SSE `UIMessageChunk` stream.
 	 * Returns `204` when there is no active generation to replay.
 	 */
-	replay(streamName: string, fromSeqNum?: number): Promise<Response>;
+	replay(streamName: string): Promise<Response>;
 }
 
-/**
- * Configuration for `createS2Transport`.
- */
-export interface S2TransportConfig {
-	/** Chat POST endpoint. */
-	api: string;
-	/** Optional reconnect endpoint. Defaults to `${api}/stream`. */
-	reconnectApi?: string;
-	/** Default headers sent on both POST and reconnect requests. */
-	headers?: HeadersInit;
-	/** Optional fetch implementation override. */
-	fetchClient?: typeof fetch;
-}
+const DEFAULT_ERROR_TEXT = "An error occurred.";
 
-function flattenHeaders(h?: HeadersInit): Record<string, string> {
-	if (!h) return {};
-	if (h instanceof Headers)
-		return Object.fromEntries(h as unknown as Iterable<[string, string]>);
-	if (Array.isArray(h)) return Object.fromEntries(h);
-	return { ...h };
-}
-
-function buildReconnectEndpoint(
-	api: string,
-	reconnectApi: string | undefined,
-	chatId: string,
-	fromSeqNum?: number,
-): string {
-	const base = reconnectApi ?? defaultReconnectApi(api);
-	const params = new URLSearchParams({ id: chatId });
-	if (fromSeqNum !== undefined) {
-		params.set("from", String(fromSeqNum));
-	}
-	const separator = base.includes("?") ? "&" : "?";
-	return `${base}${separator}${params.toString()}`;
-}
-
-function defaultReconnectApi(api: string): string {
-	if (api.includes("?") || api.includes("#")) {
-		throw new Error(
-			"[resumable-stream] Pass reconnectApi explicitly when api contains a query string or hash.",
-		);
-	}
-	return `${api.replace(/\/$/, "")}/stream`;
-}
-
-async function readNdjsonStream(
-	res: Response,
-	options?: {
-		signal?: AbortSignal;
-	},
-): Promise<ReadableStream<UIMessageChunk>> {
-	if (!res.body) throw new Error("[resumable-stream] Response has no body.");
-
-	const reader = res.body.getReader();
-	const decoder = new TextDecoder();
-	let buf = "";
-	let readerDone = false;
-
-	const parseChunk = (line: string): UIMessageChunk => {
-		try {
-			return JSON.parse(line) as UIMessageChunk;
-		} catch {
-			throw new Error(
-				`[resumable-stream] Invalid NDJSON chunk: ${line.slice(0, 200)}`,
-			);
-		}
-	};
-
-	options?.signal?.addEventListener("abort", () => reader.cancel(), {
-		once: true,
-	});
-
-	return new ReadableStream<UIMessageChunk>({
-		async pull(ctrl) {
-			while (true) {
-				const nl = buf.indexOf("\n");
-				if (nl !== -1) {
-					const line = buf.slice(0, nl).trim();
-					buf = buf.slice(nl + 1);
-					if (line.length === 0) continue;
-					ctrl.enqueue(parseChunk(line));
-					return;
-				}
-
-				if (readerDone) {
-					buf += decoder.decode();
-					const line = buf.trim();
-					buf = "";
-					if (line.length === 0) {
-						ctrl.close();
-						return;
-					}
-					ctrl.enqueue(parseChunk(line));
-					ctrl.close();
-					return;
-				}
-
-				const { done, value } = await reader.read();
-				if (done) {
-					readerDone = true;
-					continue;
-				}
-
-				buf += decoder.decode(value, { stream: true });
-			}
-		},
-		cancel() {
-			reader.cancel();
-		},
-	});
-}
-
-function makeErrorChunkRecord(): AppendRecord {
+function makeErrorChunkRecord(
+	err: unknown,
+	onError?: (error: unknown) => string,
+): AppendRecord {
+	const errorText = onError ? onError(err) : DEFAULT_ERROR_TEXT;
 	return AppendRecord.string({
 		body: JSON.stringify({
 			type: "error",
-			errorText: "The generation ended before the stream completed.",
+			errorText,
 		} satisfies UIMessageChunk),
+	});
+}
+
+async function* readableToAsyncIterable<T>(
+	rs: ReadableStream<T>,
+): AsyncIterable<T> {
+	const reader = rs.getReader();
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) return;
+			yield value;
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+function asyncIterableToReadableStream<T>(
+	source: AsyncIterable<T>,
+): ReadableStream<T> {
+	let iterator: AsyncIterator<T> | undefined;
+	return new ReadableStream<T>({
+		async pull(controller) {
+			if (!iterator) iterator = source[Symbol.asyncIterator]();
+			try {
+				const { done, value } = await iterator.next();
+				if (done) {
+					controller.close();
+					return;
+				}
+				controller.enqueue(value);
+			} catch (err) {
+				controller.error(err);
+				await iterator?.return?.().catch(() => {});
+			}
+		},
+		async cancel() {
+			await iterator?.return?.().catch(() => {});
+		},
 	});
 }
 
@@ -198,6 +170,8 @@ export function createResumableChat(
 	const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
 	const streamReuse = config.streamReuse ?? "single-use";
+	const leaseDurationMs = config.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
+	const onError = config.onError;
 
 	const makeResumable = async (
 		streamName: string,
@@ -206,7 +180,6 @@ export function createResumableChat(
 	): Promise<Response> => {
 		const fencingToken = `session-${randomToken(8)}`;
 		let matchSeqNumStart = 1;
-		let fromSeqNum = 0;
 
 		try {
 			if (streamReuse === "shared") {
@@ -215,79 +188,95 @@ export function createResumableChat(
 					basin,
 					stream: streamName,
 					fencingToken,
+					leaseDurationMs,
 				});
 				if (!claim) {
 					return new Response("Stream already in use", { status: 409 });
 				}
-				fromSeqNum = claim.fromSeqNum;
 				matchSeqNumStart = claim.matchSeqNumStart;
 			} else {
+				// Single-use: require matchSeqNum=0 so any prior usage of this
+				// stream name (even a completed generation whose trim has
+				// propagated) rejects the claim with SeqNumMismatchError.
 				const ack = await appendFenceCommand(
 					s2,
 					basin,
 					streamName,
 					"",
 					fencingToken,
+					{ matchSeqNum: 0 },
 				);
-				fromSeqNum = ack.start.seqNum;
 				matchSeqNumStart = ack.end.seqNum;
 			}
 		} catch (err) {
-			if (err instanceof FencingTokenMismatchError) {
+			if (
+				err instanceof FencingTokenMismatchError ||
+				err instanceof SeqNumMismatchError
+			) {
 				return new Response("Stream already in use", { status: 409 });
 			}
 			throw err;
 		}
 
-		const write = persistToS2({
+		const [toClient, toPersist] = asyncIterableToReadableStream(source).tee();
+
+		const persistPromise = persistToS2({
 			s2,
 			basin,
 			stream: streamName,
-			source,
+			source: readableToAsyncIterable(toPersist),
 			fencingToken,
 			batchSize,
 			lingerDuration,
 			matchSeqNumStart,
 			toRecord: (chunk) => AppendRecord.string({ body: JSON.stringify(chunk) }),
-			finalRecords: (failed) =>
-				failed
-					? [
-							makeErrorChunkRecord(),
-							AppendRecord.fence(`error-${randomToken(4)}`),
-						]
-					: [AppendRecord.fence(`end-${randomToken(4)}`)],
+			finalRecords: (sourceError) => {
+				const fenceToken =
+					sourceError !== undefined
+						? `error-${randomToken(4)}`
+						: `end-${randomToken(4)}`;
+				const records: AppendRecord[] =
+					sourceError !== undefined
+						? [
+								makeErrorChunkRecord(sourceError, onError),
+								AppendRecord.fence(fenceToken),
+							]
+						: [AppendRecord.fence(fenceToken)];
+				// Single-use: follow the terminal fence with a trim so
+				// delete-on-empty can GC the stream. Shared streams rely on
+				// the next claim's trim instead.
+				if (streamReuse === "single-use") {
+					records.push(AppendRecord.trim(Number.MAX_SAFE_INTEGER));
+				}
+				return records;
+			},
 		});
 
 		if (options?.waitUntil) {
-			options.waitUntil(write);
+			options.waitUntil(persistPromise);
 		} else {
-			await write;
+			persistPromise.catch((err) => {
+				console.error("[resumable-stream] Background persist failed:", err);
+			});
 		}
 
-		return Response.json(
-			{ stream: streamName, fromSeqNum },
-			{ headers: { "Cache-Control": "no-store" } },
+		return new Response(
+			toClient
+				.pipeThrough(new JsonToSseTransformStream())
+				.pipeThrough(new TextEncoderStream()),
+			{ headers: UI_MESSAGE_STREAM_HEADERS },
 		);
 	};
 
 	return {
 		makeResumable,
 
-		async replay(streamName: string, fromSeqNum?: number): Promise<Response> {
-			const iterator = (
-				fromSeqNum === undefined
-					? replayActiveGenerationStringBodies({
-							s2,
-							basin,
-							stream: streamName,
-						})
-					: replayGenerationStringBodiesFromSeqNum({
-							s2,
-							basin,
-							stream: streamName,
-							fromSeqNum,
-						})
-			)[Symbol.asyncIterator]();
+		async replay(streamName: string): Promise<Response> {
+			const iterator = replayActiveGenerationStringBodies({
+				s2,
+				basin,
+				stream: streamName,
+			})[Symbol.asyncIterator]();
 			const first = await iterator.next();
 			if (first.done) {
 				return new Response(null, {
@@ -297,138 +286,34 @@ export function createResumableChat(
 			}
 
 			const encoder = new TextEncoder();
+			let pending: string | undefined = first.value;
 			const body = new ReadableStream<Uint8Array>({
-				async start(controller) {
+				async pull(controller) {
 					try {
-						controller.enqueue(encoder.encode(`${first.value}\n`));
-						while (true) {
-							const next = await iterator.next();
-							if (next.done) break;
-							controller.enqueue(encoder.encode(`${next.value}\n`));
+						if (pending !== undefined) {
+							const value = pending;
+							pending = undefined;
+							controller.enqueue(encoder.encode(`data: ${value}\n\n`));
+							return;
 						}
-						controller.close();
+						const next = await iterator.next();
+						if (next.done) {
+							controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+							controller.close();
+							return;
+						}
+						controller.enqueue(encoder.encode(`data: ${next.value}\n\n`));
 					} catch (err) {
 						controller.error(err);
+						await iterator.return?.();
 					}
 				},
-			});
-
-			return new Response(body, {
-				headers: {
-					"Content-Type": "application/x-ndjson",
-					"Cache-Control": "no-store",
-					"X-Accel-Buffering": "no",
+				async cancel() {
+					await iterator.return?.();
 				},
 			});
-		},
-	};
-}
 
-/**
- * Creates an AI SDK chat transport that reconnects by chat id.
- */
-export function createS2Transport<UIMessageT extends UIMessage = UIMessage>({
-	api,
-	reconnectApi,
-	headers,
-	fetchClient,
-}: S2TransportConfig): ChatTransport<UIMessageT> {
-	const fetchFn = fetchClient ?? fetch;
-
-	return {
-		async sendMessages({
-			trigger,
-			chatId,
-			messageId,
-			messages,
-			abortSignal,
-			body,
-			headers: reqHeaders,
-		}) {
-			const res = await fetchFn(api, {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					...flattenHeaders(headers),
-					...flattenHeaders(reqHeaders),
-				},
-				body: JSON.stringify({
-					...(body ?? {}),
-					id: chatId,
-					messages,
-					trigger,
-					messageId,
-				}),
-				signal: abortSignal,
-			});
-
-			if (!res.ok) {
-				const text = await res.text();
-				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
-			}
-
-			let fromSeqNum: number | undefined;
-			try {
-				const body = (await res.json()) as { fromSeqNum?: unknown };
-				if (
-					typeof body.fromSeqNum === "number" &&
-					Number.isSafeInteger(body.fromSeqNum) &&
-					body.fromSeqNum >= 0
-				) {
-					fromSeqNum = body.fromSeqNum;
-				}
-			} catch {
-				// Backward compatibility: older handlers may not return JSON metadata.
-			}
-
-			const replayRes = await fetchFn(
-				buildReconnectEndpoint(api, reconnectApi, chatId, fromSeqNum),
-				{
-					method: "GET",
-					headers: {
-						...flattenHeaders(headers),
-						...flattenHeaders(reqHeaders),
-					},
-					signal: abortSignal,
-				},
-			);
-
-			if (replayRes.status === 204) {
-				throw new Error("No active stream found for the requested chat.");
-			}
-
-			if (!replayRes.ok) {
-				const text = await replayRes.text();
-				throw new Error(
-					text || `HTTP ${replayRes.status} ${replayRes.statusText}`,
-				);
-			}
-
-			return readNdjsonStream(replayRes, { signal: abortSignal });
-		},
-
-		async reconnectToStream({ chatId, headers: reqHeaders }) {
-			const res = await fetchFn(
-				buildReconnectEndpoint(api, reconnectApi, chatId),
-				{
-					method: "GET",
-					headers: {
-						...flattenHeaders(headers),
-						...flattenHeaders(reqHeaders),
-					},
-				},
-			);
-
-			if (res.status === 204) {
-				return null;
-			}
-
-			if (!res.ok) {
-				const text = await res.text();
-				throw new Error(text || `HTTP ${res.status} ${res.statusText}`);
-			}
-
-			return readNdjsonStream(res);
+			return new Response(body, { headers: UI_MESSAGE_STREAM_HEADERS });
 		},
 	};
 }

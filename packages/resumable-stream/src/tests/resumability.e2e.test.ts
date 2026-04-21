@@ -91,7 +91,7 @@ describeIf("resumable-stream", () => {
 		});
 		await waitForBasinReady(s2, basinName);
 		process.env.S2_BASIN = basinName;
-		process.env.S2_LINGER_DURATION = "100";
+		process.env.S2_LINGER_DURATION_MS = "100";
 	}, 120_000);
 
 	afterAll(async () => {
@@ -102,7 +102,7 @@ describeIf("resumable-stream", () => {
 			// best-effort cleanup
 		}
 		delete process.env.S2_BASIN;
-		delete process.env.S2_LINGER_DURATION;
+		delete process.env.S2_LINGER_DURATION_MS;
 	});
 
 	it("pub/sub", async () => {

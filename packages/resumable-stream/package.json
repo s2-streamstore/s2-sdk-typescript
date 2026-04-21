@@ -38,7 +38,7 @@
   "sideEffects": false,
   "peerDependencies": {
     "@s2-dev/streamstore": ">=0.21.0",
-    "ai": ">=4.0.0"
+    "ai": ">=5.0.0"
   },
   "peerDependenciesMeta": {
     "ai": {

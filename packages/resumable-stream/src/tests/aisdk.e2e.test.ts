@@ -1,4 +1,9 @@
-import { S2, S2Environment } from "@s2-dev/streamstore";
+import {
+	AppendInput,
+	AppendRecord,
+	S2,
+	S2Environment,
+} from "@s2-dev/streamstore";
 import type { UIMessageChunk } from "ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createResumableChat } from "../aisdk.js";
@@ -57,12 +62,17 @@ async function* delayedAsyncIterable<T>(
 	}
 }
 
-async function readNdjsonResponse(res: Response): Promise<unknown[]> {
+async function readSseResponse(res: Response): Promise<unknown[]> {
 	const text = await res.text();
-	return text
-		.split("\n")
-		.filter((line) => line.trim().length > 0)
-		.map((line) => JSON.parse(line));
+	const results: unknown[] = [];
+	for (const block of text.split("\n\n")) {
+		const trimmed = block.trim();
+		if (!trimmed.startsWith("data: ")) continue;
+		const payload = trimmed.slice("data: ".length);
+		if (payload === "[DONE]") continue;
+		results.push(JSON.parse(payload));
+	}
+	return results;
 }
 
 function sampleChunks(text = "Hello world"): UIMessageChunk[] {
@@ -117,7 +127,7 @@ describeIf("resumable-stream/aisdk", () => {
 
 	describe("makeResumable", () => {
 		it(
-			"writes chunks and returns { stream } response",
+			"streams the source back to the client as SSE",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -133,15 +143,14 @@ describeIf("resumable-stream/aisdk", () => {
 				);
 
 				expect(res.status).toBe(200);
-				const body = (await res.json()) as { stream: string };
-				expect(body.stream).toBe(streamName);
-				expect(res.headers.get("Cache-Control")).toBe("no-store");
+				expect(res.headers.get("Content-Type")).toBe("text/event-stream");
+				expect(await readSseResponse(res)).toEqual(chunks);
 			},
 			TEST_TIMEOUT_MS,
 		);
 
 		it(
-			"returns 200 immediately with waitUntil and completes in background",
+			"runs persistence under waitUntil while the client consumes the body",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -149,12 +158,13 @@ describeIf("resumable-stream/aisdk", () => {
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("resumable-bg");
+				const chunks = sampleChunks();
 
 				let bgPromise: Promise<unknown> | undefined;
 
 				const res = await chat.makeResumable(
 					streamName,
-					arrayToAsyncIterable(sampleChunks()),
+					arrayToAsyncIterable(chunks),
 					{
 						waitUntil: (promise) => {
 							bgPromise = promise;
@@ -163,16 +173,57 @@ describeIf("resumable-stream/aisdk", () => {
 				);
 
 				expect(res.status).toBe(200);
-				const body = (await res.json()) as { stream: string };
-				expect(body.stream).toBe(streamName);
+				expect(await readSseResponse(res)).toEqual(chunks);
 				expect(bgPromise).toBeDefined();
 				await bgPromise;
+
+				// After waitUntil resolves, a replay of a completed single-use
+				// stream must return 204.
+				const replay = await chat.replay(streamName);
+				expect(replay.status).toBe(204);
 			},
 			TEST_TIMEOUT_MS,
 		);
 
 		it(
-			"returns 409 when stream is already claimed",
+			"appends a trim after a single-use generation for self-cleanup",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("single-use-trim");
+				const chunks = sampleChunks();
+
+				let bgPromise: Promise<unknown> | undefined;
+				const res = await chat.makeResumable(
+					streamName,
+					arrayToAsyncIterable(chunks),
+					{
+						waitUntil: (promise) => {
+							bgPromise = promise;
+						},
+					},
+				);
+				expect(res.status).toBe(200);
+				await res.text();
+				await bgPromise;
+
+				// Opening fence + N data chunks + terminal fence + trim.
+				// The trim itself may already be trimmed by the time we read,
+				// but the stream's tail seqnum is preserved even after records
+				// are trimmed, so we assert on that rather than on record
+				// presence.
+				const expectedAppendCount = 1 + chunks.length + 1 + 1;
+				const tail = await s2.basin(basinName).stream(streamName).checkTail();
+				expect(tail.tail.seqNum).toBe(expectedAppendCount);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"returns 409 when a single-use stream is already claimed",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -186,6 +237,7 @@ describeIf("resumable-stream/aisdk", () => {
 					arrayToAsyncIterable(sampleChunks()),
 				);
 				expect(res1.status).toBe(200);
+				await res1.text();
 
 				const res2 = await chat.makeResumable(
 					streamName,
@@ -199,53 +251,7 @@ describeIf("resumable-stream/aisdk", () => {
 
 	describe("replay", () => {
 		it(
-			"returns 204 once a single-use stream has completed",
-			async () => {
-				const chat = createResumableChat({
-					accessToken: process.env.S2_ACCESS_TOKEN!,
-					basin: basinName,
-					...s2EndpointsFromEnv(),
-				});
-				const streamName = makeStreamName("replay-basic");
-				const chunks = sampleChunks();
-
-				await chat.makeResumable(streamName, arrayToAsyncIterable(chunks));
-
-				const res = await chat.replay(streamName);
-				expect(res.status).toBe(204);
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
-			"replays a just-completed generation when fromSeqNum is provided",
-			async () => {
-				const chat = createResumableChat({
-					accessToken: process.env.S2_ACCESS_TOKEN!,
-					basin: basinName,
-					...s2EndpointsFromEnv(),
-				});
-				const streamName = makeStreamName("replay-from");
-				const chunks = sampleChunks();
-
-				const makeResumableRes = await chat.makeResumable(
-					streamName,
-					arrayToAsyncIterable(chunks),
-				);
-				const body = (await makeResumableRes.json()) as {
-					fromSeqNum: number;
-					stream: string;
-				};
-
-				const replayRes = await chat.replay(streamName, body.fromSeqNum);
-				expect(replayRes.status).toBe(200);
-				expect(await readNdjsonResponse(replayRes)).toEqual(chunks);
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
-			"streams the active generation while makeResumable runs in the background",
+			"tails the active generation from S2 while the client drops the POST body",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -256,17 +262,25 @@ describeIf("resumable-stream/aisdk", () => {
 				const chunks = sampleChunks();
 
 				let bgPromise: Promise<unknown> | undefined;
-				await chat.makeResumable(streamName, delayedAsyncIterable(chunks), {
-					waitUntil: (promise) => {
-						bgPromise = promise;
+				const postRes = await chat.makeResumable(
+					streamName,
+					delayedAsyncIterable(chunks),
+					{
+						waitUntil: (promise) => {
+							bgPromise = promise;
+						},
 					},
-				});
+				);
 
-				const res = await chat.replay(streamName);
-				expect(res.status).toBe(200);
-				expect(res.headers.get("Content-Type")).toBe("application/x-ndjson");
+				// Simulate the client disconnecting before consuming any chunks.
+				// Tee semantics: persist branch continues independently.
+				await postRes.body?.cancel();
 
-				const records = await readNdjsonResponse(res);
+				const replayRes = await chat.replay(streamName);
+				expect(replayRes.status).toBe(200);
+				expect(replayRes.headers.get("Content-Type")).toBe("text/event-stream");
+
+				const records = await readSseResponse(replayRes);
 				expect(records).toEqual(chunks);
 
 				await bgPromise;
@@ -289,29 +303,38 @@ describeIf("resumable-stream/aisdk", () => {
 				const firstChunks = sampleChunks("Hello world");
 				const secondChunks = sampleChunks("Second pass");
 
+				let firstBg: Promise<unknown> | undefined;
 				const res1 = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(firstChunks),
+					{
+						waitUntil: (promise) => {
+							firstBg = promise;
+						},
+					},
 				);
 				expect(res1.status).toBe(200);
+				await res1.text();
+				await firstBg;
 
-				let bgPromise: Promise<unknown> | undefined;
+				let secondBg: Promise<unknown> | undefined;
 				const res2 = await chat.makeResumable(
 					streamName,
 					delayedAsyncIterable(secondChunks),
 					{
 						waitUntil: (promise) => {
-							bgPromise = promise;
+							secondBg = promise;
 						},
 					},
 				);
 				expect(res2.status).toBe(200);
+				await res2.body?.cancel();
 
 				const latest = await chat.replay(streamName);
 				expect(latest.status).toBe(200);
-				expect(await readNdjsonResponse(latest)).toEqual(secondChunks);
+				expect(await readSseResponse(latest)).toEqual(secondChunks);
 
-				await bgPromise;
+				await secondBg;
 
 				const raw = await s2
 					.basin(basinName)
@@ -336,6 +359,72 @@ describeIf("resumable-stream/aisdk", () => {
 		);
 
 		it(
+			"returns 409 when a non-terminal fence is still within its lease",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					streamReuse: "shared",
+					leaseDurationMs: 60_000,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("shared-held");
+
+				// Simulate an in-flight generation: fence now, no terminal.
+				await s2
+					.basin(basinName)
+					.stream(streamName)
+					.append(
+						AppendInput.create([AppendRecord.fence("holder-abcd", Date.now())]),
+					);
+
+				const blocked = await chat.makeResumable(
+					streamName,
+					arrayToAsyncIterable(sampleChunks()),
+				);
+				expect(blocked.status).toBe(409);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"takes over a shared stream whose lease has expired",
+			async () => {
+				const leaseDurationMs = 60_000;
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					streamReuse: "shared",
+					leaseDurationMs,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("shared-expired");
+
+				// Simulate a crashed generation: fence with a timestamp well in
+				// the past, no terminal fence, no data. s2 preserves past
+				// client timestamps under the default ClientPrefer mode.
+				const staleTimestamp = Date.now() - leaseDurationMs - 10_000;
+				await s2
+					.basin(basinName)
+					.stream(streamName)
+					.append(
+						AppendInput.create([
+							AppendRecord.fence("stale-holder", staleTimestamp),
+						]),
+					);
+
+				const chunks = sampleChunks("Took over");
+				const res = await chat.makeResumable(
+					streamName,
+					arrayToAsyncIterable(chunks),
+				);
+				expect(res.status).toBe(200);
+				expect(await readSseResponse(res)).toEqual(chunks);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
 			"returns 204 once a shared stream is idle",
 			async () => {
 				const chat = createResumableChat({
@@ -346,11 +435,19 @@ describeIf("resumable-stream/aisdk", () => {
 				});
 				const streamName = makeStreamName("shared-idle");
 
+				let bgPromise: Promise<unknown> | undefined;
 				const res = await chat.makeResumable(
 					streamName,
 					arrayToAsyncIterable(sampleChunks("Idle latest")),
+					{
+						waitUntil: (promise) => {
+							bgPromise = promise;
+						},
+					},
 				);
 				expect(res.status).toBe(200);
+				await res.text();
+				await bgPromise;
 
 				const replay = await chat.replay(streamName);
 				expect(replay.status).toBe(204);
