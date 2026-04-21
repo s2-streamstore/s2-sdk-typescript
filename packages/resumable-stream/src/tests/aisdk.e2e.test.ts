@@ -194,11 +194,12 @@ describeIf("resumable-stream/aisdk", () => {
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("single-use-trim");
+				const chunks = sampleChunks();
 
 				let bgPromise: Promise<unknown> | undefined;
 				const res = await chat.makeResumable(
 					streamName,
-					arrayToAsyncIterable(sampleChunks()),
+					arrayToAsyncIterable(chunks),
 					{
 						waitUntil: (promise) => {
 							bgPromise = promise;
@@ -209,6 +210,11 @@ describeIf("resumable-stream/aisdk", () => {
 				await res.text();
 				await bgPromise;
 
+				// Opening fence + N data chunks + terminal fence + trim.
+				// The trim itself may already be trimmed by the time we read,
+				// but `tail.seqNum` is preserved even for trimmed records, so
+				// we assert on the tail position rather than record presence.
+				const expectedAppendCount = 1 + chunks.length + 1 + 1;
 				const raw = await s2
 					.basin(basinName)
 					.stream(streamName)
@@ -219,13 +225,7 @@ describeIf("resumable-stream/aisdk", () => {
 						},
 						{ as: "string" },
 					);
-				const hasTrim = raw.records.some(
-					(record) =>
-						record.headers.length === 1 &&
-						record.headers[0]?.[0] === "" &&
-						record.headers[0]?.[1] === "trim",
-				);
-				expect(hasTrim).toBe(true);
+				expect(raw.tail?.seqNum).toBe(expectedAppendCount);
 			},
 			TEST_TIMEOUT_MS,
 		);
