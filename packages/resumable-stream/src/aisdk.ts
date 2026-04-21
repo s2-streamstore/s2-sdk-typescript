@@ -19,7 +19,7 @@ import {
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
-const DEFAULT_LEASE_DURATION_MS = 60 * 1000;
+const DEFAULT_LEASE_DURATION_MS = 5 * 1000;
 
 /**
  * Configuration for creating a resumable AI SDK chat helper.
@@ -50,7 +50,7 @@ export interface ResumableChatConfig {
 	 * generations that keep streaming are unaffected, the lease slides
 	 * forward with every record.
 	 *
-	 * Defaults to 1 minute. Set this longer than the longest pause you
+	 * Defaults to 5 seconds. Set this longer than the longest pause you
 	 * expect *between* tokens in a live generation.
 	 *
 	 * Timestamps come from s2's `client-prefer` default: the opening fence

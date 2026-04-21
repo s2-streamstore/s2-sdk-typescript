@@ -89,7 +89,7 @@ function getS2Config(): S2Config {
 	const basin = process.env.S2_BASIN;
 	const batchSize = Number.parseInt(process.env.S2_BATCH_SIZE ?? "10", 10);
 	const lingerDuration = Number.parseInt(
-		process.env.S2_LINGER_DURATION ?? "500",
+		process.env.S2_LINGER_DURATION_MS ?? "500",
 		10,
 	);
 
