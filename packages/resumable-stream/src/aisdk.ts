@@ -59,6 +59,13 @@ export interface ResumableChatConfig {
 	 * comparisons.
 	 */
 	leaseDurationMs?: number;
+	/**
+	 * Maps an upstream error to the `errorText` shown to the client when a
+	 * generation fails mid-stream.
+	 *
+	 * @default () => "An error occurred."
+	 */
+	onError?: (error: unknown) => string;
 }
 
 /**
@@ -94,11 +101,13 @@ export interface ResumableChat {
 	replay(streamName: string): Promise<Response>;
 }
 
-function makeErrorChunkRecord(err: unknown): AppendRecord {
-	const errorText =
-		err instanceof Error && err.message
-			? err.message
-			: "The generation ended before the stream completed.";
+const DEFAULT_ERROR_TEXT = "An error occurred.";
+
+function makeErrorChunkRecord(
+	err: unknown,
+	onError?: (error: unknown) => string,
+): AppendRecord {
+	const errorText = onError ? onError(err) : DEFAULT_ERROR_TEXT;
 	return AppendRecord.string({
 		body: JSON.stringify({
 			type: "error",
@@ -162,6 +171,7 @@ export function createResumableChat(
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
 	const streamReuse = config.streamReuse ?? "single-use";
 	const leaseDurationMs = config.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
+	const onError = config.onError;
 
 	const makeResumable = async (
 		streamName: string,
@@ -228,7 +238,7 @@ export function createResumableChat(
 				const records: AppendRecord[] =
 					sourceError !== undefined
 						? [
-								makeErrorChunkRecord(sourceError),
+								makeErrorChunkRecord(sourceError, onError),
 								AppendRecord.fence(fenceToken),
 							]
 						: [AppendRecord.fence(fenceToken)];
