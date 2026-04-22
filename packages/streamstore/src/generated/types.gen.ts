@@ -141,9 +141,6 @@ export type BasinConfig = {
      */
     create_stream_on_read?: boolean;
     default_stream_config?: null | StreamConfig;
-    /**
-     * Encryption algorithm to apply to newly created streams in the basin.
-     */
     stream_cipher?: null | EncryptionAlgorithm;
 };
 
@@ -177,9 +174,6 @@ export type BasinReconfiguration = {
      */
     create_stream_on_read?: boolean | null;
     default_stream_config?: null | StreamReconfiguration;
-    /**
-     * Encryption algorithm to apply to newly created streams in the basin.
-     */
     stream_cipher?: null | EncryptionAlgorithm;
 };
 
@@ -228,12 +222,12 @@ export type DeleteOnEmptyReconfiguration = {
     min_age_secs?: number | null;
 };
 
+export type EncryptionAlgorithm = 'aegis-256' | 'aes-256-gcm';
+
 export type ErrorInfo = {
     code: string;
     message: string;
 };
-
-export type EncryptionAlgorithm = 'aegis-256' | 'aes-256-gcm';
 
 export type FencingToken = string;
 
@@ -470,6 +464,7 @@ export type StreamConfig = {
 };
 
 export type StreamInfo = {
+    cipher?: null | EncryptionAlgorithm;
     /**
      * Creation time in RFC 3339 format.
      */
@@ -478,10 +473,6 @@ export type StreamInfo = {
      * Deletion time in RFC 3339 format, if the stream is being deleted.
      */
     deleted_at?: string | null;
-    /**
-     * Encryption algorithm for this stream, if encryption is enabled.
-     */
-    cipher?: null | EncryptionAlgorithm;
     /**
      * Stream name.
      */
