@@ -236,7 +236,7 @@ export interface TransportConfig {
 	baseUrl: string;
 	accessToken: Redacted.Redacted;
 	/**
-	 * Optional base64-encoded customer-supplied encryption key for data-plane requests.
+	 * Optional base64-encoded client-supplied encryption key for data-plane requests.
 	 */
 	encryptionKey?: Redacted.Redacted<string>;
 	forceTransport?: SessionTransports;

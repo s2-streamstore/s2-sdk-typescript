@@ -84,7 +84,7 @@ export class S2Basin {
 export interface StreamOptions {
 	forceTransport?: SessionTransports;
 	/**
-	 * Customer-supplied encryption key for append/read operations on this stream.
+	 * Client-supplied encryption key for append/read operations on this stream.
 	 *
 	 * Accepts either base64-encoded key material or raw bytes.
 	 */
