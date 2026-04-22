@@ -45,12 +45,14 @@ export const EncryptionKey = {
 	from(value: EncryptionKeyInput): string {
 		const normalized =
 			typeof value === "string" ? value.trim() : encodeToBase64(value);
+		const keyMaterialLength =
+			typeof value === "string" ? normalized.length : value.byteLength;
 
 		if (
 			normalized.length === 0 ||
 			normalized.length > MAX_ENCRYPTION_KEY_HEADER_VALUE_LEN
 		) {
-			throw new EncryptionKeyLengthError(normalized.length);
+			throw new EncryptionKeyLengthError(keyMaterialLength);
 		}
 
 		return normalized;
