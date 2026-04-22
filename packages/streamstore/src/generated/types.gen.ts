@@ -141,6 +141,7 @@ export type BasinConfig = {
      */
     create_stream_on_read?: boolean;
     default_stream_config?: null | StreamConfig;
+    stream_cipher?: null | EncryptionAlgorithm;
 };
 
 export type BasinInfo = {
@@ -173,6 +174,7 @@ export type BasinReconfiguration = {
      */
     create_stream_on_read?: boolean | null;
     default_stream_config?: null | StreamReconfiguration;
+    stream_cipher?: null | EncryptionAlgorithm;
 };
 
 export type BasinScope = 'aws:us-east-1';
@@ -219,6 +221,8 @@ export type DeleteOnEmptyReconfiguration = {
      */
     min_age_secs?: number | null;
 };
+
+export type EncryptionAlgorithm = 'aegis-256' | 'aes-256-gcm';
 
 export type ErrorInfo = {
     code: string;
@@ -460,6 +464,7 @@ export type StreamConfig = {
 };
 
 export type StreamInfo = {
+    cipher?: null | EncryptionAlgorithm;
     /**
      * Creation time in RFC 3339 format.
      */
@@ -1093,6 +1098,11 @@ export type ReadData = {
          * Use `base64` for safe transmission with efficient storage of binary data.
          */
         's2-format'?: Format;
+        /**
+         * Encryption key material for append and read operations.
+         * Provide base64-encoded key when stream encryption is enabled.
+         */
+        's2-encryption-key'?: string;
     };
     path: {
         /**
@@ -1169,6 +1179,11 @@ export type AppendData = {
          * Use `base64` for safe transmission with efficient storage of binary data.
          */
         's2-format'?: Format;
+        /**
+         * Encryption key material for append and read operations.
+         * Provide base64-encoded key when stream encryption is enabled.
+         */
+        's2-encryption-key'?: string;
     };
     path: {
         /**
