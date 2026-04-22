@@ -26,7 +26,6 @@ function invalidEncryptionKeyLength(length: number): S2Error {
 	return new S2Error({
 		message: `invalid encryption key: key material length ${length} is out of range`,
 		origin: "sdk",
-		status: 422,
 	});
 }
 

@@ -24,4 +24,18 @@ describe("EncryptionKey", () => {
 			/length 45 is out of range/,
 		);
 	});
+
+	it("reports invalid key length as an sdk error without an HTTP status", () => {
+		try {
+			EncryptionKey.from("   ");
+			throw new Error("expected EncryptionKey.from() to throw");
+		} catch (error) {
+			expect(error).toBeInstanceOf(S2Error);
+			expect(error).toMatchObject({
+				message: "invalid encryption key: key material length 0 is out of range",
+				origin: "sdk",
+				status: 0,
+			});
+		}
+	});
 });
