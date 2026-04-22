@@ -24,6 +24,7 @@ import {
 import type * as API from "../../../../generated/index.js";
 import * as Proto from "../../../../generated/proto/s2.js";
 import type * as Types from "../../../../types.js";
+import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
@@ -92,6 +93,7 @@ export class S2STransport implements SessionTransport {
 					stream,
 					() => this.getConnection(),
 					this.transportConfig.basinName,
+					this.transportConfig.encryptionKey,
 					myOptions,
 					requestOptions,
 				);
@@ -117,6 +119,7 @@ export class S2STransport implements SessionTransport {
 					options,
 					() => this.getConnection(),
 					this.transportConfig.basinName,
+					this.transportConfig.encryptionKey,
 				);
 			},
 			args,
@@ -268,6 +271,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		options: S2RequestOptions | undefined,
 		getConnection: () => Promise<ClientHttp2Session>,
 		basinName?: string,
+		encryptionKey?: Redacted.Redacted<string>,
 	): Promise<S2SReadSession<Format>> {
 		const url = new URL(baseUrl);
 		return new S2SReadSession(
@@ -278,6 +282,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			options,
 			getConnection,
 			basinName,
+			encryptionKey,
 		);
 	}
 
@@ -289,6 +294,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private options: S2RequestOptions | undefined,
 		private getConnection: () => Promise<ClientHttp2Session>,
 		private basinName?: string,
+		private encryptionKey?: Redacted.Redacted<string>,
 	) {
 		// Initialize parser and textDecoder before super() call
 		const parser = new S2SFrameParser();
@@ -413,6 +419,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						accept: "application/protobuf",
 						"content-type": "s2s/proto",
 						...(basinName ? { "s2-basin": basinName } : {}),
+						...(encryptionKey
+							? {
+									[S2_ENCRYPTION_KEY_HEADER]: Redacted.value(encryptionKey),
+								}
+							: {}),
 					});
 
 					http2Stream = stream;
@@ -740,6 +751,7 @@ class S2SAppendSession implements TransportAppendSession {
 		streamName: string,
 		getConnection: () => Promise<ClientHttp2Session>,
 		basinName: string | undefined,
+		encryptionKey: Redacted.Redacted<string> | undefined,
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<S2SAppendSession> {
@@ -749,6 +761,7 @@ class S2SAppendSession implements TransportAppendSession {
 			streamName,
 			getConnection,
 			basinName,
+			encryptionKey,
 			sessionOptions,
 			requestOptions,
 		);
@@ -760,6 +773,7 @@ class S2SAppendSession implements TransportAppendSession {
 		private streamName: string,
 		private getConnection: () => Promise<ClientHttp2Session>,
 		private basinName?: string,
+		private encryptionKey?: Redacted.Redacted<string>,
 		sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
 	) {
@@ -784,6 +798,11 @@ class S2SAppendSession implements TransportAppendSession {
 			// TODO compression
 			accept: "application/protobuf",
 			...(this.basinName ? { "s2-basin": this.basinName } : {}),
+			...(this.encryptionKey
+				? {
+						[S2_ENCRYPTION_KEY_HEADER]: Redacted.value(this.encryptionKey),
+					}
+				: {}),
 		});
 
 		this.http2Stream = stream;

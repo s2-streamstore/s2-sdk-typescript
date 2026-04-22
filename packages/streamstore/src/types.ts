@@ -10,11 +10,18 @@
 
 import { S2Error } from "./error.js";
 import type * as API from "./generated/types.gen.js";
+import type { EncryptionAlgorithm } from "./lib/encryption.js";
 import type { ListAllArgs } from "./lib/paginate.js";
 import {
 	meteredBytes as calculateMeteredBytes,
 	utf8ByteLength,
 } from "./utils.js";
+
+export type {
+	EncryptionAlgorithm,
+	EncryptionKeyInput,
+} from "./lib/encryption.js";
+export { EncryptionKey, EncryptionKeyLengthError } from "./lib/encryption.js";
 
 // =============================================================================
 // Stream Position
@@ -443,6 +450,8 @@ export interface StreamInfo {
 	createdAt: Date;
 	/** Deletion time, if the stream is being deleted. */
 	deletedAt?: Date | null;
+	/** Encryption algorithm for this stream, if encryption is enabled. */
+	cipher?: EncryptionAlgorithm | null;
 }
 
 /**
@@ -582,6 +591,8 @@ export interface ReconfigureBasinInput {
 	createStreamOnRead?: boolean | null;
 	/** Default stream configuration updates. */
 	defaultStreamConfig?: StreamConfig | null;
+	/** Encryption algorithm to apply to newly created streams in this basin. */
+	streamCipher?: EncryptionAlgorithm | null;
 }
 
 // Basin response types (explicit interfaces for documentation)
@@ -608,6 +619,8 @@ export interface BasinConfig {
 	createStreamOnRead?: boolean;
 	/** Default stream configuration. */
 	defaultStreamConfig?: StreamConfig | null;
+	/** Encryption algorithm to apply to newly created streams in this basin. */
+	streamCipher?: EncryptionAlgorithm | null;
 }
 
 /**

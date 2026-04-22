@@ -68,8 +68,8 @@ export type StreamConfig = CamelCaseKeys<API.StreamConfig>;
 /**
  * Stream information.
  *
- * Generated: `created_at`, `deleted_at`
- * SDK: `createdAt`, `deletedAt`
+ * Generated: `created_at`, `deleted_at`, `cipher`
+ * SDK: `createdAt`, `deletedAt`, `cipher`
  */
 export type StreamInfo = CamelCaseKeys<API.StreamInfo>;
 
