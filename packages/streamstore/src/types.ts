@@ -17,7 +17,10 @@ import {
 	utf8ByteLength,
 } from "./utils.js";
 
-export type { EncryptionAlgorithm } from "./lib/encryption.js";
+export type {
+	EncryptionAlgorithm,
+	EncryptionKeyInput,
+} from "./lib/encryption.js";
 export { EncryptionKey } from "./lib/encryption.js";
 
 // =============================================================================

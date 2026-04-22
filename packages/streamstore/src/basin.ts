@@ -1,6 +1,7 @@
 import type { RetryConfig } from "./common.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
+import type { EncryptionKeyInput } from "./lib/encryption.js";
 import { resolveEncryptionKey } from "./lib/encryption.js";
 import * as Redacted from "./lib/redacted.js";
 import {
@@ -83,8 +84,9 @@ export class S2Basin {
 export interface StreamOptions {
 	forceTransport?: SessionTransports;
 	/**
-	 * Base64-encoded customer-supplied encryption key for append/read operations
-	 * on this stream. Use {@link EncryptionKey.fromBytes} to convert raw bytes.
+	 * Customer-supplied encryption key for append/read operations on this stream.
+	 *
+	 * Accepts either base64-encoded key material or raw bytes.
 	 */
-	encryptionKey?: string;
+	encryptionKey?: EncryptionKeyInput;
 }

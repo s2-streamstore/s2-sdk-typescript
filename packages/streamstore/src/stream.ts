@@ -9,6 +9,7 @@ import {
 	toAPIReadQuery,
 } from "./internal/mappers.js";
 import {
+	type EncryptionKeyInput,
 	resolveEncryptionKey,
 	S2_ENCRYPTION_KEY_HEADER,
 } from "./lib/encryption.js";
@@ -101,11 +102,9 @@ export class S2Stream {
 	}
 
 	/**
-	 * Return a new stream handle that sends the supplied base64-encoded encryption
-	 * key on append/read requests. Use {@link EncryptionKey.fromBytes} to convert
-	 * raw bytes.
+	 * Return a new stream handle that sends the supplied encryption key on append/read requests.
 	 */
-	public withEncryptionKey(encryptionKey: string): S2Stream {
+	public withEncryptionKey(encryptionKey: EncryptionKeyInput): S2Stream {
 		return new S2Stream(
 			this.name,
 			this.client,

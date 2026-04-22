@@ -8,15 +8,18 @@ import * as Redacted from "./redacted.js";
 export type EncryptionAlgorithm = "aegis-256" | "aes-256-gcm";
 
 /**
+ * Accepted input for customer-supplied encryption keys.
+ *
+ * - `string`: base64-encoded key material
+ * - `Uint8Array`: raw key material, which will be base64-encoded automatically
+ */
+export type EncryptionKeyInput = string | Uint8Array;
+
+/**
  * Request header used for per-stream append/read encryption keys.
  */
 export const S2_ENCRYPTION_KEY_HEADER = "s2-encryption-key";
 
-/**
- * Maximum length of the base64-encoded encryption key header value.
- *
- * Matches the Rust SDK's `MAX_ENCRYPTION_KEY_HEADER_VALUE_LEN`.
- */
 export const MAX_ENCRYPTION_KEY_HEADER_VALUE_LEN = 44;
 
 function invalidEncryptionKeyLength(length: number): S2Error {
@@ -28,19 +31,15 @@ function invalidEncryptionKeyLength(length: number): S2Error {
 }
 
 /**
- * Helpers for customer-supplied encryption keys.
- *
- * Keys are passed to the SDK as base64-encoded strings. Use {@link fromBytes}
- * to convert raw key material into the base64 form expected by the API.
+ * Helpers for normalizing customer-supplied encryption keys.
  */
 export const EncryptionKey = {
 	/**
-	 * Validate and normalize a base64-encoded encryption key string.
-	 *
-	 * Trims surrounding whitespace and enforces the header length bound.
+	 * Normalize key material into the base64-encoded header form accepted by S2.
 	 */
-	from(value: string): string {
-		const normalized = value.trim();
+	from(value: EncryptionKeyInput): string {
+		const normalized =
+			typeof value === "string" ? value.trim() : encodeToBase64(value);
 
 		if (
 			normalized.length === 0 ||
@@ -51,17 +50,10 @@ export const EncryptionKey = {
 
 		return normalized;
 	},
-
-	/**
-	 * Base64-encode raw key material and validate its length.
-	 */
-	fromBytes(bytes: Uint8Array): string {
-		return EncryptionKey.from(encodeToBase64(bytes));
-	},
 };
 
 export function resolveEncryptionKey(
-	value: string | undefined | null,
+	value: EncryptionKeyInput | undefined | null,
 ): Redacted.Redacted<string> | undefined {
 	if (value === undefined || value === null) {
 		return undefined;

@@ -14,9 +14,10 @@ import * as Redacted from "../lib/redacted.js";
 import { createSessionTransport } from "../lib/stream/factory.js";
 import * as SharedTransport from "../lib/stream/transport/fetch/shared.js";
 import { S2Stream } from "../stream.js";
-import { AppendInput, AppendRecord } from "../types.js";
+import { AppendInput, AppendRecord, EncryptionKey } from "../types.js";
 
 const KEY_B64 = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
+const KEY_BYTES = new Uint8Array([1, 2, 3, 4]);
 
 const makeStream = () =>
 	new S2Stream("events", {} as any, {
@@ -73,14 +74,14 @@ describe("Stream encryption", () => {
 			includeBasinHeader: false,
 		});
 
-		const stream = basin.stream("events", {
-			encryptionKey: ` ${KEY_B64}\n`,
-		});
+		const stream = basin.stream("events", { encryptionKey: KEY_BYTES });
 		await stream.readSession();
 
 		const transportConfig = vi.mocked(createSessionTransport).mock
 			.calls[0]?.[0];
 		expect(transportConfig?.encryptionKey).toBeDefined();
-		expect(Redacted.value(transportConfig!.encryptionKey!)).toBe(KEY_B64);
+		expect(Redacted.value(transportConfig!.encryptionKey!)).toBe(
+			EncryptionKey.from(KEY_BYTES),
+		);
 	});
 });
