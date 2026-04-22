@@ -3,6 +3,7 @@
  */
 
 import createDebug from "debug";
+import { S2Error } from "../error.js";
 
 const debug = createDebug("s2:event-stream");
 
@@ -54,7 +55,17 @@ export class EventStream<T>
 						const match = findBoundary(buffer);
 						if (!match) {
 							const chunk = await upstream.read();
-							if (chunk.done) return downstream.close();
+							if (chunk.done) {
+								if (buffer.length > 0) {
+									throw new S2Error({
+										message: "SSE stream closed with incomplete data remaining",
+										status: 502,
+										code: "STREAM_CLOSED_PREMATURELY",
+										origin: "sdk",
+									});
+								}
+								return downstream.close();
+							}
 							buffer = concatBuffer(buffer, chunk.value);
 							continue;
 						}

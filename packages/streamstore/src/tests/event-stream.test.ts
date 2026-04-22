@@ -153,22 +153,26 @@ describe("EventStream boundary detection (issue #118)", () => {
 			expect(results).toEqual(["line1\nline2"]);
 		});
 
-		it("text without any newlines produces no output", async () => {
+		it("errors when EOF leaves an incomplete message with no newline", async () => {
 			const raw = "data:incomplete";
 			const buf = encoder.encode(raw);
 			const body = streamFromBytes(buf);
 			const stream = new EventStream<string>(body, parseString);
-			const results = await collectStream(stream);
-			expect(results).toEqual([]);
+			await expect(collectStream(stream)).rejects.toMatchObject({
+				code: "STREAM_CLOSED_PREMATURELY",
+				status: 502,
+			});
 		});
 
-		it("single newline at end does not produce a split", async () => {
+		it("errors when EOF leaves a partially framed message", async () => {
 			const raw = "data:incomplete\n";
 			const buf = encoder.encode(raw);
 			const body = streamFromBytes(buf);
 			const stream = new EventStream<string>(body, parseString);
-			const results = await collectStream(stream);
-			expect(results).toEqual([]);
+			await expect(collectStream(stream)).rejects.toMatchObject({
+				code: "STREAM_CLOSED_PREMATURELY",
+				status: 502,
+			});
 		});
 	});
 
@@ -201,6 +205,23 @@ describe("EventStream boundary detection (issue #118)", () => {
 			const stream = new EventStream<string>(body, parseString);
 			const results = await collectStream(stream);
 			expect(results).toEqual(["slow"]);
+		});
+
+		it("does not silently drop buffered data when EOF cuts off a later message", async () => {
+			const first = encoder.encode("data:first\n\n");
+			const second = encoder.encode("data:second");
+			const body = streamFromChunks([first, second]);
+			const stream = new EventStream<string>(body, parseString);
+			const reader = stream.getReader();
+
+			await expect(reader.read()).resolves.toEqual({
+				done: false,
+				value: "first",
+			});
+			await expect(reader.read()).rejects.toMatchObject({
+				code: "STREAM_CLOSED_PREMATURELY",
+				status: 502,
+			});
 		});
 	});
 
