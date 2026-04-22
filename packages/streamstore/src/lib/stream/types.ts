@@ -238,7 +238,7 @@ export interface TransportConfig {
 	/**
 	 * Optional base64-encoded customer-supplied encryption key for data-plane requests.
 	 */
-	encryptionKey?: string;
+	encryptionKey?: Redacted.Redacted<string>;
 	forceTransport?: SessionTransports;
 	/**
 	 * Basin name to include in s2-basin header when using account endpoint

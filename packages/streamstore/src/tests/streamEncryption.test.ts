@@ -77,10 +77,11 @@ describe("Stream encryption", () => {
 		const stream = basin.stream("events", { encryptionKey: KEY_BYTES });
 		await stream.readSession();
 
-		expect(vi.mocked(createSessionTransport)).toHaveBeenCalledWith(
-			expect.objectContaining({
-				encryptionKey: EncryptionKey.from(KEY_BYTES),
-			}),
+		const transportConfig = vi.mocked(createSessionTransport).mock
+			.calls[0]?.[0];
+		expect(transportConfig?.encryptionKey).toBeDefined();
+		expect(Redacted.value(transportConfig!.encryptionKey!)).toBe(
+			EncryptionKey.from(KEY_BYTES),
 		);
 	});
 });

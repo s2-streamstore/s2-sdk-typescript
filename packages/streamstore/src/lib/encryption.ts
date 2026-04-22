@@ -1,5 +1,6 @@
 import { S2Error } from "../error.js";
 import { encodeToBase64 } from "./base64.js";
+import * as Redacted from "./redacted.js";
 
 /**
  * Encryption algorithm for basin-level default stream encryption.
@@ -58,10 +59,10 @@ export const EncryptionKey = {
 
 export function resolveEncryptionKey(
 	value: EncryptionKeyInput | undefined | null,
-): string | undefined {
+): Redacted.Redacted<string> | undefined {
 	if (value === undefined || value === null) {
 		return undefined;
 	}
 
-	return EncryptionKey.from(value);
+	return Redacted.make(EncryptionKey.from(value));
 }

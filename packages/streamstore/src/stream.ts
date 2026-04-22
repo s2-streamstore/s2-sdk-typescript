@@ -13,6 +13,7 @@ import {
 	resolveEncryptionKey,
 	S2_ENCRYPTION_KEY_HEADER,
 } from "./lib/encryption.js";
+import * as Redacted from "./lib/redacted.js";
 import { withRetries } from "./lib/retry.js";
 import { createSessionTransport } from "./lib/stream/factory.js";
 import {
@@ -95,7 +96,7 @@ export class S2Stream {
 			...requestOptions,
 			headers: {
 				...(requestOptions.headers ?? {}),
-				[S2_ENCRYPTION_KEY_HEADER]: encryptionKey,
+				[S2_ENCRYPTION_KEY_HEADER]: Redacted.value(encryptionKey),
 			},
 		};
 	}

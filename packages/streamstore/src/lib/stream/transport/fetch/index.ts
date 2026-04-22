@@ -392,7 +392,9 @@ export class FetchAppendSession implements TransportAppendSession {
 			headers["s2-basin"] = transportConfig.basinName;
 		}
 		if (transportConfig.encryptionKey) {
-			headers[S2_ENCRYPTION_KEY_HEADER] = transportConfig.encryptionKey;
+			headers[S2_ENCRYPTION_KEY_HEADER] = Redacted.value(
+				transportConfig.encryptionKey,
+			);
 		}
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
@@ -638,7 +640,7 @@ export class FetchTransport implements SessionTransport {
 			headers["s2-basin"] = config.basinName;
 		}
 		if (config.encryptionKey) {
-			headers[S2_ENCRYPTION_KEY_HEADER] = config.encryptionKey;
+			headers[S2_ENCRYPTION_KEY_HEADER] = Redacted.value(config.encryptionKey);
 		}
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
