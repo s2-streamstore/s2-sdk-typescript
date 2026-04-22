@@ -14,7 +14,7 @@ describe("EncryptionKey", () => {
 	});
 
 	it("encodes raw key material as base64", () => {
-		expect(EncryptionKey.from(KEY_BYTES)).toBe(KEY_B64);
+		expect(EncryptionKey.fromBytes(KEY_BYTES)).toBe(KEY_B64);
 	});
 
 	it("rejects empty and oversized header values", () => {

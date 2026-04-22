@@ -55,7 +55,6 @@ export type {
 	DeleteOnEmptyConfig,
 	DeleteStreamInput,
 	EncryptionAlgorithm,
-	EncryptionKeyInput,
 	GaugeMetric,
 	GetBasinConfigInput,
 	GetStreamConfigInput,

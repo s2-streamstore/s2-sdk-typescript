@@ -8,14 +8,6 @@ import * as Redacted from "./redacted.js";
 export type EncryptionAlgorithm = "aegis-256" | "aes-256-gcm";
 
 /**
- * Accepted input for customer-supplied encryption keys.
- *
- * - `string`: base64-encoded key material
- * - `Uint8Array`: raw key material, which will be base64-encoded automatically
- */
-export type EncryptionKeyInput = string | Uint8Array;
-
-/**
  * Request header used for per-stream append/read encryption keys.
  */
 export const S2_ENCRYPTION_KEY_HEADER = "s2-encryption-key";
@@ -36,15 +28,19 @@ function invalidEncryptionKeyLength(length: number): S2Error {
 }
 
 /**
- * Helpers for normalizing customer-supplied encryption keys.
+ * Helpers for customer-supplied encryption keys.
+ *
+ * Keys are passed to the SDK as base64-encoded strings. Use {@link fromBytes}
+ * to convert raw key material into the base64 form expected by the API.
  */
 export const EncryptionKey = {
 	/**
-	 * Normalize key material into the base64-encoded header form accepted by S2.
+	 * Validate and normalize a base64-encoded encryption key string.
+	 *
+	 * Trims surrounding whitespace and enforces the header length bound.
 	 */
-	from(value: EncryptionKeyInput): string {
-		const normalized =
-			typeof value === "string" ? value.trim() : encodeToBase64(value);
+	from(value: string): string {
+		const normalized = value.trim();
 
 		if (
 			normalized.length === 0 ||
@@ -55,10 +51,17 @@ export const EncryptionKey = {
 
 		return normalized;
 	},
+
+	/**
+	 * Base64-encode raw key material and validate its length.
+	 */
+	fromBytes(bytes: Uint8Array): string {
+		return EncryptionKey.from(encodeToBase64(bytes));
+	},
 };
 
 export function resolveEncryptionKey(
-	value: EncryptionKeyInput | undefined | null,
+	value: string | undefined | null,
 ): Redacted.Redacted<string> | undefined {
 	if (value === undefined || value === null) {
 		return undefined;
