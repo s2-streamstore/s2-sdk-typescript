@@ -1107,6 +1107,11 @@ export type ReadData = {
          * Use `base64` for safe transmission with efficient storage of binary data.
          */
         's2-format'?: Format;
+        /**
+         * Encryption key material for append and read operations.
+         * Provide base64-encoded key when stream encryption is enabled.
+         */
+        's2-encryption-key'?: string;
     };
     path: {
         /**
@@ -1183,6 +1188,11 @@ export type AppendData = {
          * Use `base64` for safe transmission with efficient storage of binary data.
          */
         's2-format'?: Format;
+        /**
+         * Encryption key material for append and read operations.
+         * Provide base64-encoded key when stream encryption is enabled.
+         */
+        's2-encryption-key'?: string;
     };
     path: {
         /**
