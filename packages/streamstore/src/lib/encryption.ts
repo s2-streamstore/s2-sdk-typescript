@@ -8,7 +8,7 @@ import * as Redacted from "./redacted.js";
 export type EncryptionAlgorithm = "aegis-256" | "aes-256-gcm";
 
 /**
- * Accepted input for customer-supplied encryption keys.
+ * Accepted input for client-supplied encryption keys.
  *
  * - `string`: base64-encoded key material
  * - `Uint8Array`: raw key material, which will be base64-encoded automatically
@@ -36,7 +36,7 @@ export class EncryptionKeyLengthError extends S2Error {
 }
 
 /**
- * Helpers for normalizing customer-supplied encryption keys.
+ * Helpers for normalizing client-supplied encryption keys.
  */
 export const EncryptionKey = {
 	/**
