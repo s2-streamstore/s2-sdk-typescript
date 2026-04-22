@@ -421,8 +421,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						...(basinName ? { "s2-basin": basinName } : {}),
 						...(encryptionKey
 							? {
-									[S2_ENCRYPTION_KEY_HEADER]:
-										Redacted.value(encryptionKey),
+									[S2_ENCRYPTION_KEY_HEADER]: Redacted.value(encryptionKey),
 								}
 							: {}),
 					});
