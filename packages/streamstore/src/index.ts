@@ -105,6 +105,7 @@ export {
 	AppendInput,
 	AppendRecord,
 	EncryptionKey,
+	EncryptionKeyLengthError,
 	MAX_APPEND_BYTES,
 	MAX_APPEND_RECORDS,
 } from "./types.js";

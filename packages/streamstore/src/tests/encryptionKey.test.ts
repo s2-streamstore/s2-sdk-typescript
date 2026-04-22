@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { S2Error } from "../error.js";
-import { EncryptionKey } from "../index.js";
+import { EncryptionKey, EncryptionKeyLengthError } from "../index.js";
 
 const KEY_B64 = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
 const KEY_BYTES = new Uint8Array([
@@ -18,7 +18,9 @@ describe("EncryptionKey", () => {
 	});
 
 	it("rejects empty and oversized header values", () => {
-		expect(() => EncryptionKey.from("   ")).toThrowError(S2Error);
+		expect(() => EncryptionKey.from("   ")).toThrowError(
+			EncryptionKeyLengthError,
+		);
 		expect(() => EncryptionKey.from("   ")).toThrow(/length 0 is out of range/);
 		expect(() => EncryptionKey.from("A".repeat(45))).toThrow(
 			/length 45 is out of range/,
@@ -30,9 +32,12 @@ describe("EncryptionKey", () => {
 			EncryptionKey.from("   ");
 			throw new Error("expected EncryptionKey.from() to throw");
 		} catch (error) {
+			expect(error).toBeInstanceOf(EncryptionKeyLengthError);
 			expect(error).toBeInstanceOf(S2Error);
 			expect(error).toMatchObject({
-				message: "invalid encryption key: key material length 0 is out of range",
+				message:
+					"invalid encryption key: key material length 0 is out of range",
+				length: 0,
 				origin: "sdk",
 				status: 0,
 			});

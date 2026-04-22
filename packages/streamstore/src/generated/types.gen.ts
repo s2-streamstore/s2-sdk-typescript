@@ -479,6 +479,10 @@ export type StreamInfo = {
      */
     deleted_at?: string | null;
     /**
+     * Encryption algorithm for this stream, if encryption is enabled.
+     */
+    cipher?: null | EncryptionAlgorithm;
+    /**
      * Stream name.
      */
     name: StreamNameStr;

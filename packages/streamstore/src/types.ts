@@ -21,7 +21,7 @@ export type {
 	EncryptionAlgorithm,
 	EncryptionKeyInput,
 } from "./lib/encryption.js";
-export { EncryptionKey } from "./lib/encryption.js";
+export { EncryptionKey, EncryptionKeyLengthError } from "./lib/encryption.js";
 
 // =============================================================================
 // Stream Position
@@ -450,6 +450,8 @@ export interface StreamInfo {
 	createdAt: Date;
 	/** Deletion time, if the stream is being deleted. */
 	deletedAt?: Date | null;
+	/** Encryption algorithm for this stream, if encryption is enabled. */
+	cipher?: EncryptionAlgorithm | null;
 }
 
 /**

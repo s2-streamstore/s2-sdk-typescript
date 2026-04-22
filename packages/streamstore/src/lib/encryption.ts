@@ -22,11 +22,17 @@ export const S2_ENCRYPTION_KEY_HEADER = "s2-encryption-key";
 
 export const MAX_ENCRYPTION_KEY_HEADER_VALUE_LEN = 44;
 
-function invalidEncryptionKeyLength(length: number): S2Error {
-	return new S2Error({
-		message: `invalid encryption key: key material length ${length} is out of range`,
-		origin: "sdk",
-	});
+export class EncryptionKeyLengthError extends S2Error {
+	public readonly length: number;
+
+	constructor(length: number) {
+		super({
+			message: `invalid encryption key: key material length ${length} is out of range`,
+			origin: "sdk",
+		});
+		this.length = length;
+		this.name = "EncryptionKeyLengthError";
+	}
 }
 
 /**
@@ -44,7 +50,7 @@ export const EncryptionKey = {
 			normalized.length === 0 ||
 			normalized.length > MAX_ENCRYPTION_KEY_HEADER_VALUE_LEN
 		) {
-			throw invalidEncryptionKeyLength(normalized.length);
+			throw new EncryptionKeyLengthError(normalized.length);
 		}
 
 		return normalized;
