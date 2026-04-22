@@ -1,6 +1,6 @@
 {
   "name": "@s2-dev/resumable-stream",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Resumable streams based on s2.dev, inspired by Vercel's implementation.",
   "license": "MIT",
   "type": "module",

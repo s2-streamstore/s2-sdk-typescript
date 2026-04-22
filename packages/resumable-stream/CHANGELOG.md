@@ -1,5 +1,11 @@
 # @s2-dev/resumable-stream
 
+## 2.0.1
+
+### Patch Changes
+
+- 62698b8: Update readme
+
 ## 2.0.0
 
 ### Major Changes
