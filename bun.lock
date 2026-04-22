@@ -20,7 +20,7 @@
     },
     "packages/patterns": {
       "name": "@s2-dev/streamstore-patterns",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "dependencies": {
         "nanoid": "^3.3.11",
       },
@@ -37,13 +37,13 @@
     },
     "packages/resumable-stream": {
       "name": "@s2-dev/resumable-stream",
-      "version": "1.10.1",
+      "version": "2.0.0",
       "devDependencies": {
         "ai": "^6.0.142",
       },
       "peerDependencies": {
         "@s2-dev/streamstore": ">=0.21.0",
-        "ai": ">=4.0.0",
+        "ai": ">=5.0.0",
       },
       "optionalPeers": [
         "ai",
@@ -51,7 +51,7 @@
     },
     "packages/streamstore": {
       "name": "@s2-dev/streamstore",
-      "version": "0.22.8",
+      "version": "0.22.10",
       "dependencies": {
         "@protobuf-ts/runtime": "^2.11.1",
         "debug": "^4.4.3",
