@@ -1,5 +1,19 @@
 # @s2-dev/streamstore
 
+## 0.23.0
+
+### Minor Changes
+
+- cdc822c: - Add stream encryption support to `@s2-dev/streamstore`, including
+  `EncryptionKey`, `EncryptionAlgorithm`, and `EncryptionKeyInput`,
+  per-stream encryption keys via `basin.stream({ encryptionKey })` and
+  - `stream.withEncryptionKey()`, and basin-level `streamCipher`
+    configuration.
+
+### Patch Changes
+
+- e17c444: Treat truncated fetch SSE reads as retryable errors instead of silently ending the read session.
+
 ## 0.22.10
 
 ### Patch Changes
