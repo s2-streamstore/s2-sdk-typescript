@@ -761,16 +761,10 @@ async function* readS2SessionEventsFromStream({
 	}
 }
 
-function s2SessionRecordsToSseResponse(
-	source: AsyncIterable<S2SessionRecord>,
-): Response {
-	return jsonSseResponseFromValues(source);
-}
-
 export function sessionRecordsToSseResponse(
 	source: AsyncIterable<S2SessionRecord>,
 ): Response {
-	return s2SessionRecordsToSseResponse(source);
+	return jsonSseResponseFromValues(source);
 }
 
 export async function* readS2SessionSseResponse(
@@ -1364,7 +1358,7 @@ export function createS2SessionHandler(
 			);
 			const live = url.searchParams.get("live") !== "false";
 			const stream = getStream(streamName);
-			return s2SessionRecordsToSseResponse(
+			return jsonSseResponseFromValues(
 				readS2SessionEventsFromStream({
 					stream,
 					fromSeqNum,
