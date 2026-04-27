@@ -24,6 +24,7 @@ The package exposes two entry points:
 
 - **`@s2-dev/resumable-stream`**: a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams or anything that isn't AI SDK.
 - **`@s2-dev/resumable-stream/aisdk`**: a thin helper over `UIMessageChunk` streams for the AI SDK's `useChat`. See the [AI SDK section](#ai-sdk) below.
+- **`@s2-dev/resumable-stream/tanstack-ai`**: a thin helper over TanStack AI `StreamChunk` streams. See the [TanStack AI section](#tanstack-ai) below.
 
 ### Generic resumer
 
@@ -158,3 +159,48 @@ export default function Chat() {
   return null;
 }
 ```
+
+## TanStack AI
+
+The `./tanstack-ai` subpath has two layers:
+
+- `createResumableGeneration()` makes a single TanStack AI `StreamChunk` generation resumable through S2.
+- `createS2SessionHandler()` and `createS2Connection()` implement an S2 session log: append new user messages, tail assistant events from a `seqNum`, and materialize message history plus the next resume coordinate with `snapshot()`.
+
+```ts
+import { chat } from "@tanstack/ai";
+import { openaiText } from "@tanstack/ai-openai";
+import {
+  createS2Connection,
+  createS2SessionHandler,
+} from "@s2-dev/resumable-stream/tanstack-ai";
+
+const handler = createS2SessionHandler({
+  accessToken: process.env.S2_ACCESS_TOKEN!,
+  basin: process.env.S2_BASIN!,
+  async produce({ messages }) {
+    return chat({
+      adapter: openaiText("gpt-4o-mini"),
+      messages,
+    });
+  },
+});
+
+export async function POST(req: Request) {
+  // Appends new user messages and starts a background model run.
+  return handler.POST(req);
+}
+
+export async function GET(req: Request) {
+  // Tails session events from ?streamName=...&fromSeqNum=...
+  return handler.GET(req);
+}
+
+export const connection = createS2Connection({
+  appendUrl: "/api/chat/append",
+  tailUrl: "/api/chat/tail",
+  streamName: "tanstack-ai/session-1",
+});
+```
+
+The session stream stores user messages, run starts, assistant chunks, run finishes, and run errors as ordered S2 records. A runnable browser chat example lives in [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat). It uses a local fallback stream by default, or a real TanStack AI + OpenAI stream when `OPENAI_API_KEY` is set and `@tanstack/ai @tanstack/ai-openai` are installed.
