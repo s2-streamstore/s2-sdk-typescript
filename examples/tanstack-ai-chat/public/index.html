@@ -304,16 +304,10 @@
       if (!response.ok) throw new Error(await responseErrorMessage(response));
 
       for await (const record of readSessionEvents(response)) {
-        const event = record.event;
-        if (!event || event.runId !== runId) continue;
-        if (event.kind === "chunk") {
-          applyChunk(bubble, event.chunk);
-        }
-        if (event.kind === "run-error") {
-          applyChunk(bubble, event.chunk);
-          break;
-        }
-        if (event.kind === "run-finish") {
+        const chunk = record.chunk;
+        if (!chunk || chunk.runId !== runId) continue;
+        applyChunk(bubble, chunk);
+        if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR") {
           break;
         }
       }

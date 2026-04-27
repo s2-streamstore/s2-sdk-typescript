@@ -140,21 +140,54 @@ async function createStream(
 	}) as AsyncIterable<StreamChunk>;
 }
 
-function activeRunId(events: S2SessionRecord[]): string | null {
+function reduceTextMessages(records: S2SessionRecord[]): ChatMessage[] {
+	const messages: ChatMessage[] = [];
+	const messageById = new Map<string, ChatMessage>();
+	for (const { chunk } of records) {
+		if (typeof chunk.messageId !== "string") continue;
+		const messageId = chunk.messageId;
+		if (chunk.type === "TEXT_MESSAGE_START") {
+			const message: ChatMessage = {
+				id: messageId,
+				role: typeof chunk.role === "string" ? chunk.role : "assistant",
+				content: "",
+			};
+			messageById.set(messageId, message);
+			messages.push(message);
+			continue;
+		}
+		if (chunk.type === "TEXT_MESSAGE_CONTENT") {
+			let message = messageById.get(messageId);
+			if (!message) {
+				message = { id: messageId, role: "assistant", content: "" };
+				messageById.set(messageId, message);
+				messages.push(message);
+			}
+			if (typeof chunk.delta === "string") {
+				message.content = `${String(message.content ?? "")}${chunk.delta}`;
+			}
+		}
+	}
+	return messages;
+}
+
+function activeRunId(records: S2SessionRecord[]): string | null {
 	const active = new Set<string>();
 	let latest: string | null = null;
-	for (const { event } of events) {
-		if (event.kind === "run-start") {
-			active.add(event.runId);
-			latest = event.runId;
+	for (const { chunk } of records) {
+		const runId = typeof chunk.runId === "string" ? chunk.runId : null;
+		if (!runId) continue;
+		if (chunk.type === "RUN_STARTED") {
+			active.add(runId);
+			latest = runId;
+			continue;
 		}
-		if (event.kind === "chunk") {
-			latest = event.runId;
+		if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR") {
+			active.delete(runId);
+			if (latest === runId) latest = null;
+			continue;
 		}
-		if (event.kind === "run-finish" || event.kind === "run-error") {
-			active.delete(event.runId);
-			if (latest === event.runId) latest = null;
-		}
+		latest = runId;
 	}
 	return latest && active.has(latest) ? latest : null;
 }
@@ -189,7 +222,7 @@ async function snapshotForStream(streamName: string) {
 		return await handler.snapshot(streamName);
 	} catch (error) {
 		if (isStreamNotFound(error)) {
-			return { messages: [], events: [], nextSeqNum: 0 };
+			return { records: [], nextSeqNum: 0 };
 		}
 		throw error;
 	}
@@ -210,7 +243,8 @@ async function handleSnapshot(chatId: string): Promise<Response> {
 	const snapshot = await snapshotForStream(streamName);
 	return Response.json({
 		streamName,
-		activeRunId: activeRunId(snapshot.events),
+		activeRunId: activeRunId(snapshot.records),
+		messages: reduceTextMessages(snapshot.records),
 		...snapshot,
 	});
 }
@@ -226,7 +260,7 @@ async function handleChat(request: Request): Promise<Response> {
 	const streamName = streamNameForChat(body.id);
 	await ensureStreamExists(streamName);
 	const snapshot = await snapshotForStream(streamName);
-	const messages = [...snapshot.messages, body.message];
+	const messages = [...reduceTextMessages(snapshot.records), body.message];
 
 	return handler.POST(
 		new Request(request.url, {

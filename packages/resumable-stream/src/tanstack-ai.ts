@@ -1,5 +1,4 @@
 import type {
-	AppendAck,
 	ReadInput,
 	ReadRecord,
 	S2Endpoints,
@@ -8,9 +7,11 @@ import type {
 	StreamPosition,
 } from "@s2-dev/streamstore";
 import {
-	AppendInput,
 	AppendRecord,
+	BatchTransform,
 	FencingTokenMismatchError,
+	Producer,
+	type RecordSubmitTicket,
 	randomToken,
 	S2,
 	SeqNumMismatchError,
@@ -25,9 +26,6 @@ const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
 const DEFAULT_LEASE_DURATION_MS = 5 * 1000;
 const DEFAULT_ERROR_TEXT = "An error occurred.";
-const DEFAULT_SESSION_READ_BATCH_SIZE = 1000;
-const SESSION_EVENT_CONTENT_TYPE =
-	"application/vnd.s2.tanstack-ai-session+json";
 
 type SseEncodeOptions = { doneMarker?: boolean };
 type SseReadOptions = { stopOnDone?: boolean };
@@ -49,10 +47,14 @@ export const SSE_HEADERS = {
  *
  * This package intentionally does not import `@tanstack/ai` at runtime. The
  * actual `StreamChunk` type from TanStack AI is structurally assignable here.
+ *
+ * When persisted to S2, every chunk carries a `runId` so the same stream can
+ * hold multiple runs and consumers can filter by the run they started.
  */
 export type StreamChunk = {
 	type: string;
 	timestamp?: number;
+	runId?: string;
 	[key: string]: unknown;
 };
 
@@ -62,50 +64,15 @@ export type FetchClient = (
 	init?: RequestInit,
 ) => Promise<Response>;
 
-export type S2SessionEvent =
-	| {
-			kind: "message";
-			message: ChatMessage;
-			messageId?: string;
-			runId?: string;
-			timestamp: string;
-	  }
-	| {
-			kind: "run-start";
-			runId: string;
-			data?: Record<string, unknown>;
-			timestamp: string;
-	  }
-	| {
-			kind: "chunk";
-			runId: string;
-			chunk: StreamChunk;
-			timestamp: string;
-	  }
-	| {
-			kind: "run-finish";
-			runId: string;
-			timestamp: string;
-	  }
-	| {
-			kind: "run-error";
-			runId: string;
-			error: { message: string };
-			chunk: StreamChunk;
-			timestamp: string;
-	  };
-
 export interface S2SessionRecord {
 	seqNum: number;
 	timestamp: string;
-	event: S2SessionEvent;
+	chunk: StreamChunk;
 }
 
 export interface S2SessionSnapshot {
-	messages: ChatMessage[];
-	events: S2SessionRecord[];
+	records: S2SessionRecord[];
 	nextSeqNum: number;
-	tail?: StreamPosition;
 }
 
 export interface Connection {
@@ -141,7 +108,7 @@ export interface ResumableGenerationConfig {
 	 */
 	leaseDurationMs?: number;
 	/**
-	 * Maps an upstream error to the message carried by a `RUN_ERROR` event.
+	 * Maps an upstream error to the message carried by a `RUN_ERROR` chunk.
 	 *
 	 * @default () => "An error occurred."
 	 */
@@ -212,6 +179,59 @@ export interface HttpSessionHandler {
 	replay(streamName: string): Promise<Response>;
 }
 
+export interface S2ConnectionOptions {
+	appendUrl: string | (() => string);
+	tailUrl: string | (() => string);
+	headers?: HeadersInit | (() => HeadersInit);
+	fetchClient?: FetchClient;
+	streamName?: ConnectionStreamName;
+	/**
+	 * Sequence number already materialized during SSR/hydration.
+	 * Tailing starts at this point after appending a new message.
+	 */
+	initialSeqNum?: number;
+	live?: boolean;
+}
+
+export interface S2SessionHandlerConfig extends ResumableGenerationConfig {
+	getStream?: (streamName: string) => S2Stream;
+	resolveStreamName?: (context: {
+		request: Request;
+		body?: SessionRequestBody;
+	}) => string | Promise<string>;
+	selectNewMessages?: (context: {
+		body: SessionRequestBody;
+		messages: ChatMessage[];
+	}) => ChatMessage[];
+	/**
+	 * Maps a chat message to the TanStack AI chunks that should be persisted
+	 * for it. Defaults to `TEXT_MESSAGE_START` + `TEXT_MESSAGE_CONTENT` +
+	 * `TEXT_MESSAGE_END` carrying the message's role and content.
+	 */
+	messageToChunks?: (
+		message: ChatMessage,
+		context: { runId: string },
+	) => StreamChunk[];
+	produce: (context: {
+		request: Request;
+		body: SessionRequestBody;
+		messages: ChatMessage[];
+		newMessages: ChatMessage[];
+		data?: Record<string, unknown>;
+		streamName: string;
+		sessionId?: string;
+		runId: string;
+		abortSignal: AbortSignal;
+	}) => AsyncIterable<StreamChunk> | Promise<AsyncIterable<StreamChunk>>;
+}
+
+export interface S2SessionHandler {
+	handle(request: Request, options?: MakeResumableOptions): Promise<Response>;
+	POST(request: Request, options?: MakeResumableOptions): Promise<Response>;
+	GET(request: Request): Promise<Response>;
+	snapshot(streamName: string): Promise<S2SessionSnapshot>;
+}
+
 async function* readableToAsyncIterable<T>(
 	rs: ReadableStream<T>,
 ): AsyncIterable<T> {
@@ -252,93 +272,79 @@ function asyncIterableToReadableStream<T>(
 	});
 }
 
-function makeErrorChunk(
+function makeRunErrorChunk(
+	runId: string | undefined,
 	err: unknown,
 	onError?: (error: unknown) => string,
 ): StreamChunk {
 	const message = onError ? onError(err) : DEFAULT_ERROR_TEXT;
-	return {
+	const chunk: StreamChunk = {
 		type: "RUN_ERROR",
 		timestamp: Date.now(),
 		error: { message },
 	};
+	if (runId !== undefined) {
+		chunk.runId = runId;
+	}
+	return chunk;
 }
 
-function errorMessageFromChunk(chunk: StreamChunk): string {
-	return typeof chunk.error === "object" &&
-		chunk.error !== null &&
-		"message" in chunk.error &&
-		typeof chunk.error.message === "string"
-		? chunk.error.message
-		: DEFAULT_ERROR_TEXT;
+function makeRunStartedChunk(runId: string): StreamChunk {
+	return { type: "RUN_STARTED", timestamp: Date.now(), runId };
 }
 
-function makeRunErrorSessionEvent(
-	runId: string,
-	error: unknown,
-	onError?: (error: unknown) => string,
-): Extract<S2SessionEvent, { kind: "run-error" }> {
-	const chunk = makeErrorChunk(error, onError);
+function makeRunFinishedChunk(runId: string): StreamChunk {
+	return { type: "RUN_FINISHED", timestamp: Date.now(), runId };
+}
+
+function defaultMessageToChunks(
+	message: ChatMessage,
+	{ runId }: { runId: string },
+): StreamChunk[] {
+	const messageId =
+		typeof message.id === "string" ? message.id : `msg-${randomToken(8)}`;
+	const role = typeof message.role === "string" ? message.role : "user";
+	const content = String(message.content ?? "");
+	const timestamp = Date.now();
+	return [
+		{ type: "TEXT_MESSAGE_START", timestamp, messageId, role, runId },
+		{
+			type: "TEXT_MESSAGE_CONTENT",
+			timestamp,
+			messageId,
+			delta: content,
+			runId,
+		},
+		{ type: "TEXT_MESSAGE_END", timestamp, messageId, runId },
+	];
+}
+
+function chunkWithRunId(chunk: StreamChunk, runId: string): StreamChunk {
+	return chunk.runId === runId ? chunk : { ...chunk, runId };
+}
+
+function chunkToAppendRecord(chunk: StreamChunk): AppendRecord {
+	return AppendRecord.string({ body: JSON.stringify(chunk) });
+}
+
+export function readRecordToS2SessionRecord(
+	record: ReadRecord<"string">,
+): S2SessionRecord {
+	const chunk = JSON.parse(record.body) as StreamChunk;
+	if (
+		typeof chunk !== "object" ||
+		chunk === null ||
+		typeof chunk.type !== "string"
+	) {
+		throw new TypeError(
+			"S2 session record must encode a StreamChunk with a string `type`.",
+		);
+	}
 	return {
-		kind: "run-error",
-		runId,
-		error: { message: errorMessageFromChunk(chunk) },
+		seqNum: record.seqNum,
+		timestamp: record.timestamp.toISOString(),
 		chunk,
-		timestamp: nowIso(),
 	};
-}
-
-export interface S2ConnectionOptions {
-	appendUrl: string | (() => string);
-	tailUrl: string | (() => string);
-	headers?: HeadersInit | (() => HeadersInit);
-	fetchClient?: FetchClient;
-	streamName?: ConnectionStreamName;
-	/**
-	 * Sequence number already materialized during SSR/hydration.
-	 * Tailing starts at this point after appending a new message.
-	 */
-	initialSeqNum?: number;
-	live?: boolean;
-}
-
-export interface S2SessionHandlerConfig extends ResumableGenerationConfig {
-	getStream?: (streamName: string) => S2Stream;
-	resolveStreamName?: (context: {
-		request: Request;
-		body?: SessionRequestBody;
-	}) => string | Promise<string>;
-	selectNewMessages?: (context: {
-		body: SessionRequestBody;
-		messages: ChatMessage[];
-	}) => ChatMessage[];
-	produce: (context: {
-		request: Request;
-		body: SessionRequestBody;
-		messages: ChatMessage[];
-		newMessages: ChatMessage[];
-		data?: Record<string, unknown>;
-		streamName: string;
-		sessionId?: string;
-		runId: string;
-		abortSignal: AbortSignal;
-	}) => AsyncIterable<StreamChunk> | Promise<AsyncIterable<StreamChunk>>;
-}
-
-export interface S2SessionHandler {
-	handle(request: Request, options?: MakeResumableOptions): Promise<Response>;
-	POST(request: Request, options?: MakeResumableOptions): Promise<Response>;
-	GET(request: Request): Promise<Response>;
-	snapshot(streamName: string): Promise<S2SessionSnapshot>;
-}
-
-function makeErrorChunkRecord(
-	err: unknown,
-	onError?: (error: unknown) => string,
-): AppendRecord {
-	return AppendRecord.string({
-		body: JSON.stringify(makeErrorChunk(err, onError)),
-	});
 }
 
 function sseResponseFromSerializedJson(
@@ -532,14 +538,6 @@ function parseS2AppendResponse(value: unknown): {
 	};
 }
 
-function nowIso(): string {
-	return new Date().toISOString();
-}
-
-function delay(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function defaultSelectNewMessages({
 	messages,
 }: {
@@ -549,215 +547,32 @@ function defaultSelectNewMessages({
 	return latest ? [latest] : [];
 }
 
-export function encodeS2SessionEvent(event: S2SessionEvent): string {
-	return JSON.stringify(event);
-}
-
-export function decodeS2SessionEvent(value: string): S2SessionEvent {
-	const parsed = JSON.parse(value) as S2SessionEvent;
-	if (typeof parsed !== "object" || parsed === null || !("kind" in parsed)) {
-		throw new TypeError("S2 session event must be an object.");
-	}
-	if (
-		parsed.kind !== "message" &&
-		parsed.kind !== "run-start" &&
-		parsed.kind !== "chunk" &&
-		parsed.kind !== "run-finish" &&
-		parsed.kind !== "run-error"
-	) {
-		throw new TypeError("Unknown S2 session event kind.");
-	}
-	return parsed;
-}
-
-export function s2SessionEventToRecord(event: S2SessionEvent): AppendRecord {
-	return AppendRecord.string({
-		body: encodeS2SessionEvent(event),
-		headers: [["content-type", SESSION_EVENT_CONTENT_TYPE]],
-		timestamp: new Date(event.timestamp),
-	});
-}
-
-export function readRecordToS2SessionRecord(
-	record: ReadRecord<"string">,
-): S2SessionRecord {
-	return {
-		seqNum: record.seqNum,
-		timestamp: record.timestamp.toISOString(),
-		event: decodeS2SessionEvent(record.body),
-	};
-}
-
-async function appendS2SessionEvents(
-	stream: S2Stream,
-	events: ReadonlyArray<S2SessionEvent>,
-): Promise<AppendAck> {
-	if (events.length === 0) {
-		throw new TypeError("appendS2SessionEvents requires events.");
-	}
-	return await stream.append(
-		AppendInput.create(events.map((event) => s2SessionEventToRecord(event))),
-	);
-}
-
-async function persistS2Run({
-	stream,
-	runId,
-	source,
-	onError,
-	batchSize,
-	lingerDuration,
-}: {
-	stream: S2Stream;
-	runId: string;
-	source: AsyncIterable<StreamChunk>;
-	onError?: (error: unknown) => string;
-	batchSize: number;
-	lingerDuration: number;
-}): Promise<void> {
-	for await (const events of s2RunEventBatches({
-		runId,
-		source,
-		onError,
-		batchSize,
-		lingerDuration,
-	})) {
-		await appendS2SessionEvents(stream, events);
-	}
-}
-
-async function* s2RunEventBatches({
-	runId,
-	source,
-	onError,
-	batchSize,
-	lingerDuration,
-}: {
-	runId: string;
-	source: AsyncIterable<StreamChunk>;
-	onError?: (error: unknown) => string;
-	batchSize: number;
-	lingerDuration: number;
-}): AsyncIterable<ReadonlyArray<S2SessionEvent>> {
-	const iterator = source[Symbol.asyncIterator]();
-	const maxBatchSize = Math.max(1, batchSize);
-	const flushDelay = Math.max(0, lingerDuration);
-	let pending: S2SessionEvent[] = [];
-	let nextPromise: Promise<IteratorResult<StreamChunk>> | undefined;
-	let sourceDone = false;
-
-	const takePending = () => {
-		const batch = pending;
-		pending = [];
-		return batch;
-	};
-
-	const nextChunk = () => {
-		nextPromise ??= iterator.next();
-		return nextPromise;
-	};
-
-	const takeNextChunk = async () => {
-		const result = await nextChunk();
-		nextPromise = undefined;
-		return result;
-	};
-
-	try {
-		while (true) {
-			let result: IteratorResult<StreamChunk>;
-			if (pending.length === 0 || flushDelay === 0) {
-				result = await takeNextChunk();
-			} else {
-				const next = await Promise.race([
-					nextChunk().then((result) => ({ type: "next" as const, result })),
-					delay(flushDelay).then(() => ({ type: "flush" as const })),
-				]);
-				if (next.type === "flush") {
-					yield takePending();
-					continue;
-				}
-				nextPromise = undefined;
-				result = next.result;
-			}
-
-			if (result.done) {
-				sourceDone = true;
-				break;
-			}
-
-			pending.push({
-				kind: "chunk",
-				runId,
-				chunk: result.value,
-				timestamp: nowIso(),
-			});
-			if (pending.length >= maxBatchSize || flushDelay === 0) {
-				yield takePending();
-			}
-		}
-
-		pending.push({ kind: "run-finish", runId, timestamp: nowIso() });
-		yield takePending();
-	} catch (error) {
-		pending.push(makeRunErrorSessionEvent(runId, error, onError));
-		yield takePending();
-		throw error;
-	} finally {
-		if (!sourceDone) {
-			await iterator.return?.().catch(() => {});
-		}
-	}
-}
-
-async function* readS2SessionEventsFromStream({
+async function* readS2SessionRecordsFromStream({
 	stream,
 	fromSeqNum = 0,
 	live = true,
-	batchSize = DEFAULT_SESSION_READ_BATCH_SIZE,
 }: {
 	stream: S2Stream;
 	fromSeqNum?: number;
 	live?: boolean;
-	batchSize?: number;
 }): AsyncIterable<S2SessionRecord> {
-	if (live) {
-		const session = await stream.readSession(
-			{
-				start: { from: { seqNum: fromSeqNum }, clamp: true },
-				ignoreCommandRecords: true,
-			},
-			{ as: "string" },
-		);
-		try {
-			for await (const record of session) {
-				yield readRecordToS2SessionRecord(record);
-			}
-		} finally {
-			await session[Symbol.asyncDispose]?.();
-		}
-		return;
-	}
-
-	let nextSeqNum = fromSeqNum;
-	const { tail } = await stream.checkTail();
-	while (nextSeqNum < tail.seqNum) {
-		const batch = await stream.read(
-			{
-				start: { from: { seqNum: nextSeqNum }, clamp: true },
-				stop: { limits: { count: batchSize } },
-				ignoreCommandRecords: true,
-			},
-			{ as: "string" },
-		);
-		if (batch.records.length === 0) {
-			break;
-		}
-		for (const record of batch.records) {
+	// `readSession` with `waitSecs: 0` drains records up to the current tail and
+	// ends the session as soon as the heartbeat-window elapses with no new
+	// records. With no `stop`, the session blocks forever (live tail).
+	const session = await stream.readSession(
+		{
+			start: { from: { seqNum: fromSeqNum }, clamp: true },
+			stop: live ? undefined : { waitSecs: 0 },
+			ignoreCommandRecords: true,
+		},
+		{ as: "string" },
+	);
+	try {
+		for await (const record of session) {
 			yield readRecordToS2SessionRecord(record);
 		}
-		const last = batch.records[batch.records.length - 1]!;
-		nextSeqNum = last.seqNum + 1;
+	} finally {
+		await session[Symbol.asyncDispose]?.();
 	}
 }
 
@@ -773,98 +588,34 @@ export async function* readS2SessionSseResponse(
 	yield* readJsonSseResponse<S2SessionRecord>(response);
 }
 
-function materializeMessagesFromEvents(
-	events: ReadonlyArray<S2SessionRecord>,
-): ChatMessage[] {
-	const messages: ChatMessage[] = [];
-	const assistantByMessageId = new Map<string, ChatMessage>();
-
-	for (const { event } of events) {
-		if (event.kind === "message") {
-			messages.push(event.message);
-			continue;
-		}
-		if (event.kind !== "chunk") {
-			continue;
-		}
-
-		const chunk = event.chunk;
-		const messageId =
-			typeof chunk.messageId === "string" ? chunk.messageId : event.runId;
-
-		if (chunk.type === "TEXT_MESSAGE_START") {
-			const message: ChatMessage = {
-				id: messageId,
-				role: typeof chunk.role === "string" ? chunk.role : "assistant",
-				content: "",
-			};
-			assistantByMessageId.set(messageId, message);
-			messages.push(message);
-			continue;
-		}
-
-		if (chunk.type === "TEXT_MESSAGE_CONTENT") {
-			const message =
-				assistantByMessageId.get(messageId) ??
-				({
-					id: messageId,
-					role: "assistant",
-					content: "",
-				} satisfies ChatMessage);
-			if (!assistantByMessageId.has(messageId)) {
-				assistantByMessageId.set(messageId, message);
-				messages.push(message);
-			}
-			if (typeof chunk.delta === "string") {
-				message.content = `${String(message.content ?? "")}${chunk.delta}`;
-			}
-		}
-	}
-
-	return messages;
-}
-
 export async function materializeSessionSnapshot({
 	stream,
 	start,
-	batchSize = DEFAULT_SESSION_READ_BATCH_SIZE,
 }: {
 	stream: S2Stream;
 	start?: ReadInput["start"];
-	batchSize?: number;
 }): Promise<S2SessionSnapshot> {
 	const from = start?.from;
 	const fromSeqNum = from && "seqNum" in from ? from.seqNum : 0;
-	const { tail } = await stream.checkTail();
-	const events: S2SessionRecord[] = [];
-	for await (const event of readS2SessionEventsFromStream({
+	const records: S2SessionRecord[] = [];
+	for await (const record of readS2SessionRecordsFromStream({
 		stream,
 		fromSeqNum,
 		live: false,
-		batchSize,
 	})) {
-		events.push(event);
+		records.push(record);
 	}
-	return {
-		messages: materializeMessagesFromEvents(events),
-		events,
-		nextSeqNum: tail.seqNum,
-		tail,
-	};
-}
-
-export async function* readSseStream(
-	stream: ReadableStream<Uint8Array> | null,
-): AsyncIterable<StreamChunk> {
-	yield* readJsonSseStream<StreamChunk>(stream, {
-		stopOnDone: true,
-	});
+	const lastRecord = records[records.length - 1];
+	const nextSeqNum = lastRecord ? lastRecord.seqNum + 1 : fromSeqNum;
+	return { records, nextSeqNum };
 }
 
 export async function* readSseResponse(
 	response: Response,
 ): AsyncIterable<StreamChunk> {
-	yield* readSseStream(response.body);
+	yield* readJsonSseStream<StreamChunk>(response.body, {
+		stopOnDone: true,
+	});
 }
 
 export function createHttpConnection(
@@ -975,17 +726,12 @@ export function createS2Connection(options: S2ConnectionOptions): Connection {
 				}
 
 				for await (const record of readS2SessionSseResponse(tailResponse)) {
-					const event = record.event;
-					if (event.kind === "chunk" && event.runId === appendAck.runId) {
-						yield event.chunk;
+					const chunk = record.chunk;
+					if (chunk.runId !== appendAck.runId) {
+						continue;
 					}
-					if (
-						(event.kind === "run-finish" || event.kind === "run-error") &&
-						event.runId === appendAck.runId
-					) {
-						if (event.kind === "run-error") {
-							yield event.chunk;
-						}
+					yield chunk;
+					if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR") {
 						return;
 					}
 				}
@@ -1079,7 +825,11 @@ export function createResumableGeneration(
 				const records: AppendRecord[] =
 					sourceError !== undefined
 						? [
-								makeErrorChunkRecord(sourceError, onError),
+								AppendRecord.string({
+									body: JSON.stringify(
+										makeRunErrorChunk(undefined, sourceError, onError),
+									),
+								}),
 								AppendRecord.fence(fenceToken),
 							]
 						: [AppendRecord.fence(fenceToken)];
@@ -1249,6 +999,7 @@ export function createS2SessionHandler(
 		config.resolveStreamName ?? defaultResolveStreamName;
 	const selectNewMessages =
 		config.selectNewMessages ?? defaultSelectNewMessages;
+	const messageToChunks = config.messageToChunks ?? defaultMessageToChunks;
 	const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
 
@@ -1270,31 +1021,47 @@ export function createS2SessionHandler(
 			const newMessages = selectNewMessages({ body, messages });
 			const runId =
 				typeof body.runId === "string" ? body.runId : `run-${randomToken(8)}`;
-			const timestamp = nowIso();
-			const startEvents: S2SessionEvent[] = [
-				...newMessages.map((message) => ({
-					kind: "message" as const,
-					message,
-					messageId: typeof message.id === "string" ? message.id : undefined,
-					runId,
-					timestamp,
-				})),
-				{
-					kind: "run-start",
-					runId,
-					data: body.data,
-					timestamp,
-				},
+
+			const userChunks = newMessages.flatMap((message) =>
+				messageToChunks(message, { runId }),
+			);
+			const startChunks: StreamChunk[] = [
+				...userChunks,
+				makeRunStartedChunk(runId),
 			];
 
-			const ack = await appendS2SessionEvents(stream, startEvents);
+			const session = await stream.appendSession();
+			const producer = new Producer(
+				new BatchTransform({
+					lingerDurationMillis: lingerDuration,
+					maxBatchRecords: batchSize,
+				}),
+				session,
+			);
+
+			let runStartedTicket: RecordSubmitTicket;
+			try {
+				for (let i = 0; i < startChunks.length - 1; i++) {
+					await producer.submit(chunkToAppendRecord(startChunks[i]!));
+				}
+				runStartedTicket = await producer.submit(
+					chunkToAppendRecord(startChunks[startChunks.length - 1]!),
+				);
+			} catch (error) {
+				await producer.close().catch(() => {});
+				throw error;
+			}
+
+			const startedAck = await runStartedTicket.ack();
+			const runStartSeqNum = startedAck.seqNum();
+			const startedBatchAck = startedAck.batchAppendAck();
 			const appendAcceptedResponse = (tail: StreamPosition) =>
 				Response.json(
 					{
 						streamName,
 						runId,
-						startSeqNum: ack.start.seqNum,
-						nextSeqNum: ack.end.seqNum,
+						startSeqNum: startedBatchAck.start.seqNum,
+						nextSeqNum: runStartSeqNum,
 						tail,
 					},
 					{ status: 202 },
@@ -1314,20 +1081,44 @@ export function createS2SessionHandler(
 					abortSignal: request.signal,
 				});
 			} catch (error) {
-				const errorAck = await appendS2SessionEvents(stream, [
-					makeRunErrorSessionEvent(runId, error, config.onError),
-				]);
-				return appendAcceptedResponse(errorAck.tail);
+				try {
+					await producer.submit(
+						chunkToAppendRecord(
+							makeRunErrorChunk(runId, error, config.onError),
+						),
+					);
+				} catch {
+					// producer may have failed already
+				}
+				await producer.close().catch(() => {});
+				return appendAcceptedResponse(startedBatchAck.tail);
 			}
 
-			const persistPromise = persistS2Run({
-				stream,
-				runId,
-				source,
-				onError: config.onError,
-				batchSize,
-				lingerDuration,
-			});
+			const persistPromise = (async () => {
+				try {
+					for await (const chunk of source) {
+						await producer.submit(
+							chunkToAppendRecord(chunkWithRunId(chunk, runId)),
+						);
+					}
+					await producer.submit(
+						chunkToAppendRecord(makeRunFinishedChunk(runId)),
+					);
+				} catch (error) {
+					try {
+						await producer.submit(
+							chunkToAppendRecord(
+								makeRunErrorChunk(runId, error, config.onError),
+							),
+						);
+					} catch {
+						// producer may have failed already
+					}
+					throw error;
+				} finally {
+					await producer.close().catch(() => {});
+				}
+			})();
 
 			if (options?.waitUntil) {
 				options.waitUntil(persistPromise);
@@ -1340,7 +1131,7 @@ export function createS2SessionHandler(
 				});
 			}
 
-			return appendAcceptedResponse(ack.tail);
+			return appendAcceptedResponse(startedBatchAck.tail);
 		} catch (error) {
 			if (error instanceof Response) {
 				return error;
@@ -1359,7 +1150,7 @@ export function createS2SessionHandler(
 			const live = url.searchParams.get("live") !== "false";
 			const stream = getStream(streamName);
 			return jsonSseResponseFromValues(
-				readS2SessionEventsFromStream({
+				readS2SessionRecordsFromStream({
 					stream,
 					fromSeqNum,
 					live,

@@ -163,8 +163,7 @@ async function main() {
 		const snapshot = await snapshotResponse.json();
 
 		console.log("\nLive chunk count:", liveChunks.length);
-		console.log("Materialized messages:");
-		console.dir(snapshot.messages, { depth: null });
+		console.log("Persisted record count:", snapshot.records.length);
 		console.log("Next S2 seqNum:", snapshot.nextSeqNum);
 	} finally {
 		server.stop(true);
