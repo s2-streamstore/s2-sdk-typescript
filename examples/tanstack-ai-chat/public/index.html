@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>S2 TanStack AI Chat</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background: #0d0f12;
+      color: #e7e9ee;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header {
+      min-height: 54px;
+      padding: 10px 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid #242a33;
+      background: #11151a;
+    }
+    h1 { margin: 0; font-size: 15px; font-weight: 600; }
+    .session {
+      min-width: 0;
+      flex: 1;
+      color: #98a2b3;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status {
+      width: 92px;
+      padding: 5px 10px;
+      border: 1px solid #2f3845;
+      border-radius: 999px;
+      text-align: center;
+      color: #a7b0bf;
+      font-size: 12px;
+      background: #151a20;
+    }
+    .status.streaming {
+      border-color: #1d5c4b;
+      color: #6ee7b7;
+      background: #0f241d;
+    }
+    main {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .empty {
+      margin: auto;
+      color: #667085;
+      font-size: 14px;
+    }
+    .message {
+      width: min(760px, 100%);
+      display: grid;
+      gap: 5px;
+    }
+    .message.user {
+      align-self: flex-end;
+      justify-items: end;
+    }
+    .label {
+      color: #7c8798;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .bubble {
+      max-width: 100%;
+      padding: 10px 13px;
+      border: 1px solid #2b333e;
+      border-radius: 8px;
+      color: #edf0f5;
+      background: #151a20;
+      font-size: 14px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .user .bubble {
+      border-color: #324763;
+      background: #172233;
+    }
+    .bubble.streaming {
+      border-color: #1f7a62;
+    }
+    form {
+      padding: 14px 18px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      border-top: 1px solid #242a33;
+      background: #11151a;
+    }
+    input {
+      min-width: 0;
+      height: 42px;
+      padding: 0 13px;
+      border: 1px solid #303846;
+      border-radius: 8px;
+      outline: none;
+      color: #f2f4f7;
+      background: #0d1117;
+      font: inherit;
+    }
+    input:focus { border-color: #4b6f9f; }
+    input:disabled { color: #667085; }
+    button {
+      width: 92px;
+      height: 42px;
+      border: 0;
+      border-radius: 8px;
+      color: #08111f;
+      background: #8ab4f8;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled {
+      cursor: default;
+      color: #667085;
+      background: #252c36;
+    }
+    @media (max-width: 640px) {
+      header { align-items: flex-start; flex-direction: column; }
+      .status { width: auto; }
+      main { padding: 16px; }
+      form { padding: 12px; grid-template-columns: 1fr; }
+      button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TanStack AI Chat</h1>
+    <div class="session" id="session"></div>
+    <div class="status" id="status">idle</div>
+  </header>
+
+  <main id="messages">
+    <div class="empty" id="empty">No messages yet.</div>
+  </main>
+
+  <form id="form">
+    <input id="input" name="message" autocomplete="off" placeholder="Message" autofocus>
+    <button id="send" type="submit">Send</button>
+  </form>
+
+  <script>
+    const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+    const messagesEl = document.getElementById("messages");
+    const emptyEl = document.getElementById("empty");
+    const formEl = document.getElementById("form");
+    const inputEl = document.getElementById("input");
+    const sendEl = document.getElementById("send");
+    const statusEl = document.getElementById("status");
+    const sessionEl = document.getElementById("session");
+
+    let streaming = false;
+    function isValidChatId(value) {
+      return typeof value === "string" && CHAT_ID_PATTERN.test(value);
+    }
+
+    function resolveChatId() {
+      const url = new URL(window.location.href);
+      const fromQuery = url.searchParams.get("chat");
+      if (isValidChatId(fromQuery)) return fromQuery;
+
+      const fromStorage = sessionStorage.getItem("tanstack-ai-chat-id");
+      if (isValidChatId(fromStorage)) return fromStorage;
+
+      return crypto.randomUUID();
+    }
+
+    const chatId = resolveChatId();
+    sessionStorage.setItem("tanstack-ai-chat-id", chatId);
+    {
+      const url = new URL(window.location.href);
+      url.searchParams.set("chat", chatId);
+      window.history.replaceState(null, "", `${url.pathname}?${url.searchParams}`);
+      sessionEl.textContent = `chat=${chatId}`;
+    }
+
+    function setStreaming(value) {
+      streaming = value;
+      inputEl.disabled = value;
+      sendEl.disabled = value;
+      statusEl.textContent = value ? "streaming" : "idle";
+      statusEl.className = value ? "status streaming" : "status";
+    }
+
+    function clearEmpty() {
+      emptyEl?.remove();
+    }
+
+    function scrollToBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function addMessage(role, content = "", streamingMessage = false) {
+      clearEmpty();
+      const wrap = document.createElement("div");
+      wrap.className = `message ${role}`;
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = role;
+      const bubble = document.createElement("div");
+      bubble.className = streamingMessage ? "bubble streaming" : "bubble";
+      bubble.textContent = content;
+      wrap.append(label, bubble);
+      messagesEl.append(wrap);
+      scrollToBottom();
+      return bubble;
+    }
+
+    function applyChunk(bubble, chunk) {
+      if (chunk.type === "TEXT_MESSAGE_CONTENT" && typeof chunk.delta === "string") {
+        bubble.textContent += chunk.delta;
+        scrollToBottom();
+      }
+      if (chunk.type === "RUN_ERROR") {
+        const message = chunk.error?.message || "Unknown error";
+        bubble.textContent += bubble.textContent ? `\n\n[error] ${message}` : `[error] ${message}`;
+        scrollToBottom();
+      }
+    }
+
+    async function responseErrorMessage(response) {
+      const text = await response.text();
+      if (text.trimStart().startsWith("<!doctype html") || text.trimStart().startsWith("<html")) {
+        return `${response.status} ${response.statusText || "Request failed"}`;
+      }
+      return text || `${response.status} ${response.statusText || "Request failed"}`;
+    }
+
+    async function* readSessionEvents(response) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
+          const frames = buffer.split(/\r?\n\r?\n/);
+          buffer = frames.pop() || "";
+          for (const frame of frames) {
+            const data = frame
+              .split(/\r?\n/)
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).trimStart())
+              .join("\n");
+            if (data) yield JSON.parse(data);
+          }
+          if (done) break;
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+    }
+
+    async function loadSnapshot() {
+      const response = await fetch(`/api/chat/snapshot?id=${encodeURIComponent(chatId)}`);
+      if (!response.ok) return null;
+      const snapshot = await response.json();
+
+      messagesEl.innerHTML = "";
+      if (!snapshot.messages?.length) {
+        messagesEl.append(emptyEl);
+      }
+      for (const message of snapshot.messages || []) {
+        addMessage(message.role || "assistant", String(message.content || ""));
+      }
+      return snapshot;
+    }
+
+    function assistantBubbleForResume(snapshot) {
+      if (!snapshot.activeRunId) return null;
+      const last = messagesEl.querySelector(".message:last-child .bubble");
+      const lastRole = messagesEl.querySelector(".message:last-child .label")?.textContent;
+      if (last && lastRole === "assistant") {
+        last.classList.add("streaming");
+        return last;
+      }
+      return addMessage("assistant", "", true);
+    }
+
+    async function tailRun(runId, fromSeqNum, bubble) {
+      const url = `/api/chat/tail?id=${encodeURIComponent(chatId)}&fromSeqNum=${fromSeqNum}&live=true`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+
+      for await (const record of readSessionEvents(response)) {
+        const chunk = record.chunk;
+        if (!chunk || chunk.runId !== runId) continue;
+        applyChunk(bubble, chunk);
+        if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR") {
+          break;
+        }
+      }
+      bubble.classList.remove("streaming");
+    }
+
+    async function sendMessage(text) {
+      addMessage("user", text);
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: chatId,
+          message: { role: "user", content: text },
+        }),
+      });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+
+      const ack = await response.json();
+      const bubble = addMessage("assistant", "", true);
+      await tailRun(ack.runId, ack.nextSeqNum, bubble);
+    }
+
+    formEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const text = inputEl.value.trim();
+      if (!text || streaming) return;
+      inputEl.value = "";
+      setStreaming(true);
+      try {
+        await sendMessage(text);
+      } catch (error) {
+        addMessage("assistant", error instanceof Error ? error.message : String(error));
+      } finally {
+        setStreaming(false);
+        inputEl.focus();
+      }
+    });
+
+    (async () => {
+      const snapshot = await loadSnapshot();
+      const bubble = snapshot && assistantBubbleForResume(snapshot);
+      if (snapshot?.activeRunId && bubble) {
+        setStreaming(true);
+        try {
+          await tailRun(snapshot.activeRunId, snapshot.nextSeqNum, bubble);
+        } finally {
+          setStreaming(false);
+        }
+      }
+    })();
+  </script>
+</body>
+</html>
