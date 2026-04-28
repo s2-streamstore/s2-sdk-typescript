@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
 	claimSharedGeneration,
 	replayActiveGenerationStringBodies,
+	tailStringBodies,
+	tailStringRecords,
 } from "../shared.js";
 
 function readRecord(partial: {
@@ -250,5 +252,85 @@ describe("replayActiveGenerationStringBodies", () => {
 			replayActiveGenerationStringBodies(handle as any),
 		);
 		expect(bodies).toEqual(["new-chunk-a", "new-chunk-b"]);
+	});
+});
+
+describe("tailStringBodies", () => {
+	const ts = new Date(10_000_000);
+
+	it("yields data records from every generation, skipping fences and trims", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder-1",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "gen-1-a", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "gen-1-b", timestamp: ts }),
+			readRecord({
+				seqNum: 3,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({
+				seqNum: 4,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 5, body: "gen-2-a", timestamp: ts }),
+			readRecord({
+				seqNum: 6,
+				body: "end-BBBB",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const bodies = await drainAsyncIterable(tailStringBodies(handle as any));
+		expect(bodies).toEqual(["gen-1-a", "gen-1-b", "gen-2-a"]);
+	});
+
+	it("yields nothing on an empty stream", async () => {
+		const handle = new MockStreamHandle([]);
+		const bodies = await drainAsyncIterable(tailStringBodies(handle as any));
+		expect(bodies).toEqual([]);
+	});
+
+	it("respects fromSeqNum when provided", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "early", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "late", timestamp: ts }),
+		]);
+
+		const bodies = await drainAsyncIterable(tailStringBodies(handle as any, 2));
+		expect(bodies).toEqual(["late"]);
+	});
+
+	it("can include the next sequence cursor for reconnects", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "first", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "second", timestamp: ts }),
+		]);
+
+		const records = await drainAsyncIterable(tailStringRecords(handle as any));
+		expect(records).toEqual([
+			{ body: "first", nextSeqNum: 2 },
+			{ body: "second", nextSeqNum: 3 },
+		]);
 	});
 });

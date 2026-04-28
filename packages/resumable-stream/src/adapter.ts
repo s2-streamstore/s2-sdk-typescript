@@ -15,6 +15,7 @@ import {
 import {
 	claimSharedGeneration,
 	replayActiveGenerationStringBodies,
+	tailStringRecords,
 } from "./shared.js";
 
 const DEFAULT_BATCH_SIZE = 10;
@@ -39,10 +40,13 @@ export interface ResumableChatConfig {
 	 * How to map generations to S2 streams. Defaults to `single-use`.
 	 * - `single-use`: each generation gets a dedicated stream.
 	 * - `shared`: generations reuse one stream; later writers take over via lease-based fencing.
+	 *   The stream is trimmed on each claim, so replay yields only the active generation.
+	 * - `shared-live`: like `shared` but skips the trim, preserving the full transcript.
+	 *   `replay` tails the stream forever, surfacing chunks from every generation as they land.
 	 */
-	streamReuse?: "single-use" | "shared";
+	streamReuse?: "single-use" | "shared" | "shared-live";
 	/**
-	 * Only applies to `streamReuse: "shared"`. If an active generation hasn't written a record
+	 * Only applies to `shared` / `shared-live`. If an active generation hasn't written a record
 	 * for this many milliseconds, the next claim takes it over. Defaults to 5000.
 	 */
 	leaseDurationMs?: number;
@@ -60,6 +64,26 @@ export interface MakeResumableOptions {
 	 * Pass the platform-provided `waitUntil` (Vercel/Cloudflare).
 	 */
 	waitUntil?: (promise: Promise<unknown>) => void;
+	/**
+	 * How to respond to the request that starts generation.
+	 * - `stream` returns the live SSE chunks on the request itself.
+	 * - `background` persists chunks to S2 and returns 202 immediately.
+	 *
+	 * `background` is intended for `shared-live`, where a separate replay
+	 * subscription is the source of truth for client delivery.
+	 *
+	 * @default "stream"
+	 */
+	responseMode?: "stream" | "background";
+}
+
+/** Options for `replay`. */
+export interface ReplayOptions {
+	/**
+	 * Sequence number to start reading from. Only meaningful for
+	 * `streamReuse: "shared-live"`, where replay tails a long-lived log.
+	 */
+	fromSeqNum?: number;
 }
 
 /** Server-side helpers for writing and replaying resumable chat streams. */
@@ -74,7 +98,7 @@ export interface Chat<T> {
 		options?: MakeResumableOptions,
 	): Promise<Response>;
 	/** Replays the active generation as SSE. Returns 204 if there is none. */
-	replay(streamName: string): Promise<Response>;
+	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
 }
 
 /** Adapter contract for plugging a chunk shape into the shared chat implementation. */
@@ -136,7 +160,6 @@ function sseResponseFromStrings(
 			try {
 				const next = await iterator.next();
 				if (next.done) {
-					controller.enqueue(encoder.encode("data: [DONE]\n\n"));
 					controller.close();
 					return;
 				}
@@ -153,9 +176,41 @@ function sseResponseFromStrings(
 	return new Response(body, { headers });
 }
 
+function sseResponseFromTailedStrings(
+	source: AsyncIterable<{ body: string; nextSeqNum: number }>,
+	headers: Readonly<Record<string, string>>,
+): Response {
+	const iterator = source[Symbol.asyncIterator]();
+	const encoder = new TextEncoder();
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const next = await iterator.next();
+				if (next.done) {
+					controller.close();
+					return;
+				}
+				controller.enqueue(
+					encoder.encode(
+						`id: ${next.value.nextSeqNum}\ndata: ${next.value.body}\n\n`,
+					),
+				);
+			} catch (err) {
+				controller.error(err);
+				await iterator.return?.();
+			}
+		},
+		async cancel() {
+			await iterator.return?.();
+		},
+	});
+	return new Response(body, { headers });
+}
+
 /**
  * Generic implementation behind each resumable chat adapter. Wire format:
- * one JSON-encoded chunk per SSE `data:` frame, terminated by `data: [DONE]`.
+ * one JSON-encoded chunk per SSE `data:` frame; end-of-stream signaled by
+ * connection close.
  */
 export function createChat<T>(
 	config: ResumableChatConfig,
@@ -173,6 +228,10 @@ export function createChat<T>(
 	const errorChunk = (err: unknown): T =>
 		adapter.makeErrorChunk(err, config.onError);
 
+	const isShared = streamReuse === "shared" || streamReuse === "shared-live";
+	const isLive = streamReuse === "shared-live";
+	const trimOnTerminalFence = streamReuse === "single-use";
+
 	return {
 		async makeResumable(
 			streamName: string,
@@ -182,13 +241,15 @@ export function createChat<T>(
 			const fencingToken = `session-${randomToken(8)}`;
 			let matchSeqNumStart = 1;
 			const handle = s2.basin(basin).stream(streamName);
+			const responseMode = options?.responseMode ?? "stream";
 
 			try {
-				if (streamReuse === "shared") {
+				if (isShared) {
 					const claim = await claimSharedGeneration({
 						stream: handle,
 						fencingToken,
 						leaseDurationMs,
+						trim: !isLive,
 					});
 					if (!claim) {
 						return new Response("Stream already in use", { status: 409 });
@@ -211,13 +272,22 @@ export function createChat<T>(
 				throw err;
 			}
 
-			const [toClient, toPersist] = asyncIterableToReadableStream(source).tee();
+			let toClient: ReadableStream<T> | undefined;
+			let persistSource: AsyncIterable<T>;
+			if (responseMode === "background") {
+				persistSource = source;
+			} else {
+				const [clientStream, persistStream] =
+					asyncIterableToReadableStream(source).tee();
+				toClient = clientStream;
+				persistSource = readableToAsyncIterable(persistStream);
+			}
 
 			const persistPromise = persistToS2({
 				s2,
 				basin,
 				stream: streamName,
-				source: readableToAsyncIterable(toPersist),
+				source: persistSource,
 				fencingToken,
 				batchSize,
 				lingerDuration,
@@ -228,7 +298,7 @@ export function createChat<T>(
 					if (sourceError === undefined) {
 						return createTerminalRecords({
 							terminalFenceToken: `end-${randomToken(4)}`,
-							trim: streamReuse === "single-use",
+							trim: trimOnTerminalFence,
 						});
 					}
 					return createTerminalRecords({
@@ -236,7 +306,7 @@ export function createChat<T>(
 							body: JSON.stringify(errorChunk(sourceError)),
 						}),
 						terminalFenceToken: `error-${randomToken(4)}`,
-						trim: streamReuse === "single-use",
+						trim: trimOnTerminalFence,
 					});
 				},
 			});
@@ -249,9 +319,16 @@ export function createChat<T>(
 				});
 			}
 
+			if (responseMode === "background") {
+				return new Response(null, {
+					status: 202,
+					headers: { "Cache-Control": "no-store" },
+				});
+			}
+
 			const clientStrings = (async function* () {
 				try {
-					for await (const chunk of readableToAsyncIterable(toClient)) {
+					for await (const chunk of readableToAsyncIterable(toClient!)) {
 						yield JSON.stringify(chunk);
 					}
 				} catch (err) {
@@ -262,8 +339,19 @@ export function createChat<T>(
 			return sseResponseFromStrings(clientStrings, adapter.responseHeaders);
 		},
 
-		async replay(streamName: string): Promise<Response> {
+		async replay(
+			streamName: string,
+			options?: ReplayOptions,
+		): Promise<Response> {
 			const handle = s2.basin(basin).stream(streamName);
+
+			if (isLive) {
+				return sseResponseFromTailedStrings(
+					tailStringRecords(handle, options?.fromSeqNum),
+					adapter.responseHeaders,
+				);
+			}
+
 			const iterator =
 				replayActiveGenerationStringBodies(handle)[Symbol.asyncIterator]();
 			const first = await iterator.next();

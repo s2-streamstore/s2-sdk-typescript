@@ -107,12 +107,12 @@ export const chat = createResumableChat({
 ```ts
 // app/api/chat/route.ts
 import { after } from "next/server";
-import { convertToModelMessages, streamText, type UIMessage } from "ai";
+import { convertToModelMessages, streamText, type UISnapshotMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
-  const { id, messages } = (await req.json()) as { id: string; messages: UIMessage[] };
+  const { id, messages } = (await req.json()) as { id: string; messages: UISnapshotMessage[] };
   const streamName = `chat-${id}`;
   const result = streamText({
     model: openai("gpt-4o-mini"),
@@ -164,7 +164,14 @@ export default function Chat() {
 
 The `./tanstack-ai` subpath exposes `createResumableChat` for TanStack AI's `StreamChunk` streams. `makeResumable` persists a generation and streams it back to the client. `replay` reconnects to an active generation mid-stream.
 
-A TanStack Start chat app: [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat).
+`streamReuse` controls how generations map to S2 streams:
+
+- `single-use` (default): each generation gets a dedicated stream.
+- `shared`: generations reuse one stream, with later writers taking over via lease-based fencing. Replay yields the active generation only.
+- `shared-live`: like `shared` but preserves the full transcript. Replay tails the stream forever.
+
+A TanStack Start chat app and detailed implementation guide:
+[`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat).
 
 ```ts
 import { chat as tanstackChat } from "@tanstack/ai";
@@ -193,3 +200,90 @@ export async function GET(req: Request) {
   return chat.replay(streamName);
 }
 ```
+
+The `./tanstack-ai/client` subpath exposes a `useChat`-compatible connection adapter that wires the server endpoints above to TanStack AI's client.
+
+```tsx
+import { useChat } from "@tanstack/ai-react";
+import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client";
+
+const connection = createS2Connection({
+  sendUrl: "/api/chat",
+  subscribeUrl: "/api/chat/replay",
+  mode: "single-use", // must match the server's `streamReuse`
+});
+
+const { messages, sendMessage } = useChat({ connection });
+```
+
+For `shared-live`, use the session helpers so the app code stays small:
+
+```ts
+import {
+  createResumableChat,
+  getLatestUserText,
+  toTextMessages,
+} from "@s2-dev/resumable-stream/tanstack-ai";
+
+const chat = createResumableChat({
+  accessToken: process.env.S2_ACCESS_TOKEN!,
+  basin: process.env.S2_BASIN!,
+  streamReuse: "shared-live",
+});
+
+export async function POST(req: Request) {
+  const { id, messages } = await req.json();
+  if (!getLatestUserText(messages)) return new Response("Missing prompt", { status: 400 });
+
+  const source = tanstackChat({
+    adapter: openaiText("gpt-4o-mini"),
+    messages: toTextMessages(messages),
+  });
+
+  return chat.makeSessionResponse(`chat-${id}`, {
+    messages,
+    source,
+    waitUntil,
+  });
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  return chat.replay(`chat-${url.searchParams.get("id")}`, {
+    fromSeqNum: Number(url.searchParams.get("from") ?? 0),
+  });
+}
+
+export async function snapshot(req: Request) {
+  const id = new URL(req.url).searchParams.get("id");
+  return chat.getSessionSnapshotResponse(`chat-${id}`);
+}
+```
+
+```tsx
+import { useChat } from "@tanstack/ai-react";
+import {
+  createS2Connection,
+  loadSnapshot,
+} from "@s2-dev/resumable-stream/tanstack-ai/client";
+
+const snapshot = await loadSnapshot({ url: `/api/chat/snapshot?id=${chatId}` });
+const connection = createS2Connection({
+  mode: "shared-live",
+  sendUrl: "/api/chat",
+  subscribeUrl: `/api/chat/replay?id=${chatId}`,
+  snapshot,
+  body: { id: chatId },
+});
+
+const chat = useChat({
+  connection,
+  initialMessages: snapshot.messages,
+  live: true,
+});
+```
+
+`makeSessionResponse` prepends the message snapshot, persists in the
+background, and returns 202 immediately. `loadSnapshot` and `snapshot` seed
+the reconnect cursor; subsequent replay responses advance it via SSE `id`
+fields.

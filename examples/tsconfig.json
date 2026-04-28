@@ -20,6 +20,9 @@
 			"@s2-dev/resumable-stream/aisdk": ["packages/resumable-stream/src/aisdk.ts"],
 			"@s2-dev/resumable-stream/tanstack-ai": [
 				"packages/resumable-stream/src/tanstack-ai.ts"
+			],
+			"@s2-dev/resumable-stream/tanstack-ai/client": [
+				"packages/resumable-stream/src/tanstack-ai-client.ts"
 			]
 		}
 	},

@@ -7,6 +7,11 @@ import {
 	isTrimRecord,
 } from "./protocol.js";
 
+export interface TailedStringBody {
+	body: string;
+	nextSeqNum: number;
+}
+
 interface SharedStreamState {
 	reusableFenceToken: string | null;
 	/**
@@ -170,6 +175,46 @@ export async function* replayActiveGenerationStringBodies(
 			if (isTrimRecord(record)) continue;
 			if (record.body) {
 				yield record.body;
+			}
+		}
+	} finally {
+		await session[Symbol.asyncDispose]?.();
+	}
+}
+
+/**
+ * Tail every data record on the stream from `fromSeqNum` (default 0), skipping
+ * fence and trim records, and never stopping on terminal fences. Used by
+ * `shared-live` mode so a single subscription sees chunks from every
+ * generation as they land.
+ */
+export async function* tailStringBodies(
+	stream: S2Stream,
+	fromSeqNum = 0,
+): AsyncIterable<string> {
+	for await (const record of tailStringRecords(stream, fromSeqNum)) {
+		yield record.body;
+	}
+}
+
+/**
+ * Tail every data record on the stream together with the next sequence number.
+ * The cursor lets reconnecting subscribers resume after the last emitted
+ * record instead of replaying already-processed chunks.
+ */
+export async function* tailStringRecords(
+	stream: S2Stream,
+	fromSeqNum = 0,
+): AsyncIterable<TailedStringBody> {
+	const session = await stream.readSession(
+		{ start: { from: { seqNum: fromSeqNum } } },
+		{ as: "string" },
+	);
+	try {
+		for await (const record of session) {
+			if (isFenceRecord(record) || isTrimRecord(record)) continue;
+			if (record.body) {
+				yield { body: record.body, nextSeqNum: record.seqNum + 1 };
 			}
 		}
 	} finally {

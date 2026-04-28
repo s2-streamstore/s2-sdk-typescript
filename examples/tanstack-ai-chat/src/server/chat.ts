@@ -1,8 +1,12 @@
 import {
 	createResumableChat,
+	getLatestUserText,
+	normalizeMessages,
 	type StreamChunk,
+	type TextMessage,
+	toTextMessages,
 } from "@s2-dev/resumable-stream/tanstack-ai";
-import { AppendInput, AppendRecord, S2, S2Error } from "@s2-dev/streamstore";
+import { AppendInput, AppendRecord, S2 } from "@s2-dev/streamstore";
 
 const HISTORY_STREAM_PREFIX =
 	process.env.S2_TANSTACK_CHAT_HISTORY_PREFIX || "tanstack-ai-chat-history";
@@ -11,17 +15,26 @@ const LIVE_STREAM_PREFIX =
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const FALLBACK_MESSAGE_ID = "fallback-assistant";
 
-type StreamReuse = "single-use" | "shared";
+type StreamReuse = "single-use" | "shared" | "shared-live";
 
-export type ChatMessage = {
-	role: "user" | "assistant";
-	content: string;
-};
+export type ChatMessage = TextMessage;
 
 type ChatPayload = {
 	id?: unknown;
-	message?: unknown;
+	messages?: unknown;
 };
+
+function latestUserMessage(messages: unknown): ChatMessage | null {
+	const content = getLatestUserText(messages);
+	return content ? { role: "user", content } : null;
+}
+
+function parseFromSeqNum(value: string | null): number | undefined {
+	if (value === null) return undefined;
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isSafeInteger(parsed) || parsed < 0) return undefined;
+	return parsed;
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -40,14 +53,14 @@ function endpointsFromEnv() {
 }
 
 function streamReuseFromEnv(): StreamReuse {
-	return process.env.S2_TANSTACK_STREAM_REUSE === "shared"
-		? "shared"
-		: "single-use";
+	const raw = process.env.S2_TANSTACK_STREAM_REUSE;
+	if (raw === "single-use" || raw === "shared" || raw === "shared-live") {
+		return raw;
+	}
+	return "shared-live";
 }
 
 type Context = {
-	basin: string;
-	s2: S2;
 	basinClient: ReturnType<S2["basin"]>;
 	chat: ReturnType<typeof createResumableChat>;
 };
@@ -62,8 +75,6 @@ function getContext(): Context {
 	const s2 = new S2({ accessToken, endpoints });
 
 	cachedContext = {
-		basin,
-		s2,
 		basinClient: s2.basin(basin),
 		chat: createResumableChat({
 			accessToken,
@@ -80,9 +91,9 @@ function historyStreamName(chatId: string): string {
 }
 
 function liveStreamName(chatId: string, turnIndex: number): string {
-	return streamReuseFromEnv() === "shared"
-		? `${LIVE_STREAM_PREFIX}-${chatId}`
-		: `${LIVE_STREAM_PREFIX}-${chatId}-${turnIndex}`;
+	return streamReuseFromEnv() === "single-use"
+		? `${LIVE_STREAM_PREFIX}-${chatId}-${turnIndex}`
+		: `${LIVE_STREAM_PREFIX}-${chatId}`;
 }
 
 function turnIndexForNewTurn(history: ChatMessage[]): number {
@@ -111,21 +122,10 @@ function isChatMessage(value: unknown): value is ChatMessage {
 	);
 }
 
-async function ensureStreamExists(
-	context: Context,
-	streamName: string,
-): Promise<void> {
-	await context.basinClient.streams
-		.create({ stream: streamName })
-		.catch((error: unknown) => {
-			if (!(error instanceof S2Error && error.status === 409)) throw error;
-		});
-}
-
 async function readHistory(chatId: string): Promise<ChatMessage[]> {
 	const context = getContext();
 	const streamName = historyStreamName(chatId);
-	await ensureStreamExists(context, streamName);
+	await context.chat.ensureStream(streamName);
 
 	const stream = context.basinClient.stream(streamName);
 	const messages: ChatMessage[] = [];
@@ -157,7 +157,7 @@ async function appendHistoryMessage(
 ): Promise<void> {
 	const context = getContext();
 	const streamName = historyStreamName(chatId);
-	await ensureStreamExists(context, streamName);
+	await context.chat.ensureStream(streamName);
 	await context.basinClient
 		.stream(streamName)
 		.append(
@@ -237,7 +237,6 @@ function persistCompletedAssistantMessage(
 
 	return (async function* () {
 		await appendHistoryMessage(chatId, userMessage);
-
 		for await (const chunk of source) {
 			if (
 				chunk.type === "TEXT_MESSAGE_CONTENT" &&
@@ -268,12 +267,31 @@ function routeError(error: unknown): Response {
 export async function postChat(request: Request): Promise<Response> {
 	try {
 		const body = (await request.json()) as ChatPayload;
-		if (
-			!isValidChatId(body.id) ||
-			!isChatMessage(body.message) ||
-			body.message.role !== "user"
-		) {
-			return new Response("Expected { id, message } with a user message.", {
+		if (!isValidChatId(body.id)) {
+			return new Response("Missing or invalid id", { status: 400 });
+		}
+		const streamReuse = streamReuseFromEnv();
+
+		if (streamReuse === "shared-live") {
+			const messages = normalizeMessages(body.messages);
+			if (!getLatestUserText(messages)) {
+				return new Response("Expected at least one user message", {
+					status: 400,
+				});
+			}
+
+			const context = getContext();
+			const streamName = liveStreamName(body.id, 0);
+			const source = await createChunks(toTextMessages(messages));
+			return context.chat.makeSessionResponse(streamName, {
+				messages,
+				source,
+			});
+		}
+
+		const userMessage = latestUserMessage(body.messages);
+		if (!userMessage) {
+			return new Response("Expected at least one user message", {
 				status: 400,
 			});
 		}
@@ -281,26 +299,30 @@ export async function postChat(request: Request): Promise<Response> {
 		const context = getContext();
 		const history = await readHistory(body.id);
 		const streamName = liveStreamName(body.id, turnIndexForNewTurn(history));
-		await ensureStreamExists(context, streamName);
-		const source = await createChunks([...history, body.message]);
+		await context.chat.ensureStream(streamName);
+		const messages = [...history, userMessage];
+		const source = await createChunks(messages);
 
 		return context.chat.makeResumable(
 			streamName,
-			persistCompletedAssistantMessage(body.id, body.message, source),
+			persistCompletedAssistantMessage(body.id, userMessage, source),
 		);
 	} catch (error) {
 		return routeError(error);
 	}
 }
 
-export async function replayChat(chatId: string | null): Promise<Response> {
+export async function replayChat(
+	chatId: string | null,
+	fromSeqNumValue?: string | null,
+): Promise<Response> {
 	try {
 		if (!isValidChatId(chatId)) {
 			return new Response("Missing id query parameter", { status: 400 });
 		}
 
 		let streamName: string;
-		if (streamReuseFromEnv() === "shared") {
+		if (streamReuseFromEnv() !== "single-use") {
 			streamName = liveStreamName(chatId, 0);
 		} else {
 			const history = await readHistory(chatId);
@@ -309,7 +331,25 @@ export async function replayChat(chatId: string | null): Promise<Response> {
 			streamName = liveStreamName(chatId, activeIndex);
 		}
 
-		return getContext().chat.replay(streamName);
+		const context = getContext();
+		await context.chat.ensureStream(streamName);
+		return context.chat.replay(streamName, {
+			fromSeqNum: parseFromSeqNum(fromSeqNumValue ?? null),
+		});
+	} catch (error) {
+		return routeError(error);
+	}
+}
+
+export async function getSnapshot(chatId: string | null): Promise<Response> {
+	try {
+		if (!isValidChatId(chatId)) {
+			return new Response("Missing id query parameter", { status: 400 });
+		}
+
+		return getContext().chat.getSessionSnapshotResponse(
+			liveStreamName(chatId, 0),
+		);
 	} catch (error) {
 		return routeError(error);
 	}

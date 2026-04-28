@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiChatRouteImport } from './routes/api.chat'
+import { Route as ApiChatSnapshotRouteImport } from './routes/api.chat.snapshot'
 import { Route as ApiChatReplayRouteImport } from './routes/api.chat.replay'
 import { Route as ApiChatHistoryRouteImport } from './routes/api.chat.history'
 
@@ -23,6 +24,11 @@ const ApiChatRoute = ApiChatRouteImport.update({
   id: '/api/chat',
   path: '/api/chat',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ApiChatSnapshotRoute = ApiChatSnapshotRouteImport.update({
+  id: '/snapshot',
+  path: '/snapshot',
+  getParentRoute: () => ApiChatRoute,
 } as any)
 const ApiChatReplayRoute = ApiChatReplayRouteImport.update({
   id: '/replay',
@@ -40,12 +46,14 @@ export interface FileRoutesByFullPath {
   '/api/chat': typeof ApiChatRouteWithChildren
   '/api/chat/history': typeof ApiChatHistoryRoute
   '/api/chat/replay': typeof ApiChatReplayRoute
+  '/api/chat/snapshot': typeof ApiChatSnapshotRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/chat': typeof ApiChatRouteWithChildren
   '/api/chat/history': typeof ApiChatHistoryRoute
   '/api/chat/replay': typeof ApiChatReplayRoute
+  '/api/chat/snapshot': typeof ApiChatSnapshotRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +61,30 @@ export interface FileRoutesById {
   '/api/chat': typeof ApiChatRouteWithChildren
   '/api/chat/history': typeof ApiChatHistoryRoute
   '/api/chat/replay': typeof ApiChatReplayRoute
+  '/api/chat/snapshot': typeof ApiChatSnapshotRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/chat' | '/api/chat/history' | '/api/chat/replay'
+  fullPaths:
+    | '/'
+    | '/api/chat'
+    | '/api/chat/history'
+    | '/api/chat/replay'
+    | '/api/chat/snapshot'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/chat' | '/api/chat/history' | '/api/chat/replay'
-  id: '__root__' | '/' | '/api/chat' | '/api/chat/history' | '/api/chat/replay'
+  to:
+    | '/'
+    | '/api/chat'
+    | '/api/chat/history'
+    | '/api/chat/replay'
+    | '/api/chat/snapshot'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/chat'
+    | '/api/chat/history'
+    | '/api/chat/replay'
+    | '/api/chat/snapshot'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -83,6 +108,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiChatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/chat/snapshot': {
+      id: '/api/chat/snapshot'
+      path: '/snapshot'
+      fullPath: '/api/chat/snapshot'
+      preLoaderRoute: typeof ApiChatSnapshotRouteImport
+      parentRoute: typeof ApiChatRoute
+    }
     '/api/chat/replay': {
       id: '/api/chat/replay'
       path: '/replay'
@@ -103,11 +135,13 @@ declare module '@tanstack/react-router' {
 interface ApiChatRouteChildren {
   ApiChatHistoryRoute: typeof ApiChatHistoryRoute
   ApiChatReplayRoute: typeof ApiChatReplayRoute
+  ApiChatSnapshotRoute: typeof ApiChatSnapshotRoute
 }
 
 const ApiChatRouteChildren: ApiChatRouteChildren = {
   ApiChatHistoryRoute: ApiChatHistoryRoute,
   ApiChatReplayRoute: ApiChatReplayRoute,
+  ApiChatSnapshotRoute: ApiChatSnapshotRoute,
 }
 
 const ApiChatRouteWithChildren =
