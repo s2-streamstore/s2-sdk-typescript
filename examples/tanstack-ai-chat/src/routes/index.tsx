@@ -14,18 +14,18 @@ const HISTORY_API = `${API}/history`;
 const SNAPSHOT_API = `${API}/snapshot`;
 const SUBSCRIBE_API = `${API}/replay`;
 
-type StreamReuse = "single-use" | "shared" | "shared-live";
+type StreamMode = "single-use" | "shared" | "session";
 
-function streamReuseFromEnv(): StreamReuse {
-	const raw = import.meta.env.VITE_S2_TANSTACK_STREAM_REUSE;
-	if (raw === "single-use" || raw === "shared" || raw === "shared-live") {
+function streamModeFromEnv(): StreamMode {
+	const raw = import.meta.env.VITE_S2_TANSTACK_MODE;
+	if (raw === "single-use" || raw === "shared" || raw === "session") {
 		return raw;
 	}
-	return "shared-live";
+	return "session";
 }
 
-// Must match the server's `S2_TANSTACK_STREAM_REUSE`. Default `shared-live`.
-const STREAM_REUSE = streamReuseFromEnv();
+// Must match the server's `S2_TANSTACK_MODE`. Default `session`.
+const STREAM_MODE = streamModeFromEnv();
 
 type ChatMessage = {
 	role: "user" | "assistant";
@@ -100,7 +100,7 @@ function ChatRoute() {
 		);
 		sessionStorage.setItem("s2-tanstack-ai-chat-id", id);
 
-		if (STREAM_REUSE === "shared-live") {
+		if (STREAM_MODE === "session") {
 			loadSnapshot({ url: `${SNAPSHOT_API}?id=${encodeURIComponent(id)}` })
 				.then(setSnapshot)
 				.catch((error) => {
@@ -171,7 +171,7 @@ function ChatInner({
 			createS2Connection({
 				sendUrl: API,
 				subscribeUrl: subscribeUrl(chatId),
-				mode: STREAM_REUSE,
+				mode: STREAM_MODE,
 				snapshot,
 				body: { id: chatId },
 			}),
@@ -181,9 +181,9 @@ function ChatInner({
 	const { messages, sendMessage, isLoading, sessionGenerating } = useChat({
 		connection,
 		initialMessages: snapshot.messages,
-		// In shared-live, the subscribe channel must stay open on mount so a
+		// In session mode, the subscribe channel must stay open on mount so a
 		// refresh re-attaches and replays the transcript.
-		live: STREAM_REUSE === "shared-live",
+		live: STREAM_MODE === "session",
 	});
 
 	const [input, setInput] = useState("");

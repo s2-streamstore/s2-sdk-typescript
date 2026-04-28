@@ -10,6 +10,7 @@ import {
 export type {
 	MakeResumableOptions,
 	ResumableChatConfig,
+	ResumableChatMode,
 } from "./adapter.js";
 
 /**

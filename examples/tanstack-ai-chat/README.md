@@ -1,26 +1,37 @@
-# Building TanStack AI Chat Apps With S2 Resume
+# Building Durable TanStack AI Chat Apps
 
-This guide explains how to build a TanStack AI chat app whose generations
-survive refreshes, disconnects, and multiple open tabs. The example app is a
-TanStack Start chat client, but the same server/client shape works in any
-framework that can expose HTTP routes.
+This guide shows how to build a TanStack AI chat app that survives refreshes
+and disconnects, and keeps multiple tabs in sync. The example app uses
+TanStack Start, but the same server/client shape works in any framework that
+can expose HTTP routes.
 
-The core idea is simple:
+The flow is:
 
 - TanStack AI emits `StreamChunk` objects while the model is generating.
 - `@s2-dev/resumable-stream/tanstack-ai` writes those chunks to an S2 stream.
-- The browser reads from normal TanStack `useChat` APIs.
+- The browser still reads through standard TanStack `useChat` APIs.
 - On refresh, the app first loads a snapshot, then reconnects to the durable
   stream from the exact next S2 sequence number.
 
-## Why Shared-Live Exists
+## Refreshing Without Losing State
 
-TanStack AI has two useful ways to think about chat delivery:
+The simplest chat shape is a streamed `POST`: the browser sends a message and
+renders chunks from that same response. That works until the page refreshes,
+the network drops, or another tab opens the same chat. At that point the
+browser has lost the response it was reading from, even though the generation
+may still be running.
+
+S2 makes model output durable, but the client still needs a clean way to
+rebuild TanStack's UI state before it starts listening for new chunks. Session
+mode handles that by loading the current session state first, then keeping a
+live read open for anything that arrives after that snapshot.
+
+In session mode, chat delivery is split into two responsibilities:
 
 - A `send` request starts work.
 - A live subscription receives chunks.
 
-`streamReuse: "shared-live"` maps that cleanly to S2:
+The example maps those responsibilities to three routes:
 
 - `POST /api/chat` starts and persists the generation, then returns `202`.
 - `GET /api/chat/replay` tails the durable session stream and owns delivery.
@@ -44,33 +55,32 @@ sequenceDiagram
 
   Browser->>AppServer: POST /api/chat
   AppServer-->>Browser: 202 Accepted
-  AppServer->>S2: append prompt snapshot
+  AppServer->>S2: append message snapshot
   AppServer->>Model: start generation
   Model-->>AppServer: StreamChunk
   AppServer->>S2: append chunk
   S2-->>Browser: SSE id + chunk
 ```
 
-The snapshot step is what prevents the "blank mid-generation after refresh"
-case. The UI renders everything already persisted, then the replay subscription
+On reload, the UI renders everything already persisted, then the subscription
 continues from `fromSeqNum`.
 
-## Choosing A Mode
+## Pick A Mode
 
-Use `streamReuse` to choose the durability shape.
+Use `mode` to choose how generations map to S2 streams.
 
-| Mode | Best For | Refresh Behavior | Snapshot Needed |
+| Mode | Use When | Refresh Behavior | Snapshot Needed |
 | --- | --- | --- | --- |
 | `single-use` | One stream per assistant turn | Replays only the active turn | No |
 | `shared` | Reusing one stream for the active generation | Replays the active generation after lease/fence coordination | No |
-| `shared-live` | Full chat sessions, multiple tabs, mid-generation refresh | Snapshot first, then tail new chunks forever | Yes |
+| `session` | Full chat sessions, multiple tabs, mid-generation refresh | Snapshot first, then tail later chunks | Yes |
 
-For most TanStack chat apps, use `shared-live`.
+For most TanStack chat apps, use `session`.
 
-## Server Setup
+## Server Helper
 
-Create one resumable chat helper for your app. Keep `streamReuse` aligned with
-the client `mode`.
+Create one resumable chat helper for your app. Keep the server and client
+`mode` values aligned.
 
 ```ts
 // src/server/s2-chat.ts
@@ -86,7 +96,7 @@ export const chat = createResumableChat({
           basin: process.env.S2_BASIN_ENDPOINT,
         }
       : undefined,
-  streamReuse: "shared-live",
+  mode: "session",
 });
 ```
 
@@ -105,11 +115,10 @@ function streamName(chatId: string): string {
 }
 ```
 
-## Start A Generation
+## Send Route
 
-In shared-live mode, the send route should not stream chunks back on the POST
-response. It should start the generation and let the replay subscription deliver
-chunks.
+In session mode, the POST route starts generation, persists chunks, and
+returns quickly. The replay subscription is the chunk delivery path.
 
 ```ts
 // POST /api/chat
@@ -148,7 +157,7 @@ export async function POST(req: Request): Promise<Response> {
 }
 ```
 
-What the helpers do:
+Helper responsibilities:
 
 - `normalizeMessages` preserves TanStack UI message ids and non-text parts.
 - `toTextMessages` converts messages to the text-only shape many model adapters
@@ -156,9 +165,9 @@ What the helpers do:
 - `makeSessionResponse` appends a `MESSAGES_SNAPSHOT` chunk first, then appends
   model chunks, persists everything in the background, and returns `202`.
 
-That means the durable S2 session stream is the source of truth for refreshes.
+The session stream is the source of truth for refresh and reconnect.
 
-## Replay New Chunks
+## Replay Route
 
 The replay route tails the session stream. It accepts a `from` cursor supplied
 by the client.
@@ -190,7 +199,7 @@ Replay responses include SSE `id` fields. The client adapter reads those ids and
 advances its reconnect cursor, so a later reconnect does not duplicate already
 applied chunks.
 
-## Load A Snapshot
+## Snapshot Route
 
 The snapshot route reconstructs UI messages from the durable session stream and
 returns `{ messages, fromSeqNum }`.
@@ -205,7 +214,7 @@ export async function GET(req: Request): Promise<Response> {
     return new Response("Missing id query parameter", { status: 400 });
   }
 
-  return chat.getSessionSnapshotResponse(streamName(id));
+  return chat.snapshot(streamName(id));
 }
 ```
 
@@ -259,7 +268,7 @@ function ChatInner({
   const connection = useMemo(
     () =>
       createS2Connection({
-        mode: "shared-live",
+        mode: "session",
         sendUrl: "/api/chat",
         subscribeUrl: `/api/chat/replay?id=${encodeURIComponent(chatId)}`,
         snapshot,
@@ -296,28 +305,30 @@ function ChatInner({
 }
 ```
 
-The important pieces are:
+Key client options:
 
 - `initialMessages: snapshot.messages` renders durable state immediately.
 - `snapshot` seeds the first replay cursor.
-- `live: true` keeps TanStack subscribed after mount.
+- `live: true` tells `useChat` to call `connection.subscribe()` on mount.
+  Session mode needs this because the POST route returns `202`; chunks arrive
+  through the replay route.
 - `body: { id: chatId }` adds the chat id to the send request.
 
-## What Happens On Refresh
+## Refresh Flow
 
 1. The browser reloads.
 2. The page calls `loadSnapshot`.
-3. The server reads the durable S2 stream and returns the latest UI messages.
+3. The server reads the session stream and returns the latest UI messages.
 4. The page renders those messages as `initialMessages`.
 5. `createS2Connection` starts replay from `snapshot.fromSeqNum`.
 6. Any chunks written after the snapshot arrive over the live subscription.
 
-This avoids both failure modes:
+This avoids both common failure modes:
 
 - No blank chat while a generation is in progress.
 - No duplicate assistant text after reconnecting.
 
-## Preserving Rich Messages
+## Message Shape
 
 `makeSessionResponse` stores the full UI messages you pass in `messages`. That
 preserves:
@@ -327,7 +338,7 @@ preserves:
 - non-text parts such as files or tool-related parts,
 - the latest user prompt before the assistant response starts.
 
-Only `toTextMessages` narrows messages to text, and that is just for model
+Only `toTextMessages` narrows messages to text. That is just for model
 adapters that expect `{ role, content }` messages. The durable snapshot still
 keeps the richer UI shape.
 
@@ -343,23 +354,23 @@ For production, prefer a custom `onError` message:
 const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
-  streamReuse: "shared-live",
+  mode: "session",
   onError: () => "The model stopped unexpectedly.",
 });
 ```
 
-## Production Checklist
+## Production Notes
 
 - Validate chat ids before deriving stream names.
-- Use one stable stream name per shared-live chat.
+- Use one stable stream name per session chat.
 - Pass `waitUntil` or your platform equivalent in serverless runtimes.
-- Keep server `streamReuse` and client `mode` the same.
-- Load a snapshot before rendering `useChat` for shared-live.
+- Keep server and client `mode` values the same.
+- Load a snapshot before rendering `useChat` for session mode.
 - Pass `snapshot` to `createS2Connection`.
-- Keep `live: true` for shared-live clients.
+- Use `live: true` for session clients so replay starts on mount.
 - Use HTTPS and normal application auth around chat endpoints.
 
-## Running This Example
+## Run The Example
 
 With S2 Lite:
 
@@ -384,13 +395,13 @@ export OPENAI_MODEL=gpt-4o-mini
 bun run example:tanstack-ai-chat
 ```
 
-## Files In This Example
+## Example Files
 
 - `src/routes/index.tsx`: React chat UI, snapshot loading, and `useChat`.
 - `src/routes/api.chat.ts`: starts a generation.
 - `src/routes/api.chat.replay.ts`: tails the durable session stream.
 - `src/routes/api.chat.snapshot.ts`: returns the bounded session snapshot.
-- `src/routes/api.chat.history.ts`: compatibility endpoint for non-live modes.
+- `src/routes/api.chat.history.ts`: compatibility endpoint for non-session modes.
 - `src/server/chat.ts`: stream names, S2 helper setup, and model stream creation.
 
 ## Troubleshooting
@@ -399,19 +410,19 @@ If a refresh shows an empty chat during generation:
 
 - Confirm the client calls `loadSnapshot` before constructing the connection.
 - Confirm the server send route uses `makeSessionResponse`.
-- Confirm the snapshot route calls `getSessionSnapshotResponse`.
+- Confirm the snapshot route calls `chat.snapshot`.
 
 If assistant text duplicates after reconnect:
 
 - Confirm replay responses include SSE `id` fields. `chat.replay(...)` handles
-  this for `shared-live`.
+  this for session mode.
 - Confirm the client passes the loaded `snapshot` to `createS2Connection`.
 - Confirm no fixed `from` value is baked into `subscribeUrl` after mount.
 
 If POST requests stay open until generation finishes:
 
-- Confirm shared-live sends use `makeSessionResponse`, not `makeResumable`.
-- Confirm the client uses `mode: "shared-live"`.
+- Confirm session sends use `makeSessionResponse`, not `makeResumable`.
+- Confirm the client uses `mode: "session"`.
 
 If messages lose ids or non-text parts:
 

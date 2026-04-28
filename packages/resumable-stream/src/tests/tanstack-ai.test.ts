@@ -182,7 +182,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(typeof chat.makeResumable).toBe("function");
 		expect(typeof chat.replay).toBe("function");
 		expect(typeof chat.makeSessionResponse).toBe("function");
-		expect(typeof chat.getSessionSnapshotResponse).toBe("function");
+		expect(typeof chat.snapshot).toBe("function");
 		expect(typeof chat.ensureStream).toBe("function");
 	});
 
@@ -269,7 +269,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 			basin: "b",
 			batchSize: 1,
 			lingerDuration: 0,
-			streamReuse: "shared-live",
+			mode: "session",
 		});
 
 		const persisted: Promise<unknown>[] = [];
@@ -296,7 +296,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 			basin: "b",
 			batchSize: 1,
 			lingerDuration: 0,
-			streamReuse: "shared-live",
+			mode: "session",
 		});
 
 		const persisted: Promise<unknown>[] = [];
@@ -336,7 +336,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(response.status).toBe(204);
 	});
 
-	it("getSessionSnapshotResponse rebuilds messages and next cursor", async () => {
+	it("snapshot rebuilds messages and next cursor", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const ts = new Date(0);
 		activeStreamRef.current = new FakeStream({
@@ -391,10 +391,10 @@ describe("createResumableChat (tanstack-ai)", () => {
 		const chat = createResumableChat({
 			accessToken: "t",
 			basin: "b",
-			streamReuse: "shared-live",
+			mode: "session",
 		});
 
-		const response = await chat.getSessionSnapshotResponse("s");
+		const response = await chat.snapshot("s");
 		const snapshot = await response.json();
 		expect(snapshot).toEqual({
 			fromSeqNum: 4,
@@ -416,7 +416,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		});
 	});
 
-	it("shared-live replay yields data from every generation and never 204s", async () => {
+	it("session replay yields data from every generation and never 204s", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const ts = new Date(0);
 		activeStreamRef.current = new FakeStream({
@@ -453,7 +453,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		const chat = createResumableChat({
 			accessToken: "t",
 			basin: "b",
-			streamReuse: "shared-live",
+			mode: "session",
 		});
 		const response = await chat.replay("s");
 		expect(response.status).toBe(200);
@@ -462,7 +462,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(frames).toEqual(["gen-1-a", "gen-2-a"]);
 	});
 
-	it("shared-live replay can start from a provided sequence number", async () => {
+	it("session replay can start from a provided sequence number", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const ts = new Date(0);
 		activeStreamRef.current = new FakeStream({
@@ -481,7 +481,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		const chat = createResumableChat({
 			accessToken: "t",
 			basin: "b",
-			streamReuse: "shared-live",
+			mode: "session",
 		});
 		const response = await chat.replay("s", { fromSeqNum: 2 });
 		expect(response.status).toBe(200);
@@ -490,7 +490,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(frames).toEqual(["new"]);
 	});
 
-	it("shared-live replay tags each frame with the next S2 sequence number", async () => {
+	it("session replay tags each frame with the next S2 sequence number", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const ts = new Date(0);
 		activeStreamRef.current = new FakeStream({
@@ -509,7 +509,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		const chat = createResumableChat({
 			accessToken: "t",
 			basin: "b",
-			streamReuse: "shared-live",
+			mode: "session",
 		});
 
 		const response = await chat.replay("s");

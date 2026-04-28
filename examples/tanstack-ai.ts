@@ -128,7 +128,7 @@ async function main() {
 		accessToken,
 		basin,
 		endpoints: endpointsFromEnv(),
-		streamReuse: "single-use",
+		mode: "single-use",
 	});
 
 	const source = await createSource(prompt);

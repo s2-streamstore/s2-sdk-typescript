@@ -164,11 +164,11 @@ export default function Chat() {
 
 The `./tanstack-ai` subpath exposes `createResumableChat` for TanStack AI's `StreamChunk` streams. `makeResumable` persists a generation and streams it back to the client. `replay` reconnects to an active generation mid-stream.
 
-`streamReuse` controls how generations map to S2 streams:
+`mode` controls how generations map to S2 streams:
 
 - `single-use` (default): each generation gets a dedicated stream.
 - `shared`: generations reuse one stream, with later writers taking over via lease-based fencing. Replay yields the active generation only.
-- `shared-live`: like `shared` but preserves the full transcript. Replay tails the stream forever.
+- `session`: generations append to one durable session log. Replay tails the stream forever.
 
 A TanStack Start chat app and detailed implementation guide:
 [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat).
@@ -181,7 +181,7 @@ import { createResumableChat } from "@s2-dev/resumable-stream/tanstack-ai";
 const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
-  streamReuse: "single-use",
+  mode: "single-use",
 });
 
 export async function POST(req: Request) {
@@ -210,13 +210,13 @@ import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client"
 const connection = createS2Connection({
   sendUrl: "/api/chat",
   subscribeUrl: "/api/chat/replay",
-  mode: "single-use", // must match the server's `streamReuse`
+  mode: "single-use", // must match the server mode
 });
 
 const { messages, sendMessage } = useChat({ connection });
 ```
 
-For `shared-live`, use the session helpers so the app code stays small:
+For full chat sessions, use `mode: "session"` and the session helpers:
 
 ```ts
 import {
@@ -228,7 +228,7 @@ import {
 const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
-  streamReuse: "shared-live",
+  mode: "session",
 });
 
 export async function POST(req: Request) {
@@ -256,7 +256,7 @@ export async function GET(req: Request) {
 
 export async function snapshot(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
-  return chat.getSessionSnapshotResponse(`chat-${id}`);
+  return chat.snapshot(`chat-${id}`);
 }
 ```
 
@@ -269,7 +269,7 @@ import {
 
 const snapshot = await loadSnapshot({ url: `/api/chat/snapshot?id=${chatId}` });
 const connection = createS2Connection({
-  mode: "shared-live",
+  mode: "session",
   sendUrl: "/api/chat",
   subscribeUrl: `/api/chat/replay?id=${chatId}`,
   snapshot,
@@ -284,6 +284,8 @@ const chat = useChat({
 ```
 
 `makeSessionResponse` prepends the message snapshot, persists in the
-background, and returns 202 immediately. `loadSnapshot` and `snapshot` seed
-the reconnect cursor; subsequent replay responses advance it via SSE `id`
-fields.
+background, and returns 202 immediately. `loadSnapshot` and `chat.snapshot`
+seed the reconnect cursor; subsequent replay responses advance it via SSE `id`
+fields. `live: true` tells `useChat` to start `connection.subscribe()` on mount,
+which is required for session mode because chunks arrive through the replay
+route instead of the POST response.

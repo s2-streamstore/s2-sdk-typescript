@@ -15,7 +15,7 @@ const LIVE_STREAM_PREFIX =
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const FALLBACK_MESSAGE_ID = "fallback-assistant";
 
-type StreamReuse = "single-use" | "shared" | "shared-live";
+type StreamMode = "single-use" | "shared" | "session";
 
 export type ChatMessage = TextMessage;
 
@@ -52,12 +52,15 @@ function endpointsFromEnv() {
 		: undefined;
 }
 
-function streamReuseFromEnv(): StreamReuse {
-	const raw = process.env.S2_TANSTACK_STREAM_REUSE;
-	if (raw === "single-use" || raw === "shared" || raw === "shared-live") {
-		return raw;
+function normalizeStreamMode(value: string | undefined): StreamMode | null {
+	if (value === "single-use" || value === "shared" || value === "session") {
+		return value;
 	}
-	return "shared-live";
+	return null;
+}
+
+function streamModeFromEnv(): StreamMode {
+	return normalizeStreamMode(process.env.S2_TANSTACK_MODE) ?? "session";
 }
 
 type Context = {
@@ -80,7 +83,7 @@ function getContext(): Context {
 			accessToken,
 			basin,
 			endpoints,
-			streamReuse: streamReuseFromEnv(),
+			mode: streamModeFromEnv(),
 		}),
 	};
 	return cachedContext;
@@ -91,7 +94,7 @@ function historyStreamName(chatId: string): string {
 }
 
 function liveStreamName(chatId: string, turnIndex: number): string {
-	return streamReuseFromEnv() === "single-use"
+	return streamModeFromEnv() === "single-use"
 		? `${LIVE_STREAM_PREFIX}-${chatId}-${turnIndex}`
 		: `${LIVE_STREAM_PREFIX}-${chatId}`;
 }
@@ -270,9 +273,9 @@ export async function postChat(request: Request): Promise<Response> {
 		if (!isValidChatId(body.id)) {
 			return new Response("Missing or invalid id", { status: 400 });
 		}
-		const streamReuse = streamReuseFromEnv();
+		const streamMode = streamModeFromEnv();
 
-		if (streamReuse === "shared-live") {
+		if (streamMode === "session") {
 			const messages = normalizeMessages(body.messages);
 			if (!getLatestUserText(messages)) {
 				return new Response("Expected at least one user message", {
@@ -322,7 +325,7 @@ export async function replayChat(
 		}
 
 		let streamName: string;
-		if (streamReuseFromEnv() !== "single-use") {
+		if (streamModeFromEnv() !== "single-use") {
 			streamName = liveStreamName(chatId, 0);
 		} else {
 			const history = await readHistory(chatId);
@@ -347,9 +350,7 @@ export async function getSnapshot(chatId: string | null): Promise<Response> {
 			return new Response("Missing id query parameter", { status: 400 });
 		}
 
-		return getContext().chat.getSessionSnapshotResponse(
-			liveStreamName(chatId, 0),
-		);
+		return getContext().chat.snapshot(liveStreamName(chatId, 0));
 	} catch (error) {
 		return routeError(error);
 	}

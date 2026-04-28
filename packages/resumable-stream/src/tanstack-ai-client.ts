@@ -2,10 +2,10 @@
  * Client-side connection adapter for TanStack AI's `ChatClient` / `useChat`,
  * wired to a `@s2-dev/resumable-stream/tanstack-ai` server.
  *
- * Auto-picks the adapter shape per server `streamReuse` mode:
+ * Auto-picks the adapter shape per server mode:
  * - `single-use` / `shared`: returns a `ConnectConnectionAdapter` that POSTs
  *   to `sendUrl` and yields chunks from the live SSE response.
- * - `shared-live`: returns a `SubscribeConnectionAdapter` that GETs `subscribeUrl`
+ * - `session`: returns a `SubscribeConnectionAdapter` that GETs `subscribeUrl`
  *   to tail the stream forever, and POSTs to `sendUrl` to kick off generations.
  *
  * Types come from `@tanstack/ai` and `@tanstack/ai-client` (type-only imports;
@@ -22,6 +22,8 @@ import { EventSourceParserStream } from "eventsource-parser/stream";
 export type { ConnectionAdapter } from "@tanstack/ai-client";
 
 type Messages = ReadonlyArray<UIMessage> | ReadonlyArray<ModelMessage>;
+
+export type S2ConnectionMode = "single-use" | "shared" | "session";
 
 export type ChatSnapshot = {
 	messages: UIMessage[];
@@ -42,17 +44,17 @@ export interface LoadSnapshotOptions {
 export interface S2ConnectionOptions {
 	/** Endpoint that POSTs messages and starts a generation. */
 	sendUrl: string | (() => string);
-	/** Endpoint that GETs the SSE chunk stream. Required for `shared-live`. */
+	/** Endpoint that GETs the SSE chunk stream. Required for `session`. */
 	subscribeUrl?: string | ((fromSeqNum?: number) => string);
-	/** Server's `streamReuse`. Drives which adapter shape is returned. Defaults to `single-use`. */
-	mode?: "single-use" | "shared" | "shared-live";
+	/** Server mode. Drives which adapter shape is returned. Defaults to `single-use`. */
+	mode?: S2ConnectionMode;
 	/**
-	 * Starting cursor for `shared-live` subscriptions. Snapshot responses should
+	 * Starting cursor for `session` subscriptions. Snapshot responses should
 	 * pass the next S2 sequence number here so subscribe only reads new records.
 	 */
 	initialFromSeqNum?: number;
 	/**
-	 * Snapshot loaded before constructing the connection. For `shared-live`,
+	 * Snapshot loaded before constructing the connection. For `session`,
 	 * this is the concise way to seed the reconnect cursor.
 	 */
 	snapshot?: ChatSnapshot;
@@ -184,7 +186,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-/** Load a shared-live snapshot before creating the TanStack connection. */
+/** Load a session snapshot before creating the TanStack connection. */
 export async function loadSnapshot(
 	options: LoadSnapshotOptions,
 ): Promise<ChatSnapshot> {
@@ -205,9 +207,9 @@ export function createS2Connection(
 	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const credentials = options.credentials ?? "same-origin";
 
-	if (mode === "shared-live" && !options.subscribeUrl) {
+	if (mode === "session" && !options.subscribeUrl) {
 		throw new Error(
-			'createS2Connection: subscribeUrl is required when mode is "shared-live"',
+			'createS2Connection: subscribeUrl is required when mode is "session"',
 		);
 	}
 
@@ -240,7 +242,7 @@ export function createS2Connection(
 		});
 	};
 
-	if (mode === "shared-live") {
+	if (mode === "session") {
 		const subscribeUrl = options.subscribeUrl as
 			| string
 			| ((fromSeqNum?: number) => string);

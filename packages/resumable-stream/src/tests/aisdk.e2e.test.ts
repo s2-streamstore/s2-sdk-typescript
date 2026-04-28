@@ -296,7 +296,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("shared-reuse");
@@ -364,7 +364,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					leaseDurationMs: 60_000,
 					...s2EndpointsFromEnv(),
 				});
@@ -394,7 +394,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					leaseDurationMs,
 					...s2EndpointsFromEnv(),
 				});
@@ -430,7 +430,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("shared-idle");

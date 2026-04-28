@@ -185,7 +185,7 @@ export async function* replayActiveGenerationStringBodies(
 /**
  * Tail every data record on the stream from `fromSeqNum` (default 0), skipping
  * fence and trim records, and never stopping on terminal fences. Used by
- * `shared-live` mode so a single subscription sees chunks from every
+ * `session` mode so a single subscription sees chunks from every
  * generation as they land.
  */
 export async function* tailStringBodies(

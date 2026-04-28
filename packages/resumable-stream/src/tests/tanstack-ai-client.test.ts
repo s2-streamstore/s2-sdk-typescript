@@ -216,11 +216,11 @@ describe("createS2Connection (single-use / shared)", () => {
 	});
 });
 
-describe("createS2Connection (shared-live)", () => {
+describe("createS2Connection (session)", () => {
 	it("requires subscribeUrl at construction", () => {
 		expect(() =>
-			createS2Connection({ sendUrl: "/api/chat", mode: "shared-live" }),
-		).toThrow(/subscribeUrl is required/);
+			createS2Connection({ sendUrl: "/api/chat", mode: "session" }),
+		).toThrow(/mode is "session"/);
 	});
 
 	it("subscribe() GETs subscribeUrl and yields chunks; send() POSTs to sendUrl", async () => {
@@ -235,7 +235,7 @@ describe("createS2Connection (shared-live)", () => {
 		const adapter = createS2Connection({
 			sendUrl: "/api/chat",
 			subscribeUrl: "/api/chat/replay",
-			mode: "shared-live",
+			mode: "session",
 			fetch,
 		}) as SubscribeConnectionAdapter;
 
@@ -265,7 +265,7 @@ describe("createS2Connection (shared-live)", () => {
 		const adapter = createS2Connection({
 			sendUrl: "/api/chat",
 			subscribeUrl: "/api/chat/replay?id=chat-1",
-			mode: "shared-live",
+			mode: "session",
 			snapshot: { messages, fromSeqNum: 5 },
 			fetch,
 		}) as SubscribeConnectionAdapter;
@@ -277,7 +277,7 @@ describe("createS2Connection (shared-live)", () => {
 		expect(calls[1]!.url).toBe("/api/chat/replay?id=chat-1&from=9");
 	});
 
-	it("loads a shared-live snapshot response", async () => {
+	it("loads a session snapshot response", async () => {
 		const { fetch, calls } = recordingFetch([
 			new Response(JSON.stringify({ messages, fromSeqNum: 12 }), {
 				headers: { "Content-Type": "application/json" },

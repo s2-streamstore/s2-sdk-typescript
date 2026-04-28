@@ -24,6 +24,8 @@ const DEFAULT_LEASE_DURATION_MS = 5 * 1000;
 
 export const DEFAULT_ERROR_TEXT = "An error occurred.";
 
+export type ResumableChatMode = "single-use" | "shared" | "session";
+
 /** Configuration shared by all resumable chat adapters. */
 export interface ResumableChatConfig {
 	/** S2 access token. */
@@ -41,12 +43,12 @@ export interface ResumableChatConfig {
 	 * - `single-use`: each generation gets a dedicated stream.
 	 * - `shared`: generations reuse one stream; later writers take over via lease-based fencing.
 	 *   The stream is trimmed on each claim, so replay yields only the active generation.
-	 * - `shared-live`: like `shared` but skips the trim, preserving the full transcript.
-	 *   `replay` tails the stream forever, surfacing chunks from every generation as they land.
+	 * - `session`: generations append to one durable session log. Replay tails the stream,
+	 *   surfacing chunks from every generation as they land.
 	 */
-	streamReuse?: "single-use" | "shared" | "shared-live";
+	mode?: ResumableChatMode;
 	/**
-	 * Only applies to `shared` / `shared-live`. If an active generation hasn't written a record
+	 * Only applies to `shared` / `session`. If an active generation hasn't written a record
 	 * for this many milliseconds, the next claim takes it over. Defaults to 5000.
 	 */
 	leaseDurationMs?: number;
@@ -69,7 +71,7 @@ export interface MakeResumableOptions {
 	 * - `stream` returns the live SSE chunks on the request itself.
 	 * - `background` persists chunks to S2 and returns 202 immediately.
 	 *
-	 * `background` is intended for `shared-live`, where a separate replay
+	 * `background` is intended for `session` mode, where a separate replay
 	 * subscription is the source of truth for client delivery.
 	 *
 	 * @default "stream"
@@ -81,7 +83,7 @@ export interface MakeResumableOptions {
 export interface ReplayOptions {
 	/**
 	 * Sequence number to start reading from. Only meaningful for
-	 * `streamReuse: "shared-live"`, where replay tails a long-lived log.
+	 * `mode: "session"`, where replay tails a long-lived log.
 	 */
 	fromSeqNum?: number;
 }
@@ -223,14 +225,14 @@ export function createChat<T>(
 	const basin = config.basin;
 	const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
-	const streamReuse = config.streamReuse ?? "single-use";
+	const mode = config.mode ?? "single-use";
 	const leaseDurationMs = config.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
 	const errorChunk = (err: unknown): T =>
 		adapter.makeErrorChunk(err, config.onError);
 
-	const isShared = streamReuse === "shared" || streamReuse === "shared-live";
-	const isLive = streamReuse === "shared-live";
-	const trimOnTerminalFence = streamReuse === "single-use";
+	const isShared = mode === "shared" || mode === "session";
+	const isSession = mode === "session";
+	const trimOnTerminalFence = mode === "single-use";
 
 	return {
 		async makeResumable(
@@ -249,7 +251,7 @@ export function createChat<T>(
 						stream: handle,
 						fencingToken,
 						leaseDurationMs,
-						trim: !isLive,
+						trim: !isSession,
 					});
 					if (!claim) {
 						return new Response("Stream already in use", { status: 409 });
@@ -345,7 +347,7 @@ export function createChat<T>(
 		): Promise<Response> {
 			const handle = s2.basin(basin).stream(streamName);
 
-			if (isLive) {
+			if (isSession) {
 				return sseResponseFromTailedStrings(
 					tailStringRecords(handle, options?.fromSeqNum),
 					adapter.responseHeaders,

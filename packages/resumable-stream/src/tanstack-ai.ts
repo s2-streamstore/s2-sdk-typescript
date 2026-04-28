@@ -11,6 +11,7 @@ export type {
 	MakeResumableOptions,
 	ReplayOptions,
 	ResumableChatConfig,
+	ResumableChatMode,
 } from "./adapter.js";
 
 /**
@@ -67,17 +68,17 @@ export type ResumableChat = Chat<StreamChunk> & {
 	/** Creates the S2 stream if needed. */
 	ensureStream(streamName: string): Promise<void>;
 	/**
-	 * Starts a shared-live TanStack chat session and returns immediately.
+	 * Starts a TanStack chat session and returns immediately.
 	 * The durable replay subscription is the source of truth for chunks.
 	 */
 	makeSessionResponse(
 		streamName: string,
 		options: MakeSessionResponseOptions,
 	): Promise<Response>;
-	/** Reads the current shared-live transcript snapshot without tailing. */
+	/** Reads the current session transcript snapshot without tailing. */
 	getSessionSnapshot(streamName: string): Promise<ChatSnapshot>;
-	/** Reads the current shared-live transcript snapshot as a JSON response. */
-	getSessionSnapshotResponse(streamName: string): Promise<Response>;
+	/** Returns the current session transcript snapshot as a JSON response. */
+	snapshot(streamName: string): Promise<Response>;
 };
 
 const SSE_HEADERS = {
@@ -351,7 +352,7 @@ export function createResumableChat(
 		endpoints: config.endpoints,
 	});
 	const basin = s2.basin(config.basin);
-	const streamReuse = config.streamReuse ?? "single-use";
+	const mode = config.mode ?? "single-use";
 
 	const ensureStream = async (streamName: string): Promise<void> => {
 		await basin.streams
@@ -368,10 +369,8 @@ export function createResumableChat(
 			streamName: string,
 			options: MakeSessionResponseOptions,
 		): Promise<Response> {
-			if (streamReuse !== "shared-live") {
-				throw new Error(
-					'makeSessionResponse requires streamReuse: "shared-live"',
-				);
+			if (mode !== "session") {
+				throw new Error('makeSessionResponse requires mode: "session"');
 			}
 			const messages = normalizeMessages(options.messages);
 			await ensureStream(streamName);
@@ -388,7 +387,7 @@ export function createResumableChat(
 			await ensureStream(streamName);
 			return readSessionSnapshot(basin.stream(streamName));
 		},
-		async getSessionSnapshotResponse(streamName: string): Promise<Response> {
+		async snapshot(streamName: string): Promise<Response> {
 			await ensureStream(streamName);
 			return Response.json(
 				await readSessionSnapshot(basin.stream(streamName)),

@@ -20,8 +20,8 @@ const LIVE_STREAM_PREFIX =
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 // Toggle between "shared" and "single-use"
-type StreamReuse = "single-use" | "shared";
-const STREAM_REUSE = "single-use" as StreamReuse;
+type StreamMode = "single-use" | "shared";
+const STREAM_MODE = "single-use" as StreamMode;
 
 type ChatMessage = {
 	role: "user" | "assistant";
@@ -52,7 +52,7 @@ const chat = createResumableChat({
 	basin,
 	endpoints:
 		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
-	streamReuse: STREAM_REUSE,
+	mode: STREAM_MODE,
 });
 
 function historyStreamName(chatId: string): string {
@@ -63,7 +63,7 @@ function historyStreamName(chatId: string): string {
 // needs a fresh stream per turn so the `matchSeqNum: 0` re-claim guard
 // doesn't reject subsequent turns.
 function liveStreamName(chatId: string, turnIndex: number): string {
-	return STREAM_REUSE === "shared"
+	return STREAM_MODE === "shared"
 		? `${LIVE_STREAM_PREFIX}-${chatId}`
 		: `${LIVE_STREAM_PREFIX}-${chatId}-${turnIndex}`;
 }
@@ -257,7 +257,7 @@ const server = Bun.serve({
 			}
 
 			let streamName: string;
-			if (STREAM_REUSE === "shared") {
+			if (STREAM_MODE === "shared") {
 				streamName = liveStreamName(chatId, 0);
 			} else {
 				const history = await readHistory(chatId);
