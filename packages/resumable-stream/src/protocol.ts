@@ -6,6 +6,7 @@ import {
 	Producer,
 	type ReadRecord,
 	S2,
+	type S2Stream,
 	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
 
@@ -38,34 +39,45 @@ export function isTerminalFence(
 }
 
 export async function appendFenceCommand(
-	s2: S2,
-	basin: string,
-	stream: string,
+	stream: S2Stream,
 	currentToken: string | null | undefined,
 	newToken: string,
 	options?: { matchSeqNum?: number },
 ): Promise<AppendAck> {
-	const command = AppendInput.create(
-		[AppendRecord.fence(newToken, Date.now())],
-		{
+	return await stream.append(
+		AppendInput.create([AppendRecord.fence(newToken, Date.now())], {
 			fencingToken: currentToken ?? undefined,
 			matchSeqNum: options?.matchSeqNum,
-		},
+		}),
 	);
-	return await s2.basin(basin).stream(stream).append(command);
 }
 
 export async function appendTrimCommand(
-	s2: S2,
-	basin: string,
-	stream: string,
+	stream: S2Stream,
 	currentToken: string | null | undefined,
 	trimBeforeSeqNum: number,
 ): Promise<AppendAck> {
-	const command = AppendInput.create([AppendRecord.trim(trimBeforeSeqNum)], {
-		fencingToken: currentToken ?? undefined,
-	});
-	return await s2.basin(basin).stream(stream).append(command);
+	return await stream.append(
+		AppendInput.create([AppendRecord.trim(trimBeforeSeqNum)], {
+			fencingToken: currentToken ?? undefined,
+		}),
+	);
+}
+
+export function createTerminalRecords({
+	errorRecord,
+	terminalFenceToken,
+	trim,
+}: {
+	errorRecord?: AppendRecord;
+	terminalFenceToken: string;
+	trim: boolean;
+}): AppendRecord[] {
+	const records: AppendRecord[] = [];
+	if (errorRecord) records.push(errorRecord);
+	if (trim) records.push(AppendRecord.trim(Number.MAX_SAFE_INTEGER));
+	records.push(AppendRecord.fence(terminalFenceToken));
+	return records;
 }
 
 export interface PersistToS2Options<T> {

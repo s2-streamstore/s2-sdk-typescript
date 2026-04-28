@@ -5,6 +5,12 @@
       "packages/*/src/**/*.ts",
       "packages/*/examples/**/*.ts",
       "examples/*.ts",
+      "examples/tanstack-ai-chat/*.json",
+      "examples/tanstack-ai-chat/*.ts",
+      "examples/tanstack-ai-chat/src/**/*.css",
+      "examples/tanstack-ai-chat/src/**/*.ts",
+      "examples/tanstack-ai-chat/src/**/*.tsx",
+      "!examples/tanstack-ai-chat/src/routeTree.gen.ts",
       "*.json",
       "!packages/streamstore/src/generated/**/*.ts"
     ]

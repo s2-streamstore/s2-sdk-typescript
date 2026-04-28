@@ -1,11 +1,10 @@
-import { S2Error } from "@s2-dev/streamstore";
+import { S2Error, type S2Stream } from "@s2-dev/streamstore";
 import {
 	appendFenceCommand,
 	appendTrimCommand,
 	isFenceRecord,
 	isTerminalFence,
 	isTrimRecord,
-	type StreamReadOptions,
 } from "./protocol.js";
 
 interface SharedStreamState {
@@ -46,28 +45,25 @@ function isMissingStreamError(error: unknown): boolean {
 	);
 }
 
-async function readSharedStreamState({
-	s2,
-	basin,
-	stream,
-}: StreamReadOptions): Promise<SharedStreamState> {
-	const handle = s2.basin(basin).stream(stream);
-	try {
-		const session = await handle
-			.readSession(
-				{
-					start: { from: { seqNum: 0 }, clamp: true },
-					stop: { waitSecs: 0 },
-				},
-				{ as: "string" },
-			)
-			.catch((error: unknown) => {
-				if (isMissingStreamError(error)) return null;
-				throw error;
-			});
-		if (!session) return createEmptySharedStreamState();
+async function readSharedStreamState(
+	stream: S2Stream,
+): Promise<SharedStreamState> {
+	const session = await stream
+		.readSession(
+			{
+				start: { from: { seqNum: 0 }, clamp: true },
+				stop: { waitSecs: 0 },
+			},
+			{ as: "string" },
+		)
+		.catch((error: unknown) => {
+			if (isMissingStreamError(error)) return null;
+			throw error;
+		});
+	if (!session) return createEmptySharedStreamState();
 
-		const state = createEmptySharedStreamState();
+	const state = createEmptySharedStreamState();
+	try {
 		for await (const record of session) {
 			state.nextSeqNum = record.seqNum + 1;
 			state.lastRecordTimestamp = record.timestamp.getTime();
@@ -86,29 +82,37 @@ async function readSharedStreamState({
 			state.reusableFenceToken = null;
 			state.heldFenceToken = record.body;
 		}
-		return state;
 	} finally {
-		await handle.close();
+		await session[Symbol.asyncDispose]?.();
 	}
+	return state;
 }
 
 export async function claimSharedGeneration({
-	s2,
-	basin,
 	stream,
 	fencingToken,
 	leaseDurationMs,
 	now = () => Date.now(),
-}: StreamReadOptions & {
+	trim = true,
+}: {
+	stream: S2Stream;
 	fencingToken: string;
 	leaseDurationMs: number;
 	/** Time source override for tests. */
 	now?: () => number;
+	/**
+	 * Trim records before the new fence after claiming. `true` for one-shot
+	 * generations (`createResumableGeneration` `shared` mode). `false` for
+	 * session logs that need to preserve history across generations.
+	 *
+	 * @default true
+	 */
+	trim?: boolean;
 }): Promise<{
 	fromSeqNum: number;
 	matchSeqNumStart: number;
 } | null> {
-	const state = await readSharedStreamState({ s2, basin, stream });
+	const state = await readSharedStreamState(stream);
 
 	let currentToken = state.reusableFenceToken;
 	if (
@@ -126,19 +130,11 @@ export async function claimSharedGeneration({
 		return null;
 	}
 
-	const fenceAck = await appendFenceCommand(
-		s2,
-		basin,
-		stream,
-		currentToken,
-		fencingToken,
-	);
+	const fenceAck = await appendFenceCommand(stream, currentToken, fencingToken);
 	let matchSeqNumStart = fenceAck.end.seqNum;
 
-	if (state.nextSeqNum > 0) {
+	if (trim && state.nextSeqNum > 0) {
 		const trimAck = await appendTrimCommand(
-			s2,
-			basin,
 			stream,
 			fencingToken,
 			fenceAck.start.seqNum,
@@ -152,23 +148,20 @@ export async function claimSharedGeneration({
 	};
 }
 
-export async function* replayActiveGenerationStringBodies({
-	s2,
-	basin,
-	stream,
-}: StreamReadOptions): AsyncIterable<string> {
-	const state = await readSharedStreamState({ s2, basin, stream });
+export async function* replayActiveGenerationStringBodies(
+	stream: S2Stream,
+): AsyncIterable<string> {
+	const state = await readSharedStreamState(stream);
 	if (state.activeGenerationStartSeqNum === null) return;
 	if (!state.hasActiveGeneration) return;
 
-	const handle = s2.basin(basin).stream(stream);
+	const session = await stream.readSession(
+		{
+			start: { from: { seqNum: state.activeGenerationStartSeqNum } },
+		},
+		{ as: "string" },
+	);
 	try {
-		const session = await handle.readSession(
-			{
-				start: { from: { seqNum: state.activeGenerationStartSeqNum } },
-			},
-			{ as: "string" },
-		);
 		for await (const record of session) {
 			if (isFenceRecord(record)) {
 				if (isTerminalFence(record)) break;
@@ -180,6 +173,6 @@ export async function* replayActiveGenerationStringBodies({
 			}
 		}
 	} finally {
-		await handle.close();
+		await session[Symbol.asyncDispose]?.();
 	}
 }

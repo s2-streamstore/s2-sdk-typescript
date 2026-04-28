@@ -1,70 +1,32 @@
-# TanStack AI Chat with S2
+# TanStack AI Chat With S2 Resume
 
-A Bun server + vanilla-JS browser client that stores a TanStack AI session log in
-S2. The browser app appends a user turn, tails assistant events from the returned
-`seqNum`, and reloads from `snapshot()` after a refresh.
+A TanStack Start app that streams TanStack AI chunks through S2-backed resumable SSE routes.
 
-## How It Works
-
-One S2 stream per chat:
-
-1. `POST /api/chat` reads the current S2 snapshot, appends the new user message,
-   starts a TanStack AI run, and returns `{ streamName, runId, nextSeqNum }`.
-2. The browser calls `GET /api/chat/tail?id=...&fromSeqNum=...` and renders
-   `chunk` events for that `runId`.
-3. `GET /api/chat/snapshot?id=...` materializes messages and returns the next
-   resume coordinate. On refresh, the browser renders the snapshot and tails any
-   active run.
-
-The example uses a local fallback stream unless `OPENAI_API_KEY` is set. With
-`OPENAI_API_KEY`, it dynamically imports `@tanstack/ai` and
-`@tanstack/ai-openai`.
-
-## Run With S2 Lite
+## Run
 
 ```bash
-# terminal 1
-s2 lite --port 8080
+export S2_ACCOUNT_ENDPOINT=http://localhost:8080
+export S2_BASIN_ENDPOINT=http://localhost:8080
+export S2_ACCESS_TOKEN=ignored
+export S2_BASIN=my-basin
 
-# terminal 2
-export S2_ACCOUNT_ENDPOINT="http://localhost:8080"
-export S2_BASIN_ENDPOINT="http://localhost:8080"
-export S2_ACCESS_TOKEN="ignored"
-
-s2 create-basin tanstack-ai-chat
-
-export S2_BASIN="tanstack-ai-chat"
-bun run examples/tanstack-ai-chat/server.ts
+bun run example:tanstack-ai-chat
 ```
 
-Open [http://localhost:3458](http://localhost:3458).
+Open [http://127.0.0.1:3458](http://127.0.0.1:3458).
 
-## Run With S2 Cloud
+Without `OPENAI_API_KEY`, the app uses a deterministic local stream so resume can be tested without a model provider. To use real TanStack AI generation:
 
 ```bash
-export S2_ACCESS_TOKEN="..."
-export S2_BASIN="my-basin"
-
-bun run examples/tanstack-ai-chat/server.ts
+export OPENAI_API_KEY=sk-...
+export OPENAI_MODEL=gpt-4o-mini
+bun run example:tanstack-ai-chat
 ```
 
-## Optional Real Model Mode
+## Shape
 
-```bash
-bun add @tanstack/ai @tanstack/ai-openai
-export OPENAI_API_KEY="sk-..."
-export OPENAI_MODEL="gpt-4o-mini"
-
-bun run examples/tanstack-ai-chat/server.ts
-```
-
-## Tuning
-
-```bash
-# Fallback echo delay per word. Set to 0 for instant local echo.
-export S2_TANSTACK_ECHO_DELAY_MS=12
-
-# S2 session persistence batching. Lower linger favors latency.
-export S2_TANSTACK_SESSION_BATCH_SIZE=16
-export S2_TANSTACK_SESSION_LINGER_MS=5
-```
+- `src/routes/index.tsx` is the React chat route.
+- `src/routes/api.chat.ts` starts a generation and returns the live SSE stream.
+- `src/routes/api.chat.replay.ts` replays the active S2 generation after a refresh.
+- `src/routes/api.chat.history.ts` reloads completed transcript messages.
+- `src/server/chat.ts` contains S2 stream creation, transcript persistence, and TanStack AI source creation.

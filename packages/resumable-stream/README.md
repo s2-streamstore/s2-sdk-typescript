@@ -92,7 +92,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
 
 The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResumable` tees the `UIMessageChunk` stream: one branch streams directly back to the client as SSE, the other is persisted to S2 for resumption. The wire format matches the AI SDK's `createUIMessageStreamResponse`, so the stock `DefaultChatTransport` works out of the box.
 
-A runnable end-to-end demo (Bun server + vanilla-JS client) lives in [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
+A runnable end-to-end demo (Bun server + vanilla-JS client): [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
 
 ```ts
 // lib/s2.ts
@@ -162,45 +162,34 @@ export default function Chat() {
 
 ## TanStack AI
 
-The `./tanstack-ai` subpath has two layers:
+The `./tanstack-ai` subpath exposes `createResumableChat` for TanStack AI's `StreamChunk` streams. `makeResumable` persists a generation and streams it back to the client. `replay` reconnects to an active generation mid-stream.
 
-- `createResumableGeneration()` makes a single TanStack AI `StreamChunk` generation resumable through S2.
-- `createS2SessionHandler()` and `createS2Connection()` implement an S2 session log: append new user messages, tail assistant events from a `seqNum`, and materialize message history plus the next resume coordinate with `snapshot()`.
+A TanStack Start chat app: [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat).
 
 ```ts
-import { chat } from "@tanstack/ai";
+import { chat as tanstackChat } from "@tanstack/ai";
 import { openaiText } from "@tanstack/ai-openai";
-import {
-  createS2Connection,
-  createS2SessionHandler,
-} from "@s2-dev/resumable-stream/tanstack-ai";
+import { createResumableChat } from "@s2-dev/resumable-stream/tanstack-ai";
 
-const handler = createS2SessionHandler({
+const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
-  async produce({ messages }) {
-    return chat({
-      adapter: openaiText("gpt-4o-mini"),
-      messages,
-    });
-  },
+  streamReuse: "single-use",
 });
 
 export async function POST(req: Request) {
-  // Appends new user messages and starts a background model run.
-  return handler.POST(req);
+  const { chatId, turnIndex, messages } = await req.json();
+  const source = tanstackChat({
+    adapter: openaiText("gpt-4o-mini"),
+    messages,
+  });
+  return chat.makeResumable(`chat-${chatId}-${turnIndex}`, source, {
+    waitUntil,
+  });
 }
 
 export async function GET(req: Request) {
-  // Tails session events from ?streamName=...&fromSeqNum=...
-  return handler.GET(req);
+  const streamName = new URL(req.url).searchParams.get("stream")!;
+  return chat.replay(streamName);
 }
-
-export const connection = createS2Connection({
-  appendUrl: "/api/chat/append",
-  tailUrl: "/api/chat/tail",
-  streamName: "tanstack-ai/session-1",
-});
 ```
-
-The session stream stores user messages, run starts, assistant chunks, run finishes, and run errors as ordered S2 records. A runnable browser chat example lives in [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat). It uses a local fallback stream by default, or a real TanStack AI + OpenAI stream when `OPENAI_API_KEY` is set and `@tanstack/ai @tanstack/ai-openai` are installed.

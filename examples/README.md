@@ -31,21 +31,17 @@ Some examples require additional variables
 
 ### TanStack AI
 
-This starts a browser chat demo with append, tail, and snapshot routes backed by
-one S2 stream per chat. It uses a local fallback stream by default. To use a
-real model, install TanStack AI packages and set `OPENAI_API_KEY`.
+A TanStack Start chat app with one S2 transcript stream per chat and a resumable live stream per active turn. Uses a local fallback stream by default. Set `OPENAI_API_KEY` to use a real model.
 
 ```bash
-bun run tanstack-ai-chat/server.ts
+bun run example:tanstack-ai-chat
 
 # Optional real model mode:
-npm install @tanstack/ai @tanstack/ai-openai
 export OPENAI_API_KEY="sk-..."
-bun run tanstack-ai-chat/server.ts
+bun run example:tanstack-ai-chat
 ```
 
-Open [http://localhost:3458](http://localhost:3458). More details are in
-[`tanstack-ai-chat/README.md`](tanstack-ai-chat/README.md).
+Open [http://127.0.0.1:3458](http://127.0.0.1:3458). See [tanstack-ai-chat/README.md](tanstack-ai-chat/README.md) for the route layout.
 
 ### AI SDK examples
 
