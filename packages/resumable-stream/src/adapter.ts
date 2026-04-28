@@ -62,21 +62,22 @@ export interface ResumableChatConfig {
 /** Options for `makeResumable`. */
 export interface MakeResumableOptions {
 	/**
-	 * Keeps background S2 persistence alive after the response returns.
+	 * Keeps S2 persistence alive after the response returns.
 	 * Pass the platform-provided `waitUntil` (Vercel/Cloudflare).
 	 */
 	waitUntil?: (promise: Promise<unknown>) => void;
 	/**
-	 * How to respond to the request that starts generation.
-	 * - `stream` returns the live SSE chunks on the request itself.
-	 * - `background` persists chunks to S2 and returns 202 immediately.
+	 * Which path delivers chunks to the client.
+	 * - `response` streams chunks on the request that starts generation.
+	 * - `replay` persists chunks to S2 and returns 202 immediately; a replay
+	 *   route or subscription owns delivery.
 	 *
-	 * `background` is intended for `session` mode, where a separate replay
+	 * `replay` is intended for `session` mode, where a separate replay
 	 * subscription is the source of truth for client delivery.
 	 *
-	 * @default "stream"
+	 * @default "response"
 	 */
-	responseMode?: "stream" | "background";
+	delivery?: "response" | "replay";
 }
 
 /** Options for `replay`. */
@@ -243,7 +244,7 @@ export function createChat<T>(
 			const fencingToken = `session-${randomToken(8)}`;
 			let matchSeqNumStart = 1;
 			const handle = s2.basin(basin).stream(streamName);
-			const responseMode = options?.responseMode ?? "stream";
+			const delivery = options?.delivery ?? "response";
 
 			try {
 				if (isShared) {
@@ -276,7 +277,7 @@ export function createChat<T>(
 
 			let toClient: ReadableStream<T> | undefined;
 			let persistSource: AsyncIterable<T>;
-			if (responseMode === "background") {
+			if (delivery === "replay") {
 				persistSource = source;
 			} else {
 				const [clientStream, persistStream] =
@@ -321,7 +322,7 @@ export function createChat<T>(
 				});
 			}
 
-			if (responseMode === "background") {
+			if (delivery === "replay") {
 				return new Response(null, {
 					status: 202,
 					headers: { "Cache-Control": "no-store" },

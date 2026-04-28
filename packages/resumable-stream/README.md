@@ -283,9 +283,15 @@ const chat = useChat({
 });
 ```
 
-`makeSessionResponse` prepends the message snapshot, persists in the
-background, and returns 202 immediately. `loadSnapshot` and `chat.snapshot`
-seed the reconnect cursor; subsequent replay responses advance it via SSE `id`
-fields. `live: true` tells `useChat` to start `connection.subscribe()` on mount,
-which is required for session mode because chunks arrive through the replay
-route instead of the POST response.
+`makeSessionResponse` prepends the message snapshot and uses replay delivery:
+the POST route returns 202 immediately, while chunks arrive through the replay
+route. `loadSnapshot` and `chat.snapshot` seed the reconnect cursor;
+subsequent replay responses advance it via SSE `id` fields. `live: true` tells
+`useChat` to start `connection.subscribe()` on mount, which is required for
+session mode because chunks arrive through the replay route instead of the
+POST response.
+
+For lower-level calls, `makeResumable` defaults to
+`delivery: "response"`, which streams chunks on the request that starts
+generation. Use `delivery: "replay"` only when a separate replay route or
+subscription owns chunk delivery.

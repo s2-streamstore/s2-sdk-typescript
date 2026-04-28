@@ -55,7 +55,7 @@ export interface MakeSessionResponseOptions {
 	/** Assistant/model stream to append after the message snapshot. */
 	source: AsyncIterable<StreamChunk>;
 	/**
-	 * Keeps background S2 persistence alive after the response returns.
+	 * Keeps S2 persistence alive after the response returns.
 	 * Pass the platform-provided `waitUntil` (Vercel/Cloudflare).
 	 */
 	waitUntil?: (promise: Promise<unknown>) => void;
@@ -378,7 +378,7 @@ export function createResumableChat(
 				streamName,
 				prependMessagesSnapshot(messages, options.source),
 				{
-					responseMode: "background",
+					delivery: "replay",
 					waitUntil: options.waitUntil,
 				},
 			);

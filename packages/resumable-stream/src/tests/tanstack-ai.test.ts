@@ -259,7 +259,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		await Promise.allSettled(persisted);
 	});
 
-	it("can persist in the background and return 202 without a live SSE body", async () => {
+	it("can use replay delivery and return 202 without a live SSE body", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const stream = new FakeStream();
 		activeStreamRef.current = stream;
@@ -274,7 +274,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 
 		const persisted: Promise<unknown>[] = [];
 		const response = await chat.makeResumable("s", okSource(), {
-			responseMode: "background",
+			delivery: "replay",
 			waitUntil: (p) => {
 				persisted.push(p);
 			},

@@ -163,7 +163,7 @@ Helper responsibilities:
 - `toTextMessages` converts messages to the text-only shape many model adapters
   expect.
 - `makeSessionResponse` appends a `MESSAGES_SNAPSHOT` chunk first, then appends
-  model chunks, persists everything in the background, and returns `202`.
+  model chunks with replay delivery, and returns `202`.
 
 The session stream is the source of truth for refresh and reconnect.
 
