@@ -336,6 +336,29 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(response.status).toBe(204);
 	});
 
+	it("active replay tags chunks and can resume from a sequence number", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		const ts = new Date(0);
+		activeStreamRef.current = new FakeStream({
+			readRecords: [
+				{
+					seqNum: 0,
+					body: "holder",
+					headers: [["", "fence"]],
+					timestamp: ts,
+				},
+				{ seqNum: 1, body: "old", headers: [], timestamp: ts },
+				{ seqNum: 2, body: "new", headers: [], timestamp: ts },
+			],
+		});
+
+		const chat = createResumableChat({ accessToken: "t", basin: "b" });
+		const response = await chat.replay("s", { fromSeqNum: 2 });
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe("id: 3\ndata: new\n\n");
+	});
+
 	it("snapshot rebuilds messages and next cursor", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const ts = new Date(0);

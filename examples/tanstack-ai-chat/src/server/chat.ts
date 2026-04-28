@@ -1,7 +1,9 @@
 import {
 	createResumableChat,
 	getLatestUserText,
+	getMessageText,
 	normalizeMessages,
+	type SnapshotMessage,
 	type StreamChunk,
 	type TextMessage,
 	toTextMessages,
@@ -14,10 +16,12 @@ const LIVE_STREAM_PREFIX =
 	process.env.S2_TANSTACK_CHAT_LIVE_PREFIX || "tanstack-ai-chat-live";
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const FALLBACK_MESSAGE_ID = "fallback-assistant";
+const REPLAY_WAIT_MS = 10_000;
+const REPLAY_POLL_MS = 50;
 
 type StreamMode = "single-use" | "shared" | "session";
 
-export type ChatMessage = TextMessage;
+export type ChatMessage = SnapshotMessage;
 
 type ChatPayload = {
 	id?: unknown;
@@ -25,8 +29,12 @@ type ChatPayload = {
 };
 
 function latestUserMessage(messages: unknown): ChatMessage | null {
-	const content = getLatestUserText(messages);
-	return content ? { role: "user", content } : null;
+	const normalized = normalizeMessages(messages);
+	for (let index = normalized.length - 1; index >= 0; index -= 1) {
+		const message = normalized[index];
+		if (message?.role === "user" && getMessageText(message)) return message;
+	}
+	return null;
 }
 
 function parseFromSeqNum(value: string | null): number | undefined {
@@ -119,9 +127,16 @@ function isChatMessage(value: unknown): value is ChatMessage {
 	return (
 		typeof value === "object" &&
 		value !== null &&
+		typeof (value as { id?: unknown }).id === "string" &&
 		((value as { role?: unknown }).role === "user" ||
 			(value as { role?: unknown }).role === "assistant") &&
-		typeof (value as { content?: unknown }).content === "string"
+		Array.isArray((value as { parts?: unknown }).parts) &&
+		(value as { parts: unknown[] }).parts.every(
+			(part) =>
+				typeof part === "object" &&
+				part !== null &&
+				typeof (part as { type?: unknown }).type === "string",
+		)
 	);
 }
 
@@ -176,7 +191,8 @@ async function* fallbackStream(
 ): AsyncIterable<StreamChunk> {
 	const words = `Echo: ${prompt}`.split(/(\s+)/).filter(Boolean);
 	const ts = Date.now();
-	yield { type: "RUN_STARTED", timestamp: ts };
+	const runId = `fallback-run-${ts}`;
+	yield { type: "RUN_STARTED", timestamp: ts, runId };
 	yield {
 		type: "TEXT_MESSAGE_START",
 		timestamp: ts + 1,
@@ -199,11 +215,17 @@ async function* fallbackStream(
 		timestamp: ts + 2 + words.length,
 		messageId,
 	};
-	yield { type: "RUN_FINISHED", timestamp: ts + 3 + words.length };
+	yield {
+		type: "RUN_FINISHED",
+		timestamp: ts + 3 + words.length,
+		runId,
+		model: "fallback",
+		finishReason: "stop",
+	};
 }
 
 async function createChunks(
-	messages: ChatMessage[],
+	messages: TextMessage[],
 ): Promise<AsyncIterable<StreamChunk>> {
 	const prompt = messages.at(-1)?.content ?? "";
 
@@ -230,17 +252,29 @@ async function createChunks(
 	}) as AsyncIterable<StreamChunk>;
 }
 
+function lazyChunks(messages: TextMessage[]): AsyncIterable<StreamChunk> {
+	return (async function* () {
+		yield* await createChunks(messages);
+	})();
+}
+
 function persistCompletedAssistantMessage(
 	chatId: string,
-	userMessage: ChatMessage,
 	source: AsyncIterable<StreamChunk>,
 ): AsyncIterable<StreamChunk> {
 	let fullText = "";
 	let persisted = false;
+	let messageId = FALLBACK_MESSAGE_ID;
 
 	return (async function* () {
-		await appendHistoryMessage(chatId, userMessage);
 		for await (const chunk of source) {
+			if (
+				(chunk.type === "TEXT_MESSAGE_START" ||
+					chunk.type === "TEXT_MESSAGE_CONTENT") &&
+				typeof chunk.messageId === "string"
+			) {
+				messageId = chunk.messageId;
+			}
 			if (
 				chunk.type === "TEXT_MESSAGE_CONTENT" &&
 				typeof chunk.delta === "string"
@@ -250,13 +284,34 @@ function persistCompletedAssistantMessage(
 			if (chunk.type === "RUN_FINISHED" && !persisted) {
 				persisted = true;
 				await appendHistoryMessage(chatId, {
+					id: messageId,
 					role: "assistant",
-					content: fullText,
+					parts: [{ type: "text", content: fullText }],
 				});
 			}
 			yield chunk;
 		}
 	})();
+}
+
+async function replayWhenReady(
+	streamName: string,
+	fromSeqNumValue: string | null,
+): Promise<Response> {
+	const context = getContext();
+	const deadline = Date.now() + REPLAY_WAIT_MS;
+	while (Date.now() < deadline) {
+		await context.chat.ensureStream(streamName);
+		const response = await context.chat.replay(streamName, {
+			fromSeqNum: parseFromSeqNum(fromSeqNumValue),
+		});
+		if (response.status !== 204) return response;
+		await sleep(REPLAY_POLL_MS);
+	}
+	return new Response(null, {
+		status: 204,
+		headers: { "Cache-Control": "no-store" },
+	});
 }
 
 function routeError(error: unknown): Response {
@@ -285,7 +340,7 @@ export async function postChat(request: Request): Promise<Response> {
 
 			const context = getContext();
 			const streamName = liveStreamName(body.id, 0);
-			const source = await createChunks(toTextMessages(messages));
+			const source = lazyChunks(toTextMessages(messages));
 			return context.chat.makeSessionResponse(streamName, {
 				messages,
 				source,
@@ -304,11 +359,12 @@ export async function postChat(request: Request): Promise<Response> {
 		const streamName = liveStreamName(body.id, turnIndexForNewTurn(history));
 		await context.chat.ensureStream(streamName);
 		const messages = [...history, userMessage];
-		const source = await createChunks(messages);
+		const source = lazyChunks(toTextMessages(messages));
+		await appendHistoryMessage(body.id, userMessage);
 
 		return context.chat.makeResumable(
 			streamName,
-			persistCompletedAssistantMessage(body.id, userMessage, source),
+			persistCompletedAssistantMessage(body.id, source),
 		);
 	} catch (error) {
 		return routeError(error);
@@ -325,20 +381,29 @@ export async function replayChat(
 		}
 
 		let streamName: string;
-		if (streamModeFromEnv() !== "single-use") {
+		const streamMode = streamModeFromEnv();
+		if (streamMode === "session") {
+			streamName = liveStreamName(chatId, 0);
+			const context = getContext();
+			await context.chat.ensureStream(streamName);
+			return context.chat.replay(streamName, {
+				fromSeqNum: parseFromSeqNum(fromSeqNumValue ?? null),
+			});
+		} else if (streamMode === "shared") {
 			streamName = liveStreamName(chatId, 0);
 		} else {
 			const history = await readHistory(chatId);
 			const activeIndex = activeTurnIndex(history);
-			if (activeIndex === null) return new Response(null, { status: 204 });
+			if (activeIndex === null) {
+				return new Response(null, {
+					status: 204,
+					headers: { "Cache-Control": "no-store" },
+				});
+			}
 			streamName = liveStreamName(chatId, activeIndex);
 		}
 
-		const context = getContext();
-		await context.chat.ensureStream(streamName);
-		return context.chat.replay(streamName, {
-			fromSeqNum: parseFromSeqNum(fromSeqNumValue ?? null),
-		});
+		return replayWhenReady(streamName, fromSeqNumValue ?? null);
 	} catch (error) {
 		return routeError(error);
 	}

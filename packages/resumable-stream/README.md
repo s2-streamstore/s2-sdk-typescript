@@ -170,6 +170,11 @@ The `./tanstack-ai` subpath exposes `createResumableChat` for TanStack AI's `Str
 - `shared`: generations reuse one stream, with later writers taking over via lease-based fencing. Replay yields the active generation only.
 - `session`: generations append to one durable session log. Replay tails the stream forever.
 
+For request-scoped streaming, omit `subscribeUrl` on the client and let
+`makeResumable` stream chunks on the POST response. In `single-use` and
+`shared`, you can also pass `subscribeUrl` when the client should recover an
+active generation on mount; new sends still stream from the POST response.
+
 A TanStack Start chat app and detailed implementation guide:
 [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat).
 
@@ -209,7 +214,6 @@ import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client"
 
 const connection = createS2Connection({
   sendUrl: "/api/chat",
-  subscribeUrl: "/api/chat/replay",
   mode: "single-use", // must match the server mode
 });
 
@@ -288,8 +292,8 @@ the POST route returns 202 immediately, while chunks arrive through the replay
 route. `loadSnapshot` and `chat.snapshot` seed the reconnect cursor;
 subsequent replay responses advance it via SSE `id` fields. `live: true` tells
 `useChat` to start `connection.subscribe()` on mount, which is required for
-session mode because chunks arrive through the replay route instead of the
-POST response.
+session mode because chunks arrive through the replay route instead of the POST
+response.
 
 For lower-level calls, `makeResumable` defaults to
 `delivery: "response"`, which streams chunks on the request that starts

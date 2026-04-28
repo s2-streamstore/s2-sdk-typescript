@@ -14,7 +14,7 @@ import {
 } from "./protocol.js";
 import {
 	claimSharedGeneration,
-	replayActiveGenerationStringBodies,
+	replayActiveGenerationStringRecords,
 	tailStringRecords,
 } from "./shared.js";
 
@@ -72,8 +72,8 @@ export interface MakeResumableOptions {
 	 * - `replay` persists chunks to S2 and returns 202 immediately; a replay
 	 *   route or subscription owns delivery.
 	 *
-	 * `replay` is intended for `session` mode, where a separate replay
-	 * subscription is the source of truth for client delivery.
+	 * Use `replay` when a separate replay route or subscription is the source
+	 * of truth for client delivery.
 	 *
 	 * @default "response"
 	 */
@@ -355,8 +355,10 @@ export function createChat<T>(
 				);
 			}
 
-			const iterator =
-				replayActiveGenerationStringBodies(handle)[Symbol.asyncIterator]();
+			const iterator = replayActiveGenerationStringRecords(
+				handle,
+				options?.fromSeqNum,
+			)[Symbol.asyncIterator]();
 			const first = await iterator.next();
 			if (first.done) {
 				return new Response(null, {
@@ -373,7 +375,10 @@ export function createChat<T>(
 					yield next.value;
 				}
 			})();
-			return sseResponseFromStrings(replayWithFirst, adapter.responseHeaders);
+			return sseResponseFromTailedStrings(
+				replayWithFirst,
+				adapter.responseHeaders,
+			);
 		},
 	};
 }

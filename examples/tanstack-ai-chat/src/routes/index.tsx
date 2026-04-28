@@ -27,10 +27,7 @@ function streamModeFromEnv(): StreamMode {
 // Must match the server's `S2_TANSTACK_MODE`. Default `session`.
 const STREAM_MODE = streamModeFromEnv();
 
-type ChatMessage = {
-	role: "user" | "assistant";
-	content: string;
-};
+type ChatMessage = UIMessage;
 
 export const Route = createFileRoute("/")({
 	component: ChatRoute,
@@ -63,10 +60,11 @@ function subscribeUrl(chatId: string): string {
 
 function historyToInitialMessages(history: ChatMessage[]): UIMessage[] {
 	return history.map((message) => ({
-		id: crypto.randomUUID(),
+		...message,
+		id: typeof message.id === "string" ? message.id : crypto.randomUUID(),
 		role: message.role,
-		parts: [{ type: "text", content: message.content }],
-		createdAt: new Date(),
+		parts: Array.isArray(message.parts) ? message.parts : [],
+		createdAt: message.createdAt ? new Date(message.createdAt) : new Date(),
 	}));
 }
 
@@ -78,6 +76,16 @@ function renderMessageText(message: UIMessage): string {
 		)
 		.map((part) => part.content)
 		.join("");
+}
+
+function hasActiveTurn(messages: UIMessage[]): boolean {
+	const userCount = messages.filter(
+		(message) => message.role === "user",
+	).length;
+	const assistantCount = messages.filter(
+		(message) => message.role === "assistant",
+	).length;
+	return userCount > assistantCount;
 }
 
 function ChatRoute() {
@@ -166,24 +174,27 @@ function ChatInner({
 	historyError: string | null;
 	chatEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
+	const shouldReplayOnMount =
+		STREAM_MODE === "session" ||
+		(STREAM_MODE !== "session" && hasActiveTurn(snapshot.messages));
 	const connection = useMemo(
 		() =>
 			createS2Connection({
 				sendUrl: API,
-				subscribeUrl: subscribeUrl(chatId),
+				...(shouldReplayOnMount
+					? { subscribeUrl: subscribeUrl(chatId), snapshot }
+					: {}),
 				mode: STREAM_MODE,
-				snapshot,
 				body: { id: chatId },
 			}),
-		[chatId, snapshot],
+		[chatId, snapshot, shouldReplayOnMount],
 	);
 
 	const { messages, sendMessage, isLoading, sessionGenerating } = useChat({
 		connection,
 		initialMessages: snapshot.messages,
-		// In session mode, the subscribe channel must stay open on mount so a
-		// refresh re-attaches and replays the transcript.
-		live: STREAM_MODE === "session",
+		// Replay on mount only when there is session state or an active turn.
+		live: shouldReplayOnMount,
 	});
 
 	const [input, setInput] = useState("");

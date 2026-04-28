@@ -30,18 +30,6 @@ function frameWithId(id: number, chunk: object): string {
 	return `id: ${id}\ndata: ${JSON.stringify(chunk)}\n\n`;
 }
 
-function hangingSseResponse(): Response {
-	const encoder = new TextEncoder();
-	return new Response(
-		new ReadableStream<Uint8Array>({
-			start(controller) {
-				controller.enqueue(encoder.encode(frame({ type: "RUN_STARTED" })));
-			},
-		}),
-		{ headers: { "Content-Type": "text/event-stream" } },
-	);
-}
-
 interface CapturedRequest {
 	url: string;
 	init: RequestInit;
@@ -67,6 +55,24 @@ async function drainAsyncIterable<T>(source: AsyncIterable<T>): Promise<T[]> {
 	const out: T[] = [];
 	for await (const value of source) out.push(value);
 	return out;
+}
+
+function collectUntil<T>(
+	source: AsyncIterable<T>,
+	count: number,
+	onDone?: () => void,
+): Promise<T[]> {
+	return (async () => {
+		const out: T[] = [];
+		for await (const value of source) {
+			out.push(value);
+			if (out.length >= count) {
+				onDone?.();
+				break;
+			}
+		}
+		return out;
+	})();
 }
 
 const messages: UIMessage[] = [
@@ -214,6 +220,70 @@ describe("createS2Connection (single-use / shared)", () => {
 		await drainAsyncIterable(adapter.connect(messages, undefined, ctrl.signal));
 		expect(calls[0]!.init.signal).toBe(ctrl.signal);
 	});
+
+	it("uses replay for subscribe and the POST response for non-session sends", async () => {
+		const { fetch, calls } = recordingFetch([
+			new Response(null, { status: 204 }),
+			sseResponse([
+				frame({ type: "RUN_STARTED", timestamp: 1 }),
+				frame({
+					type: "TEXT_MESSAGE_CONTENT",
+					timestamp: 2,
+					messageId: "m1",
+					delta: "hi",
+				}),
+				frame({ type: "RUN_FINISHED", timestamp: 3 }),
+			]),
+		]);
+
+		const adapter = createS2Connection({
+			sendUrl: "/api/chat",
+			subscribeUrl: "/api/chat/replay?id=chat-1",
+			mode: "single-use",
+			fetch,
+		}) as SubscribeConnectionAdapter;
+
+		const ctrl = new AbortController();
+		const chunksPromise = collectUntil(adapter.subscribe(ctrl.signal), 3, () =>
+			ctrl.abort(),
+		);
+		await adapter.send(messages);
+		const chunks = await chunksPromise;
+
+		expect(calls[0]!.url).toBe("/api/chat/replay?id=chat-1");
+		expect(calls[0]!.init.method).toBe("GET");
+		expect(calls[1]!.url).toBe("/api/chat");
+		expect(calls[1]!.init.method).toBe("POST");
+		expect(chunks.map((c) => c.type)).toEqual([
+			"RUN_STARTED",
+			"TEXT_MESSAGE_CONTENT",
+			"RUN_FINISHED",
+		]);
+	});
+
+	it("can recover non-session chunks from replay without sending", async () => {
+		const { fetch, calls } = recordingFetch([
+			sseResponse([
+				frameWithId(2, { type: "RUN_STARTED", timestamp: 1 }),
+				frameWithId(4, { type: "RUN_FINISHED", timestamp: 2 }),
+			]),
+		]);
+
+		const adapter = createS2Connection({
+			sendUrl: "/api/chat",
+			subscribeUrl: "/api/chat/replay?id=chat-1",
+			mode: "single-use",
+			fetch,
+		}) as SubscribeConnectionAdapter;
+
+		const ctrl = new AbortController();
+		const chunks = await collectUntil(adapter.subscribe(ctrl.signal), 2, () =>
+			ctrl.abort(),
+		);
+
+		expect(calls[0]!.url).toBe("/api/chat/replay?id=chat-1");
+		expect(chunks.map((c) => c.type)).toEqual(["RUN_STARTED", "RUN_FINISHED"]);
+	});
 });
 
 describe("createS2Connection (session)", () => {
@@ -229,7 +299,7 @@ describe("createS2Connection (session)", () => {
 				frame({ type: "RUN_STARTED", timestamp: 1 }),
 				frame({ type: "RUN_FINISHED", timestamp: 2 }),
 			]),
-			hangingSseResponse(),
+			new Response(null, { status: 202 }),
 		]);
 
 		const adapter = createS2Connection({

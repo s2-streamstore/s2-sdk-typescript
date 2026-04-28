@@ -3,8 +3,9 @@
  * wired to a `@s2-dev/resumable-stream/tanstack-ai` server.
  *
  * Auto-picks the adapter shape per server mode:
- * - `single-use` / `shared`: returns a `ConnectConnectionAdapter` that POSTs
- *   to `sendUrl` and yields chunks from the live SSE response.
+ * - `single-use` / `shared`: returns a `ConnectConnectionAdapter` by default.
+ *   If `subscribeUrl` is provided, returns a `SubscribeConnectionAdapter` so
+ *   refreshes can reconnect through the replay route.
  * - `session`: returns a `SubscribeConnectionAdapter` that GETs `subscribeUrl`
  *   to tail the stream forever, and POSTs to `sendUrl` to kick off generations.
  *
@@ -44,13 +45,16 @@ export interface LoadSnapshotOptions {
 export interface S2ConnectionOptions {
 	/** Endpoint that POSTs messages and starts a generation. */
 	sendUrl: string | (() => string);
-	/** Endpoint that GETs the SSE chunk stream. Required for `session`. */
+	/**
+	 * Endpoint that GETs the SSE chunk stream. Required for `session`.
+	 * In `single-use` and `shared`, passing this opts into subscribe/send mode.
+	 */
 	subscribeUrl?: string | ((fromSeqNum?: number) => string);
 	/** Server mode. Drives which adapter shape is returned. Defaults to `single-use`. */
 	mode?: S2ConnectionMode;
 	/**
-	 * Starting cursor for `session` subscriptions. Snapshot responses should
-	 * pass the next S2 sequence number here so subscribe only reads new records.
+	 * Starting cursor for replay subscriptions. Snapshot responses should pass
+	 * the next S2 sequence number here so subscribe only reads new records.
 	 */
 	initialFromSeqNum?: number;
 	/**
@@ -168,6 +172,88 @@ async function readResponse(
 	return response;
 }
 
+async function cancelResponseBody(
+	body: ReadableStream<Uint8Array>,
+): Promise<void> {
+	await body.cancel().catch(() => {
+		// The replay subscription owns delivery; ignore best-effort body cleanup.
+	});
+}
+
+function makeSyntheticRunFinished(): StreamChunk {
+	return {
+		type: "RUN_FINISHED",
+		runId: `s2-replay-${Date.now()}`,
+		model: "s2-replay",
+		timestamp: Date.now(),
+		finishReason: "stop",
+	} as StreamChunk;
+}
+
+function createChunkQueue(abortSignal?: AbortSignal) {
+	let buffer: StreamChunk[] = [];
+	let waiters: Array<{
+		resolve: (value: IteratorResult<StreamChunk>) => void;
+		reject: (error: unknown) => void;
+	}> = [];
+	let closed = false;
+	let failure: unknown;
+
+	const flush = () => {
+		while (waiters.length > 0 && (buffer.length > 0 || closed || failure)) {
+			const waiter = waiters.shift()!;
+			if (failure) {
+				waiter.reject(failure);
+			} else if (buffer.length > 0) {
+				waiter.resolve({ done: false, value: buffer.shift()! });
+			} else {
+				waiter.resolve({ done: true, value: undefined });
+			}
+		}
+	};
+
+	const close = () => {
+		if (closed) return;
+		closed = true;
+		flush();
+	};
+
+	abortSignal?.addEventListener("abort", close, { once: true });
+
+	return {
+		push(chunk: StreamChunk): void {
+			if (closed || failure) return;
+			buffer.push(chunk);
+			flush();
+		},
+		fail(error: unknown): void {
+			if (closed || failure) return;
+			failure = error;
+			flush();
+		},
+		async *iterable(): AsyncIterable<StreamChunk> {
+			try {
+				while (true) {
+					if (buffer.length > 0) {
+						yield buffer.shift()!;
+						continue;
+					}
+					if (failure) throw failure;
+					if (closed) return;
+					const next = await new Promise<IteratorResult<StreamChunk>>(
+						(resolve, reject) => waiters.push({ resolve, reject }),
+					);
+					if (next.done) return;
+					yield next.value;
+				}
+			} finally {
+				abortSignal?.removeEventListener("abort", close);
+				close();
+			}
+		},
+	};
+}
+
 function normalizeSnapshot(value: unknown): ChatSnapshot {
 	const payload = isRecord(value) ? value : {};
 	const fromSeqNum = payload.fromSeqNum;
@@ -242,7 +328,7 @@ export function createS2Connection(
 		});
 	};
 
-	if (mode === "session") {
+	if (options.subscribeUrl) {
 		const subscribeUrl = options.subscribeUrl as
 			| string
 			| ((fromSeqNum?: number) => string);
@@ -262,6 +348,62 @@ export function createS2Connection(
 				nextFromSeqNum = parsed;
 			}
 		};
+
+		if (mode !== "session") {
+			let activeQueue: ReturnType<typeof createChunkQueue> | undefined;
+
+			const adapter: SubscribeConnectionAdapter = {
+				subscribe(abortSignal?: AbortSignal): AsyncIterable<StreamChunk> {
+					const queue = createChunkQueue(abortSignal);
+					activeQueue = queue;
+
+					void (async () => {
+						try {
+							const headers = await resolveHeaders(options.headers);
+							const response = await readResponse(
+								doFetch,
+								resolveSubscribeUrl(
+									subscribeUrl,
+									nextFromSeqNum,
+									fromSeqNumParam,
+								),
+								{
+									method: "GET",
+									headers,
+									credentials,
+									signal: abortSignal,
+								},
+							);
+							if (!response.body) return;
+							for await (const chunk of parseSseChunks(
+								response.body,
+								abortSignal,
+								updateCursor,
+							)) {
+								queue.push(chunk);
+							}
+						} catch (error) {
+							if (!abortSignal?.aborted) queue.fail(error);
+						}
+					})();
+
+					return queue.iterable();
+				},
+				async send(messages, data, abortSignal): Promise<void> {
+					const response = await postSend(messages, data, abortSignal);
+					if (!response.body) return;
+					for await (const chunk of parseSseChunks(
+						response.body,
+						abortSignal,
+						updateCursor,
+					)) {
+						activeQueue?.push(chunk);
+					}
+				},
+			};
+			return adapter;
+		}
+
 		const adapter: SubscribeConnectionAdapter = {
 			async *subscribe(abortSignal?: AbortSignal): AsyncIterable<StreamChunk> {
 				const headers = await resolveHeaders(options.headers);
@@ -275,11 +417,17 @@ export function createS2Connection(
 						signal: abortSignal,
 					},
 				);
-				if (!response.body) return;
+				if (!response.body) {
+					// TanStack waits for a terminal chunk after send(); 204 replay
+					// responses mean there is nothing active to consume.
+					yield makeSyntheticRunFinished();
+					return;
+				}
 				yield* parseSseChunks(response.body, abortSignal, updateCursor);
 			},
 			async send(messages, data, abortSignal): Promise<void> {
-				await postSend(messages, data, abortSignal);
+				const response = await postSend(messages, data, abortSignal);
+				if (response.body) await cancelResponseBody(response.body);
 			},
 		};
 		return adapter;

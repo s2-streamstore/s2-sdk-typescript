@@ -156,13 +156,26 @@ export async function claimSharedGeneration({
 export async function* replayActiveGenerationStringBodies(
 	stream: S2Stream,
 ): AsyncIterable<string> {
+	for await (const record of replayActiveGenerationStringRecords(stream)) {
+		yield record.body;
+	}
+}
+
+export async function* replayActiveGenerationStringRecords(
+	stream: S2Stream,
+	fromSeqNum = 0,
+): AsyncIterable<TailedStringBody> {
 	const state = await readSharedStreamState(stream);
 	if (state.activeGenerationStartSeqNum === null) return;
 	if (!state.hasActiveGeneration) return;
 
 	const session = await stream.readSession(
 		{
-			start: { from: { seqNum: state.activeGenerationStartSeqNum } },
+			start: {
+				from: {
+					seqNum: Math.max(state.activeGenerationStartSeqNum, fromSeqNum),
+				},
+			},
 		},
 		{ as: "string" },
 	);
@@ -174,7 +187,7 @@ export async function* replayActiveGenerationStringBodies(
 			}
 			if (isTrimRecord(record)) continue;
 			if (record.body) {
-				yield record.body;
+				yield { body: record.body, nextSeqNum: record.seqNum + 1 };
 			}
 		}
 	} finally {
