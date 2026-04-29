@@ -237,7 +237,11 @@ function applyStreamChunkToSnapshot(
 		const messageId = chunk.messageId;
 		if (typeof chunk.delta === "string" && chunk.delta) {
 			const delta = chunk.delta;
-			return updateMessageText(messages, messageId, (current) => current + delta);
+			return updateMessageText(
+				messages,
+				messageId,
+				(current) => current + delta,
+			);
 		}
 		if (typeof chunk.content === "string" && chunk.content) {
 			const content = chunk.content;
@@ -383,9 +387,19 @@ function makeSessionSource({
 			const timestamp = Date.now();
 			const messageId = submitted.id;
 			const text = getMessageText(submitted);
-			yield { type: "TEXT_MESSAGE_START", timestamp, messageId, role: submitted.role };
+			yield {
+				type: "TEXT_MESSAGE_START",
+				timestamp,
+				messageId,
+				role: submitted.role,
+			};
 			if (text) {
-				yield { type: "TEXT_MESSAGE_CONTENT", timestamp, messageId, delta: text };
+				yield {
+					type: "TEXT_MESSAGE_CONTENT",
+					timestamp,
+					messageId,
+					delta: text,
+				};
 			}
 			yield { type: "TEXT_MESSAGE_END", timestamp, messageId };
 		}

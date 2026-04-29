@@ -353,10 +353,7 @@ export function createChat<T>(
 					yield next.value;
 				}
 			})();
-			return tailAsSse(
-				replayWithFirst,
-				adapter.responseHeaders,
-			);
+			return tailAsSse(replayWithFirst, adapter.responseHeaders);
 		},
 	};
 }
