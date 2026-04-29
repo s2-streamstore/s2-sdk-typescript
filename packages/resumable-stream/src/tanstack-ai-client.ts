@@ -72,15 +72,13 @@ function resolveUrl(url: string | (() => string)): string {
 	return typeof url === "function" ? url() : url;
 }
 
-function isAbsoluteUrl(url: string): boolean {
-	return /^[a-z][a-z\d+\-.]*:/i.test(url);
-}
-
 function setUrlSearchParam(url: string, key: string, value: string): string {
-	if (isAbsoluteUrl(url)) {
+	try {
 		const parsed = new URL(url);
 		parsed.searchParams.set(key, value);
 		return parsed.toString();
+	} catch {
+		// `url` was relative
 	}
 
 	const hashStart = url.indexOf("#");

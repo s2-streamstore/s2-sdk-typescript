@@ -94,13 +94,6 @@ const SSE_HEADERS = {
 	"X-Accel-Buffering": "no",
 } as const;
 
-function sanitizeChunkForStorage(chunk: StreamChunk): StreamChunk {
-	if (chunk.type !== "TEXT_MESSAGE_CONTENT") return chunk;
-	const next = { ...chunk };
-	delete next.content;
-	return next;
-}
-
 const adapter: ChatAdapter<StreamChunk> = {
 	makeErrorChunk(err, onError) {
 		const message = onError ? onError(err) : DEFAULT_ERROR_TEXT;
@@ -111,7 +104,14 @@ const adapter: ChatAdapter<StreamChunk> = {
 			error: { message },
 		};
 	},
-	prepareForStorage: sanitizeChunkForStorage,
+	// `TEXT_MESSAGE_CONTENT` carries both an incremental `delta` and the
+	// running aggregate `content`. Only `delta` is needed durably; dropping
+	// `content` keeps the stored stream close to true diff size.
+	prepareForStorage(chunk) {
+		if (chunk.type !== "TEXT_MESSAGE_CONTENT") return chunk;
+		const { content: _content, ...rest } = chunk;
+		return rest;
+	},
 	responseHeaders: SSE_HEADERS,
 };
 
@@ -347,37 +347,6 @@ function needsModelResponse(
 		.some((currentMessage) => currentMessage.role === "assistant");
 }
 
-function messageEchoChunks(message: ChatMessage): StreamChunk[] {
-	const timestamp = Date.now();
-	const text = getMessageText(message);
-	return [
-		{
-			type: "TEXT_MESSAGE_START",
-			timestamp,
-			messageId: message.id,
-			role: message.role,
-			model: "client",
-		},
-		...(text
-			? [
-					{
-						type: "TEXT_MESSAGE_CONTENT",
-						timestamp,
-						messageId: message.id,
-						delta: text,
-						model: "client",
-					},
-				]
-			: []),
-		{
-			type: "TEXT_MESSAGE_END",
-			timestamp,
-			messageId: message.id,
-			model: "client",
-		},
-	];
-}
-
 function makeSessionSource({
 	readCurrentSnapshot,
 	incomingMessages,
@@ -407,7 +376,19 @@ function makeSessionSource({
 			? baseMessages
 			: [...baseMessages, cloneMessage(submitted)];
 
-		if (!alreadyStored) yield* messageEchoChunks(submitted);
+		if (!alreadyStored) {
+			// Persist the user turn as the same TEXT_MESSAGE_* chunks the
+			// assistant emits, so `StreamProcessor` reconstructs it identically
+			// on replay without a special case.
+			const timestamp = Date.now();
+			const messageId = submitted.id;
+			const text = getMessageText(submitted);
+			yield { type: "TEXT_MESSAGE_START", timestamp, messageId, role: submitted.role };
+			if (text) {
+				yield { type: "TEXT_MESSAGE_CONTENT", timestamp, messageId, delta: text };
+			}
+			yield { type: "TEXT_MESSAGE_END", timestamp, messageId };
+		}
 		yield* await source(messagesForModel);
 	})();
 }
