@@ -1,11 +1,14 @@
-import { S2, S2Error, type S2Stream } from "@s2-dev/streamstore";
+import { S2, type S2Stream } from "@s2-dev/streamstore";
 import {
 	type Chat,
 	type ChatAdapter,
 	createChat,
 	DEFAULT_ERROR_TEXT,
+	type ReplayOptions,
 	type ResumableChatConfig,
 } from "./adapter.js";
+import { isFenceRecord, isTrimRecord } from "./protocol.js";
+import { tailAsSse, tailStringRecords } from "./shared.js";
 
 export type {
 	MakeResumableOptions,
@@ -24,36 +27,45 @@ export type StreamChunk = {
 	[key: string]: unknown;
 };
 
-export type MessageRole = "user" | "assistant";
-
-export type SnapshotMessagePart = {
+type ChatMessagePart = {
 	type: string;
 	content?: unknown;
 	[key: string]: unknown;
 };
 
-export type SnapshotMessage = {
+export type ChatMessage = {
 	id: string;
-	role: MessageRole;
-	parts: SnapshotMessagePart[];
+	role: "user" | "assistant";
+	parts: ChatMessagePart[];
 	[key: string]: unknown;
 };
 
 export type TextMessage = {
-	role: MessageRole;
+	role: ChatMessage["role"];
 	content: string;
 };
 
-export type ChatSnapshot = {
-	messages: SnapshotMessage[];
+type SessionSource = (
+	messages: ChatMessage[],
+) => AsyncIterable<StreamChunk> | Promise<AsyncIterable<StreamChunk>>;
+
+type ChatSnapshot = {
+	messages: ChatMessage[];
 	fromSeqNum: number;
 };
 
 export interface MakeSessionResponseOptions {
-	/** TanStack UI messages from the send request. Preserved in the durable snapshot. */
+	/**
+	 * TanStack UI messages from the send request. The helper reads S2, keeps
+	 * stored messages, and appends the latest user message from this array if it
+	 * is not already stored.
+	 */
 	messages: unknown;
-	/** Assistant/model stream to append after the message snapshot. */
-	source: AsyncIterable<StreamChunk>;
+	/**
+	 * Assistant/model stream factory. It receives messages rebuilt from S2 plus
+	 * the latest submitted user message.
+	 */
+	source: SessionSource;
 	/**
 	 * Keeps S2 persistence alive after the response returns.
 	 * Pass the platform-provided `waitUntil` (Vercel/Cloudflare).
@@ -65,20 +77,14 @@ export interface MakeSessionResponseOptions {
  * Server-side helpers for writing and replaying resumable TanStack AI streams.
  */
 export type ResumableChat = Chat<StreamChunk> & {
-	/** Creates the S2 stream if needed. */
-	ensureStream(streamName: string): Promise<void>;
 	/**
 	 * Starts a TanStack chat session and returns immediately.
-	 * The durable replay subscription is the source of truth for chunks.
+	 * The replay subscription delivers the stored chunks to clients.
 	 */
 	makeSessionResponse(
 		streamName: string,
 		options: MakeSessionResponseOptions,
 	): Promise<Response>;
-	/** Reads the current session transcript snapshot without tailing. */
-	getSessionSnapshot(streamName: string): Promise<ChatSnapshot>;
-	/** Returns the current session transcript snapshot as a JSON response. */
-	snapshot(streamName: string): Promise<Response>;
 };
 
 const SSE_HEADERS = {
@@ -88,69 +94,54 @@ const SSE_HEADERS = {
 	"X-Accel-Buffering": "no",
 } as const;
 
+function sanitizeChunkForStorage(chunk: StreamChunk): StreamChunk {
+	if (chunk.type !== "TEXT_MESSAGE_CONTENT") return chunk;
+	const next = { ...chunk };
+	delete next.content;
+	return next;
+}
+
 const adapter: ChatAdapter<StreamChunk> = {
 	makeErrorChunk(err, onError) {
+		const message = onError ? onError(err) : DEFAULT_ERROR_TEXT;
 		return {
 			type: "RUN_ERROR",
 			timestamp: Date.now(),
-			error: { message: onError ? onError(err) : DEFAULT_ERROR_TEXT },
+			message,
+			error: { message },
 		};
 	},
+	prepareForStorage: sanitizeChunkForStorage,
 	responseHeaders: SSE_HEADERS,
 };
+
+type StreamProcessorInstance = {
+	processChunk(chunk: unknown): void;
+	getMessages(): unknown[];
+};
+
+type StreamProcessorConstructor = new (options?: {
+	initialMessages?: unknown[];
+}) => StreamProcessorInstance;
+
+let streamProcessorPromise:
+	| Promise<StreamProcessorConstructor | null>
+	| undefined;
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function normalizePart(value: unknown): SnapshotMessagePart | null {
+function normalizePart(value: unknown): ChatMessagePart | null {
 	if (!isObjectRecord(value) || typeof value.type !== "string") return null;
 	return { ...value, type: value.type };
 }
 
-function isFenceOrTrimRecord(record: {
-	headers?: ReadonlyArray<readonly [string, string]>;
-}): boolean {
-	return (
-		record.headers?.length === 1 &&
-		record.headers[0]?.[0] === "" &&
-		(record.headers[0]?.[1] === "fence" || record.headers[0]?.[1] === "trim")
-	);
-}
-
-function messagesSnapshotChunk(messages: SnapshotMessage[]): StreamChunk {
-	return {
-		type: "MESSAGES_SNAPSHOT",
-		timestamp: Date.now(),
-		messages,
-	};
-}
-
-function isSnapshotMessage(value: unknown): value is SnapshotMessage {
-	if (!isObjectRecord(value)) return false;
-	return (
-		(value.role === "user" || value.role === "assistant") &&
-		typeof value.id === "string" &&
-		Array.isArray(value.parts) &&
-		value.parts.every(
-			(part) => isObjectRecord(part) && typeof part.type === "string",
-		)
-	);
-}
-
-function normalizeSnapshotMessages(value: unknown): SnapshotMessage[] | null {
-	if (!Array.isArray(value) || !value.every(isSnapshotMessage)) return null;
-	return value.map((message) => ({
-		...message,
-		parts: message.parts.map((part) => ({ ...part })),
-	}));
-}
-
 function ensureMessage(
-	messages: SnapshotMessage[],
+	messages: ChatMessage[],
 	messageId: string,
-	role: MessageRole = "assistant",
-): SnapshotMessage[] {
+	role: ChatMessage["role"] = "assistant",
+): ChatMessage[] {
 	if (messages.some((message) => message.id === messageId)) return messages;
 	return [
 		...messages,
@@ -162,10 +153,7 @@ function ensureMessage(
 	];
 }
 
-function withMessageText(
-	message: SnapshotMessage,
-	text: string,
-): SnapshotMessage {
+function withMessageText(message: ChatMessage, text: string): ChatMessage {
 	let wroteText = false;
 	const parts = message.parts.map((part) => {
 		if (part.type !== "text" || wroteText) return part;
@@ -179,20 +167,20 @@ function withMessageText(
 }
 
 function setMessageText(
-	messages: SnapshotMessage[],
+	messages: ChatMessage[],
 	messageId: string,
 	text: string,
-): SnapshotMessage[] {
+): ChatMessage[] {
 	return ensureMessage(messages, messageId).map((message) =>
 		message.id === messageId ? withMessageText(message, text) : message,
 	);
 }
 
 function appendMessageText(
-	messages: SnapshotMessage[],
+	messages: ChatMessage[],
 	messageId: string,
 	text: string,
-): SnapshotMessage[] {
+): ChatMessage[] {
 	const existingMessages = ensureMessage(messages, messageId);
 	const current = existingMessages.find((message) => message.id === messageId);
 	return setMessageText(
@@ -202,14 +190,58 @@ function appendMessageText(
 	);
 }
 
-function applyStreamChunkToSnapshot(
-	messages: SnapshotMessage[],
-	chunk: StreamChunk,
-): SnapshotMessage[] {
-	if (chunk.type === "MESSAGES_SNAPSHOT") {
-		return normalizeSnapshotMessages(chunk.messages) ?? messages;
+function stripGeneratedDates(messages: ChatMessage[]): ChatMessage[] {
+	return messages.map((message) => {
+		if (!(message.createdAt instanceof Date)) return message;
+		const { createdAt: _, ...rest } = message;
+		return rest;
+	});
+}
+
+function normalizeRebuiltMessages(messages: unknown): ChatMessage[] {
+	return stripGeneratedDates(normalizeMessages(messages));
+}
+
+async function getStreamProcessor(): Promise<StreamProcessorConstructor | null> {
+	if (!streamProcessorPromise) {
+		streamProcessorPromise = import("@tanstack/ai")
+			.then((mod) =>
+				typeof mod.StreamProcessor === "function"
+					? (mod.StreamProcessor as StreamProcessorConstructor)
+					: null,
+			)
+			.catch(() => null);
+	}
+	return streamProcessorPromise;
+}
+
+async function rebuildMessagesFromChunks(
+	chunks: StreamChunk[],
+): Promise<ChatMessage[]> {
+	const StreamProcessor = await getStreamProcessor();
+	if (StreamProcessor) {
+		try {
+			const processor = new StreamProcessor();
+			for (const chunk of chunks) {
+				processor.processChunk(chunk);
+			}
+			return normalizeRebuiltMessages(processor.getMessages());
+		} catch {
+			// Fall through to the structural replay below.
+		}
 	}
 
+	let messages: ChatMessage[] = [];
+	for (const chunk of chunks) {
+		messages = applyStreamChunkToSnapshot(messages, chunk);
+	}
+	return messages;
+}
+
+function applyStreamChunkToSnapshot(
+	messages: ChatMessage[],
+	chunk: StreamChunk,
+): ChatMessage[] {
 	if (chunk.type === "TEXT_MESSAGE_START") {
 		if (typeof chunk.messageId !== "string") return messages;
 		const role = chunk.role === "user" ? "user" : "assistant";
@@ -262,17 +294,19 @@ async function readSessionSnapshot(stream: S2Stream): Promise<ChatSnapshot> {
 		{ as: "string" },
 	);
 
-	let messages: SnapshotMessage[] = [];
+	const chunks: StreamChunk[] = [];
 	let fromSeqNum = 0;
 	try {
 		for await (const record of session) {
 			fromSeqNum = record.seqNum + 1;
-			if (isFenceOrTrimRecord(record) || !record.body) continue;
+			if (isFenceRecord(record) || isTrimRecord(record) || !record.body)
+				continue;
 			try {
-				messages = applyStreamChunkToSnapshot(
-					messages,
-					JSON.parse(record.body) as StreamChunk,
-				);
+				const chunk = JSON.parse(record.body) as unknown;
+				if (isObjectRecord(chunk) && typeof chunk.type === "string") {
+					if (chunk.type === "MESSAGES_SNAPSHOT") continue;
+					chunks.push(chunk as StreamChunk);
+				}
 			} catch {
 				// Ignore malformed chunk records so snapshot loading remains best-effort.
 			}
@@ -281,22 +315,149 @@ async function readSessionSnapshot(stream: S2Stream): Promise<ChatSnapshot> {
 		await session[Symbol.asyncDispose]?.();
 	}
 
-	return { messages, fromSeqNum };
+	return { messages: await rebuildMessagesFromChunks(chunks), fromSeqNum };
 }
 
-function prependMessagesSnapshot(
-	messages: SnapshotMessage[],
-	source: AsyncIterable<StreamChunk>,
-): AsyncIterable<StreamChunk> {
+function replaySessionWithSnapshot(stream: S2Stream): Response {
+	return tailAsSse(
+		(async function* () {
+			const snapshot = await readSessionSnapshot(stream);
+			yield {
+				body: JSON.stringify({
+					type: "MESSAGES_SNAPSHOT",
+					timestamp: Date.now(),
+					messages: snapshot.messages,
+				}),
+				nextSeqNum: snapshot.fromSeqNum,
+			};
+			yield* tailStringRecords(stream, snapshot.fromSeqNum);
+		})(),
+		SSE_HEADERS,
+	);
+}
+
+function cloneMessage(message: ChatMessage): ChatMessage {
+	return {
+		...message,
+		parts: message.parts.map((part) => ({ ...part })),
+	};
+}
+
+function appendMissingMessages(
+	currentMessages: unknown,
+	incomingMessages: unknown,
+): ChatMessage[] {
+	const current = normalizeMessages(currentMessages);
+	const incoming = normalizeMessages(incomingMessages);
+	const seen = new Set(current.map((message) => message.id));
+	const messages = current.map(cloneMessage);
+	for (const message of incoming) {
+		if (seen.has(message.id)) continue;
+		seen.add(message.id);
+		messages.push(cloneMessage(message));
+	}
+	return messages;
+}
+
+function messagesMissingFromSnapshot(
+	currentMessages: ChatMessage[],
+	incomingMessages: ChatMessage[],
+): ChatMessage[] {
+	const currentIds = new Set(currentMessages.map((message) => message.id));
+	return incomingMessages.filter((message) => !currentIds.has(message.id));
+}
+
+function latestUserMessage(messages: ChatMessage[]): ChatMessage | null {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message?.role === "user" && getMessageText(message)) return message;
+	}
+	return null;
+}
+
+function needsModelResponse(
+	currentMessages: ChatMessage[],
+	submittedMessage: ChatMessage,
+): boolean {
+	const currentIndex = currentMessages.findIndex(
+		(currentMessage) => currentMessage.id === submittedMessage.id,
+	);
+	if (currentIndex < 0) return true;
+	return !currentMessages
+		.slice(currentIndex + 1)
+		.some((currentMessage) => currentMessage.role === "assistant");
+}
+
+function messageEchoChunks(message: ChatMessage): StreamChunk[] {
+	const timestamp = Date.now();
+	const text = getMessageText(message);
+	return [
+		{
+			type: "TEXT_MESSAGE_START",
+			timestamp,
+			messageId: message.id,
+			role: message.role,
+			model: "client",
+		},
+		...(text
+			? [
+					{
+						type: "TEXT_MESSAGE_CONTENT",
+						timestamp,
+						messageId: message.id,
+						delta: text,
+						model: "client",
+					},
+				]
+			: []),
+		{
+			type: "TEXT_MESSAGE_END",
+			timestamp,
+			messageId: message.id,
+			model: "client",
+		},
+	];
+}
+
+function makeSessionSource({
+	readCurrentSnapshot,
+	incomingMessages,
+	source,
+}: {
+	readCurrentSnapshot: () => Promise<ChatSnapshot>;
+	incomingMessages: ChatMessage[];
+	source: SessionSource;
+}): AsyncIterable<StreamChunk> {
 	return (async function* () {
-		yield messagesSnapshotChunk(messages);
-		yield* source;
+		const currentSnapshot = await readCurrentSnapshot();
+		const submittedMessage = latestUserMessage(incomingMessages);
+		if (!submittedMessage) return;
+
+		const submittedMessages = [submittedMessage];
+		const messagesForModel = appendMissingMessages(
+			currentSnapshot.messages,
+			submittedMessages,
+		);
+		const messagesToStore = messagesMissingFromSnapshot(
+			currentSnapshot.messages,
+			submittedMessages,
+		);
+		if (
+			messagesToStore.length === 0 &&
+			!needsModelResponse(currentSnapshot.messages, submittedMessage)
+		) {
+			return;
+		}
+		for (const message of messagesToStore) {
+			yield* messageEchoChunks(message);
+		}
+		yield* await source(messagesForModel);
 	})();
 }
 
-export function normalizeMessages(messages: unknown): SnapshotMessage[] {
+export function normalizeMessages(messages: unknown): ChatMessage[] {
 	if (!Array.isArray(messages)) return [];
-	return messages.flatMap((value, index): SnapshotMessage[] => {
+	return messages.flatMap((value, index): ChatMessage[] => {
 		if (!isObjectRecord(value)) return [];
 		if (value.role !== "user" && value.role !== "assistant") return [];
 		const rawParts = Array.isArray(value.parts) ? value.parts : [];
@@ -314,7 +475,7 @@ export function normalizeMessages(messages: unknown): SnapshotMessage[] {
 	});
 }
 
-export function getMessageText(message: SnapshotMessage): string {
+export function getMessageText(message: ChatMessage): string {
 	return message.parts
 		.filter(
 			(part): part is { type: "text"; content: string } =>
@@ -354,17 +515,17 @@ export function createResumableChat(
 	const basin = s2.basin(config.basin);
 	const mode = config.mode ?? "single-use";
 
-	const ensureStream = async (streamName: string): Promise<void> => {
-		await basin.streams
-			.create({ stream: streamName })
-			.catch((error: unknown) => {
-				if (!(error instanceof S2Error && error.status === 409)) throw error;
-			});
-	};
-
 	return {
 		...base,
-		ensureStream,
+		async replay(
+			streamName: string,
+			options?: ReplayOptions,
+		): Promise<Response> {
+			if (mode === "session" && options?.fromSeqNum === undefined) {
+				return replaySessionWithSnapshot(basin.stream(streamName));
+			}
+			return base.replay(streamName, options);
+		},
 		async makeSessionResponse(
 			streamName: string,
 			options: MakeSessionResponseOptions,
@@ -372,29 +533,16 @@ export function createResumableChat(
 			if (mode !== "session") {
 				throw new Error('makeSessionResponse requires mode: "session"');
 			}
-			const messages = normalizeMessages(options.messages);
-			await ensureStream(streamName);
-			return base.makeResumable(
-				streamName,
-				prependMessagesSnapshot(messages, options.source),
-				{
-					delivery: "replay",
-					waitUntil: options.waitUntil,
-				},
-			);
-		},
-		async getSessionSnapshot(streamName: string): Promise<ChatSnapshot> {
-			await ensureStream(streamName);
-			return readSessionSnapshot(basin.stream(streamName));
-		},
-		async snapshot(streamName: string): Promise<Response> {
-			await ensureStream(streamName);
-			return Response.json(
-				await readSessionSnapshot(basin.stream(streamName)),
-				{
-					headers: { "Cache-Control": "no-store" },
-				},
-			);
+			const source = makeSessionSource({
+				readCurrentSnapshot: () =>
+					readSessionSnapshot(basin.stream(streamName)),
+				incomingMessages: normalizeMessages(options.messages),
+				source: options.source,
+			});
+			return base.makeResumable(streamName, source, {
+				delivery: "replay",
+				waitUntil: options.waitUntil,
+			});
 		},
 	};
 }

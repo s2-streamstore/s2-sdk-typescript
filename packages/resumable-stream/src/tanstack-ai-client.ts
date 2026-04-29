@@ -26,22 +26,6 @@ type Messages = ReadonlyArray<UIMessage> | ReadonlyArray<ModelMessage>;
 
 export type S2ConnectionMode = "single-use" | "shared" | "session";
 
-export type ChatSnapshot = {
-	messages: UIMessage[];
-	fromSeqNum: number;
-};
-
-export interface LoadSnapshotOptions {
-	/** Endpoint that returns `{ messages, fromSeqNum }`. */
-	url: string | (() => string);
-	/** Extra headers added to the snapshot fetch. May be a factory. */
-	headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
-	/** Custom fetch (testing, custom auth). Defaults to `globalThis.fetch`. */
-	fetch?: typeof fetch;
-	/** Forwarded to fetch. Defaults to `same-origin`. */
-	credentials?: RequestCredentials;
-}
-
 export interface S2ConnectionOptions {
 	/** Endpoint that POSTs messages and starts a generation. */
 	sendUrl: string | (() => string);
@@ -49,26 +33,9 @@ export interface S2ConnectionOptions {
 	 * Endpoint that GETs the SSE chunk stream. Required for `session`.
 	 * In `single-use` and `shared`, passing this opts into subscribe/send mode.
 	 */
-	subscribeUrl?: string | ((fromSeqNum?: number) => string);
+	subscribeUrl?: string | ((cursor?: number) => string);
 	/** Server mode. Drives which adapter shape is returned. Defaults to `single-use`. */
 	mode?: S2ConnectionMode;
-	/**
-	 * Starting cursor for replay subscriptions. Snapshot responses should pass
-	 * the next S2 sequence number here so subscribe only reads new records.
-	 */
-	initialFromSeqNum?: number;
-	/**
-	 * Snapshot loaded before constructing the connection. For `session`,
-	 * this is the concise way to seed the reconnect cursor.
-	 */
-	snapshot?: ChatSnapshot;
-	/**
-	 * Query parameter used to add the live cursor when `subscribeUrl` is a
-	 * string. Set to `false` when the URL already embeds its own cursor.
-	 *
-	 * @default "from"
-	 */
-	fromSeqNumParam?: string | false;
 	/** Extra headers added to both fetches. May be a (possibly async) factory. */
 	headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
 	/**
@@ -105,18 +72,36 @@ function resolveUrl(url: string | (() => string)): string {
 	return typeof url === "function" ? url() : url;
 }
 
-function resolveSubscribeUrl(
-	url: string | ((fromSeqNum?: number) => string),
-	fromSeqNum: number | undefined,
-	fromSeqNumParam: string | false,
-): string {
-	if (typeof url === "function") return url(fromSeqNum);
-	if (fromSeqNum === undefined || fromSeqNumParam === false) return url;
+function isAbsoluteUrl(url: string): boolean {
+	return /^[a-z][a-z\d+\-.]*:/i.test(url);
+}
 
-	const parsed = new URL(url, "http://s2.local");
-	parsed.searchParams.set(fromSeqNumParam, String(fromSeqNum));
-	if (/^[a-z][a-z\d+\-.]*:/i.test(url)) return parsed.toString();
-	return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+function setUrlSearchParam(url: string, key: string, value: string): string {
+	if (isAbsoluteUrl(url)) {
+		const parsed = new URL(url);
+		parsed.searchParams.set(key, value);
+		return parsed.toString();
+	}
+
+	const hashStart = url.indexOf("#");
+	const base = hashStart === -1 ? url : url.slice(0, hashStart);
+	const hash = hashStart === -1 ? "" : url.slice(hashStart);
+	const queryStart = base.indexOf("?");
+	const pathname = queryStart === -1 ? base : base.slice(0, queryStart);
+	const search = queryStart === -1 ? "" : base.slice(queryStart + 1);
+	const params = new URLSearchParams(search);
+	params.set(key, value);
+	const nextSearch = params.toString();
+	return `${pathname}${nextSearch ? `?${nextSearch}` : ""}${hash}`;
+}
+
+function resolveSubscribeUrl(
+	url: string | ((cursor?: number) => string),
+	cursor: number | undefined,
+): string {
+	if (typeof url === "function") return url(cursor);
+	if (cursor === undefined) return url;
+	return setUrlSearchParam(url, "from", String(cursor));
 }
 
 function decodeBytesToText(): TransformStream<Uint8Array, string> {
@@ -254,37 +239,6 @@ function createChunkQueue(abortSignal?: AbortSignal) {
 	};
 }
 
-function normalizeSnapshot(value: unknown): ChatSnapshot {
-	const payload = isRecord(value) ? value : {};
-	const fromSeqNum = payload.fromSeqNum;
-	return {
-		messages: Array.isArray(payload.messages)
-			? (payload.messages as UIMessage[])
-			: [],
-		fromSeqNum:
-			typeof fromSeqNum === "number" && Number.isSafeInteger(fromSeqNum)
-				? fromSeqNum
-				: 0,
-	};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
-/** Load a session snapshot before creating the TanStack connection. */
-export async function loadSnapshot(
-	options: LoadSnapshotOptions,
-): Promise<ChatSnapshot> {
-	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
-	const response = await readResponse(doFetch, resolveUrl(options.url), {
-		method: "GET",
-		headers: await resolveHeaders(options.headers),
-		credentials: options.credentials ?? "same-origin",
-	});
-	return normalizeSnapshot(await response.json());
-}
-
 /** Build the chat connection adapter. */
 export function createS2Connection(
 	options: S2ConnectionOptions,
@@ -331,21 +285,14 @@ export function createS2Connection(
 	if (options.subscribeUrl) {
 		const subscribeUrl = options.subscribeUrl as
 			| string
-			| ((fromSeqNum?: number) => string);
-		const fromSeqNumParam = options.fromSeqNumParam ?? "from";
-		const initialFromSeqNum =
-			options.snapshot?.fromSeqNum ?? options.initialFromSeqNum;
-		let nextFromSeqNum =
-			typeof initialFromSeqNum === "number" &&
-			Number.isSafeInteger(initialFromSeqNum)
-				? initialFromSeqNum
-				: undefined;
+			| ((cursor?: number) => string);
+		let nextCursor: number | undefined;
 		const updateCursor = (id: string) => {
 			if (!/^\d+$/.test(id)) return;
 			const parsed = Number.parseInt(id, 10);
 			if (!Number.isSafeInteger(parsed) || parsed < 0) return;
-			if (nextFromSeqNum === undefined || parsed > nextFromSeqNum) {
-				nextFromSeqNum = parsed;
+			if (nextCursor === undefined || parsed > nextCursor) {
+				nextCursor = parsed;
 			}
 		};
 
@@ -362,11 +309,7 @@ export function createS2Connection(
 							const headers = await resolveHeaders(options.headers);
 							const response = await readResponse(
 								doFetch,
-								resolveSubscribeUrl(
-									subscribeUrl,
-									nextFromSeqNum,
-									fromSeqNumParam,
-								),
+								resolveSubscribeUrl(subscribeUrl, nextCursor),
 								{
 									method: "GET",
 									headers,
@@ -409,7 +352,7 @@ export function createS2Connection(
 				const headers = await resolveHeaders(options.headers);
 				const response = await readResponse(
 					doFetch,
-					resolveSubscribeUrl(subscribeUrl, nextFromSeqNum, fromSeqNumParam),
+					resolveSubscribeUrl(subscribeUrl, nextCursor),
 					{
 						method: "GET",
 						headers,

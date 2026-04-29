@@ -7,7 +7,6 @@ import {
 	AppendInput,
 	AppendRecord,
 	S2,
-	S2Error,
 } from "@s2-dev/streamstore";
 import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 
@@ -99,15 +98,8 @@ function isChatMessage(value: unknown): value is ChatMessage {
 	);
 }
 
-async function ensureStreamExists(streamName: string): Promise<void> {
-	await basinClient.streams.create({ stream: streamName }).catch((err: unknown) => {
-		if (!(err instanceof S2Error && err.status === 409)) throw err;
-	});
-}
-
 async function readHistory(chatId: string): Promise<ChatMessage[]> {
 	const streamName = historyStreamName(chatId);
-	await ensureStreamExists(streamName);
 
 	const stream = basinClient.stream(streamName);
 	try {
@@ -143,7 +135,6 @@ async function appendHistoryMessage(
 	message: ChatMessage,
 ): Promise<void> {
 	const streamName = historyStreamName(chatId);
-	await ensureStreamExists(streamName);
 
 	const stream = basinClient.stream(streamName);
 	try {

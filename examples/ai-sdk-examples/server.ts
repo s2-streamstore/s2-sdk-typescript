@@ -9,7 +9,6 @@ import {
 	Producer,
 	S2,
 	S2Environment,
-	S2Error,
 } from "@s2-dev/streamstore";
 import {
 	type ModelMessage,
@@ -42,12 +41,6 @@ const s2 = new S2({
 const basin = s2.basin(basinName);
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-
-async function ensureStream(name: string) {
-	await basin.streams.create({ stream: name }).catch((err: unknown) => {
-		if (!(err instanceof S2Error && err.status === 409)) throw err;
-	});
-}
 
 function pruneMessages(messages: ModelMessage[]) {
 	if (!Number.isFinite(MAX_CONTEXT_MESSAGES) || MAX_CONTEXT_MESSAGES <= 0)
@@ -176,7 +169,6 @@ function messagePreview(msg: ModelMessage): string {
 
 async function initChat() {
 	const streamName = "ai-sdk-demo/chat";
-	await ensureStream(streamName);
 	chatStream = basin.stream(streamName);
 	chatProducer = new Producer(
 		new BatchTransform({ lingerDurationMillis: 10 }),
@@ -497,7 +489,6 @@ async function handleAgentRun(req: Request): Promise<Response> {
 	const runId = crypto.randomUUID().slice(0, 8);
 	const streamName = `ai-sdk-demo/agent/run-${runId}`;
 
-	await ensureStream(streamName);
 	const streamClient = basin.stream(streamName);
 	const producer = new Producer(
 		new BatchTransform({ lingerDurationMillis: 10 }),
@@ -725,7 +716,6 @@ let dinnerRecords: { seq: number; stream: string; type: string; preview: string 
 
 async function initDinnerGuest(guest: Guest): Promise<DinnerGuestState> {
 	const streamName = `${DINNER_PREFIX}/guest/${guest.name.toLowerCase().replace(/\s+/g, "-")}`;
-	await ensureStream(streamName);
 	const stream = basin.stream(streamName);
 	const producer = new Producer(
 		new BatchTransform({ lingerDurationMillis: 10 }),
@@ -858,7 +848,6 @@ async function dinnerSaveReasoning(
 
 async function initDinner() {
 	const busStreamName = `${DINNER_PREFIX}/bus`;
-	await ensureStream(busStreamName);
 	dinnerBusStream = basin.stream(busStreamName);
 	dinnerBusProducer = new Producer(
 		new BatchTransform({ lingerDurationMillis: 10 }),

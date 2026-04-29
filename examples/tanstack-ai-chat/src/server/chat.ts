@@ -3,7 +3,7 @@ import {
 	getLatestUserText,
 	getMessageText,
 	normalizeMessages,
-	type SnapshotMessage,
+	type ChatMessage as ResumableChatMessage,
 	type StreamChunk,
 	type TextMessage,
 	toTextMessages,
@@ -21,7 +21,7 @@ const REPLAY_POLL_MS = 50;
 
 type StreamMode = "single-use" | "shared" | "session";
 
-export type ChatMessage = SnapshotMessage;
+export type ChatMessage = ResumableChatMessage;
 
 type ChatPayload = {
 	id?: unknown;
@@ -143,7 +143,6 @@ function isChatMessage(value: unknown): value is ChatMessage {
 async function readHistory(chatId: string): Promise<ChatMessage[]> {
 	const context = getContext();
 	const streamName = historyStreamName(chatId);
-	await context.chat.ensureStream(streamName);
 
 	const stream = context.basinClient.stream(streamName);
 	const messages: ChatMessage[] = [];
@@ -175,7 +174,6 @@ async function appendHistoryMessage(
 ): Promise<void> {
 	const context = getContext();
 	const streamName = historyStreamName(chatId);
-	await context.chat.ensureStream(streamName);
 	await context.basinClient
 		.stream(streamName)
 		.append(
@@ -301,7 +299,6 @@ async function replayWhenReady(
 	const context = getContext();
 	const deadline = Date.now() + REPLAY_WAIT_MS;
 	while (Date.now() < deadline) {
-		await context.chat.ensureStream(streamName);
 		const response = await context.chat.replay(streamName, {
 			fromSeqNum: parseFromSeqNum(fromSeqNumValue),
 		});
@@ -331,8 +328,7 @@ export async function postChat(request: Request): Promise<Response> {
 		const streamMode = streamModeFromEnv();
 
 		if (streamMode === "session") {
-			const messages = normalizeMessages(body.messages);
-			if (!getLatestUserText(messages)) {
+			if (!getLatestUserText(body.messages)) {
 				return new Response("Expected at least one user message", {
 					status: 400,
 				});
@@ -340,10 +336,10 @@ export async function postChat(request: Request): Promise<Response> {
 
 			const context = getContext();
 			const streamName = liveStreamName(body.id, 0);
-			const source = lazyChunks(toTextMessages(messages));
 			return context.chat.makeSessionResponse(streamName, {
-				messages,
-				source,
+				messages: body.messages,
+				source: (currentMessages) =>
+					lazyChunks(toTextMessages(currentMessages)),
 			});
 		}
 
@@ -357,7 +353,6 @@ export async function postChat(request: Request): Promise<Response> {
 		const context = getContext();
 		const history = await readHistory(body.id);
 		const streamName = liveStreamName(body.id, turnIndexForNewTurn(history));
-		await context.chat.ensureStream(streamName);
 		const messages = [...history, userMessage];
 		const source = lazyChunks(toTextMessages(messages));
 		await appendHistoryMessage(body.id, userMessage);
@@ -385,7 +380,6 @@ export async function replayChat(
 		if (streamMode === "session") {
 			streamName = liveStreamName(chatId, 0);
 			const context = getContext();
-			await context.chat.ensureStream(streamName);
 			return context.chat.replay(streamName, {
 				fromSeqNum: parseFromSeqNum(fromSeqNumValue ?? null),
 			});
@@ -404,18 +398,6 @@ export async function replayChat(
 		}
 
 		return replayWhenReady(streamName, fromSeqNumValue ?? null);
-	} catch (error) {
-		return routeError(error);
-	}
-}
-
-export async function getSnapshot(chatId: string | null): Promise<Response> {
-	try {
-		if (!isValidChatId(chatId)) {
-			return new Response("Missing id query parameter", { status: 400 });
-		}
-
-		return getContext().chat.snapshot(liveStreamName(chatId, 0));
 	} catch (error) {
 		return routeError(error);
 	}

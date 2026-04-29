@@ -12,6 +12,37 @@ export interface TailedStringBody {
 	nextSeqNum: number;
 }
 
+export function tailAsSse(
+	source: AsyncIterable<TailedStringBody>,
+	headers: Readonly<Record<string, string>>,
+): Response {
+	const iterator = source[Symbol.asyncIterator]();
+	const encoder = new TextEncoder();
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const next = await iterator.next();
+				if (next.done) {
+					controller.close();
+					return;
+				}
+				controller.enqueue(
+					encoder.encode(
+						`id: ${next.value.nextSeqNum}\ndata: ${next.value.body}\n\n`,
+					),
+				);
+			} catch (err) {
+				controller.error(err);
+				await iterator.return?.();
+			}
+		},
+		async cancel() {
+			await iterator.return?.();
+		},
+	});
+	return new Response(body, { headers });
+}
+
 interface SharedStreamState {
 	reusableFenceToken: string | null;
 	/**

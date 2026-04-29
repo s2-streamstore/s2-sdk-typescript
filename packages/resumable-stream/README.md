@@ -20,7 +20,7 @@ To use this package, you need to create an S2 [access token](https://s2.dev/docs
 
 The incoming stream is batched and the batch size can be changed by setting `S2_BATCH_SIZE`. The maximum time to wait before flushing a batch can be tweaked by setting `S2_LINGER_DURATION_MS` to a duration in milliseconds.
 
-The package exposes two entry points:
+The package exposes three entry points:
 
 - **`@s2-dev/resumable-stream`**: a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams or anything that isn't AI SDK.
 - **`@s2-dev/resumable-stream/aisdk`**: a thin helper over `UIMessageChunk` streams for the AI SDK's `useChat`. See the [AI SDK section](#ai-sdk) below.
@@ -170,6 +170,9 @@ The `./tanstack-ai` subpath exposes `createResumableChat` for TanStack AI's `Str
 - `shared`: generations reuse one stream, with later writers taking over via lease-based fencing. Replay yields the active generation only.
 - `session`: generations append to one durable session log. Replay tails the stream forever.
 
+Configure the S2 basin to create streams on append/read. The TanStack helper
+does not create streams before replay or generation.
+
 For request-scoped streaming, omit `subscribeUrl` on the client and let
 `makeResumable` stream chunks on the POST response. In `single-use` and
 `shared`, you can also pass `subscribeUrl` when the client should recover an
@@ -239,14 +242,13 @@ export async function POST(req: Request) {
   const { id, messages } = await req.json();
   if (!getLatestUserText(messages)) return new Response("Missing prompt", { status: 400 });
 
-  const source = tanstackChat({
-    adapter: openaiText("gpt-4o-mini"),
-    messages: toTextMessages(messages),
-  });
-
   return chat.makeSessionResponse(`chat-${id}`, {
     messages,
-    source,
+    source: (currentMessages) =>
+      tanstackChat({
+        adapter: openaiText("gpt-4o-mini"),
+        messages: toTextMessages(currentMessages),
+      }),
     waitUntil,
   });
 }
@@ -254,46 +256,41 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   const url = new URL(req.url);
   return chat.replay(`chat-${url.searchParams.get("id")}`, {
-    fromSeqNum: Number(url.searchParams.get("from") ?? 0),
+    fromSeqNum: url.searchParams.has("from")
+      ? Number(url.searchParams.get("from"))
+      : undefined,
   });
-}
-
-export async function snapshot(req: Request) {
-  const id = new URL(req.url).searchParams.get("id");
-  return chat.snapshot(`chat-${id}`);
 }
 ```
 
 ```tsx
 import { useChat } from "@tanstack/ai-react";
-import {
-  createS2Connection,
-  loadSnapshot,
-} from "@s2-dev/resumable-stream/tanstack-ai/client";
+import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client";
 
-const snapshot = await loadSnapshot({ url: `/api/chat/snapshot?id=${chatId}` });
 const connection = createS2Connection({
   mode: "session",
   sendUrl: "/api/chat",
   subscribeUrl: `/api/chat/replay?id=${chatId}`,
-  snapshot,
   body: { id: chatId },
 });
 
 const chat = useChat({
   connection,
-  initialMessages: snapshot.messages,
   live: true,
 });
 ```
 
-`makeSessionResponse` prepends the message snapshot and uses replay delivery:
-the POST route returns 202 immediately, while chunks arrive through the replay
-route. `loadSnapshot` and `chat.snapshot` seed the reconnect cursor;
-subsequent replay responses advance it via SSE `id` fields. `live: true` tells
-`useChat` to start `connection.subscribe()` on mount, which is required for
-session mode because chunks arrive through the replay route instead of the POST
-response.
+`makeSessionResponse` compares the submitted `messages` with the S2 log, stores
+only the latest new user message, then stores model chunks. Pass `source` as a
+factory so the model call receives the messages rebuilt from S2 plus that user
+message. The POST route returns 202 immediately, while chunks arrive through the
+replay route.
+When the first session replay request has no `from` cursor, `chat.replay`
+emits a TanStack `MESSAGES_SNAPSHOT` and then tails from that snapshot cursor.
+Subsequent replay responses advance the cursor via SSE `id` fields.
+`live: true` tells `useChat` to start `connection.subscribe()` on mount, which
+is required for session mode because chunks arrive through the replay route
+instead of the POST response.
 
 For lower-level calls, `makeResumable` defaults to
 `delivery: "response"`, which streams chunks on the request that starts

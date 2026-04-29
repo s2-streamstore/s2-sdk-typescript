@@ -1,8 +1,4 @@
-import {
-	type ChatSnapshot,
-	createS2Connection,
-	loadSnapshot,
-} from "@s2-dev/resumable-stream/tanstack-ai/client";
+import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client";
 import type { UIMessage } from "@tanstack/ai-react";
 import { useChat } from "@tanstack/ai-react";
 import { createFileRoute } from "@tanstack/react-router";
@@ -11,7 +7,6 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const API = "/api/chat";
 const HISTORY_API = `${API}/history`;
-const SNAPSHOT_API = `${API}/snapshot`;
 const SUBSCRIBE_API = `${API}/replay`;
 
 type StreamMode = "single-use" | "shared" | "session";
@@ -90,7 +85,9 @@ function hasActiveTurn(messages: UIMessage[]): boolean {
 
 function ChatRoute() {
 	const [chatId, setChatId] = useState<string | null>(null);
-	const [snapshot, setSnapshot] = useState<ChatSnapshot | null>(null);
+	const [initialMessages, setInitialMessages] = useState<UIMessage[] | null>(
+		null,
+	);
 	const [historyError, setHistoryError] = useState<string | null>(null);
 	const initializedRef = useRef(false);
 	const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -109,14 +106,7 @@ function ChatRoute() {
 		sessionStorage.setItem("s2-tanstack-ai-chat-id", id);
 
 		if (STREAM_MODE === "session") {
-			loadSnapshot({ url: `${SNAPSHOT_API}?id=${encodeURIComponent(id)}` })
-				.then(setSnapshot)
-				.catch((error) => {
-					setHistoryError(
-						error instanceof Error ? error.message : String(error),
-					);
-					setSnapshot({ messages: [], fromSeqNum: 0 });
-				});
+			setInitialMessages([]);
 			return;
 		}
 
@@ -126,18 +116,15 @@ function ChatRoute() {
 					throw new Error(`${response.status} ${response.statusText}`);
 				}
 				const payload = (await response.json()) as { messages?: ChatMessage[] };
-				setSnapshot({
-					messages: historyToInitialMessages(payload.messages ?? []),
-					fromSeqNum: 0,
-				});
+				setInitialMessages(historyToInitialMessages(payload.messages ?? []));
 			})
 			.catch((error) => {
 				setHistoryError(error instanceof Error ? error.message : String(error));
-				setSnapshot({ messages: [], fromSeqNum: 0 });
+				setInitialMessages([]);
 			});
 	}, []);
 
-	if (chatId === null || snapshot === null) {
+	if (chatId === null || initialMessages === null) {
 		return (
 			<main className="chat-shell">
 				<header className="topbar">
@@ -156,7 +143,7 @@ function ChatRoute() {
 	return (
 		<ChatInner
 			chatId={chatId}
-			snapshot={snapshot}
+			initialMessages={initialMessages}
 			historyError={historyError}
 			chatEndRef={chatEndRef}
 		/>
@@ -165,34 +152,32 @@ function ChatRoute() {
 
 function ChatInner({
 	chatId,
-	snapshot,
+	initialMessages,
 	historyError,
 	chatEndRef,
 }: {
 	chatId: string;
-	snapshot: ChatSnapshot;
+	initialMessages: UIMessage[];
 	historyError: string | null;
 	chatEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
 	const shouldReplayOnMount =
 		STREAM_MODE === "session" ||
-		(STREAM_MODE !== "session" && hasActiveTurn(snapshot.messages));
+		(STREAM_MODE !== "session" && hasActiveTurn(initialMessages));
 	const connection = useMemo(
 		() =>
 			createS2Connection({
 				sendUrl: API,
-				...(shouldReplayOnMount
-					? { subscribeUrl: subscribeUrl(chatId), snapshot }
-					: {}),
+				...(shouldReplayOnMount ? { subscribeUrl: subscribeUrl(chatId) } : {}),
 				mode: STREAM_MODE,
 				body: { id: chatId },
 			}),
-		[chatId, snapshot, shouldReplayOnMount],
+		[chatId, shouldReplayOnMount],
 	);
 
 	const { messages, sendMessage, isLoading, sessionGenerating } = useChat({
 		connection,
-		initialMessages: snapshot.messages,
+		initialMessages,
 		// Replay on mount only when there is session state or an active turn.
 		live: shouldReplayOnMount,
 	});

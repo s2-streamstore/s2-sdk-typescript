@@ -28,7 +28,6 @@ import {
 	Producer,
 	S2,
 	S2Environment,
-	S2Error,
 } from "@s2-dev/streamstore";
 import { generateText, type ModelMessage } from "ai";
 
@@ -138,12 +137,6 @@ function pruneMessages(messages: ModelMessage[]) {
 	messages.splice(0, messages.length, ...(system ? [system] : []), ...trimmed);
 }
 
-async function ensureStream(name: string) {
-	await basin.streams.create({ stream: name }).catch((err: unknown) => {
-		if (!(err instanceof S2Error && err.status === 409)) throw err;
-	});
-}
-
 // ---------------------------------------------------------------------------
 // Per-guest agent state
 // ---------------------------------------------------------------------------
@@ -162,7 +155,6 @@ type GuestState = {
 
 async function createGuestState(guest: Guest): Promise<GuestState> {
 	const streamName = `${prefix}/guest/${guest.name.toLowerCase().replace(/\s+/g, "-")}`;
-	await ensureStream(streamName);
 	const stream = basin.stream(streamName);
 
 	const producer = new Producer(
@@ -231,7 +223,6 @@ async function createGuestState(guest: Guest): Promise<GuestState> {
 // ---------------------------------------------------------------------------
 
 const busStreamName = `${prefix}/bus`;
-await ensureStream(busStreamName);
 const busStream = basin.stream(busStreamName);
 
 const busProducer = new Producer(

@@ -2,7 +2,6 @@ import {
 	createResumableChat,
 	type StreamChunk,
 } from "@s2-dev/resumable-stream/tanstack-ai";
-import { S2, S2Error } from "@s2-dev/streamstore";
 
 type Importer = (specifier: string) => Promise<any>;
 const importOptional: Importer = (specifier) => import(specifier);
@@ -68,26 +67,6 @@ function endpointsFromEnv() {
 		: undefined;
 }
 
-async function ensureStreamExists({
-	accessToken,
-	basin,
-	stream,
-}: {
-	accessToken: string;
-	basin: string;
-	stream: string;
-}): Promise<void> {
-	const s2 = new S2({ accessToken, endpoints: endpointsFromEnv() });
-	await s2
-		.basin(basin)
-		.streams.create({ stream })
-		.catch((error: unknown) => {
-			if (!(error instanceof S2Error && error.status === 409)) {
-				throw error;
-			}
-		});
-}
-
 async function* readSse(response: Response): AsyncIterable<StreamChunk> {
 	const reader = response.body!.getReader();
 	const decoder = new TextDecoder();
@@ -141,7 +120,6 @@ async function main() {
 	console.log("S2 stream:", streamName);
 	console.log("Prompt:", prompt);
 
-	await ensureStreamExists({ accessToken, basin, stream: streamName });
 	const response = await chat.makeResumable(streamName, source, {
 		waitUntil: trackPromise,
 	});

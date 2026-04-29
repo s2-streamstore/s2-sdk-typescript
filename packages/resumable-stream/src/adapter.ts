@@ -15,6 +15,7 @@ import {
 import {
 	claimSharedGeneration,
 	replayActiveGenerationStringRecords,
+	tailAsSse,
 	tailStringRecords,
 } from "./shared.js";
 
@@ -108,6 +109,8 @@ export interface Chat<T> {
 export interface ChatAdapter<T> {
 	/** Synthesize an error chunk to surface upstream failures to the client. */
 	makeErrorChunk(err: unknown, onError?: (err: unknown) => string): T;
+	/** Optionally normalize chunks before they are stored durably. */
+	prepareForStorage?: (chunk: T) => T;
 	/** SSE response headers. */
 	responseHeaders: Readonly<Record<string, string>>;
 }
@@ -167,37 +170,6 @@ function sseResponseFromStrings(
 					return;
 				}
 				controller.enqueue(encoder.encode(`data: ${next.value}\n\n`));
-			} catch (err) {
-				controller.error(err);
-				await iterator.return?.();
-			}
-		},
-		async cancel() {
-			await iterator.return?.();
-		},
-	});
-	return new Response(body, { headers });
-}
-
-function sseResponseFromTailedStrings(
-	source: AsyncIterable<{ body: string; nextSeqNum: number }>,
-	headers: Readonly<Record<string, string>>,
-): Response {
-	const iterator = source[Symbol.asyncIterator]();
-	const encoder = new TextEncoder();
-	const body = new ReadableStream<Uint8Array>({
-		async pull(controller) {
-			try {
-				const next = await iterator.next();
-				if (next.done) {
-					controller.close();
-					return;
-				}
-				controller.enqueue(
-					encoder.encode(
-						`id: ${next.value.nextSeqNum}\ndata: ${next.value.body}\n\n`,
-					),
-				);
 			} catch (err) {
 				controller.error(err);
 				await iterator.return?.();
@@ -296,7 +268,13 @@ export function createChat<T>(
 				lingerDuration,
 				matchSeqNumStart,
 				toRecord: (chunk) =>
-					AppendRecord.string({ body: JSON.stringify(chunk) }),
+					AppendRecord.string({
+						body: JSON.stringify(
+							adapter.prepareForStorage
+								? adapter.prepareForStorage(chunk)
+								: chunk,
+						),
+					}),
 				finalRecords: (sourceError) => {
 					if (sourceError === undefined) {
 						return createTerminalRecords({
@@ -349,7 +327,7 @@ export function createChat<T>(
 			const handle = s2.basin(basin).stream(streamName);
 
 			if (isSession) {
-				return sseResponseFromTailedStrings(
+				return tailAsSse(
 					tailStringRecords(handle, options?.fromSeqNum),
 					adapter.responseHeaders,
 				);
@@ -375,7 +353,7 @@ export function createChat<T>(
 					yield next.value;
 				}
 			})();
-			return sseResponseFromTailedStrings(
+			return tailAsSse(
 				replayWithFirst,
 				adapter.responseHeaders,
 			);

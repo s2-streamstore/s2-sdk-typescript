@@ -4,7 +4,7 @@ import type {
 	SubscribeConnectionAdapter,
 } from "@tanstack/ai-client";
 import { describe, expect, it } from "vitest";
-import { createS2Connection, loadSnapshot } from "../tanstack-ai-client.js";
+import { createS2Connection } from "../tanstack-ai-client.js";
 
 function sseResponse(frames: string[], status = 200): Response {
 	const encoder = new TextEncoder();
@@ -323,7 +323,7 @@ describe("createS2Connection (session)", () => {
 		expect(chunks.map((c) => c.type)).toEqual(["RUN_STARTED", "RUN_FINISHED"]);
 	});
 
-	it("uses snapshot cursor for subscribe() and advances it from SSE ids", async () => {
+	it("advances the replay cursor from SSE ids", async () => {
 		const { fetch, calls } = recordingFetch([
 			sseResponse([
 				frameWithId(6, { type: "RUN_STARTED", timestamp: 1 }),
@@ -336,31 +336,33 @@ describe("createS2Connection (session)", () => {
 			sendUrl: "/api/chat",
 			subscribeUrl: "/api/chat/replay?id=chat-1",
 			mode: "session",
-			snapshot: { messages, fromSeqNum: 5 },
 			fetch,
 		}) as SubscribeConnectionAdapter;
 
 		await drainAsyncIterable(adapter.subscribe());
 		await drainAsyncIterable(adapter.subscribe());
 
-		expect(calls[0]!.url).toBe("/api/chat/replay?id=chat-1&from=5");
+		expect(calls[0]!.url).toBe("/api/chat/replay?id=chat-1");
 		expect(calls[1]!.url).toBe("/api/chat/replay?id=chat-1&from=9");
 	});
 
-	it("loads a session snapshot response", async () => {
+	it("adds cursor params to relative subscribe URLs without inventing an origin", async () => {
 		const { fetch, calls } = recordingFetch([
-			new Response(JSON.stringify({ messages, fromSeqNum: 12 }), {
-				headers: { "Content-Type": "application/json" },
-			}),
+			sseResponse([frameWithId(5, { type: "RUN_FINISHED", timestamp: 1 })]),
+			sseResponse([]),
 		]);
 
-		const snapshot = await loadSnapshot({
-			url: "/api/chat/snapshot?id=chat-1",
+		const adapter = createS2Connection({
+			sendUrl: "/api/chat",
+			subscribeUrl: "api/chat/replay?chat=1#tail",
+			mode: "session",
 			fetch,
-		});
+		}) as SubscribeConnectionAdapter;
 
-		expect(snapshot).toEqual({ messages, fromSeqNum: 12 });
-		expect(calls[0]!.url).toBe("/api/chat/snapshot?id=chat-1");
-		expect(calls[0]!.init.method).toBe("GET");
+		await drainAsyncIterable(adapter.subscribe());
+		await drainAsyncIterable(adapter.subscribe());
+
+		expect(calls[0]!.url).toBe("api/chat/replay?chat=1#tail");
+		expect(calls[1]!.url).toBe("api/chat/replay?chat=1&from=5#tail");
 	});
 });
