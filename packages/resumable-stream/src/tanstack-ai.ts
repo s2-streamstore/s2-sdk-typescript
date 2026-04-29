@@ -153,41 +153,29 @@ function ensureMessage(
 	];
 }
 
-function withMessageText(message: ChatMessage, text: string): ChatMessage {
-	let wroteText = false;
-	const parts = message.parts.map((part) => {
-		if (part.type !== "text" || wroteText) return part;
-		wroteText = true;
-		return { ...part, content: text };
+function updateMessageText(
+	messages: ChatMessage[],
+	messageId: string,
+	updateText: (current: string) => string,
+): ChatMessage[] {
+	return ensureMessage(messages, messageId).map((message) => {
+		if (message.id !== messageId) return message;
+		const text = updateText(getMessageText(message));
+		let wrote = false;
+		const parts = message.parts.map((part) => {
+			if (part.type !== "text" || wrote) return part;
+			wrote = true;
+			return { ...part, content: text };
+		});
+		if (!wrote) parts.push({ type: "text", content: text });
+		return { ...message, parts };
 	});
-	if (!wroteText) {
-		parts.push({ type: "text", content: text });
-	}
-	return { ...message, parts };
 }
 
-function setMessageText(
-	messages: ChatMessage[],
-	messageId: string,
-	text: string,
-): ChatMessage[] {
-	return ensureMessage(messages, messageId).map((message) =>
-		message.id === messageId ? withMessageText(message, text) : message,
-	);
-}
-
-function appendMessageText(
-	messages: ChatMessage[],
-	messageId: string,
-	text: string,
-): ChatMessage[] {
-	const existingMessages = ensureMessage(messages, messageId);
-	const current = existingMessages.find((message) => message.id === messageId);
-	return setMessageText(
-		existingMessages,
-		messageId,
-		`${current ? getMessageText(current) : ""}${text}`,
-	);
+function mergeTextValue(current: string, incoming: string): string {
+	if (incoming.startsWith(current)) return incoming;
+	if (current.startsWith(incoming)) return current;
+	return current + incoming;
 }
 
 function stripGeneratedDates(messages: ChatMessage[]): ChatMessage[] {
@@ -196,10 +184,6 @@ function stripGeneratedDates(messages: ChatMessage[]): ChatMessage[] {
 		const { createdAt: _, ...rest } = message;
 		return rest;
 	});
-}
-
-function normalizeRebuiltMessages(messages: unknown): ChatMessage[] {
-	return stripGeneratedDates(normalizeMessages(messages));
 }
 
 async function getStreamProcessor(): Promise<StreamProcessorConstructor | null> {
@@ -225,7 +209,7 @@ async function rebuildMessagesFromChunks(
 			for (const chunk of chunks) {
 				processor.processChunk(chunk);
 			}
-			return normalizeRebuiltMessages(processor.getMessages());
+			return stripGeneratedDates(normalizeMessages(processor.getMessages()));
 		} catch {
 			// Fall through to the structural replay below.
 		}
@@ -250,38 +234,37 @@ function applyStreamChunkToSnapshot(
 
 	if (chunk.type === "TEXT_MESSAGE_CONTENT") {
 		if (typeof chunk.messageId !== "string") return messages;
+		const messageId = chunk.messageId;
 		if (typeof chunk.delta === "string" && chunk.delta) {
-			return appendMessageText(messages, chunk.messageId, chunk.delta);
+			const delta = chunk.delta;
+			return updateMessageText(messages, messageId, (current) => current + delta);
 		}
-		if (typeof chunk.content !== "string" || !chunk.content) return messages;
-
-		const existingMessages = ensureMessage(messages, chunk.messageId);
-		const current = existingMessages.find(
-			(message) => message.id === chunk.messageId,
-		);
-		const currentText = current ? getMessageText(current) : "";
-		const nextText = chunk.content.startsWith(currentText)
-			? chunk.content
-			: currentText.startsWith(chunk.content)
-				? currentText
-				: currentText + chunk.content;
-		return setMessageText(existingMessages, chunk.messageId, nextText);
+		if (typeof chunk.content === "string" && chunk.content) {
+			const content = chunk.content;
+			return updateMessageText(messages, messageId, (current) =>
+				mergeTextValue(current, content),
+			);
+		}
+		return messages;
 	}
 
 	if (chunk.type === "RUN_ERROR") {
+		const errMessage =
+			isObjectRecord(chunk.error) && typeof chunk.error.message === "string"
+				? chunk.error.message
+				: undefined;
 		const message =
-			typeof chunk.message === "string"
-				? chunk.message
-				: typeof (chunk.error as { message?: unknown } | undefined)?.message ===
-						"string"
-					? (chunk.error as { message: string }).message
-					: "Unknown model error";
-		return appendMessageText(
-			messages,
+			(typeof chunk.message === "string" ? chunk.message : undefined) ??
+			errMessage ??
+			"Unknown model error";
+		const messageId =
 			typeof chunk.messageId === "string"
 				? chunk.messageId
-				: "fallback-assistant",
-			`\n\n[error] ${message}`,
+				: "fallback-assistant";
+		return updateMessageText(
+			messages,
+			messageId,
+			(current) => `${current}\n\n[error] ${message}`,
 		);
 	}
 
@@ -341,30 +324,6 @@ function cloneMessage(message: ChatMessage): ChatMessage {
 		...message,
 		parts: message.parts.map((part) => ({ ...part })),
 	};
-}
-
-function appendMissingMessages(
-	currentMessages: unknown,
-	incomingMessages: unknown,
-): ChatMessage[] {
-	const current = normalizeMessages(currentMessages);
-	const incoming = normalizeMessages(incomingMessages);
-	const seen = new Set(current.map((message) => message.id));
-	const messages = current.map(cloneMessage);
-	for (const message of incoming) {
-		if (seen.has(message.id)) continue;
-		seen.add(message.id);
-		messages.push(cloneMessage(message));
-	}
-	return messages;
-}
-
-function messagesMissingFromSnapshot(
-	currentMessages: ChatMessage[],
-	incomingMessages: ChatMessage[],
-): ChatMessage[] {
-	const currentIds = new Set(currentMessages.map((message) => message.id));
-	return incomingMessages.filter((message) => !currentIds.has(message.id));
 }
 
 function latestUserMessage(messages: ChatMessage[]): ChatMessage | null {
@@ -430,27 +389,25 @@ function makeSessionSource({
 }): AsyncIterable<StreamChunk> {
 	return (async function* () {
 		const currentSnapshot = await readCurrentSnapshot();
-		const submittedMessage = latestUserMessage(incomingMessages);
-		if (!submittedMessage) return;
+		const submitted = latestUserMessage(incomingMessages);
+		if (!submitted) return;
 
-		const submittedMessages = [submittedMessage];
-		const messagesForModel = appendMissingMessages(
-			currentSnapshot.messages,
-			submittedMessages,
-		);
-		const messagesToStore = messagesMissingFromSnapshot(
-			currentSnapshot.messages,
-			submittedMessages,
+		const alreadyStored = currentSnapshot.messages.some(
+			(message) => message.id === submitted.id,
 		);
 		if (
-			messagesToStore.length === 0 &&
-			!needsModelResponse(currentSnapshot.messages, submittedMessage)
+			alreadyStored &&
+			!needsModelResponse(currentSnapshot.messages, submitted)
 		) {
 			return;
 		}
-		for (const message of messagesToStore) {
-			yield* messageEchoChunks(message);
-		}
+
+		const baseMessages = currentSnapshot.messages.map(cloneMessage);
+		const messagesForModel = alreadyStored
+			? baseMessages
+			: [...baseMessages, cloneMessage(submitted)];
+
+		if (!alreadyStored) yield* messageEchoChunks(submitted);
 		yield* await source(messagesForModel);
 	})();
 }
