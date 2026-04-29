@@ -1,12 +1,47 @@
-import { S2Error } from "@s2-dev/streamstore";
+import { S2Error, type S2Stream } from "@s2-dev/streamstore";
 import {
 	appendFenceCommand,
 	appendTrimCommand,
 	isFenceRecord,
 	isTerminalFence,
 	isTrimRecord,
-	type StreamReadOptions,
 } from "./protocol.js";
+
+export interface TailedStringBody {
+	body: string;
+	nextSeqNum: number;
+}
+
+export function tailAsSse(
+	source: AsyncIterable<TailedStringBody>,
+	headers: Readonly<Record<string, string>>,
+): Response {
+	const iterator = source[Symbol.asyncIterator]();
+	const encoder = new TextEncoder();
+	const body = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const next = await iterator.next();
+				if (next.done) {
+					controller.close();
+					return;
+				}
+				controller.enqueue(
+					encoder.encode(
+						`id: ${next.value.nextSeqNum}\ndata: ${next.value.body}\n\n`,
+					),
+				);
+			} catch (err) {
+				controller.error(err);
+				await iterator.return?.();
+			}
+		},
+		async cancel() {
+			await iterator.return?.();
+		},
+	});
+	return new Response(body, { headers });
+}
 
 interface SharedStreamState {
 	reusableFenceToken: string | null;
@@ -46,28 +81,25 @@ function isMissingStreamError(error: unknown): boolean {
 	);
 }
 
-async function readSharedStreamState({
-	s2,
-	basin,
-	stream,
-}: StreamReadOptions): Promise<SharedStreamState> {
-	const handle = s2.basin(basin).stream(stream);
-	try {
-		const session = await handle
-			.readSession(
-				{
-					start: { from: { seqNum: 0 }, clamp: true },
-					stop: { waitSecs: 0 },
-				},
-				{ as: "string" },
-			)
-			.catch((error: unknown) => {
-				if (isMissingStreamError(error)) return null;
-				throw error;
-			});
-		if (!session) return createEmptySharedStreamState();
+async function readSharedStreamState(
+	stream: S2Stream,
+): Promise<SharedStreamState> {
+	const session = await stream
+		.readSession(
+			{
+				start: { from: { seqNum: 0 }, clamp: true },
+				stop: { waitSecs: 0 },
+			},
+			{ as: "string" },
+		)
+		.catch((error: unknown) => {
+			if (isMissingStreamError(error)) return null;
+			throw error;
+		});
+	if (!session) return createEmptySharedStreamState();
 
-		const state = createEmptySharedStreamState();
+	const state = createEmptySharedStreamState();
+	try {
 		for await (const record of session) {
 			state.nextSeqNum = record.seqNum + 1;
 			state.lastRecordTimestamp = record.timestamp.getTime();
@@ -86,29 +118,37 @@ async function readSharedStreamState({
 			state.reusableFenceToken = null;
 			state.heldFenceToken = record.body;
 		}
-		return state;
 	} finally {
-		await handle.close();
+		await session[Symbol.asyncDispose]?.();
 	}
+	return state;
 }
 
 export async function claimSharedGeneration({
-	s2,
-	basin,
 	stream,
 	fencingToken,
 	leaseDurationMs,
 	now = () => Date.now(),
-}: StreamReadOptions & {
+	trim = true,
+}: {
+	stream: S2Stream;
 	fencingToken: string;
 	leaseDurationMs: number;
 	/** Time source override for tests. */
 	now?: () => number;
+	/**
+	 * Trim records before the new fence after claiming. `true` for one-shot
+	 * generations (`createResumableGeneration` `shared` mode). `false` for
+	 * session logs that need to preserve history across generations.
+	 *
+	 * @default true
+	 */
+	trim?: boolean;
 }): Promise<{
 	fromSeqNum: number;
 	matchSeqNumStart: number;
 } | null> {
-	const state = await readSharedStreamState({ s2, basin, stream });
+	const state = await readSharedStreamState(stream);
 
 	let currentToken = state.reusableFenceToken;
 	if (
@@ -126,19 +166,11 @@ export async function claimSharedGeneration({
 		return null;
 	}
 
-	const fenceAck = await appendFenceCommand(
-		s2,
-		basin,
-		stream,
-		currentToken,
-		fencingToken,
-	);
+	const fenceAck = await appendFenceCommand(stream, currentToken, fencingToken);
 	let matchSeqNumStart = fenceAck.end.seqNum;
 
-	if (state.nextSeqNum > 0) {
+	if (trim && state.nextSeqNum > 0) {
 		const trimAck = await appendTrimCommand(
-			s2,
-			basin,
 			stream,
 			fencingToken,
 			fenceAck.start.seqNum,
@@ -152,23 +184,33 @@ export async function claimSharedGeneration({
 	};
 }
 
-export async function* replayActiveGenerationStringBodies({
-	s2,
-	basin,
-	stream,
-}: StreamReadOptions): AsyncIterable<string> {
-	const state = await readSharedStreamState({ s2, basin, stream });
+export async function* replayActiveGenerationStringBodies(
+	stream: S2Stream,
+): AsyncIterable<string> {
+	for await (const record of replayActiveGenerationStringRecords(stream)) {
+		yield record.body;
+	}
+}
+
+export async function* replayActiveGenerationStringRecords(
+	stream: S2Stream,
+	fromSeqNum = 0,
+): AsyncIterable<TailedStringBody> {
+	const state = await readSharedStreamState(stream);
 	if (state.activeGenerationStartSeqNum === null) return;
 	if (!state.hasActiveGeneration) return;
 
-	const handle = s2.basin(basin).stream(stream);
-	try {
-		const session = await handle.readSession(
-			{
-				start: { from: { seqNum: state.activeGenerationStartSeqNum } },
+	const session = await stream.readSession(
+		{
+			start: {
+				from: {
+					seqNum: Math.max(state.activeGenerationStartSeqNum, fromSeqNum),
+				},
 			},
-			{ as: "string" },
-		);
+		},
+		{ as: "string" },
+	);
+	try {
 		for await (const record of session) {
 			if (isFenceRecord(record)) {
 				if (isTerminalFence(record)) break;
@@ -176,10 +218,50 @@ export async function* replayActiveGenerationStringBodies({
 			}
 			if (isTrimRecord(record)) continue;
 			if (record.body) {
-				yield record.body;
+				yield { body: record.body, nextSeqNum: record.seqNum + 1 };
 			}
 		}
 	} finally {
-		await handle.close();
+		await session[Symbol.asyncDispose]?.();
+	}
+}
+
+/**
+ * Tail every data record on the stream from `fromSeqNum` (default 0), skipping
+ * fence and trim records, and never stopping on terminal fences. Used by
+ * `session` mode so a single subscription sees chunks from every
+ * generation as they land.
+ */
+export async function* tailStringBodies(
+	stream: S2Stream,
+	fromSeqNum = 0,
+): AsyncIterable<string> {
+	for await (const record of tailStringRecords(stream, fromSeqNum)) {
+		yield record.body;
+	}
+}
+
+/**
+ * Tail every data record on the stream together with the next sequence number.
+ * The cursor lets reconnecting subscribers resume after the last emitted
+ * record instead of replaying already-processed chunks.
+ */
+export async function* tailStringRecords(
+	stream: S2Stream,
+	fromSeqNum = 0,
+): AsyncIterable<TailedStringBody> {
+	const session = await stream.readSession(
+		{ start: { from: { seqNum: fromSeqNum } } },
+		{ as: "string" },
+	);
+	try {
+		for await (const record of session) {
+			if (isFenceRecord(record) || isTrimRecord(record)) continue;
+			if (record.body) {
+				yield { body: record.body, nextSeqNum: record.seqNum + 1 };
+			}
+		}
+	} finally {
+		await session[Symbol.asyncDispose]?.();
 	}
 }

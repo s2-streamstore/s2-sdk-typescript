@@ -6,7 +6,7 @@ import type {
 } from "@s2-dev/streamstore";
 import { AppendRecord } from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
-import { persistToS2 } from "../protocol.js";
+import { createTerminalRecords, persistToS2 } from "../protocol.js";
 
 interface SubmitTicket {
 	ack(): Promise<AppendAck>;
@@ -218,5 +218,38 @@ describe("persistToS2", () => {
 			{ body: "alpha", headers: [] },
 		]);
 		expect(handle.directAppends).toHaveLength(0);
+	});
+});
+
+describe("createTerminalRecords", () => {
+	it("places single-use cleanup before the terminal fence token rotates", () => {
+		const records = createTerminalRecords({
+			terminalFenceToken: "end-token",
+			trim: true,
+		});
+
+		const summary = summarizeRecords(records);
+		expect(summary[0]?.headers).toEqual([["", "trim"]]);
+		expect(summary[1]).toEqual({
+			body: "end-token",
+			headers: [["", "fence"]],
+		});
+	});
+
+	it("keeps error chunks before cleanup and terminal fence", () => {
+		const errorRecord = AppendRecord.string({ body: "stream-error" });
+		const records = createTerminalRecords({
+			errorRecord,
+			terminalFenceToken: "error-token",
+			trim: true,
+		});
+
+		const summary = summarizeRecords(records);
+		expect(summary[0]).toEqual({ body: "stream-error", headers: [] });
+		expect(summary[1]?.headers).toEqual([["", "trim"]]);
+		expect(summary[2]).toEqual({
+			body: "error-token",
+			headers: [["", "fence"]],
+		});
 	});
 });

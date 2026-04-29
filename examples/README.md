@@ -29,6 +29,20 @@ npx tsx producer.ts
 
 Some examples require additional variables
 
+### TanStack AI
+
+A TanStack Start chat app with one S2 transcript stream per chat and a resumable live stream per active turn. Uses a local fallback stream by default. Set `OPENAI_API_KEY` to use a real model.
+
+```bash
+bun run example:tanstack-ai-chat
+
+# Optional real model mode:
+export OPENAI_API_KEY="sk-..."
+bun run example:tanstack-ai-chat
+```
+
+Open [http://127.0.0.1:3458](http://127.0.0.1:3458). See [tanstack-ai-chat/README.md](tanstack-ai-chat/README.md) for the route layout.
+
 ### AI SDK examples
 
 These require model provider API keys.

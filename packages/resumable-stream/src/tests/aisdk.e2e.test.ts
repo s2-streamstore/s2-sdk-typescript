@@ -66,9 +66,11 @@ async function readSseResponse(res: Response): Promise<unknown[]> {
 	const text = await res.text();
 	const results: unknown[] = [];
 	for (const block of text.split("\n\n")) {
-		const trimmed = block.trim();
-		if (!trimmed.startsWith("data: ")) continue;
-		const payload = trimmed.slice("data: ".length);
+		const dataLine = block
+			.split("\n")
+			.find((line) => line.startsWith("data: "));
+		if (!dataLine) continue;
+		const payload = dataLine.slice("data: ".length);
 		if (payload === "[DONE]") continue;
 		results.push(JSON.parse(payload));
 	}
@@ -296,7 +298,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("shared-reuse");
@@ -364,7 +366,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					leaseDurationMs: 60_000,
 					...s2EndpointsFromEnv(),
 				});
@@ -394,7 +396,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					leaseDurationMs,
 					...s2EndpointsFromEnv(),
 				});
@@ -430,7 +432,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
-					streamReuse: "shared",
+					mode: "shared",
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("shared-idle");

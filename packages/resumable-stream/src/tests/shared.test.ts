@@ -1,13 +1,10 @@
-import type {
-	AppendAck,
-	AppendInput,
-	ReadRecord,
-	S2,
-} from "@s2-dev/streamstore";
+import type { AppendAck, AppendInput, ReadRecord } from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
 import {
 	claimSharedGeneration,
 	replayActiveGenerationStringBodies,
+	tailStringBodies,
+	tailStringRecords,
 } from "../shared.js";
 
 function readRecord(partial: {
@@ -65,18 +62,6 @@ class MockStreamHandle {
 	async close(): Promise<void> {}
 }
 
-function makeFakeS2(handle: MockStreamHandle): S2 {
-	return {
-		basin() {
-			return {
-				stream() {
-					return handle;
-				},
-			};
-		},
-	} as unknown as S2;
-}
-
 describe("claimSharedGeneration lease takeover", () => {
 	it("returns null when the active generation wrote a record within the lease", async () => {
 		const now = 10_000_000;
@@ -95,9 +80,7 @@ describe("claimSharedGeneration lease takeover", () => {
 		]);
 
 		const result = await claimSharedGeneration({
-			s2: makeFakeS2(handle),
-			basin: "test-basin",
-			stream: "test-stream",
+			stream: handle as any,
 			fencingToken: "session-new",
 			leaseDurationMs: 60_000, // lease = 60s, last record 1s ago → alive
 			now: () => now,
@@ -124,9 +107,7 @@ describe("claimSharedGeneration lease takeover", () => {
 		]);
 
 		const result = await claimSharedGeneration({
-			s2: makeFakeS2(handle),
-			basin: "test-basin",
-			stream: "test-stream",
+			stream: handle as any,
 			fencingToken: "session-new",
 			leaseDurationMs: 60_000, // lease = 60s, last record 2 min ago → stale
 			now: () => now,
@@ -150,9 +131,7 @@ describe("claimSharedGeneration lease takeover", () => {
 		]);
 
 		const result = await claimSharedGeneration({
-			s2: makeFakeS2(handle),
-			basin: "test-basin",
-			stream: "test-stream",
+			stream: handle as any,
 			fencingToken: "session-new",
 			leaseDurationMs: 60_000,
 			now: () => now,
@@ -174,9 +153,7 @@ describe("claimSharedGeneration lease takeover", () => {
 		]);
 
 		const result = await claimSharedGeneration({
-			s2: makeFakeS2(handle),
-			basin: "test-basin",
-			stream: "test-stream",
+			stream: handle as any,
 			fencingToken: "session-new",
 			leaseDurationMs: 60_000,
 			now: () => now,
@@ -204,11 +181,7 @@ describe("replayActiveGenerationStringBodies", () => {
 		]);
 
 		const bodies = await drainAsyncIterable(
-			replayActiveGenerationStringBodies({
-				s2: makeFakeS2(handle),
-				basin: "b",
-				stream: "s",
-			}),
+			replayActiveGenerationStringBodies(handle as any),
 		);
 		expect(bodies).toEqual(["chunk-a", "chunk-b"]);
 	});
@@ -224,25 +197,20 @@ describe("replayActiveGenerationStringBodies", () => {
 			readRecord({ seqNum: 1, body: "chunk-a", timestamp: ts }),
 			readRecord({
 				seqNum: 2,
-				body: "end-XYZ",
-				headers: [["", "fence"]],
-				timestamp: ts,
-			}),
-			// Single-use cleanup trim after the terminal fence.
-			readRecord({
-				seqNum: 3,
 				body: "",
 				headers: [["", "trim"]],
+				timestamp: ts,
+			}),
+			readRecord({
+				seqNum: 3,
+				body: "end-XYZ",
+				headers: [["", "fence"]],
 				timestamp: ts,
 			}),
 		]);
 
 		const bodies = await drainAsyncIterable(
-			replayActiveGenerationStringBodies({
-				s2: makeFakeS2(handle),
-				basin: "b",
-				stream: "s",
-			}),
+			replayActiveGenerationStringBodies(handle as any),
 		);
 		expect(bodies).toEqual([]);
 	});
@@ -281,12 +249,88 @@ describe("replayActiveGenerationStringBodies", () => {
 		]);
 
 		const bodies = await drainAsyncIterable(
-			replayActiveGenerationStringBodies({
-				s2: makeFakeS2(handle),
-				basin: "b",
-				stream: "s",
-			}),
+			replayActiveGenerationStringBodies(handle as any),
 		);
 		expect(bodies).toEqual(["new-chunk-a", "new-chunk-b"]);
+	});
+});
+
+describe("tailStringBodies", () => {
+	const ts = new Date(10_000_000);
+
+	it("yields data records from every generation, skipping fences and trims", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder-1",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "gen-1-a", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "gen-1-b", timestamp: ts }),
+			readRecord({
+				seqNum: 3,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({
+				seqNum: 4,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 5, body: "gen-2-a", timestamp: ts }),
+			readRecord({
+				seqNum: 6,
+				body: "end-BBBB",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const bodies = await drainAsyncIterable(tailStringBodies(handle as any));
+		expect(bodies).toEqual(["gen-1-a", "gen-1-b", "gen-2-a"]);
+	});
+
+	it("yields nothing on an empty stream", async () => {
+		const handle = new MockStreamHandle([]);
+		const bodies = await drainAsyncIterable(tailStringBodies(handle as any));
+		expect(bodies).toEqual([]);
+	});
+
+	it("respects fromSeqNum when provided", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "early", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "late", timestamp: ts }),
+		]);
+
+		const bodies = await drainAsyncIterable(tailStringBodies(handle as any, 2));
+		expect(bodies).toEqual(["late"]);
+	});
+
+	it("can include the next sequence cursor for reconnects", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "first", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "second", timestamp: ts }),
+		]);
+
+		const records = await drainAsyncIterable(tailStringRecords(handle as any));
+		expect(records).toEqual([
+			{ body: "first", nextSeqNum: 2 },
+			{ body: "second", nextSeqNum: 3 },
+		]);
 	});
 });
