@@ -66,9 +66,11 @@ async function readSseResponse(res: Response): Promise<unknown[]> {
 	const text = await res.text();
 	const results: unknown[] = [];
 	for (const block of text.split("\n\n")) {
-		const trimmed = block.trim();
-		if (!trimmed.startsWith("data: ")) continue;
-		const payload = trimmed.slice("data: ".length);
+		const dataLine = block
+			.split("\n")
+			.find((line) => line.startsWith("data: "));
+		if (!dataLine) continue;
+		const payload = dataLine.slice("data: ".length);
 		if (payload === "[DONE]") continue;
 		results.push(JSON.parse(payload));
 	}
