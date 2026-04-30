@@ -11,7 +11,6 @@ import {
 	canSetUserAgentHeader,
 	DEFAULT_USER_AGENT,
 } from "./lib/stream/runtime.js";
-import { installUnaryCompression } from "./lib/unary-compression.js";
 import { S2Metrics } from "./metrics.js";
 
 /**
@@ -80,8 +79,6 @@ export class S2 {
 		this.client.interceptors.error.use((err, res) => {
 			return makeServerError(res, err);
 		});
-
-		installUnaryCompression(this.client, this.compression);
 
 		this.basins = new S2Basins(this.client, this.retryConfig);
 		this.accessTokens = new S2AccessTokens(this.client, this.retryConfig);

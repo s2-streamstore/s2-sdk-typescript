@@ -1,19 +1,58 @@
-import * as zlib from "node:zlib";
-import type { CompressionType } from "./framing.js";
+import type { InputType } from "node:zlib";
+import {
+	type CompressionType,
+	MAX_DECOMPRESSED_PAYLOAD_BYTES,
+	MAX_FRAME_PAYLOAD_BYTES,
+} from "./framing.js";
 
-type ZstdSyncFn = (data: zlib.InputType) => Buffer;
+type CompressionOptions = { maxOutputLength?: number };
+type CompressionSyncFn = (
+	data: InputType,
+	options?: CompressionOptions,
+) => Buffer;
 
-const zstdCompressSync = (zlib as unknown as { zstdCompressSync?: ZstdSyncFn })
-	.zstdCompressSync;
+interface CompressionModule {
+	gzipSync: CompressionSyncFn;
+	gunzipSync: CompressionSyncFn;
+	zstdCompressSync?: CompressionSyncFn;
+	zstdDecompressSync?: CompressionSyncFn;
+}
 
-const zstdDecompressSync = (
-	zlib as unknown as { zstdDecompressSync?: ZstdSyncFn }
-).zstdDecompressSync;
+const nodeZlibSpecifier = "node:zlib";
+let zlibModule: CompressionModule | undefined;
+let zlibPromise: Promise<CompressionModule> | undefined;
 
-export function assertCompressionSupported(type: CompressionType): void {
-	if (type === "zstd" && !zstdCompressSync) {
+async function loadZlib(): Promise<CompressionModule> {
+	if (!zlibPromise) {
+		zlibPromise = import(
+			/* webpackIgnore: true */
+			/* @vite-ignore */
+			nodeZlibSpecifier
+		).then((mod) => {
+			zlibModule = mod as CompressionModule;
+			return zlibModule;
+		});
+	}
+	return zlibPromise;
+}
+
+function getLoadedZlib(): CompressionModule {
+	if (!zlibModule) {
+		throw new Error("zlib module has not been loaded");
+	}
+	return zlibModule;
+}
+
+export async function assertCompressionSupported(
+	type: CompressionType,
+): Promise<void> {
+	if (type === "none") {
+		return;
+	}
+	const z = await loadZlib();
+	if (type === "zstd" && (!z.zstdCompressSync || !z.zstdDecompressSync)) {
 		throw new Error(
-			"zstd compression requires Node.js v22.15+ (zlib.zstdCompressSync is unavailable in this runtime)",
+			"zstd compression requires Node.js v22.15+ (zlib zstd APIs are unavailable in this runtime)",
 		);
 	}
 }
@@ -22,34 +61,53 @@ export function assertCompressionSupported(type: CompressionType): void {
  * Build the `Accept-Encoding` header value advertising algorithms the client
  * can decode. Returns `undefined` when no compression is configured.
  *
- * Lists zstd before gzip to indicate preference; zstd is omitted if the
- * runtime cannot decompress it.
+ * This mirrors the Rust SDK: advertise only the configured response
+ * compression algorithm so `gzip` does not negotiate `zstd`.
  */
 export function acceptEncodingHeader(
 	compression: CompressionType,
-): string | undefined {
+): Promise<string | undefined> {
 	if (compression === "none") {
-		return undefined;
+		return Promise.resolve(undefined);
 	}
-	return zstdDecompressSync ? "zstd, gzip" : "gzip";
+	return Promise.resolve(compression);
 }
 
-export function compressFrameBody(
+function assertDecompressedPayloadSize(body: Uint8Array): void {
+	if (body.byteLength > MAX_DECOMPRESSED_PAYLOAD_BYTES) {
+		throw new Error("payload exceeds decompressed limit");
+	}
+}
+
+function assertCompressedPayloadSize(body: Uint8Array): void {
+	if (body.byteLength > MAX_FRAME_PAYLOAD_BYTES) {
+		throw new Error("compressed payload exceeds frame limit");
+	}
+}
+
+export async function compressFrameBody(
 	body: Uint8Array,
 	type: CompressionType,
-): Uint8Array {
+): Promise<Uint8Array> {
+	assertDecompressedPayloadSize(body);
 	switch (type) {
 		case "none":
 			return body;
 		case "gzip":
-			return zlib.gzipSync(body);
+			return assertAndReturnCompressed((await loadZlib()).gzipSync(body));
 		case "zstd": {
-			if (!zstdCompressSync) {
+			const z = await loadZlib();
+			if (!z.zstdCompressSync) {
 				throw new Error("zstd compression requires Node.js v22.15+");
 			}
-			return zstdCompressSync(body);
+			return assertAndReturnCompressed(z.zstdCompressSync(body));
 		}
 	}
+}
+
+function assertAndReturnCompressed(body: Uint8Array): Uint8Array {
+	assertCompressedPayloadSize(body);
+	return body;
 }
 
 export function decompressFrameBody(
@@ -57,15 +115,22 @@ export function decompressFrameBody(
 	type: CompressionType,
 ): Uint8Array {
 	switch (type) {
-		case "none":
+		case "none": {
+			assertDecompressedPayloadSize(body);
 			return body;
+		}
 		case "gzip":
-			return zlib.gunzipSync(body);
+			return getLoadedZlib().gunzipSync(body, {
+				maxOutputLength: MAX_DECOMPRESSED_PAYLOAD_BYTES,
+			});
 		case "zstd": {
-			if (!zstdDecompressSync) {
+			const z = getLoadedZlib();
+			if (!z.zstdDecompressSync) {
 				throw new Error("zstd decompression requires Node.js v22.15+");
 			}
-			return zstdDecompressSync(body);
+			return z.zstdDecompressSync(body, {
+				maxOutputLength: MAX_DECOMPRESSED_PAYLOAD_BYTES,
+			});
 		}
 	}
 }

@@ -9,7 +9,6 @@ import {
 	DEFAULT_USER_AGENT,
 } from "./lib/stream/runtime.js";
 import type { SessionTransports, TransportConfig } from "./lib/stream/types.js";
-import { installUnaryCompression } from "./lib/unary-compression.js";
 import { S2Stream } from "./stream.js";
 import { S2Streams } from "./streams.js";
 
@@ -62,8 +61,6 @@ export class S2Basin {
 				headers: headers,
 			}),
 		);
-
-		installUnaryCompression(this.client, options.compression);
 
 		this.streams = new S2Streams(this.client, this.retryConfig);
 	}

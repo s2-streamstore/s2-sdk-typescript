@@ -10,7 +10,7 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const pkgRoot = join(__dirname, "..", "..");
 
 describe("browser bundling", () => {
-	it("bundles without pulling in node:http2", async () => {
+	it("bundles without pulling in Node-only compression modules", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "streamstore-bundle-"));
 		try {
 			const entry = join(dir, "entry.ts");
@@ -29,7 +29,7 @@ describe("browser bundling", () => {
 				bundle: true,
 				platform: "browser",
 				target: "es2020",
-				external: ["node:http2", "node:zlib"],
+				external: ["node:http2"],
 				outfile: join(dir, "out.js"),
 				metafile: true,
 				logLevel: "silent",
@@ -39,14 +39,14 @@ describe("browser bundling", () => {
 			expect(result.errors).toHaveLength(0);
 			expect(result.warnings).toHaveLength(0);
 
-			const http2Imports = Object.values(
-				result.metafile?.outputs ?? {},
-			).flatMap(
-				(output) =>
-					output.imports?.filter((i) => i.path === "node:http2") ?? [],
+			const imports = Object.values(result.metafile?.outputs ?? {}).flatMap(
+				(output) => output.imports ?? [],
 			);
+			const http2Imports = imports.filter((i) => i.path === "node:http2");
+			const zlibImports = imports.filter((i) => i.path === "node:zlib");
 
 			expect(http2Imports.every((imp) => imp.external)).toBe(true);
+			expect(zlibImports).toHaveLength(0);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

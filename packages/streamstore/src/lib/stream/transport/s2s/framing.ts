@@ -12,6 +12,12 @@
 
 export type CompressionType = "none" | "zstd" | "gzip";
 
+const FLAG_TOTAL_SIZE = 1;
+const STATUS_CODE_SIZE = 2;
+export const MAX_FRAME_BYTES = 2 * 1024 * 1024;
+export const MAX_FRAME_PAYLOAD_BYTES = MAX_FRAME_BYTES - FLAG_TOTAL_SIZE;
+export const MAX_DECOMPRESSED_PAYLOAD_BYTES = MAX_FRAME_PAYLOAD_BYTES;
+
 export interface S2SFrame {
 	terminal: boolean;
 	compression: CompressionType;
@@ -28,7 +34,7 @@ export function frameMessage(opts: {
 	body: Uint8Array;
 	statusCode?: number;
 }): Uint8Array {
-	const compression = opts.compression ?? "none";
+	const compression = opts.terminal ? "none" : (opts.compression ?? "none");
 
 	// Build flag byte
 	let flag = 0;
@@ -55,8 +61,10 @@ export function frameMessage(opts: {
 	// Calculate total length (flag + body)
 	const length = 1 + body.length;
 
-	if (length > 0xffffff) {
-		throw new Error(`Message too large: ${length} bytes (max 16MB)`);
+	if (length > MAX_FRAME_BYTES) {
+		throw new Error(
+			`Message too large: ${length} bytes (max ${MAX_FRAME_BYTES} bytes)`,
+		);
 	}
 
 	// Allocate frame buffer
@@ -106,6 +114,10 @@ export class S2SFrameParser {
 		const length =
 			(this.buffer[0]! << 16) | (this.buffer[1]! << 8) | this.buffer[2]!;
 
+		if (length > MAX_FRAME_BYTES) {
+			throw new Error("frame exceeds decode limit");
+		}
+
 		// The protocol requires at least a flag byte, so length must be >= 1
 		if (length < 1) {
 			throw new Error(
@@ -121,11 +133,20 @@ export class S2SFrameParser {
 		// Read flag byte
 		const flag = this.buffer[3]!;
 		const terminal = (flag & 0x80) !== 0;
-		let compression: CompressionType = "none";
-		if ((flag & 0x20) !== 0) {
-			compression = "zstd";
-		} else if ((flag & 0x40) !== 0) {
-			compression = "gzip";
+		const compressionBits = (flag & 0x60) >> 5;
+		let compression: CompressionType;
+		switch (compressionBits) {
+			case 0:
+				compression = "none";
+				break;
+			case 1:
+				compression = "zstd";
+				break;
+			case 2:
+				compression = "gzip";
+				break;
+			default:
+				throw new Error("unknown compression algorithm");
 		}
 
 		// Extract body (length includes flag byte, so body is length - 1 bytes)
@@ -133,9 +154,12 @@ export class S2SFrameParser {
 		let statusCode: number | undefined;
 
 		// For terminal frames, check for status code
-		if (terminal && body.length >= 2) {
+		if (terminal) {
+			if (body.length < STATUS_CODE_SIZE) {
+				throw new Error("terminal message missing status code");
+			}
 			statusCode = (body[0]! << 8) | body[1]!;
-			body = body.slice(2);
+			body = body.slice(STATUS_CODE_SIZE);
 		}
 
 		// Remove parsed frame from buffer

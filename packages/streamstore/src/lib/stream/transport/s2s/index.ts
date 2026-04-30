@@ -92,7 +92,6 @@ export class S2STransport implements SessionTransport {
 	constructor(config: TransportConfig) {
 		this.transportConfig = config;
 		this.compression = config.compression ?? "none";
-		assertCompressionSupported(this.compression);
 	}
 
 	async makeAppendSession(
@@ -100,6 +99,7 @@ export class S2STransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
+		await assertCompressionSupported(this.compression);
 		return AppendSessionImpl.create(
 			(myOptions) => {
 				return S2SAppendSession.create(
@@ -125,6 +125,7 @@ export class S2STransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
+		await assertCompressionSupported(this.compression);
 		return ReadSessionImpl.create(
 			(myArgs) => {
 				return S2SReadSession.create(
@@ -428,7 +429,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const queryString = queryParams.toString();
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
-					const acceptEncoding = acceptEncodingHeader(compression);
+					const acceptEncoding = await acceptEncodingHeader(compression);
 					const stream = connection.request({
 						":method": "GET",
 						":path": path,
@@ -815,7 +816,7 @@ class S2SAppendSession implements TransportAppendSession {
 
 		const path = `${url.pathname}/streams/${encodeURIComponent(this.streamName)}/records`;
 
-		const acceptEncoding = acceptEncodingHeader(this.compression);
+		const acceptEncoding = await acceptEncodingHeader(this.compression);
 		const stream = connection.request({
 			":method": "POST",
 			":path": path,
@@ -979,7 +980,7 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Send a batch and wait for ack. Returns AppendResult (never throws).
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
-	private sendBatch(input: Types.AppendInput): Promise<AppendResult> {
+	private async sendBatch(input: Types.AppendInput): Promise<AppendResult> {
 		if (!this.http2Stream || this.http2Stream.closed) {
 			return Promise.resolve(
 				err(new S2Error({ message: "HTTP/2 stream is not open", status: 502 })),
@@ -994,7 +995,7 @@ class S2SAppendSession implements TransportAppendSession {
 			? this.compression
 			: "none";
 		const bodyBytes = shouldCompress
-			? compressFrameBody(protoBytes, this.compression)
+			? await compressFrameBody(protoBytes, this.compression)
 			: protoBytes;
 
 		const frame = frameMessage({
