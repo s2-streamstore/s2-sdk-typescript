@@ -41,7 +41,7 @@ function createTestStream(
 		},
 	});
 
-	// Wrap the ReadableStream with a manual async iterator, mirroring
+	// Wrap the ReadableStream with the manual async iterator used by
 	// FetchReadSession's polyfill.
 	const reader = underlying.getReader();
 

@@ -51,9 +51,21 @@ import {
 	convertProtoRecord,
 	encodeProtoAppendInput,
 } from "../proto.js";
-import { frameMessage, S2SFrameParser } from "./framing.js";
+import {
+	acceptEncodingHeader,
+	assertCompressionSupported,
+	compressFrameBody,
+	decompressFrameBody,
+} from "./compression.js";
+import {
+	type CompressionType,
+	frameMessage,
+	S2SFrameParser,
+} from "./framing.js";
 
 const debug = createDebug("s2:s2s");
+
+const COMPRESSION_THRESHOLD_BYTES = 1024;
 
 type Http2Module = typeof import("node:http2");
 
@@ -72,12 +84,14 @@ async function loadHttp2(): Promise<Http2Module> {
 
 export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
+	private readonly compression: CompressionType;
 	private connection?: ClientHttp2Session;
 	private connectionPromise?: Promise<ClientHttp2Session>;
 	private closingPromise?: Promise<void>;
 
 	constructor(config: TransportConfig) {
 		this.transportConfig = config;
+		this.compression = config.compression ?? "none";
 	}
 
 	async makeAppendSession(
@@ -85,6 +99,7 @@ export class S2STransport implements SessionTransport {
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
+		await assertCompressionSupported(this.compression);
 		return AppendSessionImpl.create(
 			(myOptions) => {
 				return S2SAppendSession.create(
@@ -94,6 +109,7 @@ export class S2STransport implements SessionTransport {
 					() => this.getConnection(),
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
+					this.compression,
 					myOptions,
 					requestOptions,
 				);
@@ -109,6 +125,7 @@ export class S2STransport implements SessionTransport {
 		args?: ReadArgs<Format>,
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
+		await assertCompressionSupported(this.compression);
 		return ReadSessionImpl.create(
 			(myArgs) => {
 				return S2SReadSession.create(
@@ -120,6 +137,7 @@ export class S2STransport implements SessionTransport {
 					() => this.getConnection(),
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
+					this.compression,
 				);
 			},
 			args,
@@ -272,6 +290,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		getConnection: () => Promise<ClientHttp2Session>,
 		basinName?: string,
 		encryptionKey?: Redacted.Redacted<string>,
+		compression: CompressionType = "none",
 	): Promise<S2SReadSession<Format>> {
 		const url = new URL(baseUrl);
 		return new S2SReadSession(
@@ -283,6 +302,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			getConnection,
 			basinName,
 			encryptionKey,
+			compression,
 		);
 	}
 
@@ -295,6 +315,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private getConnection: () => Promise<ClientHttp2Session>,
 		private basinName?: string,
 		private encryptionKey?: Redacted.Redacted<string>,
+		private compression: CompressionType = "none",
 	) {
 		// Initialize parser and textDecoder before super() call
 		const parser = new S2SFrameParser();
@@ -408,6 +429,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const queryString = queryParams.toString();
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
+					const acceptEncoding = await acceptEncodingHeader(compression);
 					const stream = connection.request({
 						":method": "GET",
 						":path": path,
@@ -415,9 +437,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						":authority": url.host,
 						"user-agent": DEFAULT_USER_AGENT,
 						authorization: `Bearer ${Redacted.value(authToken)}`,
-						// TODO compression
 						accept: "application/protobuf",
 						"content-type": "s2s/proto",
+						...(acceptEncoding ? { "accept-encoding": acceptEncoding } : {}),
 						...(basinName ? { "s2-basin": basinName } : {}),
 						...(encryptionKey
 							? {
@@ -540,7 +562,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 								} else {
 									// Parse ReadBatch
 									try {
-										const protoBatch = Proto.ReadBatch.fromBinary(frame.body);
+										const batchBytes =
+											frame.compression === "none"
+												? frame.body
+												: decompressFrameBody(frame.body, frame.compression);
+										const protoBatch = Proto.ReadBatch.fromBinary(batchBytes);
 
 										resetTimeoutTimer();
 
@@ -752,6 +778,7 @@ class S2SAppendSession implements TransportAppendSession {
 		getConnection: () => Promise<ClientHttp2Session>,
 		basinName: string | undefined,
 		encryptionKey: Redacted.Redacted<string> | undefined,
+		compression: CompressionType,
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<S2SAppendSession> {
@@ -762,6 +789,7 @@ class S2SAppendSession implements TransportAppendSession {
 			getConnection,
 			basinName,
 			encryptionKey,
+			compression,
 			sessionOptions,
 			requestOptions,
 		);
@@ -772,8 +800,9 @@ class S2SAppendSession implements TransportAppendSession {
 		private authToken: Redacted.Redacted,
 		private streamName: string,
 		private getConnection: () => Promise<ClientHttp2Session>,
-		private basinName?: string,
-		private encryptionKey?: Redacted.Redacted<string>,
+		private basinName: string | undefined,
+		private encryptionKey: Redacted.Redacted<string> | undefined,
+		private compression: CompressionType,
 		sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
 	) {
@@ -787,6 +816,7 @@ class S2SAppendSession implements TransportAppendSession {
 
 		const path = `${url.pathname}/streams/${encodeURIComponent(this.streamName)}/records`;
 
+		const acceptEncoding = await acceptEncodingHeader(this.compression);
 		const stream = connection.request({
 			":method": "POST",
 			":path": path,
@@ -795,8 +825,8 @@ class S2SAppendSession implements TransportAppendSession {
 			"user-agent": DEFAULT_USER_AGENT,
 			authorization: `Bearer ${Redacted.value(this.authToken)}`,
 			"content-type": "s2s/proto",
-			// TODO compression
 			accept: "application/protobuf",
+			...(acceptEncoding ? { "accept-encoding": acceptEncoding } : {}),
 			...(this.basinName ? { "s2-basin": this.basinName } : {}),
 			...(this.encryptionKey
 				? {
@@ -890,7 +920,11 @@ class S2SAppendSession implements TransportAppendSession {
 					} else {
 						// Parse AppendAck
 						try {
-							const protoAck = Proto.AppendAck.fromBinary(frame.body);
+							const ackBytes =
+								frame.compression === "none"
+									? frame.body
+									: decompressFrameBody(frame.body, frame.compression);
+							const protoAck = Proto.AppendAck.fromBinary(ackBytes);
 							const ack = convertAppendAck(protoAck);
 
 							// Resolve the pending ack promise (FIFO)
@@ -946,19 +980,27 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Send a batch and wait for ack. Returns AppendResult (never throws).
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
-	private sendBatch(input: Types.AppendInput): Promise<AppendResult> {
+	private async sendBatch(input: Types.AppendInput): Promise<AppendResult> {
 		if (!this.http2Stream || this.http2Stream.closed) {
 			return Promise.resolve(
 				err(new S2Error({ message: "HTTP/2 stream is not open", status: 502 })),
 			);
 		}
 
-		// Convert to protobuf AppendInput
-		const bodyBytes = encodeProtoAppendInput(input);
+		const protoBytes = encodeProtoAppendInput(input);
+		const shouldCompress =
+			this.compression !== "none" &&
+			protoBytes.byteLength >= COMPRESSION_THRESHOLD_BYTES;
+		const frameCompression: CompressionType = shouldCompress
+			? this.compression
+			: "none";
+		const bodyBytes = shouldCompress
+			? await compressFrameBody(protoBytes, this.compression)
+			: protoBytes;
 
-		// Frame the message
 		const frame = frameMessage({
 			terminal: false,
+			compression: frameCompression,
 			body: bodyBytes,
 		});
 

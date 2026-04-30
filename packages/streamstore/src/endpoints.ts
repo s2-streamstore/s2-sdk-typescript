@@ -136,8 +136,7 @@ const DEFAULT_BASIN_ENDPOINT = "{basin}.b.s2.dev";
 /**
  * Endpoint configuration for the S2 environment.
  *
- * This mirrors the Rust SDK's endpoint model, with an additional capability:
- * the basin endpoint may include `{basin}` anywhere (hostname and/or path).
+ * The basin endpoint may include `{basin}` anywhere (hostname and/or path).
  */
 export class S2Endpoints {
 	public readonly account: EndpointTemplate;

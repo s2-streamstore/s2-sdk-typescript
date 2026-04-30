@@ -1,4 +1,4 @@
-import type { RetryConfig } from "./common.js";
+import type { RetryConfig, S2Compression } from "./common.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import type { EncryptionKeyInput } from "./lib/encryption.js";
@@ -33,6 +33,7 @@ export class S2Basin {
 			baseUrl: string;
 			includeBasinHeader: boolean;
 			retryConfig?: RetryConfig;
+			compression?: S2Compression;
 		},
 	) {
 		this.name = name;
@@ -44,6 +45,7 @@ export class S2Basin {
 			connectionTimeoutMillis: options.retryConfig?.connectionTimeoutMillis,
 			requestTimeoutMillis: options.retryConfig?.requestTimeoutMillis,
 			retry: options.retryConfig,
+			compression: options.compression,
 		};
 		const headers: Record<string, string> = {};
 		if (options.includeBasinHeader) {

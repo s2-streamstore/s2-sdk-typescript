@@ -1,7 +1,7 @@
 import { S2AccessTokens } from "./accessTokens.js";
 import { S2Basin } from "./basin.js";
 import { S2Basins } from "./basins.js";
-import type { RetryConfig, S2ClientOptions } from "./common.js";
+import type { RetryConfig, S2ClientOptions, S2Compression } from "./common.js";
 import { S2Endpoints } from "./endpoints.js";
 import { makeServerError, S2Error } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
@@ -29,6 +29,7 @@ export class S2 {
 	private readonly client: Client;
 	private readonly endpoints: S2Endpoints;
 	private readonly retryConfig: RetryConfig;
+	private readonly compression?: S2Compression;
 
 	/**
 	 * Account-scoped basin management operations.
@@ -62,6 +63,7 @@ export class S2 {
 			options.endpoints instanceof S2Endpoints
 				? options.endpoints
 				: new S2Endpoints(options.endpoints);
+		this.compression = options.compression;
 		const headers: Record<string, string> = {};
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
@@ -103,6 +105,7 @@ export class S2 {
 			baseUrl: this.endpoints.basinBaseUrl(name),
 			includeBasinHeader: this.endpoints.includeBasinHeader,
 			retryConfig: this.retryConfig,
+			compression: this.compression,
 		});
 	}
 }
