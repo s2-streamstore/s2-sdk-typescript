@@ -60,9 +60,6 @@ export async function assertCompressionSupported(
 /**
  * Build the `Accept-Encoding` header value advertising algorithms the client
  * can decode. Returns `undefined` when no compression is configured.
- *
- * This mirrors the Rust SDK: advertise only the configured response
- * compression algorithm so `gzip` does not negotiate `zstd`.
  */
 export function acceptEncodingHeader(
 	compression: CompressionType,
