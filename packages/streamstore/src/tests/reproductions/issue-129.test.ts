@@ -9,9 +9,9 @@ import { AppendInput, AppendRecord } from "../../types.js";
  * Issue #129: enforce 1 MiB minimum for maxInflightBytes.
  *
  * When a user sets maxInflightBytes below 1 MiB, the SDK should throw an
- * S2Error with origin "sdk" at session creation time, matching the Rust SDK's
- * behavior (ValidationError). Previously the SDK silently clamped the value
- * to 1 MiB using Math.max(), hiding the misconfiguration.
+ * S2Error with origin "sdk" at session creation time. Previously the SDK
+ * silently clamped the value to 1 MiB using Math.max(), hiding the
+ * misconfiguration.
  */
 
 function createMockTransport(): TransportAppendSession {

@@ -21,7 +21,7 @@ function simulateReadSessionErrorHandling(
 	status: number,
 	statusText: string,
 ): S2Error {
-	// This mirrors the fixed code path from FetchReadSession.create (line ~80)
+	// Exercise the fixed FetchReadSession.create error path.
 	const error =
 		typeof responseError === "object" &&
 		responseError !== null &&

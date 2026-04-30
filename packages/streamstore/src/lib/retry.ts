@@ -661,7 +661,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			...config,
 		};
 		this.requestTimeoutMillis = this.retryConfig.requestTimeoutMillis;
-		// Validate maxInflightBytes is finite and >= 1 MiB (matches Rust SDK behavior)
+		// Validate maxInflightBytes is finite and at least 1 MiB.
 		const configuredBytes =
 			this.sessionOptions?.maxInflightBytes ?? DEFAULT_MAX_INFLIGHT_BYTES;
 		if (
