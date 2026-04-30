@@ -4,6 +4,7 @@ import type * as API from "../../generated/index.js";
 import type * as Types from "../../types.js";
 import type * as Redacted from "../redacted.js";
 import type * as Result from "../result.js";
+import type { CompressionType } from "./transport/s2s/framing.js";
 
 export type ReadHeaders<Format extends "string" | "bytes" = "string"> =
 	Format extends "string"
@@ -256,4 +257,9 @@ export interface TransportConfig {
 	 * Retry configuration inherited from the top-level client
 	 */
 	retry?: RetryConfig;
+	/**
+	 * Compression algorithm applied to s2s frame bodies and advertised via
+	 * `Accept-Encoding`. Defaults to `"none"`.
+	 */
+	compression?: CompressionType;
 }

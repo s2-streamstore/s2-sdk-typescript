@@ -1,4 +1,4 @@
-import type { RetryConfig } from "./common.js";
+import type { RetryConfig, S2Compression } from "./common.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import type { EncryptionKeyInput } from "./lib/encryption.js";
@@ -9,6 +9,7 @@ import {
 	DEFAULT_USER_AGENT,
 } from "./lib/stream/runtime.js";
 import type { SessionTransports, TransportConfig } from "./lib/stream/types.js";
+import { installUnaryCompression } from "./lib/unary-compression.js";
 import { S2Stream } from "./stream.js";
 import { S2Streams } from "./streams.js";
 
@@ -33,6 +34,7 @@ export class S2Basin {
 			baseUrl: string;
 			includeBasinHeader: boolean;
 			retryConfig?: RetryConfig;
+			compression?: S2Compression;
 		},
 	) {
 		this.name = name;
@@ -44,6 +46,7 @@ export class S2Basin {
 			connectionTimeoutMillis: options.retryConfig?.connectionTimeoutMillis,
 			requestTimeoutMillis: options.retryConfig?.requestTimeoutMillis,
 			retry: options.retryConfig,
+			compression: options.compression,
 		};
 		const headers: Record<string, string> = {};
 		if (options.includeBasinHeader) {
@@ -59,6 +62,8 @@ export class S2Basin {
 				headers: headers,
 			}),
 		);
+
+		installUnaryCompression(this.client, options.compression);
 
 		this.streams = new S2Streams(this.client, this.retryConfig);
 	}

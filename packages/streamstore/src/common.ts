@@ -1,4 +1,14 @@
 import { S2Endpoints, type S2EndpointsInit } from "./endpoints.js";
+import type { CompressionType } from "./lib/stream/transport/s2s/framing.js";
+
+/**
+ * Compression algorithm for s2s session frame bodies.
+ *
+ * - `"none"` (default): no compression.
+ * - `"gzip"`: requires Node.js with `zlib` (always available).
+ * - `"zstd"`: requires Node.js v22.15+ for built-in zstd support.
+ */
+export type S2Compression = CompressionType;
 
 /**
  * Policy for retrying append operations.
@@ -133,6 +143,15 @@ export type S2ClientOptions = {
 	 * @default { maxAttempts: 3, minBaseDelayMillis: 100, maxBaseDelayMillis: 1000, appendRetryPolicy: "all" }
 	 */
 	retry?: RetryConfig;
+	/**
+	 * Compression for s2s session frame bodies. The configured algorithm is
+	 * applied to outgoing frame bodies and advertised via `Accept-Encoding`
+	 * so the server may compress responses. Incoming frames are always
+	 * decompressed based on the per-frame flag, regardless of this setting.
+	 *
+	 * Defaults to `"none"`.
+	 */
+	compression?: S2Compression;
 };
 
 /**

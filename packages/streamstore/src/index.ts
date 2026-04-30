@@ -148,6 +148,7 @@ export type {
 	AppendRetryPolicy,
 	RetryConfig,
 	S2ClientOptions,
+	S2Compression,
 	S2RequestOptions,
 } from "./common.js";
 export type { S2EndpointsInit } from "./endpoints.js";
