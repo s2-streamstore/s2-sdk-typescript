@@ -1,5 +1,5 @@
-import { S2, S2Error, type S2Stream } from "@s2-dev/streamstore";
-import { StreamProcessor } from "@tanstack/ai";
+import { S2 } from "@s2-dev/streamstore";
+import { StreamProcessor, type UIMessage } from "@tanstack/ai";
 import {
 	type Chat,
 	type ChatAdapter,
@@ -9,12 +9,12 @@ import {
 	type ResumableChatConfig,
 } from "./adapter.js";
 import {
-	stopSharedGeneration,
 	type TailedStringBody,
 	tailAsSse,
 	tailCompactedStringRecords,
 } from "./shared.js";
 
+export type { UIMessage } from "@tanstack/ai";
 export type {
 	MakeResumableOptions,
 	ReplayOptions,
@@ -23,7 +23,7 @@ export type {
 } from "./adapter.js";
 
 /**
- * Structural version of TanStack AI's `StreamChunk`.
+ * Structural version of TanStack AI's stream chunk.
  */
 export type StreamChunk = {
 	type: string;
@@ -31,23 +31,29 @@ export type StreamChunk = {
 	[key: string]: unknown;
 };
 
-type ChatMessagePart = {
-	type: string;
-	content?: unknown;
-	[key: string]: unknown;
-};
-
-export type ChatMessage = {
-	id: string;
-	role: "system" | "user" | "assistant";
-	parts: ChatMessagePart[];
-	[key: string]: unknown;
-};
+type MessagePart = UIMessage["parts"][number];
 
 type SessionSource = (
-	messages: ChatMessage[],
+	messages: UIMessage[],
 	context: { abortController: AbortController; signal: AbortSignal },
 ) => AsyncIterable<StreamChunk> | Promise<AsyncIterable<StreamChunk>>;
+
+interface ActiveGeneration {
+	abortController: AbortController;
+	runId?: string;
+}
+
+export interface TanStackAIChatConfig extends ResumableChatConfig {
+	/**
+	 * Enables process-local stop support via `stopSession`.
+	 *
+	 * When false, no active-generation map is created and `stopSession` is a
+	 * no-op. Turn this on only if this server instance exposes a stop route.
+	 *
+	 * @default false
+	 */
+	enableStop?: boolean;
+}
 
 export interface MakeSessionResponseOptions {
 	/**
@@ -72,14 +78,17 @@ export interface MakeSessionResponseOptions {
  */
 export type ResumableChat = Chat<StreamChunk> & {
 	/**
-	 * Starts a TanStack chat session and returns immediately.
+	 * Starts a TanStack chat session response in a durable S2 session log.
 	 * The replay subscription delivers the stored chunks to clients.
 	 */
 	makeSessionResponse(
 		streamName: string,
 		options: MakeSessionResponseOptions,
 	): Promise<Response>;
-	/** Stops the active session generation, if one is still running. */
+	/**
+	 * Stops the active process-local generation when
+	 * `enableStop` is enabled.
+	 */
 	stopSession(streamName: string): Promise<Response>;
 };
 
@@ -115,12 +124,12 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function normalizePart(value: unknown): ChatMessagePart | null {
+function normalizePart(value: unknown): MessagePart | null {
 	if (!isObjectRecord(value) || typeof value.type !== "string") return null;
-	return { ...value, type: value.type };
+	return { ...value, type: value.type } as MessagePart;
 }
 
-function messagesSnapshotChunk(messages: ChatMessage[]): StreamChunk {
+function createMessagesSnapshotChunk(messages: UIMessage[]): StreamChunk {
 	return {
 		type: "MESSAGES_SNAPSHOT",
 		timestamp: Date.now(),
@@ -145,7 +154,9 @@ function isTerminalChunk(chunk: StreamChunk | null): boolean {
 	return chunk?.type === "RUN_FINISHED" || chunk?.type === "RUN_ERROR";
 }
 
-function activeRunStartIndex(chunks: Array<StreamChunk | null>): number {
+function findActiveGenerationStartIndex(
+	chunks: Array<StreamChunk | null>,
+): number {
 	let activeIndex = -1;
 	for (let index = 0; index < chunks.length; index += 1) {
 		const type = chunks[index]?.type;
@@ -155,37 +166,7 @@ function activeRunStartIndex(chunks: Array<StreamChunk | null>): number {
 	return activeIndex;
 }
 
-async function activeRunId(stream: S2Stream): Promise<string | undefined> {
-	const session = await stream
-		.readSession(
-			{
-				start: { from: { seqNum: 0 }, clamp: true },
-				stop: { waitSecs: 0 },
-			},
-			{ as: "string" },
-		)
-		.catch((error: unknown) => {
-			if (error instanceof S2Error && error.status === 404) return null;
-			throw error;
-		});
-	if (!session) return undefined;
-
-	let runId: string | undefined;
-	try {
-		for await (const record of session) {
-			const chunk = parseStoredChunk(record.body);
-			if (chunk?.type === "RUN_STARTED") {
-				runId = typeof chunk.runId === "string" ? chunk.runId : undefined;
-			}
-			if (isTerminalChunk(chunk)) runId = undefined;
-		}
-	} finally {
-		await session[Symbol.asyncDispose]?.();
-	}
-	return runId;
-}
-
-function snapshotFromChunks(
+function createSnapshotRecords(
 	chunks: Array<StreamChunk | null>,
 	nextSeqNum: number,
 ): TailedStringBody[] {
@@ -194,25 +175,27 @@ function snapshotFromChunks(
 		if (chunk) processor.processChunk(chunk as never);
 	}
 
-	const messages = processor.getMessages() as unknown as ChatMessage[];
+	const messages = processor.getMessages() as unknown as UIMessage[];
 	if (messages.length === 0) return [];
 
 	return [
 		{
-			body: JSON.stringify(messagesSnapshotChunk(messages)),
+			body: JSON.stringify(createMessagesSnapshotChunk(messages)),
 			nextSeqNum,
 		},
 	];
 }
 
-function compactSessionReplay(records: TailedStringBody[]): TailedStringBody[] {
+function compactSessionRecordsForReplay(
+	records: TailedStringBody[],
+): TailedStringBody[] {
 	if (records.length === 0) return records;
 
 	const chunks = records.map((record) => parseStoredChunk(record.body));
-	const activeStart = activeRunStartIndex(chunks);
+	const activeStart = findActiveGenerationStartIndex(chunks);
 	if (activeStart !== -1) {
 		return [
-			...snapshotFromChunks(
+			...createSnapshotRecords(
 				chunks.slice(0, activeStart),
 				records[activeStart - 1]?.nextSeqNum ?? 0,
 			),
@@ -220,10 +203,10 @@ function compactSessionReplay(records: TailedStringBody[]): TailedStringBody[] {
 		];
 	}
 
-	return snapshotFromChunks(chunks, records[records.length - 1]!.nextSeqNum);
+	return createSnapshotRecords(chunks, records[records.length - 1]!.nextSeqNum);
 }
 
-function messageTextChunks(message: ChatMessage): StreamChunk[] {
+function createMessageTextChunks(message: UIMessage): StreamChunk[] {
 	const timestamp = Date.now();
 	const messageId = message.id;
 	const text = getMessageText(message);
@@ -236,46 +219,86 @@ function messageTextChunks(message: ChatMessage): StreamChunk[] {
 	];
 }
 
-function makeSessionSource({
+function createSessionSource({
 	incomingMessages,
 	source,
-	abortController,
+	active,
 }: {
-	incomingMessages: ChatMessage[];
+	incomingMessages: UIMessage[];
 	source: SessionSource;
-	abortController: AbortController;
+	active: ActiveGeneration;
 }): AsyncIterable<StreamChunk> {
 	return (async function* () {
 		if (incomingMessages.length === 0) return;
 		const latest = incomingMessages[incomingMessages.length - 1];
-		if (latest?.role === "user") yield* messageTextChunks(latest);
+		if (latest?.role === "user") yield* createMessageTextChunks(latest);
 		yield* await source(incomingMessages, {
-			abortController,
-			signal: abortController.signal,
+			abortController: active.abortController,
+			signal: active.abortController.signal,
 		});
 	})();
 }
 
-function abortableSource<T>(
-	source: AsyncIterable<T>,
-	signal: AbortSignal,
+function createStopChunk(active: ActiveGeneration): StreamChunk {
+	return {
+		type: "RUN_FINISHED",
+		runId: active.runId ?? `s2-stop-${Date.now()}`,
+		model: "s2-stop",
+		timestamp: Date.now(),
+		finishReason: "stop",
+	};
+}
+
+function abortableSessionSource(
+	source: AsyncIterable<StreamChunk>,
+	active: ActiveGeneration,
 	onDone: () => void,
-): AsyncIterable<T> {
+): AsyncIterable<StreamChunk> {
 	return (async function* () {
 		const iterator = source[Symbol.asyncIterator]();
 		let abortListener: (() => void) | undefined;
+		let terminalSeen = false;
+		const signal = active.abortController.signal;
 		try {
-			while (!signal.aborted) {
+			while (true) {
+				if (signal.aborted) {
+					if (!terminalSeen) yield createStopChunk(active);
+					return;
+				}
 				const abort = new Promise<"abort">((resolve) => {
 					abortListener = () => resolve("abort");
 					signal.addEventListener("abort", abortListener, { once: true });
 				});
-				const next = await Promise.race([iterator.next(), abort]);
+				let next: IteratorResult<StreamChunk> | "abort";
+				try {
+					next = await Promise.race([iterator.next(), abort]);
+				} catch (err) {
+					if (signal.aborted) {
+						if (!terminalSeen) yield createStopChunk(active);
+						return;
+					}
+					throw err;
+				}
 				if (abortListener) {
 					signal.removeEventListener("abort", abortListener);
 					abortListener = undefined;
 				}
-				if (next === "abort" || next.done) return;
+				if (next === "abort") {
+					if (!terminalSeen) yield createStopChunk(active);
+					return;
+				}
+				if (signal.aborted) {
+					if (!terminalSeen) yield createStopChunk(active);
+					return;
+				}
+				if (next.done) return;
+				if (
+					next.value.type === "RUN_STARTED" &&
+					typeof next.value.runId === "string"
+				) {
+					active.runId = next.value.runId;
+				}
+				if (isTerminalChunk(next.value)) terminalSeen = true;
 				yield next.value;
 			}
 		} finally {
@@ -286,9 +309,9 @@ function abortableSource<T>(
 	})();
 }
 
-function normalizeMessages(messages: unknown): ChatMessage[] {
+function normalizeMessages(messages: unknown): UIMessage[] {
 	if (!Array.isArray(messages)) return [];
-	return messages.flatMap((value, index): ChatMessage[] => {
+	return messages.flatMap((value, index): UIMessage[] => {
 		if (!isObjectRecord(value)) return [];
 		if (
 			value.role !== "system" &&
@@ -312,7 +335,7 @@ function normalizeMessages(messages: unknown): ChatMessage[] {
 	});
 }
 
-function getMessageText(message: ChatMessage): string {
+function getMessageText(message: UIMessage): string {
 	return message.parts
 		.filter(
 			(part): part is { type: "text"; content: string } =>
@@ -324,7 +347,7 @@ function getMessageText(message: ChatMessage): string {
 
 /** Creates server-side helpers for making TanStack AI streams resumable in S2. */
 export function createResumableChat(
-	config: ResumableChatConfig,
+	config: TanStackAIChatConfig,
 ): ResumableChat {
 	const base = createChat(config, adapter);
 	const s2 = new S2({
@@ -332,7 +355,9 @@ export function createResumableChat(
 		endpoints: config.endpoints,
 	});
 	const mode = config.mode ?? "single-use";
-	const abortControllers = new Map<string, AbortController>();
+	const activeGenerations = config.enableStop
+		? new Map<string, ActiveGeneration>()
+		: undefined;
 
 	return {
 		...base,
@@ -344,7 +369,7 @@ export function createResumableChat(
 				return tailAsSse(
 					tailCompactedStringRecords(
 						s2.basin(config.basin).stream(streamName),
-						compactSessionReplay,
+						compactSessionRecordsForReplay,
 					),
 					SSE_HEADERS,
 				);
@@ -358,46 +383,51 @@ export function createResumableChat(
 			if (mode !== "session") {
 				throw new Error('makeSessionResponse requires mode: "session"');
 			}
-			const abortController = new AbortController();
-			abortControllers.set(streamName, abortController);
-			const source = makeSessionSource({
+			const active: ActiveGeneration = {
+				abortController: new AbortController(),
+			};
+			activeGenerations?.set(streamName, active);
+			const source = createSessionSource({
 				incomingMessages: normalizeMessages(options.messages),
 				source: options.source,
-				abortController,
+				active,
 			});
-			return base.makeResumable(
-				streamName,
-				abortableSource(source, abortController.signal, () => {
-					if (abortControllers.get(streamName) === abortController) {
-						abortControllers.delete(streamName);
-					}
-				}),
-				{
-					delivery: "replay",
-					waitUntil: options.waitUntil,
-				},
-			);
+			let response: Response;
+			try {
+				response = await base.makeResumable(
+					streamName,
+					abortableSessionSource(source, active, () => {
+						if (activeGenerations?.get(streamName) === active) {
+							activeGenerations.delete(streamName);
+						}
+					}),
+					{
+						delivery: "replay",
+						waitUntil: options.waitUntil,
+					},
+				);
+			} catch (err) {
+				if (activeGenerations?.get(streamName) === active) {
+					activeGenerations.delete(streamName);
+				}
+				throw err;
+			}
+			if (
+				response.status === 409 &&
+				activeGenerations?.get(streamName) === active
+			) {
+				activeGenerations.delete(streamName);
+			}
+			return response;
 		},
 		async stopSession(streamName: string): Promise<Response> {
 			if (mode !== "session") {
 				throw new Error('stopSession requires mode: "session"');
 			}
-			const stream = s2.basin(config.basin).stream(streamName);
-			const runId = await activeRunId(stream);
-			const stopped = await stopSharedGeneration({
-				stream,
-				body: JSON.stringify({
-					type: "RUN_FINISHED",
-					runId: runId ?? `s2-stop-${Date.now()}`,
-					model: "s2-stop",
-					timestamp: Date.now(),
-					finishReason: "stop",
-				}),
-			});
-			abortControllers.get(streamName)?.abort();
-			abortControllers.delete(streamName);
+			const active = activeGenerations?.get(streamName);
+			active?.abortController.abort();
 			return new Response(null, {
-				status: stopped ? 202 : 204,
+				status: active ? 202 : 204,
 				headers: { "Cache-Control": "no-store" },
 			});
 		},

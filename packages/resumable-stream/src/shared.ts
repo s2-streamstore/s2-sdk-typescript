@@ -1,6 +1,7 @@
 import {
 	AppendInput,
 	AppendRecord,
+	RangeNotSatisfiableError,
 	randomToken,
 	S2Error,
 	type S2Stream,
@@ -188,6 +189,56 @@ export async function claimSharedGeneration({
 	return {
 		fromSeqNum: fenceAck.start.seqNum,
 		matchSeqNumStart,
+	};
+}
+
+export async function claimSessionGeneration({
+	stream,
+	fencingToken,
+}: {
+	stream: S2Stream;
+	fencingToken: string;
+}): Promise<{
+	fromSeqNum: number;
+	matchSeqNumStart: number;
+} | null> {
+	const batch = await stream
+		.read(
+			{
+				start: { from: { tailOffset: 1 } },
+				stop: { limits: { count: 1 }, waitSecs: 0 },
+			},
+			{ as: "string" },
+		)
+		.catch((error: unknown) => {
+			if (isMissingStreamError(error)) return null;
+			if (error instanceof RangeNotSatisfiableError) return null;
+			throw error;
+		});
+	const lastRecord = batch?.records.at(-1);
+
+	if (!lastRecord) {
+		const fenceAck = await appendFenceCommand(stream, "", fencingToken, {
+			matchSeqNum: 0,
+		});
+		return {
+			fromSeqNum: fenceAck.start.seqNum,
+			matchSeqNumStart: fenceAck.end.seqNum,
+		};
+	}
+
+	if (!isFenceRecord(lastRecord) || !isTerminalFence(lastRecord)) {
+		return null;
+	}
+
+	const fenceAck = await appendFenceCommand(
+		stream,
+		lastRecord.body,
+		fencingToken,
+	);
+	return {
+		fromSeqNum: fenceAck.start.seqNum,
+		matchSeqNumStart: fenceAck.end.seqNum,
 	};
 }
 

@@ -8,7 +8,8 @@ only the durable replay layer:
 - `GET /api/chat/replay?id=...` tails the same S2 session stream and returns
   Server-Sent Events for `useChat`. Completed history is compacted into a
   replay-only `MESSAGES_SNAPSHOT` on page load.
-- `DELETE /api/chat` stops the active S2 session generation.
+- `DELETE /api/chat` stops the active in-process generation. The running
+  persistence pipeline writes the final stop chunk.
 - The browser uses the normal TanStack `useChat` API with an S2 connection
   adapter.
 
@@ -48,6 +49,7 @@ const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
   mode: "session",
+  enableStop: true,
 });
 ```
 
@@ -57,7 +59,6 @@ Start a turn with `makeSessionResponse`:
 import {
   chat as tanstackChat,
   convertMessagesToModelMessages,
-  type UIMessage,
 } from "@tanstack/ai";
 import { openaiText } from "@tanstack/ai-openai";
 
@@ -66,10 +67,11 @@ export async function POST(request: Request) {
 
   return chat.makeSessionResponse(`tanstack-ai-chat-${body.id}`, {
     messages: body.messages,
-    source: (messages) =>
+    source: (messages, { abortController }) =>
       tanstackChat({
         adapter: openaiText(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
-        messages: convertMessagesToModelMessages(messages as UIMessage[]),
+        messages: convertMessagesToModelMessages(messages),
+        abortController,
       }),
   });
 }
@@ -84,7 +86,7 @@ export async function GET(request: Request) {
 }
 ```
 
-Stop the active session:
+Stop the active generation:
 
 ```ts
 export async function DELETE(request: Request) {

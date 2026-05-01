@@ -170,7 +170,8 @@ For full chat apps, use `mode: "session"`:
 
 - `POST` starts a generation and appends chunks to one durable S2 session log.
 - `GET` replays completed history and tails live chunks as SSE.
-- `DELETE` stops the active generation and closes the S2 run.
+- `DELETE` stops the active in-process generation; that generation writes its
+  own `RUN_FINISHED` stop chunk while closing.
 
 Configure the S2 basin to create streams on append/read. The helper does not
 create streams before replay or generation.
@@ -179,7 +180,6 @@ create streams before replay or generation.
 import {
   chat as tanstackChat,
   convertMessagesToModelMessages,
-  type UIMessage,
 } from "@tanstack/ai";
 import { openaiText } from "@tanstack/ai-openai";
 import { createResumableChat } from "@s2-dev/resumable-stream/tanstack-ai";
@@ -188,6 +188,7 @@ const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
   mode: "session",
+  enableStop: true,
 });
 
 export async function POST(req: Request) {
@@ -198,7 +199,7 @@ export async function POST(req: Request) {
     source: (messages, { abortController }) =>
       tanstackChat({
         adapter: openaiText("gpt-4o-mini"),
-        messages: convertMessagesToModelMessages(messages as UIMessage[]),
+        messages: convertMessagesToModelMessages(messages),
         abortController,
       }),
     waitUntil,
@@ -252,6 +253,12 @@ Notes:
 
 - `makeSessionResponse` passes the submitted TanStack messages to `source`.
   It stores stream events only: the latest user text event and model chunks.
+- Session starts read only the S2 tail to claim the next turn. `stopSession`
+  does not scan S2; it aborts the active local generation and lets the running
+  persistence pipeline close the run.
+- Local stop tracking is opt-in. Set `enableStop: true` only when this
+  server instance exposes `stopSession`; otherwise no active-generation map is
+  created and `stopSession` returns 204.
 - Pass your platform's `waitUntil` when available. Without it,
   `makeSessionResponse` waits for persistence before returning so serverless
   runtimes do not abandon the stream after a 202 response.

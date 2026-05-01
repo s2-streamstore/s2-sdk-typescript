@@ -1,5 +1,4 @@
 import {
-	type ChatMessage,
 	createResumableChat,
 	type StreamChunk,
 } from "@s2-dev/resumable-stream/tanstack-ai";
@@ -37,13 +36,26 @@ function endpointsFromEnv() {
 		: undefined;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		const timeout = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timeout);
+				resolve();
+			},
+			{ once: true },
+		);
+	});
+}
 
 const chat = createResumableChat({
 	accessToken: requireEnv("S2_ACCESS_TOKEN"),
 	basin: requireEnv("S2_BASIN"),
 	endpoints: endpointsFromEnv(),
 	mode: "session",
+	enableStop: true,
 });
 
 function streamName(chatId: string): string {
@@ -72,6 +84,7 @@ function getModelMessageText(message: ModelMessage): string {
 async function* fallbackStream(
 	prompt: string,
 	messageId = FALLBACK_MESSAGE_ID,
+	signal?: AbortSignal,
 ): AsyncIterable<StreamChunk> {
 	const words = `Echo: ${prompt}`.split(/(\s+)/).filter(Boolean);
 	const timestamp = Date.now();
@@ -86,7 +99,8 @@ async function* fallbackStream(
 	};
 
 	for (const [index, word] of words.entries()) {
-		await sleep(8);
+		await sleep(8, signal);
+		if (signal?.aborted) return;
 		yield {
 			type: "TEXT_MESSAGE_CONTENT",
 			timestamp: timestamp + 2 + index,
@@ -110,9 +124,10 @@ async function* fallbackStream(
 }
 
 async function createChunks(
-	messages: ChatMessage[],
+	messages: UIMessage[],
+	{ abortController }: { abortController: AbortController },
 ): Promise<AsyncIterable<StreamChunk>> {
-	const modelMessages = convertMessagesToModelMessages(messages as UIMessage[]);
+	const modelMessages = convertMessagesToModelMessages(messages);
 	const latestPrompt =
 		getModelMessageText(
 			modelMessages.findLast((message) => message.role === "user") ?? {
@@ -122,7 +137,11 @@ async function createChunks(
 		) ?? "";
 
 	if (!process.env.OPENAI_API_KEY) {
-		return fallbackStream(latestPrompt);
+		return fallbackStream(
+			latestPrompt,
+			FALLBACK_MESSAGE_ID,
+			abortController.signal,
+		);
 	}
 
 	const [{ chat: tanstackChat }, { openaiText }] = await Promise.all([
@@ -141,6 +160,7 @@ async function createChunks(
 	return tanstackChat({
 		adapter: openaiText(model),
 		messages: modelMessages,
+		abortController,
 	}) as AsyncIterable<StreamChunk>;
 }
 

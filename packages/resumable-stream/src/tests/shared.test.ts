@@ -7,6 +7,7 @@ import {
 } from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
 import {
+	claimSessionGeneration,
 	claimSharedGeneration,
 	replayActiveGenerationStringRecords,
 	stopSharedGeneration,
@@ -58,6 +59,23 @@ class MockStreamHandle {
 			[Symbol.asyncIterator]: async function* () {
 				for (const record of records) yield record;
 			},
+		};
+	}
+
+	async read(input?: {
+		start?: { from?: { seqNum?: number; tailOffset?: number } };
+		stop?: { limits?: { count?: number } };
+	}) {
+		const from = input?.start?.from;
+		const fromSeq =
+			from?.tailOffset !== undefined
+				? Math.max(0, this.records.length - from.tailOffset)
+				: (from?.seqNum ?? 0);
+		const count = input?.stop?.limits?.count ?? this.records.length;
+		return {
+			records: this.records
+				.filter((record) => record.seqNum >= fromSeq)
+				.slice(0, count),
 		};
 	}
 
@@ -188,6 +206,69 @@ describe("claimSharedGeneration lease takeover", () => {
 
 		expect(result).not.toBeNull();
 		expect(handle.appends[0]?.fencingToken).toBe("end-AAAA");
+	});
+});
+
+describe("claimSessionGeneration", () => {
+	const ts = new Date(10_000_000);
+
+	it("claims an empty session with matchSeqNum 0", async () => {
+		const handle = new MockStreamHandle([]);
+
+		const result = await claimSessionGeneration({
+			stream: handle as any,
+			fencingToken: "session-new",
+		});
+
+		expect(result).toMatchObject({ fromSeqNum: 0, matchSeqNumStart: 1 });
+		expect(handle.appends[0]?.matchSeqNum).toBe(0);
+		expect(handle.appends[0]?.fencingToken).toBe("");
+	});
+
+	it("claims from the terminal fence at the tail", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "chunk-a", timestamp: ts }),
+			readRecord({
+				seqNum: 2,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const result = await claimSessionGeneration({
+			stream: handle as any,
+			fencingToken: "session-new",
+		});
+
+		expect(result).toMatchObject({ fromSeqNum: 3, matchSeqNumStart: 4 });
+		expect(handle.appends[0]?.fencingToken).toBe("end-AAAA");
+	});
+
+	it("returns null when the session tail is still active", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "chunk-a", timestamp: ts }),
+		]);
+
+		const result = await claimSessionGeneration({
+			stream: handle as any,
+			fencingToken: "session-new",
+		});
+
+		expect(result).toBeNull();
+		expect(handle.appends).toHaveLength(0);
 	});
 });
 

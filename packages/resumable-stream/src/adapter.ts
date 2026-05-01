@@ -13,6 +13,7 @@ import {
 	persistToS2,
 } from "./protocol.js";
 import {
+	claimSessionGeneration,
 	claimSharedGeneration,
 	replayActiveGenerationStringRecords,
 	tailAsSse,
@@ -49,7 +50,7 @@ export interface ResumableChatConfig {
 	 */
 	mode?: ResumableChatMode;
 	/**
-	 * Only applies to `shared` / `session`. If an active generation hasn't written a record
+	 * Only applies to `shared`. If an active generation hasn't written a record
 	 * for this many milliseconds, the next claim takes it over. Defaults to 5000.
 	 */
 	leaseDurationMs?: number;
@@ -227,12 +228,20 @@ export function createChat<T>(
 			const delivery = options?.delivery ?? "response";
 
 			try {
-				if (isShared) {
+				if (isSession) {
+					const claim = await claimSessionGeneration({
+						stream: handle,
+						fencingToken,
+					});
+					if (!claim) {
+						return new Response("Stream already in use", { status: 409 });
+					}
+					matchSeqNumStart = claim.matchSeqNumStart;
+				} else if (isShared) {
 					const claim = await claimSharedGeneration({
 						stream: handle,
 						fencingToken,
 						leaseDurationMs,
-						trim: !isSession,
 					});
 					if (!claim) {
 						return new Response("Stream already in use", { status: 409 });

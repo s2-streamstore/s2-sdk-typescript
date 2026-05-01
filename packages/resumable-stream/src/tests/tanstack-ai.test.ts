@@ -52,6 +52,7 @@ class FakeStream {
 	readonly directAppends: AppendInput[] = [];
 	closeCount = 0;
 	private nextSeqOnAppend: number;
+	readSessionCount = 0;
 
 	constructor(private readonly options: FakeStreamOptions = {}) {
 		this.nextSeqOnAppend = options.readRecords?.length ?? 0;
@@ -76,13 +77,27 @@ class FakeStream {
 		return makeAck(start, this.nextSeqOnAppend);
 	}
 
+	async read(input?: {
+		start?: { from?: { seqNum?: number; tailOffset?: number } };
+		stop?: { limits?: { count?: number } };
+	}) {
+		const records = this.currentRecords();
+		const from = input?.start?.from;
+		const fromSeqNum =
+			from?.tailOffset !== undefined
+				? Math.max(0, records.length - from.tailOffset)
+				: (from?.seqNum ?? 0);
+		const count = input?.stop?.limits?.count ?? Number.POSITIVE_INFINITY;
+		return {
+			records: records
+				.filter((record) => record.seqNum >= fromSeqNum)
+				.slice(0, count),
+		};
+	}
+
 	async readSession(input?: { start?: { from?: { seqNum?: number } } }) {
-		const records = [
-			...(this.options.readRecords ?? []),
-			...(this.directAppends.length > 0
-				? (this.options.readRecordsAfterClaim ?? [])
-				: []),
-		];
+		this.readSessionCount += 1;
+		const records = this.currentRecords();
 		const fromSeqNum = input?.start?.from?.seqNum ?? 0;
 		return {
 			[Symbol.asyncIterator]: async function* () {
@@ -95,6 +110,15 @@ class FakeStream {
 
 	async close(): Promise<void> {
 		this.closeCount += 1;
+	}
+
+	private currentRecords(): ReadRecord<"string">[] {
+		return [
+			...(this.options.readRecords ?? []),
+			...(this.directAppends.length > 0
+				? (this.options.readRecordsAfterClaim ?? [])
+				: []),
+		];
 	}
 }
 
@@ -759,43 +783,117 @@ describe("createResumableChat (tanstack-ai)", () => {
 		});
 	});
 
-	it("stopSession writes RUN_FINISHED for the active run", async () => {
+	it("stopSession aborts the active generation without scanning S2", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		const stream = new FakeStream({
-			readRecords: [
-				{
-					seqNum: 0,
-					body: "holder",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-				chunkReadRecord(1, { type: "RUN_STARTED", runId: "r1" }, ts),
-				chunkReadRecord(2, {
-					type: "TEXT_MESSAGE_CONTENT",
-					messageId: "a1",
-					delta: "streaming",
-				}),
-			],
-		});
+		const stream = new FakeStream();
 		activeStreamRef.current = stream;
 
 		const chat = createResumableChat({
 			accessToken: "t",
 			basin: "b",
+			batchSize: 1,
+			lingerDuration: 0,
 			mode: "session",
+			enableStop: true,
 		});
+
+		let markStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		const responsePromise = chat.makeSessionResponse("s", {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					parts: [{ type: "text", content: "hi" }],
+				},
+			],
+			source: (_messages, { signal }) =>
+				(async function* () {
+					yield { type: "RUN_STARTED", runId: "r1" };
+					markStarted();
+					yield {
+						type: "TEXT_MESSAGE_CONTENT",
+						messageId: "a1",
+						delta: "streaming",
+					};
+					await new Promise<void>((resolve) => {
+						signal.addEventListener("abort", () => resolve(), { once: true });
+					});
+				})(),
+		});
+
+		await started;
 		const response = await chat.stopSession("s");
+		const postResponse = await responsePromise;
 
 		expect(response.status).toBe(202);
-		const appended = stream.directAppends[0]!;
-		expect(appended.fencingToken).toBe("holder");
-		const stopChunk = JSON.parse(recordBody(appended.records[0]!));
+		expect(postResponse.status).toBe(202);
+		expect(stream.readSessionCount).toBe(0);
+		expect(stream.directAppends).toHaveLength(1);
+		const storedChunks = stream.session.records.flatMap((record) => {
+			const body = recordBody(record);
+			return body.startsWith("{") ? [JSON.parse(body)] : [];
+		});
+		const stopChunk = storedChunks.find(
+			(chunk) => chunk.type === "RUN_FINISHED",
+		);
 		expect(stopChunk).toMatchObject({
 			type: "RUN_FINISHED",
 			runId: "r1",
 			finishReason: "stop",
 		});
+	});
+
+	it("stopSession is a no-op unless local stop tracking is enabled", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		const stream = new FakeStream();
+		activeStreamRef.current = stream;
+
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			batchSize: 1,
+			lingerDuration: 0,
+			mode: "session",
+		});
+
+		let markStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		let releaseSource!: () => void;
+		const sourceReleased = new Promise<void>((resolve) => {
+			releaseSource = resolve;
+		});
+		const persisted: Promise<unknown>[] = [];
+
+		const response = await chat.makeSessionResponse("s", {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					parts: [{ type: "text", content: "hi" }],
+				},
+			],
+			source: () =>
+				(async function* () {
+					yield { type: "RUN_STARTED", runId: "r1" };
+					markStarted();
+					await sourceReleased;
+					yield { type: "RUN_FINISHED", runId: "r1" };
+				})(),
+			waitUntil: (promise) => persisted.push(promise),
+		});
+
+		expect(response.status).toBe(202);
+		await started;
+		expect((await chat.stopSession("s")).status).toBe(204);
+		expect(stream.readSessionCount).toBe(0);
+
+		releaseSource();
+		await Promise.all(persisted);
 	});
 
 	it("session replay yields data from every generation from an explicit cursor", async () => {
