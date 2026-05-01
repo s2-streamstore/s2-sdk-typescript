@@ -29,6 +29,8 @@ export type S2ConnectionMode = "single-use" | "shared" | "session";
 export interface S2ConnectionOptions {
 	/** Endpoint that POSTs messages and starts a generation. */
 	sendUrl: string | (() => string);
+	/** Endpoint that stops the active generation. Optional. */
+	stopUrl?: string | (() => string);
 	/**
 	 * Endpoint that GETs the SSE chunk stream. Required for `session`.
 	 * In `single-use` and `shared`, passing this opts into subscribe/send mode.
@@ -53,6 +55,11 @@ export interface S2ConnectionOptions {
 	/** Forwarded to fetch. Defaults to `same-origin`. */
 	credentials?: RequestCredentials;
 }
+
+export type S2Connection = ConnectionAdapter & {
+	/** Stops the active server-side generation when `stopUrl` is configured. */
+	stop?: () => Promise<void>;
+};
 
 async function resolveHeaders(
 	headers: S2ConnectionOptions["headers"],
@@ -238,9 +245,7 @@ function createChunkQueue(abortSignal?: AbortSignal) {
 }
 
 /** Build the chat connection adapter. */
-export function createS2Connection(
-	options: S2ConnectionOptions,
-): ConnectionAdapter {
+export function createS2Connection(options: S2ConnectionOptions): S2Connection {
 	const mode = options.mode ?? "single-use";
 	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const credentials = options.credentials ?? "same-origin";
@@ -279,6 +284,21 @@ export function createS2Connection(
 			signal: abortSignal,
 		});
 	};
+
+	const stop = options.stopUrl
+		? async (): Promise<void> => {
+				const headers = {
+					"Content-Type": "application/json",
+					...(await resolveHeaders(options.headers)),
+				};
+				await readResponse(doFetch, resolveUrl(options.stopUrl!), {
+					method: "DELETE",
+					headers,
+					body: JSON.stringify(buildBody([], undefined)),
+					credentials,
+				});
+			}
+		: undefined;
 
 	if (options.subscribeUrl) {
 		const subscribeUrl = options.subscribeUrl as
@@ -342,7 +362,7 @@ export function createS2Connection(
 					}
 				},
 			};
-			return adapter;
+			return stop ? { ...adapter, stop } : adapter;
 		}
 
 		const adapter: SubscribeConnectionAdapter = {
@@ -371,7 +391,7 @@ export function createS2Connection(
 				if (response.body) await cancelResponseBody(response.body);
 			},
 		};
-		return adapter;
+		return stop ? { ...adapter, stop } : adapter;
 	}
 
 	const adapter: ConnectConnectionAdapter = {
@@ -381,5 +401,5 @@ export function createS2Connection(
 			yield* parseSseChunks(response.body, abortSignal);
 		},
 	};
-	return adapter;
+	return stop ? { ...adapter, stop } : adapter;
 }

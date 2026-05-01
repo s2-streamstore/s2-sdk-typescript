@@ -1,4 +1,5 @@
-import { S2, type S2Stream } from "@s2-dev/streamstore";
+import { S2 } from "@s2-dev/streamstore";
+import { StreamProcessor, type UIMessage } from "@tanstack/ai";
 import {
 	type Chat,
 	type ChatAdapter,
@@ -7,9 +8,13 @@ import {
 	type ReplayOptions,
 	type ResumableChatConfig,
 } from "./adapter.js";
-import { isFenceRecord, isTrimRecord } from "./protocol.js";
-import { tailAsSse, tailStringRecords } from "./shared.js";
+import {
+	type TailedStringBody,
+	tailAsSse,
+	tailCompactedStringRecords,
+} from "./shared.js";
 
+export type { UIMessage } from "@tanstack/ai";
 export type {
 	MakeResumableOptions,
 	ReplayOptions,
@@ -18,8 +23,7 @@ export type {
 } from "./adapter.js";
 
 /**
- * Structural version of TanStack AI's `StreamChunk`. Avoids a runtime
- * dependency on `@tanstack/ai`.
+ * Structural version of TanStack AI's stream chunk.
  */
 export type StreamChunk = {
 	type: string;
@@ -27,43 +31,39 @@ export type StreamChunk = {
 	[key: string]: unknown;
 };
 
-type ChatMessagePart = {
-	type: string;
-	content?: unknown;
-	[key: string]: unknown;
-};
-
-export type ChatMessage = {
-	id: string;
-	role: "user" | "assistant";
-	parts: ChatMessagePart[];
-	[key: string]: unknown;
-};
-
-export type TextMessage = {
-	role: ChatMessage["role"];
-	content: string;
-};
+type MessagePart = UIMessage["parts"][number];
 
 type SessionSource = (
-	messages: ChatMessage[],
+	messages: UIMessage[],
+	context: { abortController: AbortController; signal: AbortSignal },
 ) => AsyncIterable<StreamChunk> | Promise<AsyncIterable<StreamChunk>>;
 
-type ChatSnapshot = {
-	messages: ChatMessage[];
-	fromSeqNum: number;
-};
+interface ActiveGeneration {
+	abortController: AbortController;
+	runId?: string;
+}
+
+export interface TanStackAIChatConfig extends ResumableChatConfig {
+	/**
+	 * Enables process-local stop support via `stopSession`.
+	 *
+	 * When false, no active-generation map is created and `stopSession` is a
+	 * no-op. Turn this on only if this server instance exposes a stop route.
+	 *
+	 * @default false
+	 */
+	enableStop?: boolean;
+}
 
 export interface MakeSessionResponseOptions {
 	/**
-	 * TanStack UI messages from the send request. The helper reads S2, keeps
-	 * stored messages, and appends the latest user message from this array if it
-	 * is not already stored.
+	 * TanStack UI messages from the send request. The helper passes them to
+	 * `source`; only stream events are stored in S2.
 	 */
 	messages: unknown;
 	/**
-	 * Assistant/model stream factory. It receives messages rebuilt from S2 plus
-	 * the latest submitted user message.
+	 * Assistant/model stream factory. It receives the submitted messages after
+	 * structural normalization.
 	 */
 	source: SessionSource;
 	/**
@@ -78,13 +78,18 @@ export interface MakeSessionResponseOptions {
  */
 export type ResumableChat = Chat<StreamChunk> & {
 	/**
-	 * Starts a TanStack chat session and returns immediately.
+	 * Starts a TanStack chat session response in a durable S2 session log.
 	 * The replay subscription delivers the stored chunks to clients.
 	 */
 	makeSessionResponse(
 		streamName: string,
 		options: MakeSessionResponseOptions,
 	): Promise<Response>;
+	/**
+	 * Stops the active process-local generation when
+	 * `enableStop` is enabled.
+	 */
+	stopSession(streamName: string): Promise<Response>;
 };
 
 const SSE_HEADERS = {
@@ -115,303 +120,206 @@ const adapter: ChatAdapter<StreamChunk> = {
 	responseHeaders: SSE_HEADERS,
 };
 
-type StreamProcessorInstance = {
-	processChunk(chunk: unknown): void;
-	getMessages(): unknown[];
-};
-
-type StreamProcessorConstructor = new (options?: {
-	initialMessages?: unknown[];
-}) => StreamProcessorInstance;
-
-let streamProcessorPromise:
-	| Promise<StreamProcessorConstructor | null>
-	| undefined;
-
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function normalizePart(value: unknown): ChatMessagePart | null {
+function normalizePart(value: unknown): MessagePart | null {
 	if (!isObjectRecord(value) || typeof value.type !== "string") return null;
-	return { ...value, type: value.type };
+	return { ...value, type: value.type } as MessagePart;
 }
 
-function ensureMessage(
-	messages: ChatMessage[],
-	messageId: string,
-	role: ChatMessage["role"] = "assistant",
-): ChatMessage[] {
-	if (messages.some((message) => message.id === messageId)) return messages;
+function createMessagesSnapshotChunk(messages: UIMessage[]): StreamChunk {
+	return {
+		type: "MESSAGES_SNAPSHOT",
+		timestamp: Date.now(),
+		messages: messages.map((message) => ({
+			...message,
+			parts: message.parts.map((part) => ({ ...part })),
+		})),
+	};
+}
+
+function parseStoredChunk(body: string): StreamChunk | null {
+	try {
+		const value = JSON.parse(body);
+		if (!isObjectRecord(value) || typeof value.type !== "string") return null;
+		return value as StreamChunk;
+	} catch {
+		return null;
+	}
+}
+
+function isTerminalChunk(chunk: StreamChunk | null): boolean {
+	return chunk?.type === "RUN_FINISHED" || chunk?.type === "RUN_ERROR";
+}
+
+function findActiveGenerationStartIndex(
+	chunks: Array<StreamChunk | null>,
+): number {
+	let activeIndex = -1;
+	for (let index = 0; index < chunks.length; index += 1) {
+		const type = chunks[index]?.type;
+		if (type === "RUN_STARTED") activeIndex = index;
+		if (type === "RUN_FINISHED" || type === "RUN_ERROR") activeIndex = -1;
+	}
+	return activeIndex;
+}
+
+function createSnapshotRecords(
+	chunks: Array<StreamChunk | null>,
+	nextSeqNum: number,
+): TailedStringBody[] {
+	const processor = new StreamProcessor();
+	for (const chunk of chunks) {
+		if (chunk) processor.processChunk(chunk as never);
+	}
+
+	const messages = processor.getMessages() as unknown as UIMessage[];
+	if (messages.length === 0) return [];
+
 	return [
-		...messages,
 		{
-			id: messageId,
-			role,
-			parts: [{ type: "text", content: "" }],
+			body: JSON.stringify(createMessagesSnapshotChunk(messages)),
+			nextSeqNum,
 		},
 	];
 }
 
-function updateMessageText(
-	messages: ChatMessage[],
-	messageId: string,
-	updateText: (current: string) => string,
-): ChatMessage[] {
-	return ensureMessage(messages, messageId).map((message) => {
-		if (message.id !== messageId) return message;
-		const text = updateText(getMessageText(message));
-		let wrote = false;
-		const parts = message.parts.map((part) => {
-			if (part.type !== "text" || wrote) return part;
-			wrote = true;
-			return { ...part, content: text };
-		});
-		if (!wrote) parts.push({ type: "text", content: text });
-		return { ...message, parts };
-	});
-}
+function compactSessionRecordsForReplay(
+	records: TailedStringBody[],
+): TailedStringBody[] {
+	if (records.length === 0) return records;
 
-function mergeTextValue(current: string, incoming: string): string {
-	if (incoming.startsWith(current)) return incoming;
-	if (current.startsWith(incoming)) return current;
-	return current + incoming;
-}
-
-function stripGeneratedDates(messages: ChatMessage[]): ChatMessage[] {
-	return messages.map((message) => {
-		if (!(message.createdAt instanceof Date)) return message;
-		const { createdAt: _, ...rest } = message;
-		return rest;
-	});
-}
-
-async function getStreamProcessor(): Promise<StreamProcessorConstructor | null> {
-	if (!streamProcessorPromise) {
-		streamProcessorPromise = import("@tanstack/ai")
-			.then((mod) =>
-				typeof mod.StreamProcessor === "function"
-					? (mod.StreamProcessor as StreamProcessorConstructor)
-					: null,
-			)
-			.catch(() => null);
-	}
-	return streamProcessorPromise;
-}
-
-async function rebuildMessagesFromChunks(
-	chunks: StreamChunk[],
-): Promise<ChatMessage[]> {
-	const StreamProcessor = await getStreamProcessor();
-	if (StreamProcessor) {
-		try {
-			const processor = new StreamProcessor();
-			for (const chunk of chunks) {
-				processor.processChunk(chunk);
-			}
-			return stripGeneratedDates(normalizeMessages(processor.getMessages()));
-		} catch {
-			// Fall through to the structural replay below.
-		}
+	const chunks = records.map((record) => parseStoredChunk(record.body));
+	const activeStart = findActiveGenerationStartIndex(chunks);
+	if (activeStart !== -1) {
+		return [
+			...createSnapshotRecords(
+				chunks.slice(0, activeStart),
+				records[activeStart - 1]?.nextSeqNum ?? 0,
+			),
+			...records.slice(activeStart),
+		];
 	}
 
-	let messages: ChatMessage[] = [];
-	for (const chunk of chunks) {
-		messages = applyStreamChunkToSnapshot(messages, chunk);
-	}
-	return messages;
+	return createSnapshotRecords(chunks, records[records.length - 1]!.nextSeqNum);
 }
 
-function applyStreamChunkToSnapshot(
-	messages: ChatMessage[],
-	chunk: StreamChunk,
-): ChatMessage[] {
-	if (chunk.type === "TEXT_MESSAGE_START") {
-		if (typeof chunk.messageId !== "string") return messages;
-		const role = chunk.role === "user" ? "user" : "assistant";
-		return ensureMessage(messages, chunk.messageId, role);
-	}
-
-	if (chunk.type === "TEXT_MESSAGE_CONTENT") {
-		if (typeof chunk.messageId !== "string") return messages;
-		const messageId = chunk.messageId;
-		if (typeof chunk.delta === "string" && chunk.delta) {
-			const delta = chunk.delta;
-			return updateMessageText(
-				messages,
-				messageId,
-				(current) => current + delta,
-			);
-		}
-		if (typeof chunk.content === "string" && chunk.content) {
-			const content = chunk.content;
-			return updateMessageText(messages, messageId, (current) =>
-				mergeTextValue(current, content),
-			);
-		}
-		return messages;
-	}
-
-	if (chunk.type === "RUN_ERROR") {
-		const errMessage =
-			isObjectRecord(chunk.error) && typeof chunk.error.message === "string"
-				? chunk.error.message
-				: undefined;
-		const message =
-			(typeof chunk.message === "string" ? chunk.message : undefined) ??
-			errMessage ??
-			"Unknown model error";
-		const messageId =
-			typeof chunk.messageId === "string"
-				? chunk.messageId
-				: "fallback-assistant";
-		return updateMessageText(
-			messages,
-			messageId,
-			(current) => `${current}\n\n[error] ${message}`,
-		);
-	}
-
-	return messages;
+function createMessageTextChunks(message: UIMessage): StreamChunk[] {
+	const timestamp = Date.now();
+	const messageId = message.id;
+	const text = getMessageText(message);
+	return [
+		{ type: "TEXT_MESSAGE_START", timestamp, messageId, role: message.role },
+		...(text
+			? [{ type: "TEXT_MESSAGE_CONTENT", timestamp, messageId, delta: text }]
+			: []),
+		{ type: "TEXT_MESSAGE_END", timestamp, messageId },
+	];
 }
 
-async function readSessionSnapshot(stream: S2Stream): Promise<ChatSnapshot> {
-	const session = await stream.readSession(
-		{ start: { from: { seqNum: 0 } }, stop: { waitSecs: 0 } },
-		{ as: "string" },
-	);
-
-	const chunks: StreamChunk[] = [];
-	let fromSeqNum = 0;
-	try {
-		for await (const record of session) {
-			fromSeqNum = record.seqNum + 1;
-			if (isFenceRecord(record) || isTrimRecord(record) || !record.body)
-				continue;
-			try {
-				const chunk = JSON.parse(record.body) as unknown;
-				if (isObjectRecord(chunk) && typeof chunk.type === "string") {
-					if (chunk.type === "MESSAGES_SNAPSHOT") continue;
-					chunks.push(chunk as StreamChunk);
-				}
-			} catch {
-				// Ignore malformed chunk records so snapshot loading remains best-effort.
-			}
-		}
-	} finally {
-		await session[Symbol.asyncDispose]?.();
-	}
-
-	return { messages: await rebuildMessagesFromChunks(chunks), fromSeqNum };
-}
-
-function replaySessionWithSnapshot(stream: S2Stream): Response {
-	return tailAsSse(
-		(async function* () {
-			const snapshot = await readSessionSnapshot(stream);
-			yield {
-				body: JSON.stringify({
-					type: "MESSAGES_SNAPSHOT",
-					timestamp: Date.now(),
-					messages: snapshot.messages,
-				}),
-				nextSeqNum: snapshot.fromSeqNum,
-			};
-			yield* tailStringRecords(stream, snapshot.fromSeqNum);
-		})(),
-		SSE_HEADERS,
-	);
-}
-
-function cloneMessage(message: ChatMessage): ChatMessage {
-	return {
-		...message,
-		parts: message.parts.map((part) => ({ ...part })),
-	};
-}
-
-function latestUserMessage(messages: ChatMessage[]): ChatMessage | null {
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		const message = messages[index];
-		if (message?.role === "user" && getMessageText(message)) return message;
-	}
-	return null;
-}
-
-function needsModelResponse(
-	currentMessages: ChatMessage[],
-	submittedMessage: ChatMessage,
-): boolean {
-	const currentIndex = currentMessages.findIndex(
-		(currentMessage) => currentMessage.id === submittedMessage.id,
-	);
-	if (currentIndex < 0) return true;
-	return !currentMessages
-		.slice(currentIndex + 1)
-		.some((currentMessage) => currentMessage.role === "assistant");
-}
-
-function makeSessionSource({
-	readCurrentSnapshot,
+function createSessionSource({
 	incomingMessages,
 	source,
+	active,
 }: {
-	readCurrentSnapshot: () => Promise<ChatSnapshot>;
-	incomingMessages: ChatMessage[];
+	incomingMessages: UIMessage[];
 	source: SessionSource;
+	active: ActiveGeneration;
 }): AsyncIterable<StreamChunk> {
 	return (async function* () {
-		const currentSnapshot = await readCurrentSnapshot();
-		const submitted = latestUserMessage(incomingMessages);
-		if (!submitted) return;
-
-		const alreadyStored = currentSnapshot.messages.some(
-			(message) => message.id === submitted.id,
-		);
-		if (
-			alreadyStored &&
-			!needsModelResponse(currentSnapshot.messages, submitted)
-		) {
-			return;
-		}
-
-		const baseMessages = currentSnapshot.messages.map(cloneMessage);
-		const messagesForModel = alreadyStored
-			? baseMessages
-			: [...baseMessages, cloneMessage(submitted)];
-
-		if (!alreadyStored) {
-			// Persist the user turn as the same TEXT_MESSAGE_* chunks the
-			// assistant emits, so `StreamProcessor` reconstructs it identically
-			// on replay without a special case.
-			const timestamp = Date.now();
-			const messageId = submitted.id;
-			const text = getMessageText(submitted);
-			yield {
-				type: "TEXT_MESSAGE_START",
-				timestamp,
-				messageId,
-				role: submitted.role,
-			};
-			if (text) {
-				yield {
-					type: "TEXT_MESSAGE_CONTENT",
-					timestamp,
-					messageId,
-					delta: text,
-				};
-			}
-			yield { type: "TEXT_MESSAGE_END", timestamp, messageId };
-		}
-		yield* await source(messagesForModel);
+		if (incomingMessages.length === 0) return;
+		const latest = incomingMessages[incomingMessages.length - 1];
+		if (latest?.role === "user") yield* createMessageTextChunks(latest);
+		yield* await source(incomingMessages, {
+			abortController: active.abortController,
+			signal: active.abortController.signal,
+		});
 	})();
 }
 
-export function normalizeMessages(messages: unknown): ChatMessage[] {
+function createStopChunk(active: ActiveGeneration): StreamChunk {
+	return {
+		type: "RUN_FINISHED",
+		runId: active.runId ?? `s2-stop-${Date.now()}`,
+		model: "s2-stop",
+		timestamp: Date.now(),
+		finishReason: "stop",
+	};
+}
+
+function abortableSessionSource(
+	source: AsyncIterable<StreamChunk>,
+	active: ActiveGeneration,
+	onDone: () => void,
+): AsyncIterable<StreamChunk> {
+	return (async function* () {
+		const iterator = source[Symbol.asyncIterator]();
+		let abortListener: (() => void) | undefined;
+		let terminalSeen = false;
+		const signal = active.abortController.signal;
+		try {
+			while (true) {
+				if (signal.aborted) {
+					if (!terminalSeen) yield createStopChunk(active);
+					return;
+				}
+				const abort = new Promise<"abort">((resolve) => {
+					abortListener = () => resolve("abort");
+					signal.addEventListener("abort", abortListener, { once: true });
+				});
+				let next: IteratorResult<StreamChunk> | "abort";
+				try {
+					next = await Promise.race([iterator.next(), abort]);
+				} catch (err) {
+					if (signal.aborted) {
+						if (!terminalSeen) yield createStopChunk(active);
+						return;
+					}
+					throw err;
+				}
+				if (abortListener) {
+					signal.removeEventListener("abort", abortListener);
+					abortListener = undefined;
+				}
+				if (next === "abort") {
+					if (!terminalSeen) yield createStopChunk(active);
+					return;
+				}
+				if (signal.aborted) {
+					if (!terminalSeen) yield createStopChunk(active);
+					return;
+				}
+				if (next.done) return;
+				if (
+					next.value.type === "RUN_STARTED" &&
+					typeof next.value.runId === "string"
+				) {
+					active.runId = next.value.runId;
+				}
+				if (isTerminalChunk(next.value)) terminalSeen = true;
+				yield next.value;
+			}
+		} finally {
+			if (abortListener) signal.removeEventListener("abort", abortListener);
+			await iterator.return?.().catch(() => {});
+			onDone();
+		}
+	})();
+}
+
+function normalizeMessages(messages: unknown): UIMessage[] {
 	if (!Array.isArray(messages)) return [];
-	return messages.flatMap((value, index): ChatMessage[] => {
+	return messages.flatMap((value, index): UIMessage[] => {
 		if (!isObjectRecord(value)) return [];
-		if (value.role !== "user" && value.role !== "assistant") return [];
+		if (
+			value.role !== "system" &&
+			value.role !== "user" &&
+			value.role !== "assistant"
+		) {
+			return [];
+		}
 		const rawParts = Array.isArray(value.parts) ? value.parts : [];
 		return [
 			{
@@ -427,7 +335,7 @@ export function normalizeMessages(messages: unknown): ChatMessage[] {
 	});
 }
 
-export function getMessageText(message: ChatMessage): string {
+function getMessageText(message: UIMessage): string {
 	return message.parts
 		.filter(
 			(part): part is { type: "text"; content: string } =>
@@ -437,35 +345,19 @@ export function getMessageText(message: ChatMessage): string {
 		.join("");
 }
 
-export function getLatestUserText(messages: unknown): string | null {
-	const normalized = normalizeMessages(messages);
-	for (let i = normalized.length - 1; i >= 0; i -= 1) {
-		const message = normalized[i];
-		if (message?.role !== "user") continue;
-		const text = getMessageText(message);
-		if (text) return text;
-	}
-	return null;
-}
-
-export function toTextMessages(messages: unknown): TextMessage[] {
-	return normalizeMessages(messages).flatMap((message) => {
-		const content = getMessageText(message);
-		return content ? [{ role: message.role, content }] : [];
-	});
-}
-
 /** Creates server-side helpers for making TanStack AI streams resumable in S2. */
 export function createResumableChat(
-	config: ResumableChatConfig,
+	config: TanStackAIChatConfig,
 ): ResumableChat {
 	const base = createChat(config, adapter);
 	const s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
 	});
-	const basin = s2.basin(config.basin);
 	const mode = config.mode ?? "single-use";
+	const activeGenerations = config.enableStop
+		? new Map<string, ActiveGeneration>()
+		: undefined;
 
 	return {
 		...base,
@@ -474,7 +366,13 @@ export function createResumableChat(
 			options?: ReplayOptions,
 		): Promise<Response> {
 			if (mode === "session" && options?.fromSeqNum === undefined) {
-				return replaySessionWithSnapshot(basin.stream(streamName));
+				return tailAsSse(
+					tailCompactedStringRecords(
+						s2.basin(config.basin).stream(streamName),
+						compactSessionRecordsForReplay,
+					),
+					SSE_HEADERS,
+				);
 			}
 			return base.replay(streamName, options);
 		},
@@ -485,15 +383,52 @@ export function createResumableChat(
 			if (mode !== "session") {
 				throw new Error('makeSessionResponse requires mode: "session"');
 			}
-			const source = makeSessionSource({
-				readCurrentSnapshot: () =>
-					readSessionSnapshot(basin.stream(streamName)),
+			const active: ActiveGeneration = {
+				abortController: new AbortController(),
+			};
+			activeGenerations?.set(streamName, active);
+			const source = createSessionSource({
 				incomingMessages: normalizeMessages(options.messages),
 				source: options.source,
+				active,
 			});
-			return base.makeResumable(streamName, source, {
-				delivery: "replay",
-				waitUntil: options.waitUntil,
+			let response: Response;
+			try {
+				response = await base.makeResumable(
+					streamName,
+					abortableSessionSource(source, active, () => {
+						if (activeGenerations?.get(streamName) === active) {
+							activeGenerations.delete(streamName);
+						}
+					}),
+					{
+						delivery: "replay",
+						waitUntil: options.waitUntil,
+					},
+				);
+			} catch (err) {
+				if (activeGenerations?.get(streamName) === active) {
+					activeGenerations.delete(streamName);
+				}
+				throw err;
+			}
+			if (
+				response.status === 409 &&
+				activeGenerations?.get(streamName) === active
+			) {
+				activeGenerations.delete(streamName);
+			}
+			return response;
+		},
+		async stopSession(streamName: string): Promise<Response> {
+			if (mode !== "session") {
+				throw new Error('stopSession requires mode: "session"');
+			}
+			const active = activeGenerations?.get(streamName);
+			active?.abortController.abort();
+			return new Response(null, {
+				status: active ? 202 : 204,
+				headers: { "Cache-Control": "no-store" },
 			});
 		},
 	};

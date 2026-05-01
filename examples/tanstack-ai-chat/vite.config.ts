@@ -8,23 +8,8 @@ const exampleRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(exampleRoot, "../..");
 const port = Number.parseInt(process.env.PORT ?? "3458", 10);
 
-function normalizeMode(value: string | undefined): string | null {
-	if (value === "single-use" || value === "shared" || value === "session") {
-		return value;
-	}
-	return null;
-}
-
-const streamMode =
-	normalizeMode(process.env.VITE_S2_TANSTACK_MODE) ??
-	normalizeMode(process.env.S2_TANSTACK_MODE) ??
-	"session";
-
 export default defineConfig({
 	root: exampleRoot,
-	define: {
-		"import.meta.env.VITE_S2_TANSTACK_MODE": JSON.stringify(streamMode),
-	},
 	server: {
 		host: process.env.HOSTNAME ?? "127.0.0.1",
 		port,

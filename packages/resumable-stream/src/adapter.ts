@@ -13,6 +13,7 @@ import {
 	persistToS2,
 } from "./protocol.js";
 import {
+	claimSessionGeneration,
 	claimSharedGeneration,
 	replayActiveGenerationStringRecords,
 	tailAsSse,
@@ -49,7 +50,7 @@ export interface ResumableChatConfig {
 	 */
 	mode?: ResumableChatMode;
 	/**
-	 * Only applies to `shared` / `session`. If an active generation hasn't written a record
+	 * Only applies to `shared`. If an active generation hasn't written a record
 	 * for this many milliseconds, the next claim takes it over. Defaults to 5000.
 	 */
 	leaseDurationMs?: number;
@@ -70,8 +71,8 @@ export interface MakeResumableOptions {
 	/**
 	 * Which path delivers chunks to the client.
 	 * - `response` streams chunks on the request that starts generation.
-	 * - `replay` persists chunks to S2 and returns 202 immediately; a replay
-	 *   route or subscription owns delivery.
+	 * - `replay` persists chunks to S2 and returns 202; a replay route or
+	 *   subscription owns delivery.
 	 *
 	 * Use `replay` when a separate replay route or subscription is the source
 	 * of truth for client delivery.
@@ -206,6 +207,14 @@ export function createChat<T>(
 	const isShared = mode === "shared" || mode === "session";
 	const isSession = mode === "session";
 	const trimOnTerminalFence = mode === "single-use";
+	const isExpectedTakeover = (err: unknown): boolean =>
+		isShared &&
+		(err instanceof FencingTokenMismatchError ||
+			(err instanceof AggregateError &&
+				err.errors.length > 0 &&
+				err.errors.every(
+					(error) => error instanceof FencingTokenMismatchError,
+				)));
 
 	return {
 		async makeResumable(
@@ -219,12 +228,20 @@ export function createChat<T>(
 			const delivery = options?.delivery ?? "response";
 
 			try {
-				if (isShared) {
+				if (isSession) {
+					const claim = await claimSessionGeneration({
+						stream: handle,
+						fencingToken,
+					});
+					if (!claim) {
+						return new Response("Stream already in use", { status: 409 });
+					}
+					matchSeqNumStart = claim.matchSeqNumStart;
+				} else if (isShared) {
 					const claim = await claimSharedGeneration({
 						stream: handle,
 						fencingToken,
 						leaseDurationMs,
-						trim: !isSession,
 					});
 					if (!claim) {
 						return new Response("Stream already in use", { status: 409 });
@@ -291,11 +308,19 @@ export function createChat<T>(
 					});
 				},
 			});
+			const handledPersistPromise = persistPromise.catch((err) => {
+				if (isExpectedTakeover(err)) return;
+				throw err;
+			});
 
 			if (options?.waitUntil) {
-				options.waitUntil(persistPromise);
+				options.waitUntil(handledPersistPromise);
+			} else if (delivery === "replay") {
+				await handledPersistPromise.catch((err) => {
+					console.error("[resumable-stream] Persist failed:", err);
+				});
 			} else {
-				persistPromise.catch((err) => {
+				handledPersistPromise.catch((err) => {
 					console.error("[resumable-stream] Background persist failed:", err);
 				});
 			}

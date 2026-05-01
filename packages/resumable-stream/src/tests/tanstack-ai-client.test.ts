@@ -365,4 +365,28 @@ describe("createS2Connection (session)", () => {
 		expect(calls[0]!.url).toBe("api/chat/replay?chat=1#tail");
 		expect(calls[1]!.url).toBe("api/chat/replay?chat=1&from=5#tail");
 	});
+
+	it("can call a stop endpoint with the configured body", async () => {
+		const { fetch, calls } = recordingFetch([
+			new Response(null, { status: 202 }),
+		]);
+
+		const adapter = createS2Connection({
+			sendUrl: "/api/chat",
+			stopUrl: "/api/chat/stop",
+			subscribeUrl: "/api/chat/replay?id=chat-1",
+			mode: "session",
+			body: { id: "chat-1" },
+			fetch,
+		});
+
+		await adapter.stop?.();
+
+		expect(calls[0]!.url).toBe("/api/chat/stop");
+		expect(calls[0]!.init.method).toBe("DELETE");
+		expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+			id: "chat-1",
+			messages: [],
+		});
+	});
 });
