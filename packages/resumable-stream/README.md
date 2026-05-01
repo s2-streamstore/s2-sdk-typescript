@@ -162,9 +162,8 @@ export default function Chat() {
 
 ## TanStack AI
 
-The `./tanstack-ai` subpath makes TanStack AI chat streams durable without
-taking over chat state. TanStack still owns `useChat`, tools, approvals,
-message conversion, and model calls. S2 stores and replays the stream chunks.
+The `./tanstack-ai` subpath makes TanStack AI chat streams durable as S2 stores and replays the stream chunks
+on reconnects.
 
 For full chat apps, use `mode: "session"`:
 
@@ -173,8 +172,8 @@ For full chat apps, use `mode: "session"`:
 - `DELETE` stops the active in-process generation; that generation writes its
   own `RUN_FINISHED` stop chunk while closing.
 
-Configure the S2 basin to create streams on append/read. The helper does not
-create streams before replay or generation.
+Configure the S2 basin to create streams on append/read. Streams are not
+created before replay or generation.
 
 ```ts
 import {
