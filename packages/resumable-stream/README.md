@@ -253,8 +253,8 @@ Notes:
 
 - `makeSessionResponse` passes the submitted TanStack messages to `source`.
   It stores stream events only: the latest user text event and model chunks.
-- Session starts read only the S2 tail to claim the next turn. `stopSession`
-  does not scan S2; it aborts the active local generation and lets the running
+- Session starts read only the last record to claim the next turn. `stopSession`
+  does not scan the stream i.e. it aborts the active local generation and lets the running
   persistence pipeline close the run.
 - Local stop tracking is opt-in. Set `enableStop: true` only when this
   server instance exposes `stopSession`; otherwise no active-generation map is
@@ -263,7 +263,7 @@ Notes:
   `makeSessionResponse` waits for persistence before returning so serverless
   runtimes do not abandon the stream after a 202 response.
 - First page load compacts completed history into an in-memory
-  `MESSAGES_SNAPSHOT` SSE event. Snapshots are not stored in S2.
+  `MESSAGES_SNAPSHOT` SSE event. Snapshots are not stored on an S2 stream.
 - Replay frames carry the next S2 sequence number as the SSE `id`, so the
   client can reconnect from the last processed record.
 - `stop()` only cancels TanStack's local request. Call `connection.stop?.()` to
