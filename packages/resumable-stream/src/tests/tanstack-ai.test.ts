@@ -148,6 +148,18 @@ function recordBody(record: AppendRecordType): string {
 		: new TextDecoder().decode(record.body);
 }
 
+function messageText(message: {
+	parts?: Array<{ type: string; content?: unknown }>;
+}): string {
+	return (message.parts ?? [])
+		.filter(
+			(part): part is { type: "text"; content: string } =>
+				part.type === "text" && typeof part.content === "string",
+		)
+		.map((part) => part.content)
+		.join("");
+}
+
 function chunkReadRecord(
 	seqNum: number,
 	chunk: Record<string, unknown>,
@@ -238,34 +250,54 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(typeof chat.makeSessionResponse).toBe("function");
 	});
 
-	it("normalizes TanStack UI messages while preserving ids and non-text parts", async () => {
-		const { getLatestUserText, normalizeMessages, toTextMessages } =
-			await import("../tanstack-ai.js");
+	it("passes TanStack UI messages through while preserving non-text parts", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		activeStreamRef.current = new FakeStream();
 
-		const messages = normalizeMessages([
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			batchSize: 1,
+			lingerDuration: 0,
+			mode: "session",
+		});
+
+		const persisted: Promise<unknown>[] = [];
+		let sourceMessages: unknown[] = [];
+		await chat.makeSessionResponse("s", {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					parts: [
+						{ type: "text", content: "hello" },
+						{
+							type: "image",
+							source: { type: "url", value: "s2://attachment" },
+						},
+					],
+				},
+			],
+			source: (messages) => {
+				sourceMessages = messages;
+				return okSource();
+			},
+			waitUntil: (p) => persisted.push(p),
+		});
+		await Promise.all(persisted);
+
+		expect(sourceMessages).toEqual([
 			{
 				id: "u1",
 				role: "user",
 				parts: [
 					{ type: "text", content: "hello" },
-					{ type: "file", url: "s2://attachment" },
+					{
+						type: "image",
+						source: { type: "url", value: "s2://attachment" },
+					},
 				],
 			},
-		]);
-
-		expect(messages).toEqual([
-			{
-				id: "u1",
-				role: "user",
-				parts: [
-					{ type: "text", content: "hello" },
-					{ type: "file", url: "s2://attachment" },
-				],
-			},
-		]);
-		expect(getLatestUserText(messages)).toBe("hello");
-		expect(toTextMessages(messages)).toEqual([
-			{ role: "user", content: "hello" },
 		]);
 	});
 
@@ -338,7 +370,53 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(stream.session.records.length).toBeGreaterThan(0);
 	});
 
-	it("makeSessionResponse appends new message chunks and returns 202", async () => {
+	it("makeSessionResponse waits for persistence without waitUntil", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		const stream = new FakeStream();
+		activeStreamRef.current = stream;
+
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			batchSize: 1,
+			lingerDuration: 0,
+			mode: "session",
+		});
+
+		let releaseSource!: () => void;
+		const sourceGate = new Promise<void>((resolve) => {
+			releaseSource = resolve;
+		});
+		const responsePromise = chat.makeSessionResponse("s", {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					parts: [{ type: "text", content: "hi" }],
+				},
+			],
+			source: () =>
+				(async function* () {
+					await sourceGate;
+					yield* okSource();
+				})(),
+		});
+
+		const beforeRelease = await Promise.race([
+			responsePromise.then(() => "settled"),
+			new Promise<"pending">((resolve) => setTimeout(resolve, 0, "pending")),
+		]);
+		expect(beforeRelease).toBe("pending");
+
+		releaseSource();
+		const response = await responsePromise;
+		expect(response.status).toBe(202);
+		expect(stream.session.records.map(recordBody).join("\n")).toContain(
+			'"type":"RUN_FINISHED"',
+		);
+	});
+
+	it("makeSessionResponse stores latest user message events and returns 202", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const stream = new FakeStream();
 		activeStreamRef.current = stream;
@@ -352,6 +430,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 		});
 
 		const persisted: Promise<unknown>[] = [];
+		const sourceMessages: unknown[] = [];
 		const response = await chat.makeSessionResponse("s", {
 			messages: [
 				{
@@ -360,7 +439,15 @@ describe("createResumableChat (tanstack-ai)", () => {
 					parts: [{ type: "text", content: "hi" }],
 				},
 			],
-			source: () => okSource(),
+			source: (messages) => {
+				sourceMessages.push(
+					...messages.map((message) => ({
+						role: message.role,
+						content: messageText(message),
+					})),
+				);
+				return okSource();
+			},
 			waitUntil: (p) => persisted.push(p),
 		});
 
@@ -396,6 +483,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 				delta: undefined,
 			},
 		]);
+		expect(sourceMessages).toEqual([{ role: "user", content: "hi" }]);
 	});
 
 	it("stores text content chunks as deltas only", async () => {
@@ -469,191 +557,56 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(await response.text()).toBe("id: 3\ndata: new\n\n");
 	});
 
-	it("session replay snapshot rebuilds tool, approval, and reasoning parts", async () => {
+	it("makeSessionResponse passes client tool results to source without storing snapshots", async () => {
+		const { convertMessagesToModelMessages } = await import("@tanstack/ai");
 		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				...messageReadRecords(
-					0,
-					{ id: "u1", role: "user", text: "find s2" },
-					ts,
-				),
-				chunkReadRecord(
-					3,
-					{
-						type: "RUN_STARTED",
-						runId: "r1",
-					},
-					ts,
-				),
-				chunkReadRecord(
-					4,
-					{
-						type: "TEXT_MESSAGE_START",
-						messageId: "a1",
-						role: "assistant",
-					},
-					ts,
-				),
-				chunkReadRecord(
-					5,
-					{
-						type: "TEXT_MESSAGE_CONTENT",
-						messageId: "a1",
-						delta: "I will look. ",
-					},
-					ts,
-				),
-				chunkReadRecord(
-					6,
-					{
-						type: "TOOL_CALL_START",
-						toolCallId: "tool-1",
-						toolCallName: "lookup",
-						parentMessageId: "a1",
-					},
-					ts,
-				),
-				chunkReadRecord(
-					7,
-					{
-						type: "TOOL_CALL_ARGS",
-						toolCallId: "tool-1",
-						delta: '{"query":"s2"}',
-					},
-					ts,
-				),
-				chunkReadRecord(
-					8,
-					{
-						type: "CUSTOM",
-						name: "approval-requested",
-						value: {
-							toolCallId: "tool-1",
-							toolName: "lookup",
-							input: { query: "s2" },
-							approval: { id: "approval-1", needsApproval: true },
+		const stream = new FakeStream();
+		activeStreamRef.current = stream;
+
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			batchSize: 1,
+			lingerDuration: 0,
+			mode: "session",
+		});
+
+		const sourceMessages: unknown[] = [];
+		const persisted: Promise<unknown>[] = [];
+		const response = await chat.makeSessionResponse("s", {
+			messages: [
+				{
+					id: "u1",
+					role: "user",
+					parts: [{ type: "text", content: "needs lookup" }],
+				},
+				{
+					id: "a1",
+					role: "assistant",
+					parts: [
+						{
+							type: "tool-call",
+							id: "tool-1",
+							name: "lookup",
+							arguments: "{}",
+							state: "input-complete",
+							output: { answer: 42 },
 						},
-					},
-					ts,
-				),
-				chunkReadRecord(
-					9,
-					{
-						type: "TOOL_CALL_END",
-						toolCallId: "tool-1",
-						toolCallName: "lookup",
-						input: { query: "s2" },
-						result: '{"answer":42}',
-					},
-					ts,
-				),
-				chunkReadRecord(
-					10,
-					{
-						type: "REASONING_MESSAGE_CONTENT",
-						delta: "checked cache",
-					},
-					ts,
-				),
-				chunkReadRecord(
-					11,
-					{
-						type: "RUN_FINISHED",
-						runId: "r1",
-						finishReason: "stop",
-					},
-					ts,
-				),
-			],
-		});
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-
-		const response = await chat.replay("s");
-		const [frame] = await readSseFrames(response);
-		const snapshot = JSON.parse(frame!);
-		expect(snapshot.messages).toHaveLength(2);
-		expect(snapshot.messages[1]).toMatchObject({
-			id: "a1",
-			role: "assistant",
-			parts: expect.arrayContaining([
-				expect.objectContaining({ type: "text", content: "I will look. " }),
-				expect.objectContaining({
-					type: "tool-call",
-					id: "tool-1",
-					name: "lookup",
-					arguments: '{"query":"s2"}',
-					approval: { id: "approval-1", needsApproval: true },
-				}),
-				expect.objectContaining({ type: "tool-result", toolCallId: "tool-1" }),
-				expect.objectContaining({ type: "thinking", content: "checked cache" }),
-			]),
-		});
-	});
-
-	it("makeSessionResponse uses current session messages for the model and appends only the new message", async () => {
-		const { createResumableChat, toTextMessages } = await import(
-			"../tanstack-ai.js"
-		);
-		const ts = new Date(0);
-		const stream = new FakeStream({
-			readRecords: [
-				...messageReadRecords(0, { id: "u1", role: "user", text: "first" }, ts),
-				...messageReadRecords(
-					3,
-					{ id: "a1", role: "assistant", text: "first answer" },
-					ts,
-				),
-				...messageReadRecords(
-					6,
-					{ id: "u2", role: "user", text: "newer tab" },
-					ts,
-				),
-			],
-		});
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		const sourceMessages: unknown[] = [];
-		const persisted: Promise<unknown>[] = [];
-		const response = await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "first" }],
-				},
-				{
-					id: "a1",
-					role: "assistant",
-					parts: [{ type: "text", content: "first answer" }],
-				},
-				{
-					id: "u3",
-					role: "user",
-					parts: [{ type: "text", content: "stale tab send" }],
-				},
-				{
-					id: "client-a3",
-					role: "assistant",
-					parts: [{ type: "text", content: "do not trust client assistant" }],
+						{
+							type: "tool-result",
+							toolCallId: "tool-1",
+							content: '{"answer":42}',
+							state: "complete",
+						},
+					],
 				},
 			],
 			source: (messages) => {
-				sourceMessages.push(...toTextMessages(messages));
+				sourceMessages.push(
+					...convertMessagesToModelMessages(
+						messages as Parameters<typeof convertMessagesToModelMessages>[0],
+					),
+				);
 				return okSource();
 			},
 			waitUntil: (p) => persisted.push(p),
@@ -661,225 +614,36 @@ describe("createResumableChat (tanstack-ai)", () => {
 
 		expect(response.status).toBe(202);
 		await Promise.all(persisted);
-
-		const storedTypes = stream.session.records.slice(0, 4).map((record) => {
-			const chunk = JSON.parse(recordBody(record));
-			return [chunk.type, chunk.messageId, chunk.delta];
-		});
-		expect(storedTypes).toEqual([
-			["TEXT_MESSAGE_START", "u3", undefined],
-			["TEXT_MESSAGE_CONTENT", "u3", "stale tab send"],
-			["TEXT_MESSAGE_END", "u3", undefined],
-			["RUN_STARTED", undefined, undefined],
-		]);
+		const firstStoredChunk = JSON.parse(recordBody(stream.session.records[0]!));
+		expect(firstStoredChunk.type).toBe("RUN_STARTED");
 		expect(sourceMessages).toEqual([
-			{ role: "user", content: "first" },
-			{ role: "assistant", content: "first answer" },
-			{ role: "user", content: "newer tab" },
-			{ role: "user", content: "stale tab send" },
+			{ role: "user", content: "needs lookup" },
+			{
+				role: "assistant",
+				content: null,
+				toolCalls: [
+					{
+						id: "tool-1",
+						type: "function",
+						function: { name: "lookup", arguments: "{}" },
+					},
+				],
+			},
+			{ role: "tool", content: '{"answer":42}', toolCallId: "tool-1" },
 		]);
 	});
 
-	it("makeSessionResponse skips duplicate completed messages", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		const stream = new FakeStream({
-			readRecords: [
-				...messageReadRecords(
-					0,
-					{ id: "u1", role: "user", text: "already stored" },
-					ts,
-				),
-				...messageReadRecords(
-					3,
-					{ id: "a1", role: "assistant", text: "already answered" },
-					ts,
-				),
-			],
-		});
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		let sourceCalled = false;
-		const persisted: Promise<unknown>[] = [];
-		const response = await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "already stored" }],
-				},
-			],
-			source: () => {
-				sourceCalled = true;
-				return okSource();
-			},
-			waitUntil: (p) => persisted.push(p),
-		});
-
-		expect(response.status).toBe(202);
-		await Promise.all(persisted);
-		expect(sourceCalled).toBe(false);
-		expect(
-			stream.session.records
-				.map(recordBody)
-				.filter((body) => body.startsWith("{")),
-		).toEqual([]);
-	});
-
-	it("makeSessionResponse can retry a user message that has no assistant answer", async () => {
-		const { createResumableChat, toTextMessages } = await import(
-			"../tanstack-ai.js"
-		);
-		const ts = new Date(0);
-		const stream = new FakeStream({
-			readRecords: [
-				...messageReadRecords(
-					0,
-					{ id: "u1", role: "user", text: "needs answer" },
-					ts,
-				),
-			],
-		});
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		const sourceMessages: unknown[] = [];
-		const persisted: Promise<unknown>[] = [];
-		const response = await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "needs answer" }],
-				},
-			],
-			source: (messages) => {
-				sourceMessages.push(...toTextMessages(messages));
-				return okSource();
-			},
-			waitUntil: (p) => persisted.push(p),
-		});
-
-		expect(response.status).toBe(202);
-		await Promise.all(persisted);
-		const storedTypes = stream.session.records.slice(0, 2).map((record) => {
-			const chunk = JSON.parse(recordBody(record));
-			return chunk.type;
-		});
-		expect(storedTypes).toEqual(["RUN_STARTED", "TEXT_MESSAGE_CONTENT"]);
-		expect(sourceMessages).toEqual([{ role: "user", content: "needs answer" }]);
-	});
-
-	it("makeSessionResponse reads the durable snapshot after claiming the session", async () => {
-		const { createResumableChat, toTextMessages } = await import(
-			"../tanstack-ai.js"
-		);
-		const ts = new Date(0);
-		const stream = new FakeStream({
-			readRecords: [
-				...messageReadRecords(0, { id: "u1", role: "user", text: "first" }, ts),
-				...messageReadRecords(
-					3,
-					{ id: "a1", role: "assistant", text: "first answer" },
-					ts,
-				),
-			],
-			readRecordsAfterClaim: [
-				...messageReadRecords(
-					6,
-					{ id: "u2", role: "user", text: "other tab" },
-					ts,
-				),
-				...messageReadRecords(
-					9,
-					{ id: "a2", role: "assistant", text: "other answer" },
-					ts,
-				),
-			],
-		});
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		const sourceMessages: unknown[] = [];
-		const persisted: Promise<unknown>[] = [];
-		const response = await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "first" }],
-				},
-				{
-					id: "a1",
-					role: "assistant",
-					parts: [{ type: "text", content: "first answer" }],
-				},
-				{
-					id: "u3",
-					role: "user",
-					parts: [{ type: "text", content: "current tab" }],
-				},
-			],
-			source: (messages) => {
-				sourceMessages.push(...toTextMessages(messages));
-				return okSource();
-			},
-			waitUntil: (p) => persisted.push(p),
-		});
-
-		expect(response.status).toBe(202);
-		await Promise.all(persisted);
-
-		const firstThreeChunks = stream.session.records
-			.slice(0, 3)
-			.map((record) => JSON.parse(recordBody(record)));
-		expect(firstThreeChunks).toMatchObject([
-			{ type: "TEXT_MESSAGE_START", messageId: "u3", role: "user" },
-			{ type: "TEXT_MESSAGE_CONTENT", messageId: "u3", delta: "current tab" },
-			{ type: "TEXT_MESSAGE_END", messageId: "u3" },
-		]);
-		expect(sourceMessages).toEqual([
-			{ role: "user", content: "first" },
-			{ role: "assistant", content: "first answer" },
-			{ role: "user", content: "other tab" },
-			{ role: "assistant", content: "other answer" },
-			{ role: "user", content: "current tab" },
-		]);
-	});
-
-	it("session replay bootstraps with a messages snapshot when no cursor is provided", async () => {
+	it("session replay tails records from the beginning when no cursor is provided", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const ts = new Date(0);
 		activeStreamRef.current = new FakeStream({
 			readRecords: [
-				...messageReadRecords(0, { id: "u1", role: "user", text: "hi" }, ts),
-				...messageReadRecords(
-					3,
-					{ id: "a1", role: "assistant", text: "hello" },
-					ts,
-				),
+				...messageReadRecords(0, {
+					id: "u1",
+					role: "user",
+					text: "hi",
+				}),
+				chunkReadRecord(3, { type: "RUN_STARTED", runId: "r1" }, ts),
 			],
 		});
 
@@ -891,19 +655,146 @@ describe("createResumableChat (tanstack-ai)", () => {
 		const response = await chat.replay("s");
 		expect(response.status).toBe(200);
 
-		const text = await response.text();
-		expect(text.startsWith("id: 6\ndata: ")).toBe(true);
-		const payload = JSON.parse(text.match(/^id: 6\ndata: (.*)\n\n$/)![1]!);
-		expect(payload).toMatchObject({
+		expect(await response.text()).toContain(
+			'id: 3\ndata: {"type":"MESSAGES_SNAPSHOT"',
+		);
+		expect(
+			await chat.replay("s", { fromSeqNum: 3 }).then((r) => r.text()),
+		).toBe('id: 4\ndata: {"type":"RUN_STARTED","runId":"r1"}\n\n');
+	});
+
+	it("session replay hydrates completed history with one snapshot", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		activeStreamRef.current = new FakeStream({
+			readRecords: [
+				...messageReadRecords(0, {
+					id: "u1",
+					role: "user",
+					text: "hi",
+				}),
+				chunkReadRecord(3, { type: "RUN_STARTED", runId: "r1" }),
+				...messageReadRecords(4, {
+					id: "a1",
+					role: "assistant",
+					text: "hello",
+				}),
+				chunkReadRecord(7, { type: "RUN_FINISHED", runId: "r1" }),
+			],
+		});
+
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			mode: "session",
+		});
+		const response = await chat.replay("s");
+
+		const frames = await readSseFrames(response);
+		expect(frames).toHaveLength(1);
+		const snapshot = JSON.parse(frames[0]!);
+		expect(snapshot).toMatchObject({
 			type: "MESSAGES_SNAPSHOT",
 			messages: [
-				{ id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] },
+				{ id: "u1", role: "user" },
 				{
 					id: "a1",
 					role: "assistant",
 					parts: [{ type: "text", content: "hello" }],
 				},
 			],
+		});
+	});
+
+	it("session replay keeps the active run streaming after compacted history", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		activeStreamRef.current = new FakeStream({
+			readRecords: [
+				...messageReadRecords(0, {
+					id: "u1",
+					role: "user",
+					text: "hi",
+				}),
+				chunkReadRecord(3, { type: "RUN_STARTED", runId: "r1" }),
+				...messageReadRecords(4, {
+					id: "a1",
+					role: "assistant",
+					text: "hello",
+				}),
+				chunkReadRecord(7, { type: "RUN_FINISHED", runId: "r1" }),
+				...messageReadRecords(8, {
+					id: "u2",
+					role: "user",
+					text: "again",
+				}),
+				chunkReadRecord(11, { type: "RUN_STARTED", runId: "r2" }),
+				chunkReadRecord(12, {
+					type: "TEXT_MESSAGE_CONTENT",
+					messageId: "a2",
+					delta: "streaming",
+				}),
+			],
+		});
+
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			mode: "session",
+		});
+		const response = await chat.replay("s");
+
+		const chunks = (await readSseFrames(response)).map((frame) =>
+			JSON.parse(frame),
+		);
+		expect(chunks.map((chunk) => chunk.type)).toEqual([
+			"MESSAGES_SNAPSHOT",
+			"RUN_STARTED",
+			"TEXT_MESSAGE_CONTENT",
+		]);
+		expect(chunks[0]).toMatchObject({
+			messages: [
+				{ id: "u1", role: "user" },
+				{ id: "a1", role: "assistant" },
+				{ id: "u2", role: "user" },
+			],
+		});
+	});
+
+	it("stopSession writes RUN_FINISHED for the active run", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		const ts = new Date(0);
+		const stream = new FakeStream({
+			readRecords: [
+				{
+					seqNum: 0,
+					body: "holder",
+					headers: [["", "fence"]],
+					timestamp: ts,
+				},
+				chunkReadRecord(1, { type: "RUN_STARTED", runId: "r1" }, ts),
+				chunkReadRecord(2, {
+					type: "TEXT_MESSAGE_CONTENT",
+					messageId: "a1",
+					delta: "streaming",
+				}),
+			],
+		});
+		activeStreamRef.current = stream;
+
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			mode: "session",
+		});
+		const response = await chat.stopSession("s");
+
+		expect(response.status).toBe(202);
+		const appended = stream.directAppends[0]!;
+		expect(appended.fencingToken).toBe("holder");
+		const stopChunk = JSON.parse(recordBody(appended.records[0]!));
+		expect(stopChunk).toMatchObject({
+			type: "RUN_FINISHED",
+			runId: "r1",
+			finishReason: "stop",
 		});
 	});
 

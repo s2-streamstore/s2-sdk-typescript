@@ -6,23 +6,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const API = "/api/chat";
-const HISTORY_API = `${API}/history`;
 const SUBSCRIBE_API = `${API}/replay`;
-
-type StreamMode = "single-use" | "shared" | "session";
-
-function streamModeFromEnv(): StreamMode {
-	const raw = import.meta.env.VITE_S2_TANSTACK_MODE;
-	if (raw === "single-use" || raw === "shared" || raw === "session") {
-		return raw;
-	}
-	return "session";
-}
-
-// Must match the server's `S2_TANSTACK_MODE`. Default `session`.
-const STREAM_MODE = streamModeFromEnv();
-
-type ChatMessage = UIMessage;
 
 export const Route = createFileRoute("/")({
 	component: ChatRoute,
@@ -53,16 +37,6 @@ function subscribeUrl(chatId: string): string {
 	return `${SUBSCRIBE_API}?${new URLSearchParams({ id: chatId })}`;
 }
 
-function historyToInitialMessages(history: ChatMessage[]): UIMessage[] {
-	return history.map((message) => ({
-		...message,
-		id: typeof message.id === "string" ? message.id : crypto.randomUUID(),
-		role: message.role,
-		parts: Array.isArray(message.parts) ? message.parts : [],
-		createdAt: message.createdAt ? new Date(message.createdAt) : new Date(),
-	}));
-}
-
 function renderMessageText(message: UIMessage): string {
 	return message.parts
 		.filter(
@@ -73,22 +47,8 @@ function renderMessageText(message: UIMessage): string {
 		.join("");
 }
 
-function hasActiveTurn(messages: UIMessage[]): boolean {
-	const userCount = messages.filter(
-		(message) => message.role === "user",
-	).length;
-	const assistantCount = messages.filter(
-		(message) => message.role === "assistant",
-	).length;
-	return userCount > assistantCount;
-}
-
 function ChatRoute() {
 	const [chatId, setChatId] = useState<string | null>(null);
-	const [initialMessages, setInitialMessages] = useState<UIMessage[] | null>(
-		null,
-	);
-	const [historyError, setHistoryError] = useState<string | null>(null);
 	const initializedRef = useRef(false);
 	const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -104,27 +64,9 @@ function ChatRoute() {
 			`${url.pathname}?${url.searchParams}`,
 		);
 		sessionStorage.setItem("s2-tanstack-ai-chat-id", id);
-
-		if (STREAM_MODE === "session") {
-			setInitialMessages([]);
-			return;
-		}
-
-		fetch(`${HISTORY_API}?id=${encodeURIComponent(id)}`)
-			.then(async (response) => {
-				if (!response.ok) {
-					throw new Error(`${response.status} ${response.statusText}`);
-				}
-				const payload = (await response.json()) as { messages?: ChatMessage[] };
-				setInitialMessages(historyToInitialMessages(payload.messages ?? []));
-			})
-			.catch((error) => {
-				setHistoryError(error instanceof Error ? error.message : String(error));
-				setInitialMessages([]);
-			});
 	}, []);
 
-	if (chatId === null || initialMessages === null) {
+	if (chatId === null) {
 		return (
 			<main className="chat-shell">
 				<header className="topbar">
@@ -132,7 +74,7 @@ function ChatRoute() {
 						<span className="brand-mark">S2</span>
 						<div>
 							<h1>TanStack AI Chat</h1>
-							<p>{historyError ?? "starting"}</p>
+							<p>starting</p>
 						</div>
 					</div>
 				</header>
@@ -140,47 +82,34 @@ function ChatRoute() {
 		);
 	}
 
-	return (
-		<ChatInner
-			chatId={chatId}
-			initialMessages={initialMessages}
-			historyError={historyError}
-			chatEndRef={chatEndRef}
-		/>
-	);
+	return <ChatInner chatId={chatId} chatEndRef={chatEndRef} />;
 }
 
 function ChatInner({
 	chatId,
-	initialMessages,
-	historyError,
 	chatEndRef,
 }: {
 	chatId: string;
-	initialMessages: UIMessage[];
-	historyError: string | null;
 	chatEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
-	const shouldReplayOnMount =
-		STREAM_MODE === "session" ||
-		(STREAM_MODE !== "session" && hasActiveTurn(initialMessages));
 	const connection = useMemo(
 		() =>
 			createS2Connection({
 				sendUrl: API,
-				...(shouldReplayOnMount ? { subscribeUrl: subscribeUrl(chatId) } : {}),
-				mode: STREAM_MODE,
+				stopUrl: API,
+				subscribeUrl: subscribeUrl(chatId),
+				mode: "session",
 				body: { id: chatId },
 			}),
-		[chatId, shouldReplayOnMount],
+		[chatId],
 	);
 
-	const { messages, sendMessage, isLoading, sessionGenerating } = useChat({
-		connection,
-		initialMessages,
-		// Replay on mount only when there is session state or an active turn.
-		live: shouldReplayOnMount,
-	});
+	const { messages, sendMessage, isLoading, sessionGenerating, stop } = useChat(
+		{
+			connection,
+			live: true,
+		},
+	);
 
 	const [input, setInput] = useState("");
 
@@ -205,6 +134,11 @@ function ChatInner({
 		await navigator.clipboard.writeText(shareUrl).catch(() => {});
 	}
 
+	function onStop() {
+		stop();
+		void connection.stop?.();
+	}
+
 	return (
 		<main className="chat-shell">
 			<header className="topbar">
@@ -212,13 +146,18 @@ function ChatInner({
 					<span className="brand-mark">S2</span>
 					<div>
 						<h1>TanStack AI Chat</h1>
-						<p>{historyError ?? `chat=${chatId}`}</p>
+						<p>{`chat=${chatId}`}</p>
 					</div>
 				</div>
 				<div className="actions">
 					<button type="button" onClick={copyShareUrl}>
 						Copy URL
 					</button>
+					{isStreaming ? (
+						<button type="button" onClick={onStop}>
+							Stop
+						</button>
+					) : null}
 					<span className={`status ${status}`}>{status}</span>
 				</div>
 			</header>

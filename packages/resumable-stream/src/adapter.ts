@@ -70,8 +70,8 @@ export interface MakeResumableOptions {
 	/**
 	 * Which path delivers chunks to the client.
 	 * - `response` streams chunks on the request that starts generation.
-	 * - `replay` persists chunks to S2 and returns 202 immediately; a replay
-	 *   route or subscription owns delivery.
+	 * - `replay` persists chunks to S2 and returns 202; a replay route or
+	 *   subscription owns delivery.
 	 *
 	 * Use `replay` when a separate replay route or subscription is the source
 	 * of truth for client delivery.
@@ -206,6 +206,14 @@ export function createChat<T>(
 	const isShared = mode === "shared" || mode === "session";
 	const isSession = mode === "session";
 	const trimOnTerminalFence = mode === "single-use";
+	const isExpectedTakeover = (err: unknown): boolean =>
+		isShared &&
+		(err instanceof FencingTokenMismatchError ||
+			(err instanceof AggregateError &&
+				err.errors.length > 0 &&
+				err.errors.every(
+					(error) => error instanceof FencingTokenMismatchError,
+				)));
 
 	return {
 		async makeResumable(
@@ -291,11 +299,19 @@ export function createChat<T>(
 					});
 				},
 			});
+			const handledPersistPromise = persistPromise.catch((err) => {
+				if (isExpectedTakeover(err)) return;
+				throw err;
+			});
 
 			if (options?.waitUntil) {
-				options.waitUntil(persistPromise);
+				options.waitUntil(handledPersistPromise);
+			} else if (delivery === "replay") {
+				await handledPersistPromise.catch((err) => {
+					console.error("[resumable-stream] Persist failed:", err);
+				});
 			} else {
-				persistPromise.catch((err) => {
+				handledPersistPromise.catch((err) => {
 					console.error("[resumable-stream] Background persist failed:", err);
 				});
 			}

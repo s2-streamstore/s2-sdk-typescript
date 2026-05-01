@@ -1,9 +1,16 @@
-import type { AppendAck, AppendInput, ReadRecord } from "@s2-dev/streamstore";
+import {
+	type AppendAck,
+	type AppendInput,
+	type AppendRecord as AppendRecordType,
+	type ReadRecord,
+	S2Error,
+} from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
 import {
 	claimSharedGeneration,
-	replayActiveGenerationStringBodies,
-	tailStringBodies,
+	replayActiveGenerationStringRecords,
+	stopSharedGeneration,
+	tailCompactedStringRecords,
 	tailStringRecords,
 } from "../shared.js";
 
@@ -25,6 +32,12 @@ async function drainAsyncIterable<T>(source: AsyncIterable<T>): Promise<T[]> {
 	const out: T[] = [];
 	for await (const v of source) out.push(v);
 	return out;
+}
+
+function recordBody(record: AppendRecordType): string {
+	return typeof record.body === "string"
+		? record.body
+		: new TextDecoder().decode(record.body);
 }
 
 interface MockSession extends AsyncIterable<ReadRecord<"string">> {
@@ -60,6 +73,20 @@ class MockStreamHandle {
 	}
 
 	async close(): Promise<void> {}
+}
+
+class MissingStreamHandle extends MockStreamHandle {
+	constructor() {
+		super([]);
+	}
+
+	async readSession(): Promise<MockSession> {
+		throw new S2Error({
+			message: "stream not found",
+			status: 404,
+			code: "stream_not_found",
+		});
+	}
 }
 
 describe("claimSharedGeneration lease takeover", () => {
@@ -164,7 +191,52 @@ describe("claimSharedGeneration lease takeover", () => {
 	});
 });
 
-describe("replayActiveGenerationStringBodies", () => {
+describe("stopSharedGeneration", () => {
+	const ts = new Date(10_000_000);
+
+	it("writes a terminal chunk and fence with the active holder token", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "chunk-a", timestamp: ts }),
+		]);
+
+		const stopped = await stopSharedGeneration({
+			stream: handle as any,
+			body: "stopped",
+		});
+
+		expect(stopped).toBe(true);
+		expect(handle.appends).toHaveLength(1);
+		expect(handle.appends[0]?.fencingToken).toBe("holder");
+		expect(handle.appends[0]?.records.map(recordBody)).toEqual([
+			"stopped",
+			expect.stringMatching(/^end-/),
+		]);
+	});
+
+	it("returns false when there is no active holder", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const stopped = await stopSharedGeneration({ stream: handle as any });
+
+		expect(stopped).toBe(false);
+		expect(handle.appends).toHaveLength(0);
+	});
+});
+
+describe("replayActiveGenerationStringRecords", () => {
 	const now = 10_000_000;
 	const ts = new Date(now);
 
@@ -180,9 +252,10 @@ describe("replayActiveGenerationStringBodies", () => {
 			readRecord({ seqNum: 2, body: "chunk-b", timestamp: ts }),
 		]);
 
-		const bodies = await drainAsyncIterable(
-			replayActiveGenerationStringBodies(handle as any),
+		const records = await drainAsyncIterable(
+			replayActiveGenerationStringRecords(handle as any),
 		);
+		const bodies = records.map((record) => record.body);
 		expect(bodies).toEqual(["chunk-a", "chunk-b"]);
 	});
 
@@ -209,9 +282,10 @@ describe("replayActiveGenerationStringBodies", () => {
 			}),
 		]);
 
-		const bodies = await drainAsyncIterable(
-			replayActiveGenerationStringBodies(handle as any),
+		const records = await drainAsyncIterable(
+			replayActiveGenerationStringRecords(handle as any),
 		);
+		const bodies = records.map((record) => record.body);
 		expect(bodies).toEqual([]);
 	});
 
@@ -248,14 +322,15 @@ describe("replayActiveGenerationStringBodies", () => {
 			readRecord({ seqNum: 6, body: "new-chunk-b", timestamp: ts }),
 		]);
 
-		const bodies = await drainAsyncIterable(
-			replayActiveGenerationStringBodies(handle as any),
+		const records = await drainAsyncIterable(
+			replayActiveGenerationStringRecords(handle as any),
 		);
+		const bodies = records.map((record) => record.body);
 		expect(bodies).toEqual(["new-chunk-a", "new-chunk-b"]);
 	});
 });
 
-describe("tailStringBodies", () => {
+describe("tailStringRecords", () => {
 	const ts = new Date(10_000_000);
 
 	it("yields data records from every generation, skipping fences and trims", async () => {
@@ -289,14 +364,23 @@ describe("tailStringBodies", () => {
 			}),
 		]);
 
-		const bodies = await drainAsyncIterable(tailStringBodies(handle as any));
+		const records = await drainAsyncIterable(tailStringRecords(handle as any));
+		const bodies = records.map((record) => record.body);
 		expect(bodies).toEqual(["gen-1-a", "gen-1-b", "gen-2-a"]);
 	});
 
 	it("yields nothing on an empty stream", async () => {
 		const handle = new MockStreamHandle([]);
-		const bodies = await drainAsyncIterable(tailStringBodies(handle as any));
+		const records = await drainAsyncIterable(tailStringRecords(handle as any));
+		const bodies = records.map((record) => record.body);
 		expect(bodies).toEqual([]);
+	});
+
+	it("treats a missing stream as empty", async () => {
+		const records = await drainAsyncIterable(
+			tailStringRecords(new MissingStreamHandle() as any),
+		);
+		expect(records).toEqual([]);
 	});
 
 	it("respects fromSeqNum when provided", async () => {
@@ -311,7 +395,10 @@ describe("tailStringBodies", () => {
 			readRecord({ seqNum: 2, body: "late", timestamp: ts }),
 		]);
 
-		const bodies = await drainAsyncIterable(tailStringBodies(handle as any, 2));
+		const records = await drainAsyncIterable(
+			tailStringRecords(handle as any, 2),
+		);
+		const bodies = records.map((record) => record.body);
 		expect(bodies).toEqual(["late"]);
 	});
 
@@ -332,5 +419,20 @@ describe("tailStringBodies", () => {
 			{ body: "first", nextSeqNum: 2 },
 			{ body: "second", nextSeqNum: 3 },
 		]);
+	});
+});
+
+describe("tailCompactedStringRecords", () => {
+	it("treats a missing stream as empty", async () => {
+		const records = await drainAsyncIterable(
+			tailCompactedStringRecords(
+				new MissingStreamHandle() as any,
+				(existing) => {
+					expect(existing).toEqual([]);
+					return [];
+				},
+			),
+		);
+		expect(records).toEqual([]);
 	});
 });
