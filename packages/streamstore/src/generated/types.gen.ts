@@ -177,7 +177,7 @@ export type BasinReconfiguration = {
     stream_cipher?: null | EncryptionAlgorithm;
 };
 
-export type BasinScope = 'aws:us-east-1';
+export type BasinScope = 'aws:us-east-1' | 'aws:us-west-2' | 'aws:eu-north-1';
 
 export type BasinState = 'active' | 'deleting';
 
