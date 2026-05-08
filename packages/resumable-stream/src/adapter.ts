@@ -106,6 +106,12 @@ export interface Chat<T> {
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
 }
 
+/** A single SSE frame to emit. `event` is optional; when set, it becomes the SSE `event:` line. */
+export interface SseFrame {
+	event?: string;
+	data: string;
+}
+
 /** Adapter contract for plugging a chunk shape into the shared chat implementation. */
 export interface ChatAdapter<T> {
 	/** Synthesize an error chunk to surface upstream failures to the client. */
@@ -114,6 +120,13 @@ export interface ChatAdapter<T> {
 	prepareForStorage?: (chunk: T) => T;
 	/** SSE response headers. */
 	responseHeaders: Readonly<Record<string, string>>;
+	/**
+	 * Optionally emit a named SSE event. Defaults to data-only frames
+	 * (`id: <seqNum>\ndata: <body>\n\n`). Codecs can use this to carry an
+	 * `event:` line so the consumer dispatches on event name (e.g. Anthropic's
+	 * native `event: content_block_delta`).
+	 */
+	formatSseFrame?: (storedBody: string) => SseFrame;
 }
 
 async function* readableToAsyncIterable<T>(
@@ -159,9 +172,15 @@ function asyncIterableToReadableStream<T>(
 function sseResponseFromStrings(
 	source: AsyncIterable<string>,
 	headers: Readonly<Record<string, string>>,
+	formatter?: (body: string) => SseFrame,
+	startingSeqNum?: number,
 ): Response {
 	const iterator = source[Symbol.asyncIterator]();
 	const encoder = new TextEncoder();
+	// `startingSeqNum` is the next-to-write slot in S2; the persist loop
+	// assigns each chunk a seqNum starting there. We mirror that on the wire so
+	// the client's reconnect cursor matches what replay will yield.
+	let nextSeqNum = startingSeqNum;
 	const body = new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			try {
@@ -170,7 +189,21 @@ function sseResponseFromStrings(
 					controller.close();
 					return;
 				}
-				controller.enqueue(encoder.encode(`data: ${next.value}\n\n`));
+				if (!formatter && nextSeqNum === undefined) {
+					controller.enqueue(encoder.encode(`data: ${next.value}\n\n`));
+				} else {
+					const frame = formatter
+						? formatter(next.value)
+						: { data: next.value };
+					const lines: string[] = [];
+					if (frame.event) lines.push(`event: ${frame.event}`);
+					lines.push(`data: ${frame.data}`);
+					if (nextSeqNum !== undefined) {
+						lines.push(`id: ${nextSeqNum + 1}`);
+						nextSeqNum += 1;
+					}
+					controller.enqueue(encoder.encode(`${lines.join("\n")}\n\n`));
+				}
 			} catch (err) {
 				controller.error(err);
 				await iterator.return?.();
@@ -342,7 +375,12 @@ export function createChat<T>(
 				}
 			})();
 
-			return sseResponseFromStrings(clientStrings, adapter.responseHeaders);
+			return sseResponseFromStrings(
+				clientStrings,
+				adapter.responseHeaders,
+				adapter.formatSseFrame,
+				adapter.formatSseFrame ? matchSeqNumStart : undefined,
+			);
 		},
 
 		async replay(
@@ -355,6 +393,7 @@ export function createChat<T>(
 				return tailAsSse(
 					tailStringRecords(handle, options?.fromSeqNum),
 					adapter.responseHeaders,
+					adapter.formatSseFrame,
 				);
 			}
 
@@ -378,7 +417,11 @@ export function createChat<T>(
 					yield next.value;
 				}
 			})();
-			return tailAsSse(replayWithFirst, adapter.responseHeaders);
+			return tailAsSse(
+				replayWithFirst,
+				adapter.responseHeaders,
+				adapter.formatSseFrame,
+			);
 		},
 	};
 }

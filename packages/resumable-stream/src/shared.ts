@@ -20,9 +20,16 @@ export interface TailedStringBody {
 	nextSeqNum: number;
 }
 
+/** A single SSE frame to emit. Mirrors `SseFrame` in `adapter.ts`. */
+export interface SseFrameLike {
+	event?: string;
+	data: string;
+}
+
 export function tailAsSse(
 	source: AsyncIterable<TailedStringBody>,
 	headers: Readonly<Record<string, string>>,
+	formatter?: (body: string) => SseFrameLike,
 ): Response {
 	const iterator = source[Symbol.asyncIterator]();
 	const encoder = new TextEncoder();
@@ -34,11 +41,20 @@ export function tailAsSse(
 					controller.close();
 					return;
 				}
-				controller.enqueue(
-					encoder.encode(
-						`id: ${next.value.nextSeqNum}\ndata: ${next.value.body}\n\n`,
-					),
-				);
+				if (!formatter) {
+					controller.enqueue(
+						encoder.encode(
+							`id: ${next.value.nextSeqNum}\ndata: ${next.value.body}\n\n`,
+						),
+					);
+				} else {
+					const frame = formatter(next.value.body);
+					const lines: string[] = [];
+					if (frame.event) lines.push(`event: ${frame.event}`);
+					lines.push(`data: ${frame.data}`);
+					lines.push(`id: ${next.value.nextSeqNum}`);
+					controller.enqueue(encoder.encode(`${lines.join("\n")}\n\n`));
+				}
 			} catch (err) {
 				controller.error(err);
 				await iterator.return?.();
@@ -81,7 +97,7 @@ function createEmptySharedStreamState(): SharedStreamState {
 	};
 }
 
-function isMissingStreamError(error: unknown): boolean {
+export function isMissingStreamError(error: unknown): boolean {
 	return (
 		error instanceof S2Error &&
 		error.status === 404 &&

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anthropic Resumable Chat (S2)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #e5e5e5; height: 100vh; display: flex; flex-direction: column; }
+    .header { padding: 12px 20px; border-bottom: 1px solid #222; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .header h1 { font-size: 15px; font-weight: 500; opacity: .7; }
+    .header .chat-link { max-width: min(44vw, 360px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #a5b4fc; text-decoration: none; padding: 4px 10px; border-radius: 999px; border: 1px solid #312e81; background: #161329; }
+    .header .chat-link:hover { background: #1d1840; }
+    .header .copy-link { padding: 6px 12px; background: #171717; color: #d4d4d8; border: 1px solid #2a2a2a; font-size: 12px; cursor: pointer; }
+    .header .copy-link:hover { background: #222; }
+    .header .status { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 99px; }
+    .status.idle { background: #1a1a2e; color: #818cf8; }
+    .status.streaming { background: #14281e; color: #34d399; }
+    .status.replaying { background: #2a1f0d; color: #fbbf24; }
+    .chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+    .msg { max-width: 680px; width: 100%; }
+    .msg.user { align-self: flex-end; }
+    .msg-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; opacity: .4; }
+    .msg.user .msg-label { text-align: right; }
+    .msg-body { padding: 10px 14px; border-radius: 10px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .msg.user .msg-body { background: #1e1b4b; color: #c7d2fe; border-bottom-right-radius: 2px; }
+    .msg.assistant .msg-body { background: #1a1a1a; border: 1px solid #262626; border-bottom-left-radius: 2px; }
+    .msg-body.streaming { border-color: #34d399; }
+    .input-row { padding: 12px 20px; border-top: 1px solid #222; display: flex; gap: 8px; }
+    input { flex: 1; padding: 10px 14px; background: #141414; border: 1px solid #333; border-radius: 8px; color: #e5e5e5; font-size: 14px; outline: none; }
+    input:focus { border-color: #6366f1; }
+    input:disabled { opacity: .4; }
+    button { padding: 10px 20px; background: #6366f1; color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+    button:hover { background: #4f46e5; }
+    button:disabled { opacity: .4; cursor: default; }
+    .info { text-align: center; padding: 40px 20px; opacity: .3; font-size: 13px; }
+    .info kbd { background: #222; padding: 2px 6px; border-radius: 4px; font-family: inherit; }
+    @media (max-width: 640px) {
+      .header .status { margin-left: 0; }
+      .header .chat-link { max-width: calc(100vw - 150px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Anthropic Resumable Chat · S2</h1>
+    <a class="chat-link" id="chat-link" href="/" title="Share this chat URL"></a>
+    <button class="copy-link" id="copy-link" type="button">Copy link</button>
+    <span class="status idle" id="status">idle</span>
+  </div>
+
+  <div class="chat" id="chat">
+    <div class="info">Send a message. Try <kbd>F5</kbd> mid-generation. The active turn replays from S2; prior turns reload from <code>history()</code>.</div>
+  </div>
+
+  <div class="input-row">
+    <input type="text" id="input" placeholder="Say something..." autocomplete="off" autofocus>
+    <button id="send">Send</button>
+  </div>
+
+  <script type="module">
+    import { EventSourceParserStream } from 'https://esm.sh/eventsource-parser@3/stream';
+
+    const API = '/api/chat';
+    const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+    const EMPTY_STATE_HTML = '<div class="info">Send a message. Try <kbd>F5</kbd> mid-generation. The active turn replays from S2; prior turns reload from <code>history()</code>.</div>';
+
+    const chatEl = document.getElementById('chat');
+    const inputEl = document.getElementById('input');
+    const sendBtn = document.getElementById('send');
+    const statusEl = document.getElementById('status');
+    const chatLinkEl = document.getElementById('chat-link');
+    const copyLinkEl = document.getElementById('copy-link');
+
+    let activeAbort = null;
+    let nextCursor = 0;
+
+    function userMsgsKey() { return `chat-${chatId}-user-msgs`; }
+    function loadUserMsgs() {
+      try {
+        const raw = localStorage.getItem(userMsgsKey());
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.filter((s) => typeof s === 'string') : [];
+      } catch { return []; }
+    }
+    function saveUserMsgs(arr) {
+      try { localStorage.setItem(userMsgsKey(), JSON.stringify(arr)); } catch {}
+    }
+
+    function isValidChatId(value) {
+      return typeof value === 'string' && CHAT_ID_PATTERN.test(value);
+    }
+
+    function resolveChatId() {
+      const url = new URL(window.location.href);
+      const fromQuery = url.searchParams.get('chat');
+      if (isValidChatId(fromQuery)) return fromQuery;
+      const fromSession = sessionStorage.getItem('chatId');
+      if (isValidChatId(fromSession)) return fromSession;
+      return crypto.randomUUID();
+    }
+
+    const chatId = resolveChatId();
+    sessionStorage.setItem('chatId', chatId);
+
+    function syncChatUrl() {
+      const url = new URL(window.location.href);
+      url.searchParams.set('chat', chatId);
+      const relativeUrl = `${url.pathname}?${url.searchParams.toString()}`;
+      window.history.replaceState(null, '', relativeUrl);
+      chatLinkEl.href = relativeUrl;
+      chatLinkEl.textContent = `chat=${chatId}`;
+      chatLinkEl.title = url.toString();
+    }
+
+    function setStatus(status) {
+      statusEl.textContent = status;
+      statusEl.className = `status ${status}`;
+    }
+
+    function setInputEnabled(enabled) {
+      inputEl.disabled = !enabled;
+      sendBtn.disabled = !enabled;
+    }
+
+    function clearChat() {
+      chatEl.innerHTML = '';
+    }
+
+    function ensureEmptyState() {
+      if (chatEl.children.length === 0) {
+        chatEl.innerHTML = EMPTY_STATE_HTML;
+      }
+    }
+
+    function clearEmptyState() {
+      const info = chatEl.querySelector('.info');
+      if (info) info.remove();
+    }
+
+    function appendMessage(role, text) {
+      clearEmptyState();
+      const wrap = document.createElement('div');
+      wrap.className = `msg ${role}`;
+      const label = document.createElement('div');
+      label.className = 'msg-label';
+      label.textContent = role;
+      const body = document.createElement('div');
+      body.className = 'msg-body';
+      body.textContent = text;
+      wrap.appendChild(label);
+      wrap.appendChild(body);
+      chatEl.appendChild(wrap);
+      chatEl.scrollTop = chatEl.scrollHeight;
+      return body;
+    }
+
+    function extractText(message) {
+      if (!message?.content) return '';
+      return message.content
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
+    }
+
+    async function loadHistory() {
+      const res = await fetch(`${API}/history?id=${encodeURIComponent(chatId)}`);
+      if (!res.ok) return { messages: [], nextSeqNum: 0 };
+      const json = await res.json();
+      return {
+        messages: json.messages || [],
+        nextSeqNum: typeof json.nextSeqNum === 'number' ? json.nextSeqNum : 0,
+      };
+    }
+
+    async function* streamSse(body, signal) {
+      const events = body
+        .pipeThrough(new TextDecoderStream())
+        .pipeThrough(new EventSourceParserStream());
+      const reader = events.getReader();
+      try {
+        while (true) {
+          if (signal?.aborted) return;
+          const { done, value } = await reader.read();
+          if (done) return;
+          if (value?.id) {
+            const parsed = Number.parseInt(value.id, 10);
+            if (Number.isSafeInteger(parsed) && parsed > nextCursor) {
+              nextCursor = parsed;
+            }
+          }
+          if (!value?.data) continue;
+          try {
+            yield { event: value.event, data: JSON.parse(value.data), id: value.id };
+          } catch {}
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+
+    async function consumeStream(body, signal) {
+      const bodyEl = appendMessage('assistant', '');
+      bodyEl.classList.add('streaming');
+      let text = '';
+      try {
+        for await (const frame of streamSse(body, signal)) {
+          const event = frame.data;
+          if (!event || typeof event !== 'object') continue;
+          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            text += event.delta.text;
+            bodyEl.textContent = text;
+            chatEl.scrollTop = chatEl.scrollHeight;
+          } else if (event.type === 'error') {
+            text += `\n[error: ${event.error?.message || 'unknown'}]`;
+            bodyEl.textContent = text;
+          }
+        }
+      } finally {
+        bodyEl.classList.remove('streaming');
+      }
+    }
+
+    async function tailFromCursor() {
+      // Subscribe to the session log starting just past whatever history()
+      // already returned. If there's an active turn, its events arrive here;
+      // if not, the tail just sits open until a new turn lands. We bail after
+      // a short idle window so the UI can show "idle" status.
+      setStatus('replaying');
+      const url = `${API}/stream?id=${encodeURIComponent(chatId)}&from=${nextCursor}`;
+      activeAbort = new AbortController();
+      const idleTimer = setTimeout(() => activeAbort?.abort(), 1500);
+      let sawAnyChunk = false;
+      try {
+        const replayRes = await fetch(url, { signal: activeAbort.signal });
+        if (replayRes.status === 204 || !replayRes.body) return false;
+        let bodyEl = null;
+        let text = '';
+        for await (const frame of streamSse(replayRes.body, activeAbort.signal)) {
+          if (!sawAnyChunk) {
+            clearTimeout(idleTimer);
+            sawAnyChunk = true;
+            bodyEl = appendMessage('assistant', '');
+            bodyEl.classList.add('streaming');
+          }
+          const event = frame.data;
+          if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            text += event.delta.text;
+            if (bodyEl) bodyEl.textContent = text;
+            chatEl.scrollTop = chatEl.scrollHeight;
+          } else if (event?.type === 'error') {
+            text += `\n[error: ${event.error?.message || 'unknown'}]`;
+            if (bodyEl) bodyEl.textContent = text;
+          } else if (event?.type === 'message_stop') {
+            // Turn ended; we've got it. Done tailing.
+            break;
+          }
+        }
+        if (bodyEl) bodyEl.classList.remove('streaming');
+      } catch (err) {
+        // AbortError on idle is expected.
+      } finally {
+        clearTimeout(idleTimer);
+        activeAbort = null;
+      }
+      setStatus('idle');
+      return sawAnyChunk;
+    }
+
+    async function loadAndRender() {
+      clearChat();
+      const { messages: assistantMsgs, nextSeqNum } = await loadHistory();
+      nextCursor = nextSeqNum;
+      const userMsgs = loadUserMsgs();
+      // Interleave: user[i] then assistant[i]. If user.length > assistant.length,
+      // the trailing user is the in-flight turn; tailFromCursor() will pick up
+      // its assistant response if there's an active generation.
+      const turns = Math.max(userMsgs.length, assistantMsgs.length);
+      for (let i = 0; i < turns; i += 1) {
+        if (i < userMsgs.length) appendMessage('user', userMsgs[i]);
+        if (i < assistantMsgs.length) {
+          appendMessage('assistant', extractText(assistantMsgs[i]));
+        }
+      }
+      ensureEmptyState();
+      // Tail anything past the history cursor — picks up a turn that was
+      // mid-flight when the page loaded; idles out fast if there's nothing.
+      await tailFromCursor();
+    }
+
+    async function send() {
+      const text = inputEl.value.trim();
+      if (!text || sendBtn.disabled) return;
+      inputEl.value = '';
+      appendMessage('user', text);
+      const userMsgs = loadUserMsgs();
+      userMsgs.push(text);
+      saveUserMsgs(userMsgs);
+      setInputEnabled(false);
+      setStatus('streaming');
+      try {
+        const res = await fetch(API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: chatId, message: text }),
+        });
+        if (!res.ok || !res.body) {
+          appendMessage('assistant', `[error: ${res.status} ${res.statusText}]`);
+          return;
+        }
+        activeAbort = new AbortController();
+        await consumeStream(res.body, activeAbort.signal);
+      } finally {
+        activeAbort = null;
+        setStatus('idle');
+        setInputEnabled(true);
+        inputEl.focus();
+      }
+    }
+
+    sendBtn.addEventListener('click', send);
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') send();
+    });
+    copyLinkEl.addEventListener('click', async () => {
+      const url = new URL(window.location.href);
+      url.searchParams.set('chat', chatId);
+      try { await navigator.clipboard.writeText(url.toString()); } catch {}
+    });
+
+    syncChatUrl();
+    loadAndRender();
+  </script>
+</body>
+</html>
