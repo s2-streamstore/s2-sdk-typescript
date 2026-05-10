@@ -20,8 +20,8 @@ export interface TailedStringBody {
 	nextSeqNum: number;
 }
 
-/** A single SSE frame to emit. Mirrors `SseFrame` in `adapter.ts`. */
-export interface SseFrameLike {
+/** A single SSE frame to emit. `event` is optional; when set, it becomes the SSE `event:` line. */
+export interface SseFrame {
 	event?: string;
 	data: string;
 }
@@ -29,7 +29,7 @@ export interface SseFrameLike {
 export function tailAsSse(
 	source: AsyncIterable<TailedStringBody>,
 	headers: Readonly<Record<string, string>>,
-	formatter?: (body: string) => SseFrameLike,
+	formatter?: (body: string) => SseFrame,
 ): Response {
 	const iterator = source[Symbol.asyncIterator]();
 	const encoder = new TextEncoder();

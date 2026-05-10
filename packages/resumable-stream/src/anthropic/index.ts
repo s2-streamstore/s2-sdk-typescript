@@ -22,30 +22,27 @@ import {
 	createChat,
 	DEFAULT_ERROR_TEXT,
 	type ResumableChatConfig,
-} from "./adapter.js";
-import {
-	type AnthropicChunk,
-	createAnthropicAccumulator,
-} from "./anthropic-accumulator.js";
-import { isFenceRecord, isTerminalFence, isTrimRecord } from "./protocol.js";
-import { isMissingStreamError } from "./shared.js";
+} from "../adapter.js";
+import { isFenceRecord, isTerminalFence, isTrimRecord } from "../protocol.js";
+import { isMissingStreamError } from "../shared.js";
+import { type Chunk, createAccumulator } from "./accumulator.js";
 
 export type {
 	MakeResumableOptions,
 	ReplayOptions,
 	ResumableChatConfig,
 	ResumableChatMode,
-} from "./adapter.js";
+} from "../adapter.js";
 
 export {
-	type AnthropicAccumulator,
-	type AnthropicChunk,
+	type Accumulator,
 	accumulateMessage,
-	createAnthropicAccumulator,
+	type Chunk,
+	createAccumulator,
 	messagesFromEvents,
-} from "./anthropic-accumulator.js";
+} from "./accumulator.js";
 
-export type ResumableChat = Chat<AnthropicChunk> & {
+export type ResumableChat = Chat<Chunk> & {
 	/**
 	 * One-shot snapshot of closed turns as `Message[]`, in turn order.
 	 * Excludes any in-flight turn that hasn't yet emitted `message_stop`.
@@ -60,7 +57,7 @@ const SSE_HEADERS = {
 	"X-Accel-Buffering": "no",
 } as const;
 
-const adapter: ChatAdapter<AnthropicChunk> = {
+const adapter: ChatAdapter<Chunk> = {
 	makeErrorChunk(err, onError) {
 		const message = onError ? onError(err) : DEFAULT_ERROR_TEXT;
 		return {
@@ -109,7 +106,7 @@ async function readHistoryMessages(
 		if (!session) return { messages: [], nextSeqNum: 0 };
 
 		const messages: Message[] = [];
-		const acc = createAnthropicAccumulator();
+		const acc = createAccumulator();
 		let active = false;
 		let nextSeqNum = 0;
 

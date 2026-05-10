@@ -20,16 +20,16 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages";
 
 /**
- * The set of events Anthropic emits over SSE: `RawMessageStreamEvent` (the
- * union of message_start / content_block_* / message_delta / message_stop)
- * plus the wire-level `error` event, which is not a member of
- * `RawMessageStreamEvent` in the SDK types.
+ * Anthropic SSE chunk type: `RawMessageStreamEvent` (the union of
+ * message_start / content_block_* / message_delta / message_stop) plus the
+ * wire-level `error` event the API can emit, which the SDK doesn't include
+ * in `RawMessageStreamEvent`.
  */
-export type AnthropicChunk =
+export type Chunk =
 	| RawMessageStreamEvent
 	| { type: "error"; error: { type: string; message: string } };
 
-export interface AnthropicAccumulator {
+export interface Accumulator {
 	push(event: RawMessageStreamEvent): void;
 	isDone(): boolean;
 	finalMessage(): Message;
@@ -40,7 +40,7 @@ export interface AnthropicAccumulator {
 export function accumulateMessage(
 	events: Iterable<RawMessageStreamEvent>,
 ): Message {
-	const acc = createAnthropicAccumulator();
+	const acc = createAccumulator();
 	for (const event of events) acc.push(event);
 	return acc.finalMessage();
 }
@@ -56,13 +56,14 @@ const RAW_MESSAGE_EVENT_TYPES = new Set<RawMessageStreamEvent["type"]>([
 
 /**
  * Streaming accumulation: yield one `Message` per turn that ends with
- * `message_stop`. Non-Anthropic events (e.g. wire-level `error`) are skipped,
- * so callers can pipe a subscription's mixed event stream straight in.
+ * `message_stop`. Events outside the `RawMessageStreamEvent` union (e.g.
+ * wire-level `error` events) are skipped, so callers can pipe a subscription's
+ * mixed event stream straight in.
  */
 export async function* messagesFromEvents(
 	events: AsyncIterable<{ type: string }>,
 ): AsyncIterable<Message> {
-	const acc = createAnthropicAccumulator();
+	const acc = createAccumulator();
 	for await (const event of events) {
 		if (
 			!RAW_MESSAGE_EVENT_TYPES.has(event.type as RawMessageStreamEvent["type"])
@@ -77,8 +78,10 @@ export async function* messagesFromEvents(
 }
 
 /**
- * Merge `MessageDeltaUsage` (which can carry nullable fields) into an existing
- * `Usage`, dropping nulls so the message's `Usage` invariants survive.
+ * Merge a `MessageDeltaUsage` (which can carry nullable fields) into an
+ * existing `Usage`, dropping nulls so the message's `Usage` invariants
+ * survive. Cast is sound because the only fields we copy from `delta` are
+ * non-null and match `Usage`'s shape, but TS can't see that.
  */
 function mergeDeltaUsage(base: Usage, delta: MessageDeltaUsage): Usage {
 	const result: Record<string, unknown> = { ...base };
@@ -89,7 +92,7 @@ function mergeDeltaUsage(base: Usage, delta: MessageDeltaUsage): Usage {
 }
 
 /** Stateful accumulator. `finalMessage()` is only valid after `message_stop`. */
-export function createAnthropicAccumulator(): AnthropicAccumulator {
+export function createAccumulator(): Accumulator {
 	let message: Message | undefined;
 	const toolUseJsonBuffers = new Map<number, string>();
 	let done = false;
@@ -206,16 +209,8 @@ export function createAnthropicAccumulator(): AnthropicAccumulator {
 			return done;
 		},
 		finalMessage(): Message {
-			if (!message) {
-				throw new Error(
-					"[anthropic-accumulator] finalMessage called before message_start",
-				);
-			}
-			if (!done) {
-				throw new Error(
-					"[anthropic-accumulator] finalMessage called before message_stop",
-				);
-			}
+			if (!message) throw new Error("finalMessage called before message_start");
+			if (!done) throw new Error("finalMessage called before message_stop");
 			return message;
 		},
 		reset(): void {

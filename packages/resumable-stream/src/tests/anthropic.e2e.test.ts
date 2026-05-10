@@ -4,8 +4,8 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages";
 import { S2, S2Environment } from "@s2-dev/streamstore";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AnthropicChunk, createResumableChat } from "../anthropic.js";
-import { accumulateMessage } from "../anthropic-accumulator.js";
+import { accumulateMessage } from "../anthropic/accumulator.js";
+import { type Chunk, createResumableChat } from "../anthropic/index.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const hasEnv = !!process.env.S2_ACCESS_TOKEN;
@@ -197,7 +197,7 @@ describeIf("resumable-stream/anthropic", () => {
 
 			const res = await chat.makeResumable(
 				streamName,
-				arrayToAsyncIterable(events) as AsyncIterable<AnthropicChunk>,
+				arrayToAsyncIterable(events) as AsyncIterable<Chunk>,
 			);
 			expect(res.status).toBe(200);
 			expect(res.headers.get("Content-Type")).toBe("text/event-stream");
@@ -235,7 +235,7 @@ describeIf("resumable-stream/anthropic", () => {
 			let bg: Promise<unknown> | undefined;
 			const live = await chat.makeResumable(
 				streamName,
-				delayedAsyncIterable(events) as AsyncIterable<AnthropicChunk>,
+				delayedAsyncIterable(events) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg = p;
@@ -283,7 +283,7 @@ describeIf("resumable-stream/anthropic", () => {
 			let bg: Promise<unknown> | undefined;
 			const live = await chat.makeResumable(
 				streamName,
-				arrayToAsyncIterable(events) as AsyncIterable<AnthropicChunk>,
+				arrayToAsyncIterable(events) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg = p;
@@ -366,7 +366,7 @@ describeIf("resumable-stream/anthropic", () => {
 			let bg1: Promise<unknown> | undefined;
 			const r1 = await chat.makeResumable(
 				streamName,
-				arrayToAsyncIterable(turn1) as AsyncIterable<AnthropicChunk>,
+				arrayToAsyncIterable(turn1) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg1 = p;
@@ -379,7 +379,7 @@ describeIf("resumable-stream/anthropic", () => {
 			let bg2: Promise<unknown> | undefined;
 			const r2 = await chat.makeResumable(
 				streamName,
-				arrayToAsyncIterable(turn2) as AsyncIterable<AnthropicChunk>,
+				arrayToAsyncIterable(turn2) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg2 = p;
@@ -423,7 +423,7 @@ describeIf("resumable-stream/anthropic", () => {
 				streamName,
 				arrayToAsyncIterable(
 					textTurnEvents("msg_done", "done"),
-				) as AsyncIterable<AnthropicChunk>,
+				) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg1 = p;
@@ -439,7 +439,7 @@ describeIf("resumable-stream/anthropic", () => {
 			let bg2: Promise<unknown> | undefined;
 			const r2 = await chat.makeResumable(
 				streamName,
-				arrayToAsyncIterable(partial) as AsyncIterable<AnthropicChunk>,
+				arrayToAsyncIterable(partial) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg2 = p;
@@ -515,7 +515,7 @@ describeIf("resumable-stream/anthropic", () => {
 			let bg: Promise<unknown> | undefined;
 			const live = await chat.makeResumable(
 				streamName,
-				arrayToAsyncIterable(events) as AsyncIterable<AnthropicChunk>,
+				arrayToAsyncIterable(events) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg = p;
@@ -551,10 +551,7 @@ describeIf("resumable-stream/anthropic", () => {
 			let bg: Promise<unknown> | undefined;
 			const live = await chat.makeResumable(
 				streamName,
-				throwingIterable(
-					partial,
-					new Error("boom"),
-				) as AsyncIterable<AnthropicChunk>,
+				throwingIterable(partial, new Error("boom")) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg = p.catch(() => {});

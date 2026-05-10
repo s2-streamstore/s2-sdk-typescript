@@ -1,7 +1,7 @@
 import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { describe, expect, it } from "vitest";
-import { messagesFromEvents } from "../anthropic-accumulator.js";
-import { createS2AnthropicChat } from "../anthropic-client.js";
+import { messagesFromEvents } from "../anthropic/accumulator.js";
+import { createChatClient } from "../anthropic/client.js";
 
 const baseUsage = {
 	input_tokens: 5,
@@ -112,13 +112,13 @@ function truncatedSseResponse(
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("createS2AnthropicChat", () => {
+describe("createChatClient", () => {
 	it("uses history nextSeqNum as the next replay cursor", async () => {
 		const { fetch, calls } = recordingFetch([
 			Response.json({ messages: [], nextSeqNum: 42 }),
 			new Response(null, { status: 204 }),
 		]);
-		const chat = createS2AnthropicChat({
+		const chat = createChatClient({
 			sendUrl: "/send",
 			subscribeUrl: "/stream",
 			historyUrl: "/history",
@@ -137,7 +137,7 @@ describe("createS2AnthropicChat", () => {
 		const { fetch } = recordingFetch([
 			sseResponse(textTurnEvents("msg_1", "hi")),
 		]);
-		const chat = createS2AnthropicChat({
+		const chat = createChatClient({
 			sendUrl: "/send",
 			subscribeUrl: "/stream",
 			fetch,
@@ -182,7 +182,7 @@ describe("createS2AnthropicChat", () => {
 				headers: { "Content-Type": "text/event-stream" },
 			}),
 		]);
-		const chat = createS2AnthropicChat({
+		const chat = createChatClient({
 			sendUrl: "/send",
 			subscribeUrl: "/stream",
 			fetch,
@@ -211,7 +211,7 @@ describe("createS2AnthropicChat", () => {
 		const rest = truncatedSseResponse(events.slice(3), 4);
 		const { fetch, calls } = recordingFetch([partial, rest]);
 
-		const chat = createS2AnthropicChat({
+		const chat = createChatClient({
 			sendUrl: "/send",
 			subscribeUrl: "/stream",
 			fetch,
@@ -237,7 +237,7 @@ describe("createS2AnthropicChat", () => {
 	it("stops reconnecting after a terminal message_stop", async () => {
 		const events = textTurnEvents("msg_done", "ok");
 		const { fetch, calls } = recordingFetch([sseResponse(events)]);
-		const chat = createS2AnthropicChat({
+		const chat = createChatClient({
 			sendUrl: "/send",
 			subscribeUrl: "/stream",
 			fetch,
@@ -257,7 +257,7 @@ describe("createS2AnthropicChat", () => {
 		const events = textTurnEvents("msg_no_retry", "partial");
 		const partial = truncatedSseResponse(events.slice(0, 2), 1);
 		const { fetch, calls } = recordingFetch([partial]);
-		const chat = createS2AnthropicChat({
+		const chat = createChatClient({
 			sendUrl: "/send",
 			subscribeUrl: "/stream",
 			fetch,

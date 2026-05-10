@@ -16,9 +16,12 @@ import {
 	claimSessionGeneration,
 	claimSharedGeneration,
 	replayActiveGenerationStringRecords,
+	type SseFrame,
 	tailAsSse,
 	tailStringRecords,
 } from "./shared.js";
+
+export type { SseFrame } from "./shared.js";
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
@@ -104,12 +107,6 @@ export interface Chat<T> {
 	): Promise<Response>;
 	/** Replays the active generation as SSE. Returns 204 if there is none. */
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
-}
-
-/** A single SSE frame to emit. `event` is optional; when set, it becomes the SSE `event:` line. */
-export interface SseFrame {
-	event?: string;
-	data: string;
 }
 
 /** Adapter contract for plugging a chunk shape into the shared chat implementation. */

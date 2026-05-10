@@ -32,12 +32,12 @@
       "default": "./dist/tanstack-ai-client.js"
     },
     "./anthropic": {
-      "types": "./dist/anthropic.d.ts",
-      "default": "./dist/anthropic.js"
+      "types": "./dist/anthropic/index.d.ts",
+      "default": "./dist/anthropic/index.js"
     },
     "./anthropic/client": {
-      "types": "./dist/anthropic-client.d.ts",
-      "default": "./dist/anthropic-client.js"
+      "types": "./dist/anthropic/client.d.ts",
+      "default": "./dist/anthropic/client.js"
     }
   },
   "files": [

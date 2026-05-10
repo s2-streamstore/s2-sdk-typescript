@@ -25,10 +25,10 @@
 				"packages/resumable-stream/src/tanstack-ai-client.ts"
 			],
 			"@s2-dev/resumable-stream/anthropic": [
-				"packages/resumable-stream/src/anthropic.ts"
+				"packages/resumable-stream/src/anthropic/index.ts"
 			],
 			"@s2-dev/resumable-stream/anthropic/client": [
-				"packages/resumable-stream/src/anthropic-client.ts"
+				"packages/resumable-stream/src/anthropic/client.ts"
 			]
 		}
 	},

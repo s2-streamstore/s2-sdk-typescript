@@ -97,7 +97,7 @@ export async function* pipeSseFrames(
 			if (abortSignal?.aborted) return;
 			const { done, value } = await reader.read();
 			if (done) return;
-			if (value) yield value;
+			yield value;
 		}
 	} finally {
 		abortSignal?.removeEventListener("abort", cancel);

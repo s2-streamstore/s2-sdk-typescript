@@ -9,7 +9,6 @@
  * terminal event (`message_stop` / `error`), HTTP 204, or external abort.
  */
 import type { Message } from "@anthropic-ai/sdk/resources/messages";
-import type { AnthropicChunk } from "./anthropic-accumulator.js";
 import {
 	fetchOk,
 	type HeadersOption,
@@ -18,11 +17,12 @@ import {
 	resolveCursorUrl,
 	resolveHeaders,
 	resolveUrl,
-} from "./client-utils.js";
+} from "../client-utils.js";
+import type { Chunk } from "./accumulator.js";
 
-export type { AnthropicChunk } from "./anthropic-accumulator.js";
+export type { Chunk } from "./accumulator.js";
 
-export interface S2AnthropicChatOptions {
+export interface ChatClientOptions {
 	/** Endpoint that POSTs the request body and starts a generation. */
 	sendUrl: string | (() => string);
 	/** Endpoint that GETs the SSE replay stream. Reconnect uses `?from=<cursor>`. */
@@ -43,17 +43,14 @@ export interface S2AnthropicChatOptions {
 	reconnectBackoffMs?: readonly number[];
 }
 
-export interface S2AnthropicSubscription {
-	events: AsyncIterable<AnthropicChunk>;
+export interface Subscription {
+	events: AsyncIterable<Chunk>;
 	cancel(): void;
 }
 
-export interface S2AnthropicChat {
-	send(
-		body: unknown,
-		opts?: { signal?: AbortSignal },
-	): Promise<S2AnthropicSubscription>;
-	subscribe(opts?: { signal?: AbortSignal }): Promise<S2AnthropicSubscription>;
+export interface ChatClient {
+	send(body: unknown, opts?: { signal?: AbortSignal }): Promise<Subscription>;
+	subscribe(opts?: { signal?: AbortSignal }): Promise<Subscription>;
 	loadHistory(): Promise<{ messages: Message[]; nextSeqNum?: number }>;
 	stop(): Promise<void>;
 }
@@ -64,28 +61,24 @@ function isValidCursor(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isTerminal(event: AnthropicChunk): boolean {
+function isTerminal(event: Chunk): boolean {
 	return event.type === "message_stop" || event.type === "error";
 }
 
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 	if (ms <= 0) return Promise.resolve();
 	return new Promise<void>((resolve) => {
-		const onAbort = () => {
+		const finish = () => {
 			clearTimeout(timer);
+			signal.removeEventListener("abort", finish);
 			resolve();
 		};
-		const timer = setTimeout(() => {
-			signal.removeEventListener("abort", onAbort);
-			resolve();
-		}, ms);
-		signal.addEventListener("abort", onAbort, { once: true });
+		const timer = setTimeout(finish, ms);
+		signal.addEventListener("abort", finish, { once: true });
 	});
 }
 
-export function createS2AnthropicChat(
-	options: S2AnthropicChatOptions,
-): S2AnthropicChat {
+export function createChatClient(options: ChatClientOptions): ChatClient {
 	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const credentials = options.credentials ?? "same-origin";
 	const backoffMs = options.reconnectBackoffMs ?? DEFAULT_BACKOFF_MS;
@@ -112,16 +105,16 @@ export function createS2AnthropicChat(
 		body: ReadableStream<Uint8Array>,
 		signal: AbortSignal,
 		onEvent: () => void,
-	): AsyncGenerator<AnthropicChunk, boolean> {
+	): AsyncGenerator<Chunk, boolean> {
 		for await (const frame of pipeSseFrames(body, signal)) {
 			if (frame.id) {
 				const parsed = Number.parseInt(frame.id, 10);
 				if (isValidCursor(parsed)) advanceCursor(parsed);
 			}
 			if (!frame.data) continue;
-			let event: AnthropicChunk;
+			let event: Chunk;
 			try {
-				event = JSON.parse(frame.data) as AnthropicChunk;
+				event = JSON.parse(frame.data) as Chunk;
 			} catch {
 				continue;
 			}
@@ -135,7 +128,7 @@ export function createS2AnthropicChat(
 	function tailWithReconnect(
 		controller: AbortController,
 		initialResponse: Response,
-	): AsyncIterable<AnthropicChunk> {
+	): AsyncIterable<Chunk> {
 		const signal = controller.signal;
 		return (async function* () {
 			let response = initialResponse;
@@ -177,7 +170,7 @@ export function createS2AnthropicChat(
 		url: string,
 		init: RequestInit,
 		external?: AbortSignal,
-	): Promise<S2AnthropicSubscription> => {
+	): Promise<Subscription> => {
 		const controller = linkedAbortController(external);
 		const response = await fetchOk(doFetch, url, {
 			...init,

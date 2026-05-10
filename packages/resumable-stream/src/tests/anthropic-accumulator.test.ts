@@ -2,8 +2,8 @@ import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages
 import { describe, expect, it } from "vitest";
 import {
 	accumulateMessage,
-	createAnthropicAccumulator,
-} from "../anthropic-accumulator.js";
+	createAccumulator,
+} from "../anthropic/accumulator.js";
 
 // Synthetic event traces modelled on the wire format documented at
 // https://platform.claude.com/docs/en/api/messages-streaming. The accumulator
@@ -341,19 +341,19 @@ describe("anthropic accumulator", () => {
 	});
 
 	it("throws if finalMessage is called before message_start", () => {
-		const acc = createAnthropicAccumulator();
+		const acc = createAccumulator();
 		expect(() => acc.finalMessage()).toThrow(/before message_start/);
 	});
 
 	it("throws if finalMessage is called before message_stop", () => {
-		const acc = createAnthropicAccumulator();
+		const acc = createAccumulator();
 		for (const event of textTurn("partial").slice(0, -1)) acc.push(event);
 		expect(acc.isDone()).toBe(false);
 		expect(() => acc.finalMessage()).toThrow(/before message_stop/);
 	});
 
 	it("reset clears state and allows a fresh turn", () => {
-		const acc = createAnthropicAccumulator();
+		const acc = createAccumulator();
 		for (const event of textTurn("first")) acc.push(event);
 		const first = acc.finalMessage();
 		expect(first.id).toBe("msg_001");
@@ -378,7 +378,7 @@ describe("anthropic accumulator", () => {
 	});
 
 	it("ignores content_block_delta events when no message_start has been seen", () => {
-		const acc = createAnthropicAccumulator();
+		const acc = createAccumulator();
 		// Should not throw; should silently skip.
 		acc.push({
 			type: "content_block_delta",
