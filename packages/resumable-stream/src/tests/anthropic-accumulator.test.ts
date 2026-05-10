@@ -172,6 +172,60 @@ describe("anthropic accumulator", () => {
 		expect(message.stop_reason).toBe("tool_use");
 	});
 
+	it("reconstructs server_tool_use input from input_json_delta partials", () => {
+		const events: RawMessageStreamEvent[] = [
+			{
+				type: "message_start",
+				message: {
+					id: "msg_server_tool",
+					type: "message",
+					role: "assistant",
+					model: "claude-opus-4-7",
+					content: [],
+					stop_reason: null,
+					stop_sequence: null,
+					container: null,
+					stop_details: null,
+					usage: baseUsage,
+				},
+			} as unknown as RawMessageStreamEvent,
+			{
+				type: "content_block_start",
+				index: 0,
+				content_block: {
+					type: "server_tool_use",
+					id: "srv_01",
+					name: "web_search",
+					input: {},
+					caller: { type: "model" },
+				},
+			} as unknown as RawMessageStreamEvent,
+			{
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "input_json_delta", partial_json: '{"query":' },
+			} as unknown as RawMessageStreamEvent,
+			{
+				type: "content_block_delta",
+				index: 0,
+				delta: { type: "input_json_delta", partial_json: '"s2 streamstore"}' },
+			} as unknown as RawMessageStreamEvent,
+			{ type: "content_block_stop", index: 0 } as RawMessageStreamEvent,
+			{
+				type: "message_delta",
+				delta: { stop_reason: "end_turn", stop_sequence: null },
+				usage: { output_tokens: 22 },
+			} as unknown as RawMessageStreamEvent,
+			{ type: "message_stop" } as RawMessageStreamEvent,
+		];
+		const message = accumulateMessage(events);
+		const block = message.content[0];
+		expect(block?.type).toBe("server_tool_use");
+		if (block?.type === "server_tool_use") {
+			expect(block.input).toEqual({ query: "s2 streamstore" });
+		}
+	});
+
 	it("reconstructs a thinking block with signature", () => {
 		const events: RawMessageStreamEvent[] = [
 			{

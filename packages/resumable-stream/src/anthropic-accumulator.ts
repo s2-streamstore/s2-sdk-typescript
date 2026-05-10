@@ -19,6 +19,16 @@ import type {
 	Usage,
 } from "@anthropic-ai/sdk/resources/messages";
 
+/**
+ * The set of events Anthropic emits over SSE: `RawMessageStreamEvent` (the
+ * union of message_start / content_block_* / message_delta / message_stop)
+ * plus the wire-level `error` event, which is not a member of
+ * `RawMessageStreamEvent` in the SDK types.
+ */
+export type AnthropicChunk =
+	| RawMessageStreamEvent
+	| { type: "error"; error: { type: string; message: string } };
+
 export interface AnthropicAccumulator {
 	push(event: RawMessageStreamEvent): void;
 	isDone(): boolean;
@@ -33,6 +43,37 @@ export function accumulateMessage(
 	const acc = createAnthropicAccumulator();
 	for (const event of events) acc.push(event);
 	return acc.finalMessage();
+}
+
+const RAW_MESSAGE_EVENT_TYPES = new Set<RawMessageStreamEvent["type"]>([
+	"message_start",
+	"content_block_start",
+	"content_block_delta",
+	"content_block_stop",
+	"message_delta",
+	"message_stop",
+]);
+
+/**
+ * Streaming accumulation: yield one `Message` per turn that ends with
+ * `message_stop`. Non-Anthropic events (e.g. wire-level `error`) are skipped,
+ * so callers can pipe a subscription's mixed event stream straight in.
+ */
+export async function* messagesFromEvents(
+	events: AsyncIterable<{ type: string }>,
+): AsyncIterable<Message> {
+	const acc = createAnthropicAccumulator();
+	for await (const event of events) {
+		if (
+			!RAW_MESSAGE_EVENT_TYPES.has(event.type as RawMessageStreamEvent["type"])
+		)
+			continue;
+		acc.push(event as RawMessageStreamEvent);
+		if (event.type === "message_stop") {
+			yield acc.finalMessage();
+			acc.reset();
+		}
+	}
 }
 
 /**
@@ -71,7 +112,10 @@ export function createAnthropicAccumulator(): AnthropicAccumulator {
 					message.content[event.index] = {
 						...event.content_block,
 					} as ContentBlock;
-					if (event.content_block.type === "tool_use") {
+					if (
+						event.content_block.type === "tool_use" ||
+						event.content_block.type === "server_tool_use"
+					) {
 						toolUseJsonBuffers.set(event.index, "");
 					}
 					return;
@@ -113,7 +157,7 @@ export function createAnthropicAccumulator(): AnthropicAccumulator {
 					const buffer = toolUseJsonBuffers.get(event.index);
 					if (buffer === undefined) return;
 					const block = message.content[event.index];
-					if (block?.type === "tool_use") {
+					if (block?.type === "tool_use" || block?.type === "server_tool_use") {
 						try {
 							block.input = buffer.length > 0 ? JSON.parse(buffer) : {};
 						} catch {

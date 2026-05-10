@@ -23,7 +23,10 @@ import {
 	DEFAULT_ERROR_TEXT,
 	type ResumableChatConfig,
 } from "./adapter.js";
-import { createAnthropicAccumulator } from "./anthropic-accumulator.js";
+import {
+	type AnthropicChunk,
+	createAnthropicAccumulator,
+} from "./anthropic-accumulator.js";
 import { isFenceRecord, isTerminalFence, isTrimRecord } from "./protocol.js";
 import { isMissingStreamError } from "./shared.js";
 
@@ -36,21 +39,11 @@ export type {
 
 export {
 	type AnthropicAccumulator,
+	type AnthropicChunk,
 	accumulateMessage,
 	createAnthropicAccumulator,
+	messagesFromEvents,
 } from "./anthropic-accumulator.js";
-
-/**
- * Anthropic chat chunk: the union of `RawMessageStreamEvent` plus the
- * `error` event that Anthropic emits at the SSE wire level (its `error`
- * event is not a member of `RawMessageStreamEvent`).
- */
-export type AnthropicChunk =
-	| RawMessageStreamEvent
-	| {
-			type: "error";
-			error: { type: string; message: string };
-	  };
 
 export type ResumableChat = Chat<AnthropicChunk> & {
 	/**
@@ -88,6 +81,12 @@ const adapter: ChatAdapter<AnthropicChunk> = {
 	},
 };
 
+/**
+ * `nextSeqNum` is the cursor a client should tail from to see anything not
+ * already in `messages`: the seq right after the most recent terminal fence,
+ * or 0 if no turn has closed yet. A tail from there picks up an in-flight
+ * turn from its opening fence onward (or sits idle until a new turn starts).
+ */
 async function readHistoryMessages(
 	s2: S2,
 	basin: string,
@@ -95,9 +94,6 @@ async function readHistoryMessages(
 ): Promise<{ messages: Message[]; nextSeqNum: number }> {
 	const handle = s2.basin(basin).stream(streamName);
 	try {
-		// Walk all records (including command records). We need the seqNum of
-		// the most recent record so callers can tail from `nextSeqNum` without
-		// re-receiving the events already returned in `messages`.
 		const session = await handle
 			.readSession(
 				{
@@ -115,29 +111,15 @@ async function readHistoryMessages(
 		const messages: Message[] = [];
 		const acc = createAnthropicAccumulator();
 		let active = false;
-		// `nextSeqNum` is the cursor a client should tail from to see anything
-		// not already in `messages`. That means: start of the in-flight turn
-		// if one exists, otherwise the tail of the stream.
-		//
-		// We track it as "seq right after the most recent terminal fence". If
-		// no terminal fence has been seen yet, the in-flight turn (if any)
-		// starts at seq 0, so cursor stays at 0. After every closed turn
-		// (which always ends with a terminal fence), we advance the cursor
-		// past that fence — so a tail from there picks up any subsequent
-		// in-flight turn from its opening fence onward, and any new turn that
-		// starts later.
 		let nextSeqNum = 0;
 
 		try {
 			for await (const record of session) {
 				if (isFenceRecord(record)) {
-					if (isTerminalFence(record)) {
-						nextSeqNum = record.seqNum + 1;
-					}
+					if (isTerminalFence(record)) nextSeqNum = record.seqNum + 1;
 					continue;
 				}
-				if (isTrimRecord(record)) continue;
-				if (!record.body) continue;
+				if (isTrimRecord(record) || !record.body) continue;
 				let event: RawMessageStreamEvent;
 				try {
 					event = JSON.parse(record.body) as RawMessageStreamEvent;

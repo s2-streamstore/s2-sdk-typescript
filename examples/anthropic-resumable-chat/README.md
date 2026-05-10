@@ -4,11 +4,12 @@ A Bun server + vanilla-JS browser client that streams Anthropic SDK chat turns o
 
 ## How it works
 
-One S2 stream per chat, using `mode: "session"`:
+Two S2 streams per chat:
 
-- Each user turn calls `client.messages.stream(...)` and pipes its `RawMessageStreamEvent`s into `chat.makeResumable(...)`. One event per record.
-- Replay (`GET /api/chat/stream?id=...`) tails the active turn from S2 — the browser picks up mid-generation after a refresh.
-- History (`GET /api/chat/history?id=...`) returns prior closed turns as Anthropic `Message[]`, reconstructed via the in-house accumulator.
+- **Live (`mode: "session"`)** — `client.messages.stream(...)` events, one record each, persisted via `chat.makeResumable(...)`. Replay (`GET /api/chat/stream?id=...&from=N`) tails the active turn from a cursor; the browser picks up mid-generation after a refresh.
+- **Users (append-only)** — one record per user message text. The server appends before kicking off Anthropic and reads it on `/api/chat/history` so refreshes show the full conversation.
+
+`GET /api/chat/history?id=...` returns `{ users: string[], messages: Message[], nextSeqNum }`. The browser interleaves users with reconstructed assistants and uses `nextSeqNum` as the replay cursor.
 
 Wire format on both the live response and replay is byte-compatible with what `client.messages.stream(...)` produces, so any SSE parser works (we use `eventsource-parser` in the example).
 
@@ -41,12 +42,3 @@ export ANTHROPIC_API_KEY="..."
 bun run examples/anthropic-resumable-chat/server.ts
 ```
 
-## Note on persisting user messages
-
-This demo only persists the assistant turns (one per `messages.stream` call). When rebuilding the conversation for a new turn, it loads prior assistant `Message`s from `chat.history()` and pairs them with the live user message.
-
-A real app should also persist user messages — either:
-- Append them to a side stream (`s2.basin(b).stream(streamName).append(...)` with a `user-message` header, then filter in your history loader); or
-- Track them client-side and submit the full `messages` array on each POST.
-
-The first approach keeps S2 as the single source of truth; the second matches how most chat UIs already work.

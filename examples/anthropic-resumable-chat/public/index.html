@@ -75,18 +75,6 @@
     let activeAbort = null;
     let nextCursor = 0;
 
-    function userMsgsKey() { return `chat-${chatId}-user-msgs`; }
-    function loadUserMsgs() {
-      try {
-        const raw = localStorage.getItem(userMsgsKey());
-        const arr = raw ? JSON.parse(raw) : [];
-        return Array.isArray(arr) ? arr.filter((s) => typeof s === 'string') : [];
-      } catch { return []; }
-    }
-    function saveUserMsgs(arr) {
-      try { localStorage.setItem(userMsgsKey(), JSON.stringify(arr)); } catch {}
-    }
-
     function isValidChatId(value) {
       return typeof value === 'string' && CHAT_ID_PATTERN.test(value);
     }
@@ -165,10 +153,11 @@
 
     async function loadHistory() {
       const res = await fetch(`${API}/history?id=${encodeURIComponent(chatId)}`);
-      if (!res.ok) return { messages: [], nextSeqNum: 0 };
+      if (!res.ok) return { users: [], messages: [], nextSeqNum: 0 };
       const json = await res.json();
       return {
-        messages: json.messages || [],
+        users: Array.isArray(json.users) ? json.users.filter((s) => typeof s === 'string') : [],
+        messages: Array.isArray(json.messages) ? json.messages : [],
         nextSeqNum: typeof json.nextSeqNum === 'number' ? json.nextSeqNum : 0,
       };
     }
@@ -199,92 +188,75 @@
       }
     }
 
-    async function consumeStream(body, signal) {
-      const bodyEl = appendMessage('assistant', '');
-      bodyEl.classList.add('streaming');
-      let text = '';
-      try {
-        for await (const frame of streamSse(body, signal)) {
-          const event = frame.data;
-          if (!event || typeof event !== 'object') continue;
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-            text += event.delta.text;
-            bodyEl.textContent = text;
-            chatEl.scrollTop = chatEl.scrollHeight;
-          } else if (event.type === 'error') {
-            text += `\n[error: ${event.error?.message || 'unknown'}]`;
-            bodyEl.textContent = text;
-          }
-        }
-      } finally {
-        bodyEl.classList.remove('streaming');
-      }
+    function makeStreamingBubble() {
+      const el = appendMessage('assistant', '');
+      el.classList.add('streaming');
+      return el;
     }
 
-    async function tailFromCursor() {
-      // Subscribe to the session log starting just past whatever history()
-      // already returned. If there's an active turn, its events arrive here;
-      // if not, the tail just sits open until a new turn lands. We bail after
-      // a short idle window so the UI can show "idle" status.
-      setStatus('replaying');
-      const url = `${API}/stream?id=${encodeURIComponent(chatId)}&from=${nextCursor}`;
-      activeAbort = new AbortController();
-      const idleTimer = setTimeout(() => activeAbort?.abort(), 1500);
-      let sawAnyChunk = false;
+    async function renderTurn(frames, { eager = false, idleAbortMs = 0 } = {}) {
+      let bodyEl = eager ? makeStreamingBubble() : null;
+      let text = '';
+      const idleTimer = idleAbortMs > 0
+        ? setTimeout(() => activeAbort?.abort(), idleAbortMs)
+        : null;
       try {
-        const replayRes = await fetch(url, { signal: activeAbort.signal });
-        if (replayRes.status === 204 || !replayRes.body) return false;
-        let bodyEl = null;
-        let text = '';
-        for await (const frame of streamSse(replayRes.body, activeAbort.signal)) {
-          if (!sawAnyChunk) {
-            clearTimeout(idleTimer);
-            sawAnyChunk = true;
-            bodyEl = appendMessage('assistant', '');
-            bodyEl.classList.add('streaming');
+        for await (const frame of frames) {
+          if (!bodyEl) {
+            if (idleTimer) clearTimeout(idleTimer);
+            bodyEl = makeStreamingBubble();
           }
           const event = frame.data;
           if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
             text += event.delta.text;
-            if (bodyEl) bodyEl.textContent = text;
+            bodyEl.textContent = text;
             chatEl.scrollTop = chatEl.scrollHeight;
           } else if (event?.type === 'error') {
             text += `\n[error: ${event.error?.message || 'unknown'}]`;
-            if (bodyEl) bodyEl.textContent = text;
+            bodyEl.textContent = text;
           } else if (event?.type === 'message_stop') {
-            // Turn ended; we've got it. Done tailing.
             break;
           }
         }
-        if (bodyEl) bodyEl.classList.remove('streaming');
-      } catch (err) {
-        // AbortError on idle is expected.
+      } catch {
+        // AbortError on idle is expected; cancellation also lands here.
       } finally {
-        clearTimeout(idleTimer);
-        activeAbort = null;
+        if (idleTimer) clearTimeout(idleTimer);
+        bodyEl?.classList.remove('streaming');
       }
-      setStatus('idle');
-      return sawAnyChunk;
+    }
+
+    async function tailFromCursor() {
+      // Subscribe past whatever history() already returned. If there's an
+      // active turn, its events arrive here; otherwise we idle out fast.
+      setStatus('replaying');
+      activeAbort = new AbortController();
+      try {
+        const res = await fetch(
+          `${API}/stream?id=${encodeURIComponent(chatId)}&from=${nextCursor}`,
+          { signal: activeAbort.signal },
+        );
+        if (res.status === 204 || !res.body) return;
+        await renderTurn(streamSse(res.body, activeAbort.signal), { idleAbortMs: 1500 });
+      } finally {
+        activeAbort = null;
+        setStatus('idle');
+      }
     }
 
     async function loadAndRender() {
       clearChat();
-      const { messages: assistantMsgs, nextSeqNum } = await loadHistory();
+      const { users, messages: assistants, nextSeqNum } = await loadHistory();
       nextCursor = nextSeqNum;
-      const userMsgs = loadUserMsgs();
-      // Interleave: user[i] then assistant[i]. If user.length > assistant.length,
-      // the trailing user is the in-flight turn; tailFromCursor() will pick up
-      // its assistant response if there's an active generation.
-      const turns = Math.max(userMsgs.length, assistantMsgs.length);
+      // user[i] then assistant[i]; if users.length > assistants.length, the
+      // trailing user is an in-flight turn whose response tailFromCursor()
+      // will pick up.
+      const turns = Math.max(users.length, assistants.length);
       for (let i = 0; i < turns; i += 1) {
-        if (i < userMsgs.length) appendMessage('user', userMsgs[i]);
-        if (i < assistantMsgs.length) {
-          appendMessage('assistant', extractText(assistantMsgs[i]));
-        }
+        if (i < users.length) appendMessage('user', users[i]);
+        if (i < assistants.length) appendMessage('assistant', extractText(assistants[i]));
       }
       ensureEmptyState();
-      // Tail anything past the history cursor — picks up a turn that was
-      // mid-flight when the page loaded; idles out fast if there's nothing.
       await tailFromCursor();
     }
 
@@ -293,9 +265,6 @@
       if (!text || sendBtn.disabled) return;
       inputEl.value = '';
       appendMessage('user', text);
-      const userMsgs = loadUserMsgs();
-      userMsgs.push(text);
-      saveUserMsgs(userMsgs);
       setInputEnabled(false);
       setStatus('streaming');
       try {
@@ -309,7 +278,7 @@
           return;
         }
         activeAbort = new AbortController();
-        await consumeStream(res.body, activeAbort.signal);
+        await renderTurn(streamSse(res.body, activeAbort.signal), { eager: true });
       } finally {
         activeAbort = null;
         setStatus('idle');

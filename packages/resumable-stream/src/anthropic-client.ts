@@ -1,260 +1,86 @@
 /**
  * Client-side helpers for consuming a `@s2-dev/resumable-stream/anthropic`
- * server. Mirrors the shape of `./tanstack-ai-client` but tailored to
- * Anthropic-native SSE.
+ * server. The wire format is Anthropic-native SSE; we parse it back into
+ * `RawMessageStreamEvent`s and (optionally) reassemble `Message`s.
  *
- * The wire format is `event: <type>\ndata: <json>\nid: <seq>\n\n`, so we use
- * `EventSourceParserStream` and JSON-decode each `data` payload back into a
- * `RawMessageStreamEvent`. Cursor tracking via the SSE `id:` line lets a
- * subsequent `subscribe()` call continue from the last record seen on a drop.
+ * `subscribe()` and `send()` auto-reconnect: on body drop or transient fetch
+ * failure they reissue a GET against `subscribeUrl` with the latest cursor
+ * (`?from=<seqNum>`) and exponential backoff. The reconnect loop ends on a
+ * terminal event (`message_stop` / `error`), HTTP 204, or external abort.
  */
-import type {
-	Message,
-	RawMessageStreamEvent,
-} from "@anthropic-ai/sdk/resources/messages";
-import { EventSourceParserStream } from "eventsource-parser/stream";
+import type { Message } from "@anthropic-ai/sdk/resources/messages";
+import type { AnthropicChunk } from "./anthropic-accumulator.js";
 import {
-	type AnthropicAccumulator,
-	createAnthropicAccumulator,
-} from "./anthropic-accumulator.js";
+	fetchOk,
+	type HeadersOption,
+	linkedAbortController,
+	pipeSseFrames,
+	resolveCursorUrl,
+	resolveHeaders,
+	resolveUrl,
+} from "./client-utils.js";
 
-/**
- * The Anthropic API also emits `error` events at the SSE wire level; surface
- * them here so consumers can react.
- */
-export type AnthropicWireEvent =
-	| RawMessageStreamEvent
-	| {
-			type: "error";
-			error: { type: string; message: string };
-	  };
+export type { AnthropicChunk } from "./anthropic-accumulator.js";
 
 export interface S2AnthropicChatOptions {
 	/** Endpoint that POSTs the request body and starts a generation. */
 	sendUrl: string | (() => string);
 	/** Endpoint that GETs the SSE replay stream. Reconnect uses `?from=<cursor>`. */
 	subscribeUrl: string | ((cursor?: number) => string);
-	/** Optional: endpoint that returns `{ messages: Message[] }` JSON. */
+	/** Optional: endpoint that returns `{ messages: Message[], nextSeqNum?: number }` JSON. */
 	historyUrl?: string | (() => string);
 	/** Optional: endpoint that stops the active generation (DELETE). */
 	stopUrl?: string | (() => string);
-	/** Custom fetch (testing, custom auth). Defaults to `globalThis.fetch`. */
 	fetch?: typeof fetch;
-	/** Extra headers added to every fetch. May be a (possibly async) factory. */
-	headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
+	headers?: HeadersOption;
 	/** Forwarded to fetch. Defaults to `same-origin`. */
 	credentials?: RequestCredentials;
+	/**
+	 * Backoff schedule (ms) between reconnect attempts. Index `n` is the wait
+	 * before the `n`-th reconnect; the last value is reused after that. The
+	 * counter resets on every received event. Pass `[]` to disable reconnect.
+	 */
+	reconnectBackoffMs?: readonly number[];
 }
 
 export interface S2AnthropicSubscription {
-	/** Async iterator of wire events as they arrive. */
-	events: AsyncIterable<AnthropicWireEvent>;
-	/**
-	 * Resolves with the accumulated `Message` for the next turn that ends in
-	 * `message_stop`. Rejects if the stream ends or errors before then.
-	 */
-	nextMessage(): Promise<Message>;
-	/** Aborts the in-flight subscription. */
+	events: AsyncIterable<AnthropicChunk>;
 	cancel(): void;
 }
 
 export interface S2AnthropicChat {
-	/** POSTs to `sendUrl` and returns a subscription over the response body. */
 	send(
 		body: unknown,
 		opts?: { signal?: AbortSignal },
 	): Promise<S2AnthropicSubscription>;
-	/** GETs the replay endpoint, continuing from the last seen cursor. */
 	subscribe(opts?: { signal?: AbortSignal }): Promise<S2AnthropicSubscription>;
-	/** GETs `historyUrl` and returns `{ messages }`. Returns `[]` if not configured. */
-	loadHistory(): Promise<{ messages: Message[] }>;
-	/** DELETEs `stopUrl`. No-op if not configured. */
+	loadHistory(): Promise<{ messages: Message[]; nextSeqNum?: number }>;
 	stop(): Promise<void>;
 }
 
-async function resolveHeaders(
-	headers: S2AnthropicChatOptions["headers"],
-): Promise<Record<string, string>> {
-	if (!headers) return {};
-	const resolved = typeof headers === "function" ? await headers() : headers;
-	if (resolved instanceof Headers) {
-		return Object.fromEntries(resolved.entries());
-	}
-	if (Array.isArray(resolved)) {
-		return Object.fromEntries(resolved);
-	}
-	return { ...resolved };
+const DEFAULT_BACKOFF_MS = [0, 250, 500, 1000, 2000, 5000] as const;
+
+function isValidCursor(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function resolveUrl(url: string | (() => string)): string {
-	return typeof url === "function" ? url() : url;
+function isTerminal(event: AnthropicChunk): boolean {
+	return event.type === "message_stop" || event.type === "error";
 }
 
-function setUrlSearchParam(url: string, key: string, value: string): string {
-	try {
-		const parsed = new URL(url);
-		parsed.searchParams.set(key, value);
-		return parsed.toString();
-	} catch {
-		// `url` was relative
-	}
-	const hashStart = url.indexOf("#");
-	const base = hashStart === -1 ? url : url.slice(0, hashStart);
-	const hash = hashStart === -1 ? "" : url.slice(hashStart);
-	const queryStart = base.indexOf("?");
-	const pathname = queryStart === -1 ? base : base.slice(0, queryStart);
-	const search = queryStart === -1 ? "" : base.slice(queryStart + 1);
-	const params = new URLSearchParams(search);
-	params.set(key, value);
-	const nextSearch = params.toString();
-	return `${pathname}${nextSearch ? `?${nextSearch}` : ""}${hash}`;
-}
-
-function resolveSubscribeUrl(
-	url: string | ((cursor?: number) => string),
-	cursor: number | undefined,
-): string {
-	if (typeof url === "function") return url(cursor);
-	if (cursor === undefined) return url;
-	return setUrlSearchParam(url, "from", String(cursor));
-}
-
-function decodeBytesToText(): TransformStream<Uint8Array, string> {
-	const decoder = new TextDecoder();
-	return new TransformStream({
-		transform(chunk, controller) {
-			controller.enqueue(decoder.decode(chunk, { stream: true }));
-		},
-		flush(controller) {
-			const tail = decoder.decode();
-			if (tail) controller.enqueue(tail);
-		},
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+	if (ms <= 0) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			resolve();
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener("abort", onAbort, { once: true });
 	});
-}
-
-async function* parseAnthropicSse(
-	body: ReadableStream<Uint8Array>,
-	abortSignal: AbortSignal | undefined,
-	onEventId: (id: string) => void,
-): AsyncGenerator<AnthropicWireEvent> {
-	const events = body
-		.pipeThrough(decodeBytesToText())
-		.pipeThrough(new EventSourceParserStream());
-	const reader = events.getReader();
-	try {
-		while (true) {
-			if (abortSignal?.aborted) return;
-			const { done, value } = await reader.read();
-			if (done) return;
-			if (value?.id) onEventId(value.id);
-			const data = value?.data;
-			if (!data) continue;
-			try {
-				yield JSON.parse(data) as AnthropicWireEvent;
-			} catch {
-				// Skip malformed JSON frames so the stream can continue.
-			}
-		}
-	} finally {
-		reader.releaseLock();
-	}
-}
-
-async function readResponseOrThrow(
-	doFetch: typeof fetch,
-	url: string,
-	init: RequestInit,
-): Promise<Response> {
-	const response = await doFetch(url, init);
-	if (!response.ok && response.status !== 204) {
-		throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
-	}
-	return response;
-}
-
-interface SubscriptionContext {
-	body: ReadableStream<Uint8Array> | null;
-	signal: AbortSignal;
-	updateCursor: (id: string) => void;
-}
-
-function buildSubscription(ctx: SubscriptionContext): S2AnthropicSubscription {
-	const accumulator: AnthropicAccumulator = createAnthropicAccumulator();
-	const messageWaiters: Array<{
-		resolve: (value: Message) => void;
-		reject: (reason?: unknown) => void;
-	}> = [];
-	let streamFailure: unknown;
-	let streamEnded = false;
-
-	const settleAllWaitersWithError = (err: unknown) => {
-		while (messageWaiters.length > 0) {
-			const waiter = messageWaiters.shift();
-			waiter?.reject(err);
-		}
-	};
-
-	const settleStreamEnded = () => {
-		streamEnded = true;
-		while (messageWaiters.length > 0) {
-			const waiter = messageWaiters.shift();
-			waiter?.reject(
-				new Error("[anthropic-client] stream ended before message_stop"),
-			);
-		}
-	};
-
-	async function* eventsIter(): AsyncGenerator<AnthropicWireEvent> {
-		try {
-			if (!ctx.body) {
-				settleStreamEnded();
-				return;
-			}
-			for await (const event of parseAnthropicSse(
-				ctx.body,
-				ctx.signal,
-				ctx.updateCursor,
-			)) {
-				if (event.type !== "error") {
-					accumulator.push(event);
-					if (event.type === "message_stop") {
-						const message = accumulator.finalMessage();
-						accumulator.reset();
-						const waiter = messageWaiters.shift();
-						waiter?.resolve(message);
-					}
-				}
-				yield event;
-			}
-			settleStreamEnded();
-		} catch (err) {
-			streamFailure = err;
-			settleAllWaitersWithError(err);
-			throw err;
-		}
-	}
-
-	// Single-consumer iterable: a generator's `[Symbol.asyncIterator]()` returns
-	// itself, so a second `for await` would see a drained iterator.
-	const events: AsyncIterable<AnthropicWireEvent> = eventsIter();
-
-	return {
-		events,
-		nextMessage(): Promise<Message> {
-			if (streamFailure) return Promise.reject(streamFailure);
-			if (streamEnded) {
-				return Promise.reject(
-					new Error("[anthropic-client] stream ended before message_stop"),
-				);
-			}
-			return new Promise<Message>((resolve, reject) => {
-				messageWaiters.push({ resolve, reject });
-			});
-		},
-		cancel(): void {
-			ctx.body?.cancel().catch(() => {});
-		},
-	};
 }
 
 export function createS2AnthropicChat(
@@ -262,92 +88,155 @@ export function createS2AnthropicChat(
 ): S2AnthropicChat {
 	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const credentials = options.credentials ?? "same-origin";
+	const backoffMs = options.reconnectBackoffMs ?? DEFAULT_BACKOFF_MS;
 
-	let nextCursor: number | undefined;
-	const updateCursor = (id: string) => {
-		if (!/^\d+$/.test(id)) return;
-		const parsed = Number.parseInt(id, 10);
-		if (!Number.isSafeInteger(parsed) || parsed < 0) return;
-		if (nextCursor === undefined || parsed > nextCursor) {
-			nextCursor = parsed;
-		}
+	let cursor: number | undefined;
+	const advanceCursor = (next: number) => {
+		if (cursor === undefined || next > cursor) cursor = next;
 	};
 
-	const send = async (
-		body: unknown,
-		opts?: { signal?: AbortSignal },
-	): Promise<S2AnthropicSubscription> => {
-		const headers = {
-			"Content-Type": "application/json",
-			...(await resolveHeaders(options.headers)),
-		};
-		const signal = opts?.signal ?? new AbortController().signal;
-		const response = await readResponseOrThrow(
-			doFetch,
-			resolveUrl(options.sendUrl),
-			{
-				method: "POST",
-				headers,
-				body: JSON.stringify(body),
-				credentials,
-				signal,
-			},
-		);
-		return buildSubscription({
-			body: response.body ?? null,
-			signal,
-			updateCursor,
-		});
-	};
-
-	const subscribe = async (opts?: {
-		signal?: AbortSignal;
-	}): Promise<S2AnthropicSubscription> => {
-		const headers = await resolveHeaders(options.headers);
-		const signal = opts?.signal ?? new AbortController().signal;
-		const response = await readResponseOrThrow(
-			doFetch,
-			resolveSubscribeUrl(options.subscribeUrl, nextCursor),
-			{
-				method: "GET",
-				headers,
-				credentials,
-				signal,
-			},
-		);
-		// 204 means no active turn; surface a subscription whose iterable ends immediately.
-		if (response.status === 204) {
-			return buildSubscription({ body: null, signal, updateCursor });
-		}
-		return buildSubscription({
-			body: response.body ?? null,
-			signal,
-			updateCursor,
-		});
-	};
-
-	const loadHistory = async (): Promise<{ messages: Message[] }> => {
-		if (!options.historyUrl) return { messages: [] };
-		const headers = await resolveHeaders(options.headers);
-		const response = await readResponseOrThrow(
-			doFetch,
-			resolveUrl(options.historyUrl),
-			{ method: "GET", headers, credentials },
-		);
-		if (response.status === 204) return { messages: [] };
-		const json = (await response.json()) as { messages?: Message[] };
-		return { messages: json.messages ?? [] };
-	};
-
-	const stop = async (): Promise<void> => {
-		if (!options.stopUrl) return;
-		const headers = await resolveHeaders(options.headers);
-		await readResponseOrThrow(doFetch, resolveUrl(options.stopUrl), {
-			method: "DELETE",
-			headers,
+	const reconnectFetch = async (signal: AbortSignal): Promise<Response> =>
+		fetchOk(doFetch, resolveCursorUrl(options.subscribeUrl, cursor), {
+			method: "GET",
+			headers: await resolveHeaders(options.headers),
 			credentials,
+			signal,
 		});
+
+	/**
+	 * Drains a response body, yielding parsed events. Returns whether a
+	 * terminal event was seen — the reconnect loop uses this to decide
+	 * whether to keep going.
+	 */
+	async function* drainBody(
+		body: ReadableStream<Uint8Array>,
+		signal: AbortSignal,
+		onEvent: () => void,
+	): AsyncGenerator<AnthropicChunk, boolean> {
+		for await (const frame of pipeSseFrames(body, signal)) {
+			if (frame.id) {
+				const parsed = Number.parseInt(frame.id, 10);
+				if (isValidCursor(parsed)) advanceCursor(parsed);
+			}
+			if (!frame.data) continue;
+			let event: AnthropicChunk;
+			try {
+				event = JSON.parse(frame.data) as AnthropicChunk;
+			} catch {
+				continue;
+			}
+			onEvent();
+			yield event;
+			if (isTerminal(event)) return true;
+		}
+		return false;
+	}
+
+	function tailWithReconnect(
+		controller: AbortController,
+		initialResponse: Response,
+	): AsyncIterable<AnthropicChunk> {
+		const signal = controller.signal;
+		return (async function* () {
+			let response = initialResponse;
+			let needsFetch = false;
+			let attempt = 0;
+			const resetBackoff = () => {
+				attempt = 0;
+			};
+
+			while (!signal.aborted) {
+				if (needsFetch) {
+					const wait = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 0;
+					attempt += 1;
+					await sleepAbortable(wait, signal);
+					if (signal.aborted) return;
+					try {
+						response = await reconnectFetch(signal);
+						needsFetch = false;
+					} catch {
+						if (signal.aborted) return;
+						continue;
+					}
+				}
+				if (response.status === 204 || !response.body) return;
+				let terminated = false;
+				try {
+					terminated = yield* drainBody(response.body, signal, resetBackoff);
+				} catch {
+					if (signal.aborted) return;
+				}
+				if (terminated || signal.aborted) return;
+				if (backoffMs.length === 0) return;
+				needsFetch = true;
+			}
+		})();
+	}
+
+	const fetchAndTail = async (
+		url: string,
+		init: RequestInit,
+		external?: AbortSignal,
+	): Promise<S2AnthropicSubscription> => {
+		const controller = linkedAbortController(external);
+		const response = await fetchOk(doFetch, url, {
+			...init,
+			credentials,
+			signal: controller.signal,
+		});
+		return {
+			events: tailWithReconnect(controller, response),
+			cancel: () => controller.abort(),
+		};
 	};
 
-	return { send, subscribe, loadHistory, stop };
+	return {
+		async send(body, opts) {
+			return fetchAndTail(
+				resolveUrl(options.sendUrl),
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						...(await resolveHeaders(options.headers)),
+					},
+					body: JSON.stringify(body),
+				},
+				opts?.signal,
+			);
+		},
+		async subscribe(opts) {
+			return fetchAndTail(
+				resolveCursorUrl(options.subscribeUrl, cursor),
+				{ method: "GET", headers: await resolveHeaders(options.headers) },
+				opts?.signal,
+			);
+		},
+		async loadHistory() {
+			if (!options.historyUrl) return { messages: [] };
+			const response = await fetchOk(doFetch, resolveUrl(options.historyUrl), {
+				method: "GET",
+				headers: await resolveHeaders(options.headers),
+				credentials,
+			});
+			if (response.status === 204) return { messages: [] };
+			const json = (await response.json()) as {
+				messages?: Message[];
+				nextSeqNum?: number;
+			};
+			const nextSeqNum = isValidCursor(json.nextSeqNum)
+				? json.nextSeqNum
+				: undefined;
+			if (nextSeqNum !== undefined) advanceCursor(nextSeqNum);
+			return { messages: json.messages ?? [], nextSeqNum };
+		},
+		async stop() {
+			if (!options.stopUrl) return;
+			await fetchOk(doFetch, resolveUrl(options.stopUrl), {
+				method: "DELETE",
+				headers: await resolveHeaders(options.headers),
+				credentials,
+			});
+		},
+	};
 }
