@@ -12,6 +12,7 @@ import {
 	replayActiveGenerationStringRecords,
 	stopSharedGeneration,
 	tailCompactedStringRecords,
+	tailGenerationStringRecords,
 	tailStringRecords,
 } from "../shared.js";
 
@@ -500,6 +501,121 @@ describe("tailStringRecords", () => {
 			{ body: "first", nextSeqNum: 2 },
 			{ body: "second", nextSeqNum: 3 },
 		]);
+	});
+});
+
+describe("tailGenerationStringRecords", () => {
+	const ts = new Date(10_000_000);
+
+	it("yields one generation and closes at its terminal fence", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder-1",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "gen-1-a", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "gen-1-b", timestamp: ts }),
+			readRecord({
+				seqNum: 3,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({
+				seqNum: 4,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 5, body: "gen-2-a", timestamp: ts }),
+		]);
+
+		const records = await drainAsyncIterable(
+			tailGenerationStringRecords(handle as any, 1),
+		);
+		expect(records).toEqual([
+			{ body: "gen-1-a", nextSeqNum: 2 },
+			{ body: "gen-1-b", nextSeqNum: 3 },
+		]);
+	});
+
+	it("includes an error chunk before the terminal error fence", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "partial", timestamp: ts }),
+			readRecord({ seqNum: 2, body: "error", timestamp: ts }),
+			readRecord({
+				seqNum: 3,
+				body: "error-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const records = await drainAsyncIterable(
+			tailGenerationStringRecords(handle as any, 1),
+		);
+		expect(records.map((record) => record.body)).toEqual(["partial", "error"]);
+	});
+
+	it("stops at a takeover fence before streaming a later generation", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder-1",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "gen-1-a", timestamp: ts }),
+			readRecord({
+				seqNum: 2,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 3, body: "gen-2-a", timestamp: ts }),
+			readRecord({
+				seqNum: 4,
+				body: "end-BBBB",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const records = await drainAsyncIterable(
+			tailGenerationStringRecords(handle as any, 1),
+		);
+		expect(records.map((record) => record.body)).toEqual(["gen-1-a"]);
+	});
+
+	it("stops at a takeover fence even when no data was written", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder-1",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({
+				seqNum: 1,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 2, body: "gen-2-a", timestamp: ts }),
+		]);
+
+		const records = await drainAsyncIterable(
+			tailGenerationStringRecords(handle as any, 1),
+		);
+		expect(records).toEqual([]);
 	});
 });
 

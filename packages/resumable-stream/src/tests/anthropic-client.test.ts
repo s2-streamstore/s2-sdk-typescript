@@ -1,7 +1,6 @@
 import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { describe, expect, it } from "vitest";
-import { messagesFromEvents } from "../anthropic/accumulator.js";
-import { createChatClient } from "../anthropic/client.js";
+import { createChatClient, messagesFromEvents } from "../anthropic/client.js";
 
 const baseUsage = {
 	input_tokens: 5,
@@ -68,11 +67,11 @@ function textTurnEvents(id: string, text: string): RawMessageStreamEvent[] {
 	];
 }
 
-function frameBytes(event: RawMessageStreamEvent, id: number): string {
+function frameBytes(event: { type: string }, id: number): string {
 	return `event: ${event.type}\nid: ${id}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
-function sseResponse(events: RawMessageStreamEvent[]): Response {
+function sseResponse(events: { type: string }[]): Response {
 	const encoder = new TextEncoder();
 	const body = new ReadableStream<Uint8Array>({
 		start(controller) {
@@ -115,7 +114,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 describe("createChatClient", () => {
 	it("uses history nextSeqNum as the next replay cursor", async () => {
 		const { fetch, calls } = recordingFetch([
-			Response.json({ messages: [], nextSeqNum: 42 }),
+			Response.json({ users: ["hello"], messages: [], nextSeqNum: 42 }),
 			new Response(null, { status: 204 }),
 		]);
 		const chat = createChatClient({
@@ -129,8 +128,54 @@ describe("createChatClient", () => {
 		await chat.subscribe();
 
 		expect(history.nextSeqNum).toBe(42);
+		expect(history.users).toEqual(["hello"]);
 		expect(calls[0]!.url).toBe("/history");
 		expect(calls[1]!.url).toBe("/stream?from=42");
+	});
+
+	it("send reads from subscribeUrl when POST returns 202", async () => {
+		const { fetch, calls } = recordingFetch([
+			new Response(null, { status: 202 }),
+			sseResponse([
+				{ type: "user_message", message: "hello" },
+				...textTurnEvents("msg_1", "hi"),
+			]),
+		]);
+		const chat = createChatClient({
+			sendUrl: "/send",
+			subscribeUrl: "/stream",
+			fetch,
+		});
+
+		const subscription = await chat.send({ message: "hello" });
+		const events = [];
+		for await (const event of subscription.events) {
+			events.push(event);
+		}
+
+		expect(calls[0]!.url).toBe("/send");
+		expect(calls[1]!.url).toBe("/stream");
+		expect(events[0]).toEqual({ type: "user_message", message: "hello" });
+		expect(events.at(-1)?.type).toBe("message_stop");
+		expect((calls[1]!.init.signal as AbortSignal).aborted).toBe(true);
+	});
+
+	it("closes a subscription fetch after a terminal event", async () => {
+		const { fetch, calls } = recordingFetch([
+			sseResponse(textTurnEvents("msg_1", "done")),
+		]);
+		const chat = createChatClient({
+			sendUrl: "/send",
+			subscribeUrl: "/stream",
+			fetch,
+		});
+
+		const subscription = await chat.subscribe();
+		const events = [];
+		for await (const event of subscription.events) events.push(event);
+
+		expect(events.at(-1)?.type).toBe("message_stop");
+		expect((calls[0]!.init.signal as AbortSignal).aborted).toBe(true);
 	});
 
 	it("messagesFromEvents pipes a subscription into reconstructed Messages", async () => {

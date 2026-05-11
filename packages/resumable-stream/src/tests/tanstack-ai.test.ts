@@ -22,12 +22,22 @@ function makeAck(start: number, end: number): AppendAck {
 
 class FakeAppendSession {
 	readonly records: AppendRecordType[] = [];
+	readonly readRecords: ReadRecord<"string">[] = [];
 	closeCount = 0;
 	private seqNum = 0;
+
+	setNextSeqNum(seqNum: number): void {
+		this.seqNum = seqNum;
+	}
 
 	async submit(input: AppendInput): Promise<SubmitTicket> {
 		this.records.push(...input.records);
 		const ack = makeAck(this.seqNum, this.seqNum + input.records.length);
+		this.readRecords.push(
+			...input.records.map((record, index) =>
+				appendRecordToReadRecord(ack.start.seqNum + index, record),
+			),
+		);
 		this.seqNum = ack.end.seqNum;
 		return {
 			ack: async () => ack,
@@ -50,6 +60,7 @@ interface FakeStreamOptions {
 class FakeStream {
 	readonly session = new FakeAppendSession();
 	readonly directAppends: AppendInput[] = [];
+	readonly directReadRecords: ReadRecord<"string">[] = [];
 	closeCount = 0;
 	private nextSeqOnAppend: number;
 	readSessionCount = 0;
@@ -59,6 +70,7 @@ class FakeStream {
 	}
 
 	async appendSession() {
+		this.session.setNextSeqNum(this.nextSeqOnAppend);
 		return this.session;
 	}
 
@@ -74,6 +86,11 @@ class FakeStream {
 		this.directAppends.push(input);
 		const start = this.nextSeqOnAppend;
 		this.nextSeqOnAppend += input.records.length;
+		this.directReadRecords.push(
+			...input.records.map((record, index) =>
+				appendRecordToReadRecord(start + index, record),
+			),
+		);
 		return makeAck(start, this.nextSeqOnAppend);
 	}
 
@@ -95,14 +112,34 @@ class FakeStream {
 		};
 	}
 
-	async readSession(input?: { start?: { from?: { seqNum?: number } } }) {
+	async readSession(input?: {
+		start?: { from?: { seqNum?: number } };
+		stop?: { waitSecs?: number };
+	}) {
 		this.readSessionCount += 1;
-		const records = this.currentRecords();
+		const stream = this;
 		const fromSeqNum = input?.start?.from?.seqNum ?? 0;
+		const snapshot = input?.stop?.waitSecs === 0;
 		return {
 			[Symbol.asyncIterator]: async function* () {
-				for (const record of records) {
-					if (record.seqNum >= fromSeqNum) yield record;
+				let nextSeqNum = fromSeqNum;
+				let idlePolls = 0;
+				while (true) {
+					const records = stream
+						.currentRecords()
+						.filter((record) => record.seqNum >= nextSeqNum);
+					if (records.length > 0) {
+						for (const record of records) {
+							yield record;
+							nextSeqNum = record.seqNum + 1;
+						}
+						idlePolls = 0;
+						continue;
+					}
+					if (snapshot || stream.session.closeCount > 0) return;
+					idlePolls += 1;
+					if (idlePolls > 100) return;
+					await new Promise((resolve) => setTimeout(resolve, 0));
 				}
 			},
 		};
@@ -115,10 +152,12 @@ class FakeStream {
 	private currentRecords(): ReadRecord<"string">[] {
 		return [
 			...(this.options.readRecords ?? []),
+			...this.directReadRecords,
+			...this.session.readRecords,
 			...(this.directAppends.length > 0
 				? (this.options.readRecordsAfterClaim ?? [])
 				: []),
-		];
+		].sort((a, b) => a.seqNum - b.seqNum);
 	}
 }
 
@@ -170,6 +209,18 @@ function recordBody(record: AppendRecordType): string {
 	return typeof record.body === "string"
 		? record.body
 		: new TextDecoder().decode(record.body);
+}
+
+function appendRecordToReadRecord(
+	seqNum: number,
+	record: AppendRecordType,
+): ReadRecord<"string"> {
+	return {
+		seqNum,
+		body: recordBody(record),
+		headers: record.headers ?? [],
+		timestamp: new Date(0),
+	};
 }
 
 function messageText(message: {

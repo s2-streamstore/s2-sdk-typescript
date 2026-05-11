@@ -7,16 +7,16 @@ A Bun server + vanilla-JS browser client that streams AI SDK chat turns over SSE
 Two S2 streams per chat:
 
 1. A **transcript stream** holds completed `user` / `assistant` messages.
-2. A **live token stream** holds the in-flight `UIMessageChunk`s for the current assistant turn. `chat.makeResumable(...)` tees this stream: one branch goes back to the client as SSE, the other is persisted to S2 via `waitUntil`.
+2. A **live token stream** holds the in-flight `UIMessageChunk`s for the current assistant turn. `chat.makeResumable(...)` writes chunks to S2 and streams the response by reading those records.
 
 Request flow:
 
 1. **Browser** loads `GET /api/chat/history?id=...` on startup and renders the completed transcript.
 2. **Browser** sends a new user message via `POST /api/chat`.
 3. **Server** appends the user message to the transcript stream, calls `streamText()`, passes the chunk stream to `chat.makeResumable(liveStreamName, stream)`.
-4. **Server** returns the response immediately as an SSE body. The browser streams and renders chunks live; in parallel the server writes the same chunks to S2.
+4. **Server** returns a streaming response read from S2 records. The browser renders chunks live.
 5. When the assistant finishes, the server appends the completed assistant message to the transcript stream.
-6. **Refresh mid-generation?** The browser calls `GET /api/chat/stream?id=...`, and the server replays the active generation from S2 (tails the live chunks until the terminal fence).
+6. **Refresh mid-generation?** The browser calls `GET /api/chat/stream?id=...`, and the server replays the active generation from S2 until it ends.
 
 ## Run with s2-lite (local)
 

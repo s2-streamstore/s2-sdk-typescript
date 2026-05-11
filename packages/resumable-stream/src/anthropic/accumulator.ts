@@ -1,16 +1,3 @@
-/**
- * Walks `RawMessageStreamEvent`s and rebuilds the final `Message`.
- *
- * The `@anthropic-ai/sdk` SDK accumulates messages internally inside its
- * `MessageStream` class, but the accumulator is private and only callable via
- * `MessageStream.fromReadableStream` (which expects the SDK's own framing —
- * not the standard SSE wire format we store). So we re-implement the small
- * deterministic walker here. Reused on both server (`history()`) and client
- * (`subscribe()`).
- *
- * Source of truth for the state machine:
- *   https://platform.claude.com/docs/en/api/messages-streaming
- */
 import type {
 	ContentBlock,
 	Message,
@@ -19,14 +6,9 @@ import type {
 	Usage,
 } from "@anthropic-ai/sdk/resources/messages";
 
-/**
- * Anthropic SSE chunk type: `RawMessageStreamEvent` (the union of
- * message_start / content_block_* / message_delta / message_stop) plus the
- * wire-level `error` event the API can emit, which the SDK doesn't include
- * in `RawMessageStreamEvent`.
- */
 export type Chunk =
 	| RawMessageStreamEvent
+	| { type: "user_message"; message: string }
 	| { type: "error"; error: { type: string; message: string } };
 
 export interface Accumulator {
@@ -36,7 +18,6 @@ export interface Accumulator {
 	reset(): void;
 }
 
-/** One-shot accumulation: feed a turn's events, get the final `Message`. */
 export function accumulateMessage(
 	events: Iterable<RawMessageStreamEvent>,
 ): Message {
@@ -54,12 +35,6 @@ const RAW_MESSAGE_EVENT_TYPES = new Set<RawMessageStreamEvent["type"]>([
 	"message_stop",
 ]);
 
-/**
- * Streaming accumulation: yield one `Message` per turn that ends with
- * `message_stop`. Events outside the `RawMessageStreamEvent` union (e.g.
- * wire-level `error` events) are skipped, so callers can pipe a subscription's
- * mixed event stream straight in.
- */
 export async function* messagesFromEvents(
 	events: AsyncIterable<{ type: string }>,
 ): AsyncIterable<Message> {
@@ -77,12 +52,6 @@ export async function* messagesFromEvents(
 	}
 }
 
-/**
- * Merge a `MessageDeltaUsage` (which can carry nullable fields) into an
- * existing `Usage`, dropping nulls so the message's `Usage` invariants
- * survive. Cast is sound because the only fields we copy from `delta` are
- * non-null and match `Usage`'s shape, but TS can't see that.
- */
 function mergeDeltaUsage(base: Usage, delta: MessageDeltaUsage): Usage {
 	const result: Record<string, unknown> = { ...base };
 	for (const [key, value] of Object.entries(delta)) {
@@ -91,7 +60,15 @@ function mergeDeltaUsage(base: Usage, delta: MessageDeltaUsage): Usage {
 	return result as unknown as Usage;
 }
 
-/** Stateful accumulator. `finalMessage()` is only valid after `message_stop`. */
+function parseToolInput(buffer: string): unknown {
+	if (buffer.length === 0) return {};
+	try {
+		return JSON.parse(buffer);
+	} catch {
+		return undefined;
+	}
+}
+
 export function createAccumulator(): Accumulator {
 	let message: Message | undefined;
 	const toolUseJsonBuffers = new Map<number, string>();
@@ -101,7 +78,6 @@ export function createAccumulator(): Accumulator {
 		push(event: RawMessageStreamEvent): void {
 			switch (event.type) {
 				case "message_start": {
-					// Clone so we don't mutate the caller's event payload.
 					message = {
 						...event.message,
 						content: [],
@@ -161,13 +137,8 @@ export function createAccumulator(): Accumulator {
 					if (buffer === undefined) return;
 					const block = message.content[event.index];
 					if (block?.type === "tool_use" || block?.type === "server_tool_use") {
-						try {
-							block.input = buffer.length > 0 ? JSON.parse(buffer) : {};
-						} catch {
-							// Leave block.input as whatever the SDK initialized it to
-							// (typically `{}`); a malformed partial_json stream is a
-							// real bug in the source, not something to recover from.
-						}
+						const input = parseToolInput(buffer);
+						if (input !== undefined) block.input = input;
 					}
 					toolUseJsonBuffers.delete(event.index);
 					return;
@@ -193,8 +164,6 @@ export function createAccumulator(): Accumulator {
 						message.stop_details = event.delta.stop_details;
 					}
 					if (event.usage) {
-						// `MessageDeltaUsage` carries cumulative output_tokens; merge
-						// rather than replace so input_tokens from message_start survive.
 						message.usage = mergeDeltaUsage(message.usage, event.usage);
 					}
 					return;

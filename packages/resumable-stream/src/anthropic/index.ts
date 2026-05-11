@@ -1,15 +1,15 @@
 /**
  * Server-side helpers for making Anthropic SDK streams resumable in S2.
  *
- * Wire format on both the live response and replay is Anthropic-native SSE:
+ * Assistant events use Anthropic-native SSE:
  *
  *   event: <event_type>
  *   data: <json>
  *   id: <seq>
  *
- * which is what `client.messages.stream(...)` produces, so a vanilla SSE
- * parser sees the same bytes regardless of whether the source is a fresh
- * Anthropic API call or our replay endpoint.
+ * which is what `client.messages.stream(...)` produces. Apps can also store
+ * `{ type: "user_message", message }` records in the same session stream so
+ * history has both sides of the chat.
  */
 import type {
 	Message,
@@ -44,8 +44,8 @@ export {
 
 export type ResumableChat = Chat<Chunk> & {
 	/**
-	 * One-shot snapshot of closed turns as `Message[]`, in turn order.
-	 * Excludes any in-flight turn that hasn't yet emitted `message_stop`.
+	 * One-shot snapshot of user messages and closed assistant turns.
+	 * Excludes any assistant turn that hasn't yet emitted `message_stop`.
 	 */
 	history(streamName: string): Promise<Response>;
 };
@@ -78,17 +78,30 @@ const adapter: ChatAdapter<Chunk> = {
 	},
 };
 
+const RAW_MESSAGE_EVENT_TYPES = new Set<RawMessageStreamEvent["type"]>([
+	"message_start",
+	"content_block_start",
+	"content_block_delta",
+	"content_block_stop",
+	"message_delta",
+	"message_stop",
+]);
+
+function isMessageEvent(event: Chunk): event is RawMessageStreamEvent {
+	return RAW_MESSAGE_EVENT_TYPES.has(
+		event.type as RawMessageStreamEvent["type"],
+	);
+}
+
 /**
  * `nextSeqNum` is the cursor a client should tail from to see anything not
- * already in `messages`: the seq right after the most recent terminal fence,
- * or 0 if no turn has closed yet. A tail from there picks up an in-flight
- * turn from its opening fence onward (or sits idle until a new turn starts).
+ * already returned in history.
  */
 async function readHistoryMessages(
 	s2: S2,
 	basin: string,
 	streamName: string,
-): Promise<{ messages: Message[]; nextSeqNum: number }> {
+): Promise<{ users: string[]; messages: Message[]; nextSeqNum: number }> {
 	const handle = s2.basin(basin).stream(streamName);
 	try {
 		const session = await handle
@@ -103,8 +116,9 @@ async function readHistoryMessages(
 				if (isMissingStreamError(error)) return null;
 				throw error;
 			});
-		if (!session) return { messages: [], nextSeqNum: 0 };
+		if (!session) return { users: [], messages: [], nextSeqNum: 0 };
 
+		const users: string[] = [];
 		const messages: Message[] = [];
 		const acc = createAccumulator();
 		let active = false;
@@ -117,12 +131,21 @@ async function readHistoryMessages(
 					continue;
 				}
 				if (isTrimRecord(record) || !record.body) continue;
-				let event: RawMessageStreamEvent;
+				let event: Chunk;
 				try {
-					event = JSON.parse(record.body) as RawMessageStreamEvent;
+					event = JSON.parse(record.body) as Chunk;
 				} catch {
 					continue;
 				}
+				if (
+					event.type === "user_message" &&
+					typeof event.message === "string"
+				) {
+					users.push(event.message);
+					nextSeqNum = record.seqNum + 1;
+					continue;
+				}
+				if (!isMessageEvent(event)) continue;
 				if (event.type === "message_start") {
 					acc.reset();
 					acc.push(event);
@@ -135,13 +158,14 @@ async function readHistoryMessages(
 					messages.push(acc.finalMessage());
 					acc.reset();
 					active = false;
+					nextSeqNum = record.seqNum + 1;
 				}
 			}
 		} finally {
 			await session[Symbol.asyncDispose]?.();
 		}
 
-		return { messages, nextSeqNum };
+		return { users, messages, nextSeqNum };
 	} finally {
 		await handle.close();
 	}
@@ -162,13 +186,13 @@ export function createResumableChat(
 	return {
 		...base,
 		async history(streamName: string): Promise<Response> {
-			const { messages, nextSeqNum } = await readHistoryMessages(
+			const { users, messages, nextSeqNum } = await readHistoryMessages(
 				s2,
 				config.basin,
 				streamName,
 			);
 			return Response.json(
-				{ messages, nextSeqNum },
+				{ users, messages, nextSeqNum },
 				{ headers: { "Cache-Control": "no-store" } },
 			);
 		},

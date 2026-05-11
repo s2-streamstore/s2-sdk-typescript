@@ -1,7 +1,7 @@
 /**
  * Client-side helpers for consuming a `@s2-dev/resumable-stream/anthropic`
- * server. The wire format is Anthropic-native SSE; we parse it back into
- * `RawMessageStreamEvent`s and (optionally) reassemble `Message`s.
+ * server. Assistant events use Anthropic SSE; optional `user_message` events
+ * carry submitted user text.
  *
  * `subscribe()` and `send()` auto-reconnect: on body drop or transient fetch
  * failure they reissue a GET against `subscribeUrl` with the latest cursor
@@ -21,13 +21,14 @@ import {
 import type { Chunk } from "./accumulator.js";
 
 export type { Chunk } from "./accumulator.js";
+export { messagesFromEvents } from "./accumulator.js";
 
 export interface ChatClientOptions {
 	/** Endpoint that POSTs the request body and starts a generation. */
 	sendUrl: string | (() => string);
 	/** Endpoint that GETs the SSE replay stream. Reconnect uses `?from=<cursor>`. */
 	subscribeUrl: string | ((cursor?: number) => string);
-	/** Optional: endpoint that returns `{ messages: Message[], nextSeqNum?: number }` JSON. */
+	/** Optional: endpoint that returns `{ users, messages, nextSeqNum }` JSON. */
 	historyUrl?: string | (() => string);
 	/** Optional: endpoint that stops the active generation (DELETE). */
 	stopUrl?: string | (() => string);
@@ -51,7 +52,11 @@ export interface Subscription {
 export interface ChatClient {
 	send(body: unknown, opts?: { signal?: AbortSignal }): Promise<Subscription>;
 	subscribe(opts?: { signal?: AbortSignal }): Promise<Subscription>;
-	loadHistory(): Promise<{ messages: Message[]; nextSeqNum?: number }>;
+	loadHistory(): Promise<{
+		users: string[];
+		messages: Message[];
+		nextSeqNum?: number;
+	}>;
 	stop(): Promise<void>;
 }
 
@@ -76,6 +81,10 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 		const timer = setTimeout(finish, ms);
 		signal.addEventListener("abort", finish, { once: true });
 	});
+}
+
+async function closeResponse(response: Response): Promise<void> {
+	await response.body?.cancel().catch(() => {});
 }
 
 export function createChatClient(options: ChatClientOptions): ChatClient {
@@ -159,7 +168,12 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 				} catch {
 					if (signal.aborted) return;
 				}
-				if (terminated || signal.aborted) return;
+				if (terminated) {
+					controller.abort();
+					await closeResponse(response);
+					return;
+				}
+				if (signal.aborted) return;
 				if (backoffMs.length === 0) return;
 				needsFetch = true;
 			}
@@ -170,13 +184,17 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 		url: string,
 		init: RequestInit,
 		external?: AbortSignal,
+		onEmptyResponse?: (signal: AbortSignal) => Promise<Response>,
 	): Promise<Subscription> => {
 		const controller = linkedAbortController(external);
-		const response = await fetchOk(doFetch, url, {
+		let response = await fetchOk(doFetch, url, {
 			...init,
 			credentials,
 			signal: controller.signal,
 		});
+		if ((response.status === 202 || !response.body) && onEmptyResponse) {
+			response = await onEmptyResponse(controller.signal);
+		}
 		return {
 			events: tailWithReconnect(controller, response),
 			cancel: () => controller.abort(),
@@ -196,6 +214,7 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 					body: JSON.stringify(body),
 				},
 				opts?.signal,
+				reconnectFetch,
 			);
 		},
 		async subscribe(opts) {
@@ -206,14 +225,15 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 			);
 		},
 		async loadHistory() {
-			if (!options.historyUrl) return { messages: [] };
+			if (!options.historyUrl) return { users: [], messages: [] };
 			const response = await fetchOk(doFetch, resolveUrl(options.historyUrl), {
 				method: "GET",
 				headers: await resolveHeaders(options.headers),
 				credentials,
 			});
-			if (response.status === 204) return { messages: [] };
+			if (response.status === 204) return { users: [], messages: [] };
 			const json = (await response.json()) as {
+				users?: string[];
 				messages?: Message[];
 				nextSeqNum?: number;
 			};
@@ -221,7 +241,11 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 				? json.nextSeqNum
 				: undefined;
 			if (nextSeqNum !== undefined) advanceCursor(nextSeqNum);
-			return { messages: json.messages ?? [], nextSeqNum };
+			return {
+				users: json.users?.filter((user) => typeof user === "string") ?? [],
+				messages: json.messages ?? [],
+				nextSeqNum,
+			};
 		},
 		async stop() {
 			if (!options.stopUrl) return;

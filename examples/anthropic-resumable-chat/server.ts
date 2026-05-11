@@ -1,25 +1,20 @@
 #!/usr/bin/env bun
 /**
- * Resumable Anthropic chat. Each chatId maps to two S2 streams:
+ * Resumable Anthropic chat. Each chatId maps to one S2 stream:
  *
- * - `${LIVE_PREFIX}-${chatId}`: the durable session log of Anthropic events
- *   (`mode: "session"`); the codec persists it. Replay tails the active turn.
- * - `${USERS_PREFIX}-${chatId}`: an append-only log of user-message text,
- *   one record per turn. Lets us rebuild the full conversation on reload.
+ * - `${LIVE_PREFIX}-${chatId}`: user messages plus Anthropic events.
+ *   Replay reads the same records the live UI reads.
  */
 
 import { dirname, join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import { AppendInput, AppendRecord, S2 } from "@s2-dev/streamstore";
 import { createResumableChat } from "@s2-dev/resumable-stream/anthropic";
 
 const PORT = Number.parseInt(process.env.PORT || "3458", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");
 const LIVE_PREFIX =
 	process.env.S2_CHAT_LIVE_PREFIX || "anthropic-resumable-chat";
-const USERS_PREFIX =
-	process.env.S2_CHAT_USERS_PREFIX || "anthropic-resumable-chat-users";
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
 const MAX_TOKENS = Number.parseInt(process.env.ANTHROPIC_MAX_TOKENS || "1024", 10);
@@ -44,12 +39,9 @@ const chat = createResumableChat({
 	endpoints,
 	mode: "session",
 });
-const s2 = new S2({ accessToken, endpoints });
-const basinClient = s2.basin(basin);
 const anthropic = new Anthropic({ apiKey: anthropicKey });
 
 const liveStreamName = (chatId: string) => `${LIVE_PREFIX}-${chatId}`;
-const usersStreamName = (chatId: string) => `${USERS_PREFIX}-${chatId}`;
 
 const isValidChatId = (value: unknown): value is string =>
 	typeof value === "string" && CHAT_ID_PATTERN.test(value);
@@ -62,44 +54,14 @@ interface ChatPostBody {
 	message?: string;
 }
 
-async function readUserMessages(chatId: string): Promise<string[]> {
-	const stream = basinClient.stream(usersStreamName(chatId));
-	try {
-		const session = await stream
-			.readSession(
-				{ start: { from: { seqNum: 0 }, clamp: true }, stop: { waitSecs: 0 } },
-				{ as: "string" },
-			)
-			.catch(() => null);
-		if (!session) return [];
-		const out: string[] = [];
-		try {
-			for await (const record of session) {
-				if (record.body) out.push(record.body);
-			}
-		} finally {
-			await session[Symbol.asyncDispose]?.();
-		}
-		return out;
-	} finally {
-		await stream.close();
-	}
-}
-
-async function appendUserMessage(chatId: string, text: string): Promise<void> {
-	const stream = basinClient.stream(usersStreamName(chatId));
-	try {
-		await stream.append(AppendInput.create([AppendRecord.string({ body: text })]));
-	} finally {
-		await stream.close();
-	}
-}
-
-async function readAssistantMessages(
-	chatId: string,
-): Promise<{ messages: Anthropic.Message[]; nextSeqNum?: number }> {
+async function readHistory(chatId: string): Promise<{
+	users: string[];
+	messages: Anthropic.Message[];
+	nextSeqNum?: number;
+}> {
 	const res = await chat.history(liveStreamName(chatId));
 	return (await res.json()) as {
+		users: string[];
 		messages: Anthropic.Message[];
 		nextSeqNum?: number;
 	};
@@ -129,24 +91,26 @@ async function handleChat(req: Request): Promise<Response> {
 			{ status: 400 },
 		);
 	}
+	const chatId = body.id;
+	const message = body.message;
 
-	const [users, { messages: assistants }] = await Promise.all([
-		readUserMessages(body.id),
-		readAssistantMessages(body.id),
-	]);
-	await appendUserMessage(body.id, body.message);
+	const { users, messages: assistants } = await readHistory(chatId);
 	const messages: MessageParam[] = [
 		...interleaveForModel(users, assistants),
-		{ role: "user", content: body.message },
+		{ role: "user", content: message },
 	];
 
-	const stream = anthropic.messages.stream({
-		model: MODEL,
-		max_tokens: MAX_TOKENS,
-		messages,
-	});
+	const source = (async function* () {
+		yield { type: "user_message", message } as const;
+		yield* anthropic.messages.stream({
+			model: MODEL,
+			max_tokens: MAX_TOKENS,
+			messages,
+		});
+	})();
 
-	return chat.makeResumable(liveStreamName(body.id), stream, {
+	return chat.makeResumable(liveStreamName(chatId), source, {
+		delivery: "replay",
 		waitUntil: (promise) =>
 			promise.catch((err) => {
 				console.error("[example] makeResumable failed:", err);
@@ -165,12 +129,8 @@ async function handleReplay(
 }
 
 async function handleHistory(chatId: string): Promise<Response> {
-	const [users, { messages, nextSeqNum }] = await Promise.all([
-		readUserMessages(chatId),
-		readAssistantMessages(chatId),
-	]);
 	return Response.json(
-		{ users, messages, nextSeqNum },
+		await readHistory(chatId),
 		{ headers: { "Cache-Control": "no-store" } },
 	);
 }

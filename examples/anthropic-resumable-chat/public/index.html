@@ -50,7 +50,7 @@
   </div>
 
   <div class="chat" id="chat">
-    <div class="info">Send a message. Try <kbd>F5</kbd> mid-generation. The active turn replays from S2; prior turns reload from <code>history()</code>.</div>
+    <div class="info">Send a message. Refresh while it answers; it resumes from S2.</div>
   </div>
 
   <div class="input-row">
@@ -63,7 +63,7 @@
 
     const API = '/api/chat';
     const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
-    const EMPTY_STATE_HTML = '<div class="info">Send a message. Try <kbd>F5</kbd> mid-generation. The active turn replays from S2; prior turns reload from <code>history()</code>.</div>';
+    const EMPTY_STATE_HTML = '<div class="info">Send a message. Refresh while it answers; it resumes from S2.</div>';
 
     const chatEl = document.getElementById('chat');
     const inputEl = document.getElementById('input');
@@ -109,6 +109,23 @@
     function setInputEnabled(enabled) {
       inputEl.disabled = !enabled;
       sendBtn.disabled = !enabled;
+    }
+
+    function abortActiveStream() {
+      activeAbort?.abort();
+      activeAbort = null;
+    }
+
+    function startActiveStream() {
+      abortActiveStream();
+      activeAbort = new AbortController();
+      return activeAbort;
+    }
+
+    function finishActiveStream(controller) {
+      if (activeAbort === controller) {
+        activeAbort = null;
+      }
     }
 
     function clearChat() {
@@ -194,77 +211,88 @@
       return el;
     }
 
-    async function renderTurn(frames, { eager = false, idleAbortMs = 0 } = {}) {
+    async function renderTurn(frames, { eager = false, idleAbortMs = 0, controller = null } = {}) {
       let bodyEl = eager ? makeStreamingBubble() : null;
       let text = '';
-      const idleTimer = idleAbortMs > 0
-        ? setTimeout(() => activeAbort?.abort(), idleAbortMs)
+      const idleTimer = idleAbortMs > 0 && controller
+        ? setTimeout(() => controller.abort(), idleAbortMs)
         : null;
       try {
         for await (const frame of frames) {
-          if (!bodyEl) {
-            if (idleTimer) clearTimeout(idleTimer);
-            bodyEl = makeStreamingBubble();
-          }
+          if (idleTimer) clearTimeout(idleTimer);
           const event = frame.data;
-          if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          if (event?.type === 'user_message' && typeof event.message === 'string') {
+            appendMessage('user', event.message);
+          } else if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
             text += event.delta.text;
+            if (!bodyEl) bodyEl = makeStreamingBubble();
             bodyEl.textContent = text;
             chatEl.scrollTop = chatEl.scrollHeight;
           } else if (event?.type === 'error') {
             text += `\n[error: ${event.error?.message || 'unknown'}]`;
+            if (!bodyEl) bodyEl = makeStreamingBubble();
             bodyEl.textContent = text;
+            controller?.abort();
+            break;
           } else if (event?.type === 'message_stop') {
+            controller?.abort();
             break;
           }
         }
-      } catch {
-        // AbortError on idle is expected; cancellation also lands here.
+      } catch (err) {
+        if (!controller?.signal.aborted) throw err;
       } finally {
         if (idleTimer) clearTimeout(idleTimer);
         bodyEl?.classList.remove('streaming');
       }
     }
 
-    async function tailFromCursor() {
-      // Subscribe past whatever history() already returned. If there's an
-      // active turn, its events arrive here; otherwise we idle out fast.
-      setStatus('replaying');
-      activeAbort = new AbortController();
+    async function tailFromCursor({ eager = false, idleAbortMs = 1500, status = 'replaying' } = {}) {
+      const controller = startActiveStream();
+      setStatus(status);
       try {
         const res = await fetch(
           `${API}/stream?id=${encodeURIComponent(chatId)}&from=${nextCursor}`,
-          { signal: activeAbort.signal },
+          { signal: controller.signal },
         );
         if (res.status === 204 || !res.body) return;
-        await renderTurn(streamSse(res.body, activeAbort.signal), { idleAbortMs: 1500 });
+        await renderTurn(streamSse(res.body, controller.signal), {
+          eager,
+          idleAbortMs,
+          controller,
+        });
+      } catch (err) {
+        if (!controller.signal.aborted) throw err;
       } finally {
-        activeAbort = null;
-        setStatus('idle');
+        const ownsStream = activeAbort === controller;
+        finishActiveStream(controller);
+        if (ownsStream) setStatus('idle');
       }
     }
 
-    async function loadAndRender() {
+    async function loadAndRenderHistory() {
       clearChat();
       const { users, messages: assistants, nextSeqNum } = await loadHistory();
       nextCursor = nextSeqNum;
-      // user[i] then assistant[i]; if users.length > assistants.length, the
-      // trailing user is an in-flight turn whose response tailFromCursor()
-      // will pick up.
       const turns = Math.max(users.length, assistants.length);
       for (let i = 0; i < turns; i += 1) {
         if (i < users.length) appendMessage('user', users[i]);
         if (i < assistants.length) appendMessage('assistant', extractText(assistants[i]));
       }
       ensureEmptyState();
-      await tailFromCursor();
     }
 
+    const initPromise = loadAndRenderHistory().catch(() => {
+      ensureEmptyState();
+      setStatus('idle');
+    });
+
     async function send() {
+      await initPromise;
       const text = inputEl.value.trim();
       if (!text || sendBtn.disabled) return;
       inputEl.value = '';
-      appendMessage('user', text);
+      abortActiveStream();
       setInputEnabled(false);
       setStatus('streaming');
       try {
@@ -273,14 +301,12 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: chatId, message: text }),
         });
-        if (!res.ok || !res.body) {
+        if (!res.ok) {
           appendMessage('assistant', `[error: ${res.status} ${res.statusText}]`);
           return;
         }
-        activeAbort = new AbortController();
-        await renderTurn(streamSse(res.body, activeAbort.signal), { eager: true });
+        await tailFromCursor({ idleAbortMs: 0, status: 'streaming' });
       } finally {
-        activeAbort = null;
         setStatus('idle');
         setInputEnabled(true);
         inputEl.focus();
@@ -298,7 +324,7 @@
     });
 
     syncChatUrl();
-    loadAndRender();
+    initPromise.then(() => tailFromCursor()).catch(() => setStatus('idle'));
   </script>
 </body>
 </html>
