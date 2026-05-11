@@ -121,10 +121,7 @@ async function handleReplay(
 }
 
 async function handleHistory(chatId: string): Promise<Response> {
-	return Response.json(
-		await readHistory(chatId),
-		{ headers: { "Cache-Control": "no-store" } },
-	);
+	return chat.history(liveStreamName(chatId));
 }
 
 const corsHeaders = {
