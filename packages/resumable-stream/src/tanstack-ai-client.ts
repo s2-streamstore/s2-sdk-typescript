@@ -18,7 +18,14 @@ import type {
 	ConnectionAdapter,
 	SubscribeConnectionAdapter,
 } from "@tanstack/ai-client";
-import { EventSourceParserStream } from "eventsource-parser/stream";
+import {
+	fetchOk,
+	type HeadersOption,
+	pipeSseFrames,
+	resolveCursorUrl,
+	resolveHeaders,
+	resolveUrl,
+} from "./client-utils.js";
 
 export type { ConnectionAdapter } from "@tanstack/ai-client";
 
@@ -39,7 +46,7 @@ export interface S2ConnectionOptions {
 	/** Server mode. Drives which adapter shape is returned. Defaults to `single-use`. */
 	mode?: S2ConnectionMode;
 	/** Extra headers added to both fetches. May be a (possibly async) factory. */
-	headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
+	headers?: HeadersOption;
 	/**
 	 * Extra fields merged into the POST body. May be a function of the messages
 	 * and data being sent. The base body always carries `{ messages, data }`.
@@ -61,113 +68,26 @@ export type S2Connection = ConnectionAdapter & {
 	stop?: () => Promise<void>;
 };
 
-async function resolveHeaders(
-	headers: S2ConnectionOptions["headers"],
-): Promise<Record<string, string>> {
-	if (!headers) return {};
-	const resolved = typeof headers === "function" ? await headers() : headers;
-	if (resolved instanceof Headers) {
-		return Object.fromEntries(resolved.entries());
-	}
-	if (Array.isArray(resolved)) {
-		return Object.fromEntries(resolved);
-	}
-	return { ...resolved };
-}
-
-function resolveUrl(url: string | (() => string)): string {
-	return typeof url === "function" ? url() : url;
-}
-
-function setUrlSearchParam(url: string, key: string, value: string): string {
-	try {
-		const parsed = new URL(url);
-		parsed.searchParams.set(key, value);
-		return parsed.toString();
-	} catch {
-		// `url` was relative
-	}
-
-	const hashStart = url.indexOf("#");
-	const base = hashStart === -1 ? url : url.slice(0, hashStart);
-	const hash = hashStart === -1 ? "" : url.slice(hashStart);
-	const queryStart = base.indexOf("?");
-	const pathname = queryStart === -1 ? base : base.slice(0, queryStart);
-	const search = queryStart === -1 ? "" : base.slice(queryStart + 1);
-	const params = new URLSearchParams(search);
-	params.set(key, value);
-	const nextSearch = params.toString();
-	return `${pathname}${nextSearch ? `?${nextSearch}` : ""}${hash}`;
-}
-
-function resolveSubscribeUrl(
-	url: string | ((cursor?: number) => string),
-	cursor: number | undefined,
-): string {
-	if (typeof url === "function") return url(cursor);
-	if (cursor === undefined) return url;
-	return setUrlSearchParam(url, "from", String(cursor));
-}
-
-function decodeBytesToText(): TransformStream<Uint8Array, string> {
-	const decoder = new TextDecoder();
-	return new TransformStream({
-		transform(chunk, controller) {
-			controller.enqueue(decoder.decode(chunk, { stream: true }));
-		},
-		flush(controller) {
-			const tail = decoder.decode();
-			if (tail) controller.enqueue(tail);
-		},
-	});
-}
-
 async function* parseSseChunks(
 	body: ReadableStream<Uint8Array>,
 	abortSignal?: AbortSignal,
 	onEventId?: (id: string) => void,
 ): AsyncGenerator<StreamChunk> {
-	const events = body
-		.pipeThrough(decodeBytesToText())
-		.pipeThrough(new EventSourceParserStream());
-	const reader = events.getReader();
-	try {
-		while (true) {
-			if (abortSignal?.aborted) return;
-			const { done, value } = await reader.read();
-			if (done) return;
-			if (value?.id) onEventId?.(value.id);
-			const data = value?.data;
-			if (!data || data === "[DONE]") continue;
-			try {
-				yield JSON.parse(data) as StreamChunk;
-			} catch {
-				// Skip malformed JSON frames so the stream can continue.
-			}
+	for await (const frame of pipeSseFrames(body, abortSignal)) {
+		if (frame.id) onEventId?.(frame.id);
+		// `[DONE]` is the OpenAI convention; harmless on streams that omit it.
+		if (!frame.data || frame.data === "[DONE]") continue;
+		try {
+			yield JSON.parse(frame.data) as StreamChunk;
+		} catch {
+			// Skip malformed JSON frames so the stream can continue.
 		}
-	} finally {
-		reader.releaseLock();
 	}
 }
 
-async function readResponse(
-	doFetch: typeof fetch,
-	url: string,
-	init: RequestInit,
-): Promise<Response> {
-	const response = await doFetch(url, init);
-	if (!response.ok) {
-		throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
-	}
-	return response;
-}
-
-async function cancelResponseBody(
-	body: ReadableStream<Uint8Array>,
-): Promise<void> {
-	await body.cancel().catch(() => {
-		// The replay subscription owns delivery; ignore best-effort body cleanup.
-	});
+async function discardBody(body: ReadableStream<Uint8Array>): Promise<void> {
+	// The replay subscription owns delivery; ignore best-effort body cleanup.
+	await body.cancel().catch(() => {});
 }
 
 function makeSyntheticRunFinished(): StreamChunk {
@@ -276,7 +196,7 @@ export function createS2Connection(options: S2ConnectionOptions): S2Connection {
 			"Content-Type": "application/json",
 			...(await resolveHeaders(options.headers)),
 		};
-		return readResponse(doFetch, resolveUrl(options.sendUrl), {
+		return fetchOk(doFetch, resolveUrl(options.sendUrl), {
 			method: "POST",
 			headers,
 			body: JSON.stringify(buildBody(messages, data)),
@@ -291,7 +211,7 @@ export function createS2Connection(options: S2ConnectionOptions): S2Connection {
 					"Content-Type": "application/json",
 					...(await resolveHeaders(options.headers)),
 				};
-				await readResponse(doFetch, resolveUrl(options.stopUrl!), {
+				await fetchOk(doFetch, resolveUrl(options.stopUrl!), {
 					method: "DELETE",
 					headers,
 					body: JSON.stringify(buildBody([], undefined)),
@@ -325,9 +245,9 @@ export function createS2Connection(options: S2ConnectionOptions): S2Connection {
 					void (async () => {
 						try {
 							const headers = await resolveHeaders(options.headers);
-							const response = await readResponse(
+							const response = await fetchOk(
 								doFetch,
-								resolveSubscribeUrl(subscribeUrl, nextCursor),
+								resolveCursorUrl(subscribeUrl, nextCursor),
 								{
 									method: "GET",
 									headers,
@@ -368,9 +288,9 @@ export function createS2Connection(options: S2ConnectionOptions): S2Connection {
 		const adapter: SubscribeConnectionAdapter = {
 			async *subscribe(abortSignal?: AbortSignal): AsyncIterable<StreamChunk> {
 				const headers = await resolveHeaders(options.headers);
-				const response = await readResponse(
+				const response = await fetchOk(
 					doFetch,
-					resolveSubscribeUrl(subscribeUrl, nextCursor),
+					resolveCursorUrl(subscribeUrl, nextCursor),
 					{
 						method: "GET",
 						headers,
@@ -388,7 +308,7 @@ export function createS2Connection(options: S2ConnectionOptions): S2Connection {
 			},
 			async send(messages, data, abortSignal): Promise<void> {
 				const response = await postSend(messages, data, abortSignal);
-				if (response.body) await cancelResponseBody(response.body);
+				if (response.body) await discardBody(response.body);
 			},
 		};
 		return stop ? { ...adapter, stop } : adapter;

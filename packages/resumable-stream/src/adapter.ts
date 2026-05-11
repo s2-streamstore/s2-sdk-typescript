@@ -15,16 +15,24 @@ import {
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
+	readSessionReplayState,
 	replayActiveGenerationStringRecords,
+	replaySessionStringRecords,
+	type SseFrame,
+	type TailedStringRecord,
 	tailAsSse,
+	tailGenerationStringRecords,
 	tailStringRecords,
 } from "./shared.js";
+
+export type { SseFrame } from "./shared.js";
 
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
 const DEFAULT_LEASE_DURATION_MS = 5 * 1000;
 
 export const DEFAULT_ERROR_TEXT = "An error occurred.";
+const STREAM_IN_USE_TEXT = "Stream already in use";
 
 export type ResumableChatMode = "single-use" | "shared" | "session";
 
@@ -70,12 +78,10 @@ export interface MakeResumableOptions {
 	waitUntil?: (promise: Promise<unknown>) => void;
 	/**
 	 * Which path delivers chunks to the client.
-	 * - `response` streams chunks on the request that starts generation.
-	 * - `replay` persists chunks to S2 and returns 202; a replay route or
-	 *   subscription owns delivery.
+	 * - `response` streams S2 records on the request that starts generation.
+	 * - `replay` writes chunks to S2 and returns 202; another route sends them.
 	 *
-	 * Use `replay` when a separate replay route or subscription is the source
-	 * of truth for client delivery.
+	 * Use `replay` when the start request should not stream the response.
 	 *
 	 * @default "response"
 	 */
@@ -89,6 +95,11 @@ export interface ReplayOptions {
 	 * `mode: "session"`, where replay tails a long-lived log.
 	 */
 	fromSeqNum?: number;
+	/**
+	 * Only applies to `mode: "session"`. Keep the response open at the tail so
+	 * future records from later generations are delivered to other tabs.
+	 */
+	live?: boolean;
 }
 
 /** Server-side helpers for writing and replaying resumable chat streams. */
@@ -102,7 +113,10 @@ export interface Chat<T> {
 		source: AsyncIterable<T>,
 		options?: MakeResumableOptions,
 	): Promise<Response>;
-	/** Replays the active generation as SSE. Returns 204 if there is none. */
+	/**
+	 * Streams stored chunks as SSE. Returns 204 if there is no active generation,
+	 * unless session replay is called with `{ live: true }`.
+	 */
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
 }
 
@@ -110,92 +124,56 @@ export interface Chat<T> {
 export interface ChatAdapter<T> {
 	/** Synthesize an error chunk to surface upstream failures to the client. */
 	makeErrorChunk(err: unknown, onError?: (err: unknown) => string): T;
-	/** Optionally normalize chunks before they are stored durably. */
+	/** Prepare a chunk before storage. */
 	prepareForStorage?: (chunk: T) => T;
 	/** SSE response headers. */
 	responseHeaders: Readonly<Record<string, string>>;
+	/**
+	 * Adds an `event:` line to SSE frames when the format needs one.
+	 */
+	formatSseFrame?: (storedBody: string) => SseFrame;
 }
 
-async function* readableToAsyncIterable<T>(
-	rs: ReadableStream<T>,
-): AsyncIterable<T> {
-	const reader = rs.getReader();
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) return;
-			yield value;
-		}
-	} finally {
-		reader.releaseLock();
-	}
+function streamInUseResponse(): Response {
+	return new Response(STREAM_IN_USE_TEXT, { status: 409 });
 }
 
-function asyncIterableToReadableStream<T>(
-	source: AsyncIterable<T>,
-): ReadableStream<T> {
-	let iterator: AsyncIterator<T> | undefined;
-	return new ReadableStream<T>({
-		async pull(controller) {
-			if (!iterator) iterator = source[Symbol.asyncIterator]();
-			try {
-				const { done, value } = await iterator.next();
-				if (done) {
-					controller.close();
-					return;
-				}
-				controller.enqueue(value);
-			} catch (err) {
-				controller.error(err);
-				await iterator?.return?.().catch(() => {});
-			}
-		},
-		async cancel() {
-			await iterator?.return?.().catch(() => {});
-		},
-	});
-}
-
-function sseResponseFromStrings(
-	source: AsyncIterable<string>,
+async function replayResponse(
+	source: AsyncIterable<TailedStringRecord>,
 	headers: Readonly<Record<string, string>>,
-): Response {
+	formatter?: (body: string) => SseFrame,
+): Promise<Response> {
 	const iterator = source[Symbol.asyncIterator]();
-	const encoder = new TextEncoder();
-	const body = new ReadableStream<Uint8Array>({
-		async pull(controller) {
-			try {
+	const first = await iterator.next();
+	if (first.done) {
+		return new Response(null, {
+			status: 204,
+			headers: { "Cache-Control": "no-store" },
+		});
+	}
+
+	return tailAsSse(
+		(async function* () {
+			yield first.value;
+			while (true) {
 				const next = await iterator.next();
-				if (next.done) {
-					controller.close();
-					return;
-				}
-				controller.enqueue(encoder.encode(`data: ${next.value}\n\n`));
-			} catch (err) {
-				controller.error(err);
-				await iterator.return?.();
+				if (next.done) return;
+				yield next.value;
 			}
-		},
-		async cancel() {
-			await iterator.return?.();
-		},
-	});
-	return new Response(body, { headers });
+		})(),
+		headers,
+		formatter,
+	);
 }
 
-/**
- * Generic implementation behind each resumable chat adapter. Wire format:
- * one JSON-encoded chunk per SSE `data:` frame; end-of-stream signaled by
- * connection close.
- */
 export function createChat<T>(
 	config: ResumableChatConfig,
 	adapter: ChatAdapter<T>,
-): Chat<T> {
-	const s2 = new S2({
+	s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
-	});
+	}),
+): Chat<T> {
 	const basin = config.basin;
 	const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
@@ -234,7 +212,7 @@ export function createChat<T>(
 						fencingToken,
 					});
 					if (!claim) {
-						return new Response("Stream already in use", { status: 409 });
+						return streamInUseResponse();
 					}
 					matchSeqNumStart = claim.matchSeqNumStart;
 				} else if (isShared) {
@@ -244,7 +222,7 @@ export function createChat<T>(
 						leaseDurationMs,
 					});
 					if (!claim) {
-						return new Response("Stream already in use", { status: 409 });
+						return streamInUseResponse();
 					}
 					matchSeqNumStart = claim.matchSeqNumStart;
 				} else {
@@ -259,27 +237,16 @@ export function createChat<T>(
 					err instanceof FencingTokenMismatchError ||
 					err instanceof SeqNumMismatchError
 				) {
-					return new Response("Stream already in use", { status: 409 });
+					return streamInUseResponse();
 				}
 				throw err;
-			}
-
-			let toClient: ReadableStream<T> | undefined;
-			let persistSource: AsyncIterable<T>;
-			if (delivery === "replay") {
-				persistSource = source;
-			} else {
-				const [clientStream, persistStream] =
-					asyncIterableToReadableStream(source).tee();
-				toClient = clientStream;
-				persistSource = readableToAsyncIterable(persistStream);
 			}
 
 			const persistPromise = persistToS2({
 				s2,
 				basin,
 				stream: streamName,
-				source: persistSource,
+				source,
 				fencingToken,
 				batchSize,
 				lingerDuration,
@@ -332,17 +299,14 @@ export function createChat<T>(
 				});
 			}
 
-			const clientStrings = (async function* () {
-				try {
-					for await (const chunk of readableToAsyncIterable(toClient!)) {
-						yield JSON.stringify(chunk);
-					}
-				} catch (err) {
-					yield JSON.stringify(errorChunk(err));
-				}
-			})();
-
-			return sseResponseFromStrings(clientStrings, adapter.responseHeaders);
+			return tailAsSse(
+				tailGenerationStringRecords(
+					s2.basin(basin).stream(streamName),
+					matchSeqNumStart,
+				),
+				adapter.responseHeaders,
+				adapter.formatSseFrame,
+			);
 		},
 
 		async replay(
@@ -352,33 +316,38 @@ export function createChat<T>(
 			const handle = s2.basin(basin).stream(streamName);
 
 			if (isSession) {
-				return tailAsSse(
-					tailStringRecords(handle, options?.fromSeqNum),
+				if (options?.live) {
+					return tailAsSse(
+						tailStringRecords(handle, options.fromSeqNum),
+						adapter.responseHeaders,
+						adapter.formatSseFrame,
+					);
+				}
+				const state = await readSessionReplayState(handle);
+				const records = replaySessionStringRecords(
+					handle,
+					options?.fromSeqNum,
+					state,
+				);
+				if (state.hasActiveGeneration) {
+					return tailAsSse(
+						records,
+						adapter.responseHeaders,
+						adapter.formatSseFrame,
+					);
+				}
+				return replayResponse(
+					records,
 					adapter.responseHeaders,
+					adapter.formatSseFrame,
 				);
 			}
 
-			const iterator = replayActiveGenerationStringRecords(
-				handle,
-				options?.fromSeqNum,
-			)[Symbol.asyncIterator]();
-			const first = await iterator.next();
-			if (first.done) {
-				return new Response(null, {
-					status: 204,
-					headers: { "Cache-Control": "no-store" },
-				});
-			}
-
-			const replayWithFirst = (async function* () {
-				yield first.value;
-				while (true) {
-					const next = await iterator.next();
-					if (next.done) return;
-					yield next.value;
-				}
-			})();
-			return tailAsSse(replayWithFirst, adapter.responseHeaders);
+			return replayResponse(
+				replayActiveGenerationStringRecords(handle, options?.fromSeqNum),
+				adapter.responseHeaders,
+				adapter.formatSseFrame,
+			);
 		},
 	};
 }

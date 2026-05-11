@@ -9,7 +9,7 @@ import {
 	type ResumableChatConfig,
 } from "./adapter.js";
 import {
-	type TailedStringBody,
+	type TailedStringRecord,
 	tailAsSse,
 	tailCompactedStringRecords,
 } from "./shared.js";
@@ -169,7 +169,7 @@ function findActiveGenerationStartIndex(
 function createSnapshotRecords(
 	chunks: Array<StreamChunk | null>,
 	nextSeqNum: number,
-): TailedStringBody[] {
+): TailedStringRecord[] {
 	const processor = new StreamProcessor();
 	for (const chunk of chunks) {
 		if (chunk) processor.processChunk(chunk as never);
@@ -187,8 +187,8 @@ function createSnapshotRecords(
 }
 
 function compactSessionRecordsForReplay(
-	records: TailedStringBody[],
-): TailedStringBody[] {
+	records: TailedStringRecord[],
+): TailedStringRecord[] {
 	if (records.length === 0) return records;
 
 	const chunks = records.map((record) => parseStoredChunk(record.body));
@@ -349,11 +349,11 @@ function getMessageText(message: UIMessage): string {
 export function createResumableChat(
 	config: TanStackAIChatConfig,
 ): ResumableChat {
-	const base = createChat(config, adapter);
 	const s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
 	});
+	const base = createChat(config, adapter, s2);
 	const mode = config.mode ?? "single-use";
 	const activeGenerations = config.enableStop
 		? new Map<string, ActiveGeneration>()
