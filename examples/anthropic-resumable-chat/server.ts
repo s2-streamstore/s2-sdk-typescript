@@ -58,11 +58,6 @@ interface ChatPostBody {
 	message?: string;
 }
 
-async function readHistory(chatId: string): Promise<HistorySnapshot> {
-	const res = await chat.history(liveStreamName(chatId));
-	return (await res.json()) as HistorySnapshot;
-}
-
 function turnsForModel(turns: HistoryTurn[]): MessageParam[] {
 	const out: MessageParam[] = [];
 	for (const { user, assistant } of turns) {
@@ -85,9 +80,11 @@ async function handleChat(req: Request): Promise<Response> {
 	}
 	const chatId = body.id;
 	const message = body.message;
+	const historyResponse = await chat.history(liveStreamName(chatId));
+	const history = (await historyResponse.json()) as HistorySnapshot;
 
 	const messages: MessageParam[] = [
-		...turnsForModel((await readHistory(chatId)).turns),
+		...turnsForModel(history.turns),
 		{ role: "user", content: message },
 	];
 
@@ -109,21 +106,6 @@ async function handleChat(req: Request): Promise<Response> {
 	});
 }
 
-async function handleReplay(
-	chatId: string,
-	fromSeqNum?: number,
-	live = false,
-): Promise<Response> {
-	return chat.replay(
-		liveStreamName(chatId),
-		fromSeqNum !== undefined || live ? { fromSeqNum, live } : undefined,
-	);
-}
-
-async function handleHistory(chatId: string): Promise<Response> {
-	return chat.history(liveStreamName(chatId));
-}
-
 const corsHeaders = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -133,12 +115,6 @@ const corsHeaders = {
 function withCors(res: Response): Response {
 	for (const [k, v] of Object.entries(corsHeaders)) res.headers.set(k, v);
 	return res;
-}
-
-function parseSeqNum(value: string | null): number | undefined {
-	if (value === null) return undefined;
-	const parsed = Number.parseInt(value, 10);
-	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 const server = Bun.serve({
@@ -159,11 +135,19 @@ const server = Bun.serve({
 			if (!isValidChatId(chatId)) {
 				return new Response("Missing id query parameter", { status: 400 });
 			}
+			const from = url.searchParams.get("from");
+			let fromSeqNum: number | undefined;
+			if (from !== null) {
+				const parsed = Number.parseInt(from, 10);
+				if (Number.isSafeInteger(parsed) && parsed >= 0) {
+					fromSeqNum = parsed;
+				}
+			}
+			const live = url.searchParams.get("live") === "1";
 			return withCors(
-				await handleReplay(
-					chatId,
-					parseSeqNum(url.searchParams.get("from")),
-					url.searchParams.get("live") === "1",
+				await chat.replay(
+					liveStreamName(chatId),
+					fromSeqNum !== undefined || live ? { fromSeqNum, live } : undefined,
 				),
 			);
 		}
@@ -173,7 +157,7 @@ const server = Bun.serve({
 			if (!isValidChatId(chatId)) {
 				return new Response("Missing id query parameter", { status: 400 });
 			}
-			return withCors(await handleHistory(chatId));
+			return withCors(await chat.history(liveStreamName(chatId)));
 		}
 
 		if (url.pathname === "/" || url.pathname === "/index.html") {

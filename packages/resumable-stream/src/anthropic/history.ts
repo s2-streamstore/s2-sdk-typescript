@@ -57,14 +57,6 @@ function isMessageEvent(event: Chunk): event is RawMessageStreamEvent {
 	);
 }
 
-function parseChunk(body: string): Chunk | undefined {
-	try {
-		return JSON.parse(body) as Chunk;
-	} catch {
-		return undefined;
-	}
-}
-
 function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -75,10 +67,6 @@ function isHistoryError(value: unknown): value is HistoryError {
 		typeof value.type === "string" &&
 		typeof value.message === "string"
 	);
-}
-
-function isValidCursor(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function normalizeTurn(value: unknown): HistoryTurn | undefined {
@@ -108,7 +96,12 @@ export function normalizeHistorySnapshot(value: unknown): HistorySnapshot {
 	return {
 		turns,
 		messages,
-		nextSeqNum: isValidCursor(value.nextSeqNum) ? value.nextSeqNum : 0,
+		nextSeqNum:
+			typeof value.nextSeqNum === "number" &&
+			Number.isSafeInteger(value.nextSeqNum) &&
+			value.nextSeqNum >= 0
+				? value.nextSeqNum
+				: 0,
 	};
 }
 
@@ -129,8 +122,12 @@ export function createHistorySnapshot(
 		}
 		if (record.trim || !record.body) continue;
 
-		const event = parseChunk(record.body);
-		if (!event) continue;
+		let event: Chunk;
+		try {
+			event = JSON.parse(record.body) as Chunk;
+		} catch {
+			continue;
+		}
 
 		if (event.type === "user_message" && typeof event.message === "string") {
 			currentTurn = { user: event.message };

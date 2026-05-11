@@ -60,15 +60,6 @@ function mergeDeltaUsage(base: Usage, delta: MessageDeltaUsage): Usage {
 	return result as unknown as Usage;
 }
 
-function parseToolInput(buffer: string): unknown {
-	if (buffer.length === 0) return {};
-	try {
-		return JSON.parse(buffer);
-	} catch {
-		return undefined;
-	}
-}
-
 export function createAccumulator(): Accumulator {
 	let message: Message | undefined;
 	const toolUseJsonBuffers = new Map<number, string>();
@@ -137,8 +128,13 @@ export function createAccumulator(): Accumulator {
 					if (buffer === undefined) return;
 					const block = message.content[event.index];
 					if (block?.type === "tool_use" || block?.type === "server_tool_use") {
-						const input = parseToolInput(buffer);
-						if (input !== undefined) block.input = input;
+						if (buffer.length === 0) {
+							block.input = {};
+						} else {
+							try {
+								block.input = JSON.parse(buffer);
+							} catch {}
+						}
 					}
 					toolUseJsonBuffers.delete(event.index);
 					return;

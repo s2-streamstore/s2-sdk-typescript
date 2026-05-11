@@ -90,14 +90,6 @@ export interface ChatClient {
 
 const DEFAULT_BACKOFF_MS = [0, 250, 500, 1000, 2000, 5000] as const;
 
-function isValidCursor(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isTerminal(event: Chunk): boolean {
-	return event.type === "message_stop" || event.type === "error";
-}
-
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 	if (ms <= 0 || signal.aborted) return Promise.resolve();
 	return new Promise<void>((resolve) => {
@@ -109,10 +101,6 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 		const timer = setTimeout(finish, ms);
 		signal.addEventListener("abort", finish, { once: true });
 	});
-}
-
-async function closeResponse(response: Response): Promise<void> {
-	await response.body?.cancel().catch(() => {});
 }
 
 export function createChatClient(options: ChatClientOptions): ChatClient {
@@ -147,7 +135,9 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 		for await (const frame of pipeSseFrames(body, signal)) {
 			if (frame.id) {
 				const parsed = Number.parseInt(frame.id, 10);
-				if (isValidCursor(parsed)) advanceCursor(parsed);
+				if (Number.isSafeInteger(parsed) && parsed >= 0) {
+					advanceCursor(parsed);
+				}
 			}
 			if (!frame.data) continue;
 			let event: Chunk;
@@ -158,7 +148,12 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 			}
 			onEvent();
 			yield event;
-			if (stopOnTerminal && isTerminal(event)) return true;
+			if (
+				stopOnTerminal &&
+				(event.type === "message_stop" || event.type === "error")
+			) {
+				return true;
+			}
 		}
 		return false;
 	}
@@ -205,7 +200,7 @@ export function createChatClient(options: ChatClientOptions): ChatClient {
 				}
 				if (terminated) {
 					controller.abort();
-					await closeResponse(response);
+					await response.body?.cancel().catch(() => {});
 					return;
 				}
 				if (signal.aborted) return;
