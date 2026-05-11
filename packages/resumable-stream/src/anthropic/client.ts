@@ -99,7 +99,7 @@ function isTerminal(event: Chunk): boolean {
 }
 
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
-	if (ms <= 0) return Promise.resolve();
+	if (ms <= 0 || signal.aborted) return Promise.resolve();
 	return new Promise<void>((resolve) => {
 		const finish = () => {
 			clearTimeout(timer);
