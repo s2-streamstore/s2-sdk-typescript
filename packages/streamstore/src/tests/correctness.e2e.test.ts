@@ -98,6 +98,7 @@ describeIf("Correctness Integration Tests", () => {
 
 				const readSession = await stream.readSession({
 					start: { from: { seqNum: 0 } },
+					stop: { limits: { count: TOTAL_RECORDS }, waitSecs: 60 },
 				});
 
 				const readPromise = (async () => {
@@ -107,6 +108,8 @@ describeIf("Correctness Integration Tests", () => {
 
 					try {
 						for await (const record of readSession) {
+							expect(observedRecords).toBeLessThan(TOTAL_RECORDS);
+
 							const seqNum = record.seqNum;
 							if (lastSeqNum === undefined) {
 								expect(seqNum).toBe(0);
@@ -126,19 +129,15 @@ describeIf("Correctness Integration Tests", () => {
 								highestContiguousIndex = index;
 							}
 							observedRecords += 1;
-
-							if (highestContiguousIndex + 1 >= TOTAL_RECORDS) {
-								// Close the read session immediately to avoid waiting for more records
-								await readSession.cancel().catch(() => {});
-								break;
-							}
 						}
 
 						expect(highestContiguousIndex).toBe(TOTAL_RECORDS - 1);
-						expect(observedRecords).toBeGreaterThanOrEqual(TOTAL_RECORDS);
+						expect(lastSeqNum).toBe(TOTAL_RECORDS - 1);
+						expect(observedRecords).toBe(TOTAL_RECORDS);
 
 						return {
 							highestIndex: highestContiguousIndex,
+							lastSeqNum,
 							recordsObserved: observedRecords,
 						};
 					} finally {
@@ -172,6 +171,11 @@ describeIf("Correctness Integration Tests", () => {
 
 				const [readResult] = await Promise.all([readPromise, appendPromise]);
 				expect(readResult.highestIndex).toBe(TOTAL_RECORDS - 1);
+				expect(readResult.lastSeqNum).toBe(TOTAL_RECORDS - 1);
+				expect(readResult.recordsObserved).toBe(TOTAL_RECORDS);
+
+				const tail = await stream.checkTail();
+				expect(tail.tail.seqNum).toBe(TOTAL_RECORDS);
 			} finally {
 				// Close first, then delete - racing these can cause errors
 				await stream.close();
