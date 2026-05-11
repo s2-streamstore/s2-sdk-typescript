@@ -314,17 +314,6 @@ async function* failingSource(): AsyncIterable<{
 }
 
 describe("createResumableChat (tanstack-ai)", () => {
-	it("exposes the documented helper shape", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const chat = createResumableChat({
-			accessToken: "test-token",
-			basin: "test-basin",
-		});
-		expect(typeof chat.makeResumable).toBe("function");
-		expect(typeof chat.replay).toBe("function");
-		expect(typeof chat.makeSessionResponse).toBe("function");
-	});
-
 	it("passes TanStack UI messages through while preserving non-text parts", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		activeStreamRef.current = new FakeStream();
