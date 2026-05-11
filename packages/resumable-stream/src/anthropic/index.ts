@@ -136,11 +136,11 @@ async function readHistoryMessages(
 export function createResumableChat(
 	config: ResumableChatConfig,
 ): ResumableChat {
-	const base = createChat(config, adapter);
 	const s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
 	});
+	const base = createChat(config, adapter, s2);
 
 	return {
 		...base,

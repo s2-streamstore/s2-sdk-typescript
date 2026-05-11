@@ -1,6 +1,6 @@
 <div align="center">
   <h1>@s2-dev/resumable-stream</h1>
-  <p>Resumable streams based on s2.dev, inspired by Vercel's implementation.</p>
+  <p>Resumable streams backed by S2.</p>
 
   <p>
     <!-- Discord (chat) -->

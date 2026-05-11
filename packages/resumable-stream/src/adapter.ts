@@ -169,11 +169,11 @@ async function replayResponse(
 export function createChat<T>(
 	config: ResumableChatConfig,
 	adapter: ChatAdapter<T>,
-): Chat<T> {
-	const s2 = new S2({
+	s2 = new S2({
 		accessToken: config.accessToken,
 		endpoints: config.endpoints,
-	});
+	}),
+): Chat<T> {
 	const basin = config.basin;
 	const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE;
 	const lingerDuration = config.lingerDuration ?? DEFAULT_LINGER_DURATION;
