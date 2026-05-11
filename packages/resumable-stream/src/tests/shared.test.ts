@@ -10,6 +10,7 @@ import {
 	claimSessionGeneration,
 	claimSharedGeneration,
 	replayActiveGenerationStringRecords,
+	replaySessionStringRecords,
 	stopSharedGeneration,
 	tailCompactedStringRecords,
 	tailGenerationStringRecords,
@@ -616,6 +617,121 @@ describe("tailGenerationStringRecords", () => {
 			tailGenerationStringRecords(handle as any, 1),
 		);
 		expect(records).toEqual([]);
+	});
+});
+
+describe("replaySessionStringRecords", () => {
+	const ts = new Date(10_000_000);
+
+	it("returns nothing when the session is idle and the cursor is at the tail", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "done", timestamp: ts }),
+			readRecord({
+				seqNum: 2,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const records = await drainAsyncIterable(
+			replaySessionStringRecords(handle as any, 3),
+		);
+		expect(records).toEqual([]);
+	});
+
+	it("replays available session records and closes when the session is idle", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder-1",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "first", timestamp: ts }),
+			readRecord({
+				seqNum: 2,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({
+				seqNum: 3,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 4, body: "second", timestamp: ts }),
+			readRecord({
+				seqNum: 5,
+				body: "end-BBBB",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+		]);
+
+		const records = await drainAsyncIterable(
+			replaySessionStringRecords(handle as any, 1),
+		);
+		expect(records).toEqual([
+			{ body: "first", nextSeqNum: 2 },
+			{ body: "second", nextSeqNum: 5 },
+		]);
+	});
+
+	it("keeps tailing when the session has an active generation", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({
+				seqNum: 0,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 1, body: "live", timestamp: ts }),
+		]);
+
+		const records = await drainAsyncIterable(
+			replaySessionStringRecords(handle as any, 1),
+		);
+		expect(records).toEqual([{ body: "live", nextSeqNum: 2 }]);
+	});
+
+	it("stops an active tail at the terminal fence", async () => {
+		const handle = new MockStreamHandle([
+			readRecord({ seqNum: 0, body: "old", timestamp: ts }),
+			readRecord({
+				seqNum: 1,
+				body: "holder",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 2, body: "live", timestamp: ts }),
+			readRecord({
+				seqNum: 3,
+				body: "end-AAAA",
+				headers: [["", "fence"]],
+				timestamp: ts,
+			}),
+			readRecord({ seqNum: 4, body: "later", timestamp: ts }),
+		]);
+
+		const records = await drainAsyncIterable(
+			replaySessionStringRecords(handle as any, 0, {
+				hasActiveGeneration: true,
+				activeGenerationStartSeqNum: 1,
+				nextSeqNum: 3,
+			}),
+		);
+		expect(records).toEqual([
+			{ body: "old", nextSeqNum: 1 },
+			{ body: "live", nextSeqNum: 3 },
+		]);
 	});
 });
 

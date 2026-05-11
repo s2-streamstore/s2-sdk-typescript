@@ -609,6 +609,20 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(response.status).toBe(204);
 	});
 
+	it("session live replay stays open even when the stream is idle", async () => {
+		const { createResumableChat } = await import("../tanstack-ai.js");
+		activeStreamRef.current = new FakeStream();
+
+		const chat = createResumableChat({
+			accessToken: "t",
+			basin: "b",
+			mode: "session",
+		});
+		const response = await chat.replay("s", { live: true });
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe("");
+	});
+
 	it("active replay tags chunks and can resume from a sequence number", async () => {
 		const { createResumableChat } = await import("../tanstack-ai.js");
 		const ts = new Date(0);

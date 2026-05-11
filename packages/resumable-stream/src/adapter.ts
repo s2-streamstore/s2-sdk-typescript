@@ -15,8 +15,11 @@ import {
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
+	readSessionReplayState,
 	replayActiveGenerationStringRecords,
+	replaySessionStringRecords,
 	type SseFrame,
+	type TailedStringRecord,
 	tailAsSse,
 	tailGenerationStringRecords,
 	tailStringRecords,
@@ -92,6 +95,11 @@ export interface ReplayOptions {
 	 * `mode: "session"`, where replay tails a long-lived log.
 	 */
 	fromSeqNum?: number;
+	/**
+	 * Only applies to `mode: "session"`. Keep the response open at the tail so
+	 * future records from later generations are delivered to other tabs.
+	 */
+	live?: boolean;
 }
 
 /** Server-side helpers for writing and replaying resumable chat streams. */
@@ -105,7 +113,10 @@ export interface Chat<T> {
 		source: AsyncIterable<T>,
 		options?: MakeResumableOptions,
 	): Promise<Response>;
-	/** Streams stored chunks as SSE. Returns 204 if there is no active generation. */
+	/**
+	 * Streams stored chunks as SSE. Returns 204 if there is no active generation,
+	 * unless session replay is called with `{ live: true }`.
+	 */
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
 }
 
@@ -113,7 +124,7 @@ export interface Chat<T> {
 export interface ChatAdapter<T> {
 	/** Synthesize an error chunk to surface upstream failures to the client. */
 	makeErrorChunk(err: unknown, onError?: (err: unknown) => string): T;
-	/** Optionally normalize chunks before they are stored durably. */
+	/** Prepare a chunk before storage. */
 	prepareForStorage?: (chunk: T) => T;
 	/** SSE response headers. */
 	responseHeaders: Readonly<Record<string, string>>;
@@ -125,6 +136,34 @@ export interface ChatAdapter<T> {
 
 function streamInUseResponse(): Response {
 	return new Response(STREAM_IN_USE_TEXT, { status: 409 });
+}
+
+async function replayResponse(
+	source: AsyncIterable<TailedStringRecord>,
+	headers: Readonly<Record<string, string>>,
+	formatter?: (body: string) => SseFrame,
+): Promise<Response> {
+	const iterator = source[Symbol.asyncIterator]();
+	const first = await iterator.next();
+	if (first.done) {
+		return new Response(null, {
+			status: 204,
+			headers: { "Cache-Control": "no-store" },
+		});
+	}
+
+	return tailAsSse(
+		(async function* () {
+			yield first.value;
+			while (true) {
+				const next = await iterator.next();
+				if (next.done) return;
+				yield next.value;
+			}
+		})(),
+		headers,
+		formatter,
+	);
 }
 
 export function createChat<T>(
@@ -277,35 +316,35 @@ export function createChat<T>(
 			const handle = s2.basin(basin).stream(streamName);
 
 			if (isSession) {
-				return tailAsSse(
-					tailStringRecords(handle, options?.fromSeqNum),
+				if (options?.live) {
+					return tailAsSse(
+						tailStringRecords(handle, options.fromSeqNum),
+						adapter.responseHeaders,
+						adapter.formatSseFrame,
+					);
+				}
+				const state = await readSessionReplayState(handle);
+				const records = replaySessionStringRecords(
+					handle,
+					options?.fromSeqNum,
+					state,
+				);
+				if (state.hasActiveGeneration) {
+					return tailAsSse(
+						records,
+						adapter.responseHeaders,
+						adapter.formatSseFrame,
+					);
+				}
+				return replayResponse(
+					records,
 					adapter.responseHeaders,
 					adapter.formatSseFrame,
 				);
 			}
 
-			const iterator = replayActiveGenerationStringRecords(
-				handle,
-				options?.fromSeqNum,
-			)[Symbol.asyncIterator]();
-			const first = await iterator.next();
-			if (first.done) {
-				return new Response(null, {
-					status: 204,
-					headers: { "Cache-Control": "no-store" },
-				});
-			}
-
-			const replayWithFirst = (async function* () {
-				yield first.value;
-				while (true) {
-					const next = await iterator.next();
-					if (next.done) return;
-					yield next.value;
-				}
-			})();
-			return tailAsSse(
-				replayWithFirst,
+			return replayResponse(
+				replayActiveGenerationStringRecords(handle, options?.fromSeqNum),
 				adapter.responseHeaders,
 				adapter.formatSseFrame,
 			);

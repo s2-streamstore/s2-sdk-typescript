@@ -215,13 +215,88 @@ export async function GET(req: Request) {
     fromSeqNum: url.searchParams.has("from")
       ? Number(url.searchParams.get("from"))
       : undefined,
+    live: url.searchParams.get("live") === "1",
   });
 }
 ```
 
-`chat.history(streamName)` returns `{ users, messages, nextSeqNum }`. Load
-history first, then call `chat.replay(streamName, { fromSeqNum: nextSeqNum })`
-to read anything still in progress.
+`chat.history(streamName)` returns `{ turns, messages, nextSeqNum }`.
+Render `turns` for ordered chat history, then call
+`chat.replay(streamName, { fromSeqNum: nextSeqNum })` to read anything still in
+progress. Use `{ live: true }` for a tab that should stay subscribed to future
+records after the stream is idle.
+
+The optional browser client can read history, send requests, and keep a live
+session replay open:
+
+```ts
+import { createChatClient } from "@s2-dev/resumable-stream/anthropic/client";
+
+const client = createChatClient({
+  sendUrl: "/api/chat",
+  historyUrl: `/api/chat/history?id=${chatId}`,
+  subscribeUrl: (cursor) =>
+    `/api/chat/stream?id=${chatId}&from=${cursor ?? 0}&live=1`,
+});
+
+const history = await client.loadHistory();
+const subscription = await client.subscribe({ stopOnTerminal: false });
+```
+
+Server fields:
+
+| Field | Description |
+| --- | --- |
+| `accessToken` | S2 access token. |
+| `basin` | S2 basin that stores chat streams. |
+| `endpoints` | Optional S2 endpoint overrides, commonly used with `s2-lite`. |
+| `mode` | Storage layout: `single-use`, `shared`, or `session`. Use `session` for chat history and multi-tab replay. |
+| `batchSize` | Maximum number of chunks to append to S2 at once. Defaults to `10`. |
+| `lingerDuration` | Maximum batching delay in milliseconds. Defaults to `50`. |
+| `leaseDurationMs` | `shared` mode takeover window for stale active generations. Defaults to `5000`. |
+| `onError` | Maps upstream errors to the stored/rendered error message. |
+
+`makeResumable` fields:
+
+| Field | Description |
+| --- | --- |
+| `delivery` | `response` streams on the POST response; `replay` returns `202` and expects clients to read from `replay`. Defaults to `response`. |
+| `waitUntil` | Keeps persistence running after the response returns in serverless runtimes. |
+
+`replay` fields:
+
+| Field | Description |
+| --- | --- |
+| `fromSeqNum` | S2 cursor to resume from. Use `history.nextSeqNum` after loading history. |
+| `live` | `session` mode only. Keeps the SSE open at the tail for future turns. |
+
+History fields:
+
+| Field | Description |
+| --- | --- |
+| `turns` | Ordered user turns. Each turn may include a completed `assistant` message or an `error`. |
+| `messages` | Completed assistant messages reconstructed from Anthropic events. |
+| `nextSeqNum` | Cursor to pass as `fromSeqNum` for replay. |
+
+Client fields:
+
+| Field | Description |
+| --- | --- |
+| `sendUrl` | URL that accepts `POST` and starts a generation. |
+| `subscribeUrl` | URL that accepts `GET` and returns replay SSE. String URLs get `?from=` added automatically; function URLs receive the cursor. |
+| `historyUrl` | Optional URL returning `{ turns, messages, nextSeqNum }`. |
+| `stopUrl` | Optional URL called by `stop()` with `DELETE`. |
+| `fetch` | Optional fetch implementation override. |
+| `headers` | Static or lazy headers sent on every request. |
+| `credentials` | Fetch credentials mode. Defaults to `same-origin`. |
+| `reconnectBackoffMs` | Millisecond backoff schedule for reconnects. Pass `[]` to disable reconnect. |
+
+`send`/`subscribe` fields:
+
+| Field | Description |
+| --- | --- |
+| `signal` | Abort signal for the request/subscription. |
+| `stopOnTerminal` | Defaults to `true`. Set `false` for live session streams so `message_stop` does not close the listener. |
 
 ## TanStack AI
 

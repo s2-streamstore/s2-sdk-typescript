@@ -9,7 +9,11 @@
 import { dirname, join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import { createResumableChat } from "@s2-dev/resumable-stream/anthropic";
+import {
+	createResumableChat,
+	type HistorySnapshot,
+	type HistoryTurn,
+} from "@s2-dev/resumable-stream/anthropic";
 
 const PORT = Number.parseInt(process.env.PORT || "3458", 10);
 const PUBLIC_DIR = join(dirname(import.meta.path), "public");
@@ -54,31 +58,19 @@ interface ChatPostBody {
 	message?: string;
 }
 
-async function readHistory(chatId: string): Promise<{
-	users: string[];
-	messages: Anthropic.Message[];
-	nextSeqNum?: number;
-}> {
+async function readHistory(chatId: string): Promise<HistorySnapshot> {
 	const res = await chat.history(liveStreamName(chatId));
-	return (await res.json()) as {
-		users: string[];
-		messages: Anthropic.Message[];
-		nextSeqNum?: number;
-	};
+	return (await res.json()) as HistorySnapshot;
 }
 
-/** Interleaves stored users with reconstructed assistants for the model. */
-function interleaveForModel(
-	users: string[],
-	assistants: Anthropic.Message[],
-): MessageParam[] {
+function turnsForModel(turns: HistoryTurn[]): MessageParam[] {
 	const out: MessageParam[] = [];
-	const turns = Math.max(users.length, assistants.length);
-	for (let i = 0; i < turns; i += 1) {
-		if (i < users.length) out.push({ role: "user", content: users[i]! });
-		if (i < assistants.length) {
-			out.push({ role: "assistant", content: assistants[i]!.content });
-		}
+	for (const { user, assistant } of turns) {
+		if (!assistant) continue;
+		out.push(
+			{ role: "user", content: user },
+			{ role: "assistant", content: assistant.content },
+		);
 	}
 	return out;
 }
@@ -94,9 +86,8 @@ async function handleChat(req: Request): Promise<Response> {
 	const chatId = body.id;
 	const message = body.message;
 
-	const { users, messages: assistants } = await readHistory(chatId);
 	const messages: MessageParam[] = [
-		...interleaveForModel(users, assistants),
+		...turnsForModel((await readHistory(chatId)).turns),
 		{ role: "user", content: message },
 	];
 
@@ -121,10 +112,11 @@ async function handleChat(req: Request): Promise<Response> {
 async function handleReplay(
 	chatId: string,
 	fromSeqNum?: number,
+	live = false,
 ): Promise<Response> {
 	return chat.replay(
 		liveStreamName(chatId),
-		fromSeqNum !== undefined ? { fromSeqNum } : undefined,
+		fromSeqNum !== undefined || live ? { fromSeqNum, live } : undefined,
 	);
 }
 
@@ -171,7 +163,11 @@ const server = Bun.serve({
 				return new Response("Missing id query parameter", { status: 400 });
 			}
 			return withCors(
-				await handleReplay(chatId, parseSeqNum(url.searchParams.get("from"))),
+				await handleReplay(
+					chatId,
+					parseSeqNum(url.searchParams.get("from")),
+					url.searchParams.get("live") === "1",
+				),
 			);
 		}
 

@@ -108,6 +108,38 @@ async function* tailDataRecords(
 	}
 }
 
+async function* readAvailableDataRecords(
+	stream: S2Stream,
+	fromSeqNum: number,
+	untilSeqNum = Number.POSITIVE_INFINITY,
+): AsyncIterable<TailedStringRecord> {
+	const session = await stream
+		.readSession(
+			{
+				start: { from: { seqNum: fromSeqNum }, clamp: true },
+				stop: { waitSecs: 0 },
+			},
+			{ as: "string" },
+		)
+		.catch((error: unknown) => {
+			if (isMissingStreamError(error)) return null;
+			throw error;
+		});
+	if (!session) return;
+
+	try {
+		for await (const record of session) {
+			if (record.seqNum >= untilSeqNum) break;
+			if (isFenceRecord(record) || isTrimRecord(record) || !record.body) {
+				continue;
+			}
+			yield { body: record.body, nextSeqNum: record.seqNum + 1 };
+		}
+	} finally {
+		await session[Symbol.asyncDispose]?.();
+	}
+}
+
 interface SharedStreamState {
 	reusableFenceToken: string | null;
 	/**
@@ -125,6 +157,12 @@ interface SharedStreamState {
 	 * forward.
 	 */
 	lastRecordTimestamp: number | null;
+}
+
+export interface SessionReplayState {
+	hasActiveGeneration: boolean;
+	activeGenerationStartSeqNum: number | null;
+	nextSeqNum: number;
 }
 
 function createEmptySharedStreamState(): SharedStreamState {
@@ -343,6 +381,39 @@ export async function* tailStringRecords(
 	fromSeqNum = 0,
 ): AsyncIterable<TailedStringRecord> {
 	yield* tailDataRecords(stream, fromSeqNum, "skip");
+}
+
+export async function readSessionReplayState(
+	stream: S2Stream,
+): Promise<SessionReplayState> {
+	const state = await readSharedStreamState(stream);
+	return {
+		hasActiveGeneration: state.hasActiveGeneration,
+		activeGenerationStartSeqNum: state.activeGenerationStartSeqNum,
+		nextSeqNum: state.nextSeqNum,
+	};
+}
+
+export async function* replaySessionStringRecords(
+	stream: S2Stream,
+	fromSeqNum = 0,
+	state?: SessionReplayState,
+): AsyncIterable<TailedStringRecord> {
+	const replayState = state ?? (await readSessionReplayState(stream));
+	if (!replayState.hasActiveGeneration) {
+		if (fromSeqNum >= replayState.nextSeqNum) return;
+		yield* readAvailableDataRecords(stream, fromSeqNum);
+		return;
+	}
+	const activeStart = replayState.activeGenerationStartSeqNum ?? fromSeqNum;
+	if (fromSeqNum < activeStart) {
+		yield* readAvailableDataRecords(stream, fromSeqNum, activeStart);
+	}
+	yield* tailDataRecords(
+		stream,
+		Math.max(fromSeqNum, activeStart),
+		"stop-terminal",
+	);
 }
 
 export async function* tailGenerationStringRecords(

@@ -111,6 +111,10 @@
       sendBtn.disabled = !enabled;
     }
 
+    function setIdleIfReady() {
+      if (!sendBtn.disabled) setStatus('idle');
+    }
+
     function abortActiveStream() {
       activeAbort?.abort();
       activeAbort = null;
@@ -168,13 +172,24 @@
         .join('');
     }
 
+    function normalizeTurns(json) {
+      if (!json || typeof json !== 'object') return [];
+      if (!Array.isArray(json.turns)) return [];
+      return json.turns
+        .filter((turn) => turn && typeof turn.user === 'string')
+        .map((turn) => ({
+          user: turn.user,
+          assistant: turn.assistant,
+          error: turn.error && typeof turn.error.message === 'string' ? turn.error : undefined,
+        }));
+    }
+
     async function loadHistory() {
       const res = await fetch(`${API}/history?id=${encodeURIComponent(chatId)}`);
-      if (!res.ok) return { users: [], messages: [], nextSeqNum: 0 };
+      if (!res.ok) return { turns: [], nextSeqNum: 0 };
       const json = await res.json();
       return {
-        users: Array.isArray(json.users) ? json.users.filter((s) => typeof s === 'string') : [],
-        messages: Array.isArray(json.messages) ? json.messages : [],
+        turns: normalizeTurns(json),
         nextSeqNum: typeof json.nextSeqNum === 'number' ? json.nextSeqNum : 0,
       };
     }
@@ -211,73 +226,99 @@
       return el;
     }
 
-    async function renderTurn(frames, { eager = false, idleAbortMs = 0, controller = null } = {}) {
-      let bodyEl = eager ? makeStreamingBubble() : null;
+    async function renderStream(frames, controller) {
+      let bodyEl = null;
       let text = '';
-      const idleTimer = idleAbortMs > 0 && controller
-        ? setTimeout(() => controller.abort(), idleAbortMs)
-        : null;
+      const finishAssistant = () => {
+        bodyEl?.classList.remove('streaming');
+        bodyEl = null;
+        text = '';
+      };
       try {
         for await (const frame of frames) {
-          if (idleTimer) clearTimeout(idleTimer);
           const event = frame.data;
           if (event?.type === 'user_message' && typeof event.message === 'string') {
+            finishAssistant();
             appendMessage('user', event.message);
+            setInputEnabled(false);
+            setStatus('streaming');
           } else if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
             text += event.delta.text;
             if (!bodyEl) bodyEl = makeStreamingBubble();
             bodyEl.textContent = text;
             chatEl.scrollTop = chatEl.scrollHeight;
+            setInputEnabled(false);
+            setStatus('streaming');
           } else if (event?.type === 'error') {
             text += `\n[error: ${event.error?.message || 'unknown'}]`;
             if (!bodyEl) bodyEl = makeStreamingBubble();
             bodyEl.textContent = text;
-            controller?.abort();
-            break;
+            finishAssistant();
+            setInputEnabled(true);
+            setStatus('idle');
           } else if (event?.type === 'message_stop') {
-            controller?.abort();
-            break;
+            finishAssistant();
+            setInputEnabled(true);
+            setStatus('idle');
           }
         }
       } catch (err) {
         if (!controller?.signal.aborted) throw err;
       } finally {
-        if (idleTimer) clearTimeout(idleTimer);
         bodyEl?.classList.remove('streaming');
       }
     }
 
-    async function tailFromCursor({ eager = false, idleAbortMs = 1500, status = 'replaying' } = {}) {
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function streamUrl({ live = false } = {}) {
+      const params = new URLSearchParams({
+        id: chatId,
+        from: String(nextCursor),
+      });
+      if (live) params.set('live', '1');
+      return `${API}/stream?${params.toString()}`;
+    }
+
+    async function tailFromCursor({ live = false, status = 'replaying' } = {}) {
       const controller = startActiveStream();
       setStatus(status);
       try {
-        const res = await fetch(
-          `${API}/stream?id=${encodeURIComponent(chatId)}&from=${nextCursor}`,
-          { signal: controller.signal },
-        );
+        const res = await fetch(streamUrl({ live }), { signal: controller.signal });
         if (res.status === 204 || !res.body) return;
-        await renderTurn(streamSse(res.body, controller.signal), {
-          eager,
-          idleAbortMs,
-          controller,
-        });
+        await renderStream(streamSse(res.body, controller.signal), controller);
       } catch (err) {
         if (!controller.signal.aborted) throw err;
       } finally {
         const ownsStream = activeAbort === controller;
         finishActiveStream(controller);
-        if (ownsStream) setStatus('idle');
+        if (ownsStream) setIdleIfReady();
+      }
+    }
+
+    async function watchForChanges() {
+      while (true) {
+        try {
+          await tailFromCursor({ live: true, status: 'idle' });
+        } catch {
+          setIdleIfReady();
+          await sleep(1000);
+        }
+        await sleep(50);
       }
     }
 
     async function loadAndRenderHistory() {
       clearChat();
-      const { users, messages: assistants, nextSeqNum } = await loadHistory();
+      const { turns, nextSeqNum } = await loadHistory();
       nextCursor = nextSeqNum;
-      const turns = Math.max(users.length, assistants.length);
-      for (let i = 0; i < turns; i += 1) {
-        if (i < users.length) appendMessage('user', users[i]);
-        if (i < assistants.length) appendMessage('assistant', extractText(assistants[i]));
+      for (const turn of turns) {
+        appendMessage('user', turn.user);
+        if (turn.assistant) {
+          appendMessage('assistant', extractText(turn.assistant));
+        } else if (turn.error) {
+          appendMessage('assistant', `[error: ${turn.error.message}]`);
+        }
       }
       ensureEmptyState();
     }
@@ -292,9 +333,9 @@
       const text = inputEl.value.trim();
       if (!text || sendBtn.disabled) return;
       inputEl.value = '';
-      abortActiveStream();
       setInputEnabled(false);
       setStatus('streaming');
+      let accepted = false;
       try {
         const res = await fetch(API, {
           method: 'POST',
@@ -305,10 +346,12 @@
           appendMessage('assistant', `[error: ${res.status} ${res.statusText}]`);
           return;
         }
-        await tailFromCursor({ idleAbortMs: 0, status: 'streaming' });
+        accepted = true;
       } finally {
-        setStatus('idle');
-        setInputEnabled(true);
+        if (!accepted) {
+          setStatus('idle');
+          setInputEnabled(true);
+        }
         inputEl.focus();
       }
     }
@@ -324,7 +367,7 @@
     });
 
     syncChatUrl();
-    initPromise.then(() => tailFromCursor()).catch(() => setStatus('idle'));
+    initPromise.then(() => watchForChanges()).catch(() => setStatus('idle'));
   </script>
 </body>
 </html>

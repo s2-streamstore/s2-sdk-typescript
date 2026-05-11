@@ -114,7 +114,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 describe("createChatClient", () => {
 	it("uses history nextSeqNum as the next replay cursor", async () => {
 		const { fetch, calls } = recordingFetch([
-			Response.json({ users: ["hello"], messages: [], nextSeqNum: 42 }),
+			Response.json({
+				turns: [{ user: "hello" }],
+				messages: [],
+				nextSeqNum: 42,
+			}),
 			new Response(null, { status: 204 }),
 		]);
 		const chat = createChatClient({
@@ -128,7 +132,7 @@ describe("createChatClient", () => {
 		await chat.subscribe();
 
 		expect(history.nextSeqNum).toBe(42);
-		expect(history.users).toEqual(["hello"]);
+		expect(history.turns).toEqual([{ user: "hello" }]);
 		expect(calls[0]!.url).toBe("/history");
 		expect(calls[1]!.url).toBe("/stream?from=42");
 	});
@@ -176,6 +180,28 @@ describe("createChatClient", () => {
 
 		expect(events.at(-1)?.type).toBe("message_stop");
 		expect((calls[0]!.init.signal as AbortSignal).aborted).toBe(true);
+	});
+
+	it("can keep a live subscription open after terminal events", async () => {
+		const { fetch, calls } = recordingFetch([
+			sseResponse([
+				...textTurnEvents("msg_1", "done"),
+				{ type: "user_message", message: "next" },
+			]),
+		]);
+		const chat = createChatClient({
+			sendUrl: "/send",
+			subscribeUrl: "/stream",
+			fetch,
+			reconnectBackoffMs: [],
+		});
+
+		const subscription = await chat.subscribe({ stopOnTerminal: false });
+		const events = [];
+		for await (const event of subscription.events) events.push(event);
+
+		expect(events.at(-1)).toEqual({ type: "user_message", message: "next" });
+		expect((calls[0]!.init.signal as AbortSignal).aborted).toBe(false);
 	});
 
 	it("messagesFromEvents pipes a subscription into reconstructed Messages", async () => {
