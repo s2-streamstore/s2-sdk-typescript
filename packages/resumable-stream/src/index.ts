@@ -221,11 +221,32 @@ async function resumeStream(
 			},
 			{ as: "string" },
 		);
+		const reader = session.getReader();
+		let cancelled = false;
+		let sessionDone = false;
+		let cleanupPromise: Promise<void> | undefined;
+		const cleanup = (reason?: unknown) => {
+			cleanupPromise ??= (async () => {
+				try {
+					if (!sessionDone) await reader.cancel(reason);
+				} finally {
+					reader.releaseLock();
+					await handle.close?.();
+				}
+			})();
+			return cleanupPromise;
+		};
 
 		return new ReadableStream({
 			async start(controller) {
 				try {
-					for await (const record of session) {
+					while (true) {
+						const { done, value: record } = await reader.read();
+						if (done) {
+							sessionDone = true;
+							break;
+						}
+						if (cancelled) break;
 						if (isFenceRecord(record)) {
 							if (isTerminalFence(record)) break;
 							continue;
@@ -251,14 +272,22 @@ async function resumeStream(
 						}
 					}
 
-					debugLog("Closing stream due to completion:", streamId);
-					controller.close();
+					if (!cancelled) {
+						debugLog("Closing stream due to completion:", streamId);
+						controller.close();
+					}
 				} catch (error: unknown) {
-					debugLog("Error processing stream:", streamId, error);
-					controller.error(error);
+					if (!cancelled) {
+						debugLog("Error processing stream:", streamId, error);
+						controller.error(error);
+					}
 				} finally {
-					await handle.close?.();
+					await cleanup();
 				}
+			},
+			async cancel(reason) {
+				cancelled = true;
+				await cleanup(reason);
 			},
 		});
 	} catch (error: unknown) {
