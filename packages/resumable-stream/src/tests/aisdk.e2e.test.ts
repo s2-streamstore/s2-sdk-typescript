@@ -23,6 +23,17 @@ const makeStreamName = (prefix: string): string =>
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function deferred(): {
+	promise: Promise<void>;
+	resolve: () => void;
+} {
+	let resolve!: () => void;
+	const promise = new Promise<void>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
+}
+
 const waitForBasinReady = async (s2: S2, basin: string): Promise<void> => {
 	const deadline = Date.now() + 60_000;
 	while (Date.now() < deadline) {
@@ -59,6 +70,20 @@ async function* delayedAsyncIterable<T>(
 		if (index < items.length - 1) {
 			await sleep(delayMs);
 		}
+	}
+}
+
+async function* heldOpenAsyncIterable<T>(
+	items: T[],
+	release: Promise<void>,
+	delayMs = 25,
+): AsyncIterable<T> {
+	if (items.length === 0) return;
+	yield items[0]!;
+	await release;
+	for (let index = 1; index < items.length; index += 1) {
+		if (delayMs > 0) await sleep(delayMs);
+		yield items[index]!;
 	}
 }
 
@@ -262,11 +287,12 @@ describeIf("resumable-stream/aisdk", () => {
 				});
 				const streamName = makeStreamName("replay-bg");
 				const chunks = sampleChunks();
+				const releaseSource = deferred();
 
 				let bgPromise: Promise<unknown> | undefined;
 				const postRes = await chat.makeResumable(
 					streamName,
-					delayedAsyncIterable(chunks),
+					heldOpenAsyncIterable(chunks, releaseSource.promise),
 					{
 						waitUntil: (promise) => {
 							bgPromise = promise;
@@ -279,6 +305,7 @@ describeIf("resumable-stream/aisdk", () => {
 				await postRes.body?.cancel();
 
 				const replayRes = await chat.replay(streamName);
+				releaseSource.resolve();
 				expect(replayRes.status).toBe(200);
 				expect(replayRes.headers.get("Content-Type")).toBe("text/event-stream");
 
@@ -304,6 +331,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const streamName = makeStreamName("shared-reuse");
 				const firstChunks = sampleChunks("Hello world");
 				const secondChunks = sampleChunks("Second pass");
+				const releaseSecondSource = deferred();
 
 				let firstBg: Promise<unknown> | undefined;
 				const res1 = await chat.makeResumable(
@@ -322,7 +350,7 @@ describeIf("resumable-stream/aisdk", () => {
 				let secondBg: Promise<unknown> | undefined;
 				const res2 = await chat.makeResumable(
 					streamName,
-					delayedAsyncIterable(secondChunks),
+					heldOpenAsyncIterable(secondChunks, releaseSecondSource.promise),
 					{
 						waitUntil: (promise) => {
 							secondBg = promise;
@@ -333,6 +361,7 @@ describeIf("resumable-stream/aisdk", () => {
 				await res2.body?.cancel();
 
 				const latest = await chat.replay(streamName);
+				releaseSecondSource.resolve();
 				expect(latest.status).toBe(200);
 				expect(await readSseResponse(latest)).toEqual(secondChunks);
 

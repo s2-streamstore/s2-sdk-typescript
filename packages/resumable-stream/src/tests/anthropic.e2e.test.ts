@@ -19,6 +19,17 @@ const makeStreamName = (prefix: string): string =>
 	`${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function deferred(): {
+	promise: Promise<void>;
+	resolve: () => void;
+} {
+	let resolve!: () => void;
+	const promise = new Promise<void>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
+}
+
 async function waitForBasinReady(s2: S2, basin: string): Promise<void> {
 	const deadline = Date.now() + 60_000;
 	while (Date.now() < deadline) {
@@ -53,6 +64,20 @@ async function* delayedAsyncIterable<T>(
 		if (index < items.length - 1) {
 			await sleep(delayMs);
 		}
+	}
+}
+
+async function* heldOpenAsyncIterable<T>(
+	items: T[],
+	release: Promise<void>,
+	delayMs = 25,
+): AsyncIterable<T> {
+	if (items.length === 0) return;
+	yield items[0]!;
+	await release;
+	for (let index = 1; index < items.length; index += 1) {
+		if (delayMs > 0) await sleep(delayMs);
+		yield items[index]!;
 	}
 }
 
@@ -230,12 +255,16 @@ describeIf("resumable-stream/anthropic", () => {
 			});
 			const streamName = makeStreamName("anthr-replay");
 			const events = textTurnEvents("msg_replay", "Replay me");
+			const releaseSource = deferred();
 
 			// Cancel the live response immediately — the persist branch keeps writing.
 			let bg: Promise<unknown> | undefined;
 			const live = await chat.makeResumable(
 				streamName,
-				delayedAsyncIterable(events) as AsyncIterable<Chunk>,
+				heldOpenAsyncIterable(
+					events,
+					releaseSource.promise,
+				) as AsyncIterable<Chunk>,
 				{
 					waitUntil: (p) => {
 						bg = p;
@@ -246,6 +275,7 @@ describeIf("resumable-stream/anthropic", () => {
 
 			// Replay tails the active generation until the terminal fence arrives.
 			const replay = await chat.replay(streamName);
+			releaseSource.resolve();
 			expect(replay.status).toBe(200);
 			expect(replay.headers.get("Content-Type")).toBe("text/event-stream");
 			const replayFrames = await readAnthropicSse(replay);
