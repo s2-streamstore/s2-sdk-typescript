@@ -24,8 +24,8 @@ The package exposes these entry points:
 
 - **`@s2-dev/resumable-stream`**: a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams or anything that isn't AI SDK.
 - **`@s2-dev/resumable-stream/aisdk`**: a thin helper over `UIMessageChunk` streams for the AI SDK's `useChat`. See the [AI SDK section](#ai-sdk) below.
-- **`@s2-dev/resumable-stream/anthropic`**: a helper for Anthropic message streams. See the [Anthropic section](#anthropic) below.
-- **`@s2-dev/resumable-stream/anthropic/client`**: browser helpers for reading Anthropic streams and rebuilding messages.
+- **`@s2-dev/resumable-stream/anthropic`**: persists and replays raw `client.messages.stream(...)` events. See the [Anthropic section](#anthropic) below.
+- **`@s2-dev/resumable-stream/anthropic/client`**: browser helpers for subscribing to and reconnecting against the replay.
 - **`@s2-dev/resumable-stream/tanstack-ai`**: a thin helper over TanStack AI `StreamChunk` streams. See the [TanStack AI section](#tanstack-ai) below.
 - **`@s2-dev/resumable-stream/tanstack-ai/client`**: TanStack AI client helpers.
 
@@ -165,12 +165,22 @@ export default function Chat() {
 
 ## Anthropic
 
-The `./anthropic` subpath stores Anthropic message stream events in S2 and
-streams responses by reading those records. Assistant events keep the same SSE
-shape as `client.messages.stream(...)`. Apps can also write `user_message`
-records to the same stream so history contains both sides of the chat.
+The `./anthropic` subpath persists raw `client.messages.stream(...)` events to
+S2 and replays them as SSE that matches the Anthropic wire format:
 
-A runnable end-to-end demo (Bun server + vanilla-JS client): [`examples/anthropic-resumable-chat`](../../examples/anthropic-resumable-chat/).
+```
+event: <event_type>
+data:  <json>
+id:    <seqNum>
+```
+
+That's the entire mission. Chat history, message reconstruction, and prompt
+assembly stay in your application — pair this with the SDK's
+[`MessageStream`](https://github.com/anthropics/anthropic-sdk-typescript) or
+your own folding logic to turn replayed events back into a `Message`.
+
+A runnable end-to-end demo (Bun server + vanilla-JS client maintaining its own
+chat state in `localStorage`): [`examples/anthropic-resumable-chat`](../../examples/anthropic-resumable-chat/).
 
 For chat apps, use `mode: "session"` and read responses from a replay route:
 
@@ -178,9 +188,7 @@ For chat apps, use `mode: "session"` and read responses from a replay route:
 import Anthropic from "@anthropic-ai/sdk";
 import { createResumableChat } from "@s2-dev/resumable-stream/anthropic";
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
 const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -188,24 +196,17 @@ const chat = createResumableChat({
   mode: "session",
 });
 
-const waitUntil = (promise: Promise<unknown>) => {
-  promise.catch(console.error);
-};
-
 export async function POST(req: Request) {
-  const { id, message, messages } = await req.json();
-  const source = (async function* () {
-    yield { type: "user_message", message } as const;
-    yield* anthropic.messages.stream({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      messages: [...messages, { role: "user", content: message }],
-    });
-  })();
+  const { id, messages } = await req.json();
+  const source = anthropic.messages.stream({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 1024,
+    messages,
+  });
 
   return chat.makeResumable(`chat-${id}`, source, {
     delivery: "replay",
-    waitUntil,
+    waitUntil: (p) => p.catch(console.error),
   });
 }
 
@@ -220,28 +221,32 @@ export async function GET(req: Request) {
 }
 ```
 
-`chat.history(streamName)` returns `{ turns, messages, nextSeqNum }`.
-Render `turns` for ordered chat history, then call
-`chat.replay(streamName, { fromSeqNum: nextSeqNum })` to read anything still in
-progress. Use `{ live: true }` for a tab that should stay subscribed to future
-records after the stream is idle.
-
-The optional browser client can read history, send requests, and keep a live
-session replay open:
+The browser helper is a single async generator. POSTs are plain `fetch`;
+`subscribe` handles the SSE tail, cursor tracking, and auto-reconnect with
+`?from=<seqNum>` on body drop:
 
 ```ts
-import { createChatClient } from "@s2-dev/resumable-stream/anthropic/client";
+import { subscribe } from "@s2-dev/resumable-stream/anthropic/client";
 
-const client = createChatClient({
-  sendUrl: "/api/chat",
-  historyUrl: `/api/chat/history?id=${chatId}`,
-  subscribeUrl: (cursor) =>
-    `/api/chat/stream?id=${chatId}&from=${cursor ?? 0}&live=1`,
+const ac = new AbortController();
+
+await fetch("/api/chat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ id: chatId, message: "hi" }),
 });
 
-const history = await client.loadHistory();
-const subscription = await client.subscribe({ stopOnTerminal: false });
+for await (const event of subscribe({
+  url: (cursor) => `/api/chat/stream?id=${chatId}&from=${cursor ?? 0}&live=1`,
+  signal: ac.signal,
+})) {
+  // Anthropic events plus the adapter's `error` envelope.
+}
 ```
+
+The loop ends on body close followed by HTTP 204 from a reconnect, on an
+aborted `signal`, or when `reconnectBackoffMs: []` is passed and the body
+ends without 204.
 
 Server fields:
 
@@ -250,7 +255,7 @@ Server fields:
 | `accessToken` | S2 access token. |
 | `basin` | S2 basin that stores chat streams. |
 | `endpoints` | Optional S2 endpoint overrides, commonly used with `s2-lite`. |
-| `mode` | Storage layout: `single-use`, `shared`, or `session`. Use `session` for chat history and multi-tab replay. |
+| `mode` | Storage layout: `single-use`, `shared`, or `session`. Use `session` for multi-turn chats and multi-tab replay. |
 | `batchSize` | Maximum number of chunks to append to S2 at once. Defaults to `10`. |
 | `lingerDuration` | Maximum batching delay in milliseconds. Defaults to `50`. |
 | `leaseDurationMs` | `shared` mode takeover window for stale active generations. Defaults to `5000`. |
@@ -267,36 +272,19 @@ Server fields:
 
 | Field | Description |
 | --- | --- |
-| `fromSeqNum` | S2 cursor to resume from. Use `history.nextSeqNum` after loading history. |
+| `fromSeqNum` | S2 cursor to resume from. The client tracks this automatically via SSE `id:`. |
 | `live` | `session` mode only. Keeps the SSE open at the tail for future turns. |
 
-History fields:
+`subscribe` options:
 
 | Field | Description |
 | --- | --- |
-| `turns` | Ordered user turns. Each turn may include a completed `assistant` message or an `error`. |
-| `messages` | Completed assistant messages reconstructed from Anthropic events. |
-| `nextSeqNum` | Cursor to pass as `fromSeqNum` for replay. |
-
-Client fields:
-
-| Field | Description |
-| --- | --- |
-| `sendUrl` | URL that accepts `POST` and starts a generation. |
-| `subscribeUrl` | URL that accepts `GET` and returns replay SSE. String URLs get `?from=` added automatically; function URLs receive the cursor. |
-| `historyUrl` | Optional URL returning `{ turns, messages, nextSeqNum }`. |
-| `stopUrl` | Optional URL called by `stop()` with `DELETE`. |
+| `url` | Replay URL. String URLs get `?from=<cursor>` appended on reconnect; function URLs receive the cursor. |
+| `signal` | Optional abort signal. |
 | `fetch` | Optional fetch implementation override. |
 | `headers` | Static or lazy headers sent on every request. |
 | `credentials` | Fetch credentials mode. Defaults to `same-origin`. |
 | `reconnectBackoffMs` | Millisecond backoff schedule for reconnects. Pass `[]` to disable reconnect. |
-
-`send`/`subscribe` fields:
-
-| Field | Description |
-| --- | --- |
-| `signal` | Abort signal for the request/subscription. |
-| `stopOnTerminal` | Defaults to `true`. Set `false` for live session streams so `message_stop` does not close the listener. |
 
 ## TanStack AI
 

@@ -1,13 +1,13 @@
 import {
+	type Chunk,
 	createResumableChat,
-	type StreamChunk,
 } from "@s2-dev/resumable-stream/tanstack-ai";
 
 type Importer = (specifier: string) => Promise<any>;
 const importOptional: Importer = (specifier) => import(specifier);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function* fallbackStream(prompt: string): AsyncIterable<StreamChunk> {
+async function* fallbackStream(prompt: string): AsyncIterable<Chunk> {
 	const ts = Date.now();
 	yield { type: "RUN_STARTED", timestamp: ts };
 	await sleep(25);
@@ -33,9 +33,7 @@ async function* fallbackStream(prompt: string): AsyncIterable<StreamChunk> {
 	yield { type: "RUN_FINISHED", timestamp: ts + 4 };
 }
 
-async function createSource(
-	prompt: string,
-): Promise<AsyncIterable<StreamChunk>> {
+async function createSource(prompt: string): Promise<AsyncIterable<Chunk>> {
 	if (!process.env.OPENAI_API_KEY) return fallbackStream(prompt);
 
 	const [{ chat }, { openaiText }] = await Promise.all([
@@ -50,7 +48,7 @@ async function createSource(
 	return chat({
 		adapter: openaiText(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
 		messages: [{ role: "user", content: prompt }],
-	}) as AsyncIterable<StreamChunk>;
+	}) as AsyncIterable<Chunk>;
 }
 
 function requireEnv(name: string): string {
@@ -67,7 +65,7 @@ function endpointsFromEnv() {
 		: undefined;
 }
 
-async function* readSse(response: Response): AsyncIterable<StreamChunk> {
+async function* readSse(response: Response): AsyncIterable<Chunk> {
 	const reader = response.body!.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -84,7 +82,7 @@ async function* readSse(response: Response): AsyncIterable<StreamChunk> {
 					.map((line) => line.slice(5).trimStart())
 					.join("\n");
 				if (!data || data === "[DONE]") continue;
-				yield JSON.parse(data) as StreamChunk;
+				yield JSON.parse(data) as Chunk;
 			}
 			if (done) break;
 		}
@@ -127,7 +125,7 @@ async function main() {
 		throw new Error(`makeResumable failed: ${response.status}`);
 	}
 
-	const chunks: StreamChunk[] = [];
+	const chunks: Chunk[] = [];
 	for await (const chunk of readSse(response)) {
 		chunks.push(chunk);
 		console.log("chunk:", chunk);

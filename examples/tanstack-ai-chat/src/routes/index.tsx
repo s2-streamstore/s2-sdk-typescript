@@ -1,4 +1,4 @@
-import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client";
+import { createConnection } from "@s2-dev/resumable-stream/tanstack-ai/client";
 import type { UIMessage } from "@tanstack/ai-react";
 import { useChat } from "@tanstack/ai-react";
 import { createFileRoute } from "@tanstack/react-router";
@@ -94,7 +94,7 @@ function ChatInner({
 }) {
 	const connection = useMemo(
 		() =>
-			createS2Connection({
+			createConnection({
 				sendUrl: API,
 				stopUrl: API,
 				subscribeUrl: subscribeUrl(chatId),

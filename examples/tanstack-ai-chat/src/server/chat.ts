@@ -1,6 +1,6 @@
 import {
+	type Chunk,
 	createResumableChat,
-	type StreamChunk,
 } from "@s2-dev/resumable-stream/tanstack-ai";
 import {
 	convertMessagesToModelMessages,
@@ -55,8 +55,12 @@ const chat = createResumableChat({
 	basin: requireEnv("S2_BASIN"),
 	endpoints: endpointsFromEnv(),
 	mode: "session",
-	enableStop: true,
 });
+
+// Process-local active-generation tracking. The resumable-stream package no
+// longer owns this; we keep the abort controller for each in-flight turn here
+// so `/stop` can abort the upstream model call.
+const activeGenerations = new Map<string, AbortController>();
 
 function streamName(chatId: string): string {
 	return `${STREAM_PREFIX}-${chatId}`;
@@ -85,7 +89,7 @@ async function* fallbackStream(
 	prompt: string,
 	messageId = FALLBACK_MESSAGE_ID,
 	signal?: AbortSignal,
-): AsyncIterable<StreamChunk> {
+): AsyncIterable<Chunk> {
 	const words = `Echo: ${prompt}`.split(/(\s+)/).filter(Boolean);
 	const timestamp = Date.now();
 	const runId = `fallback-run-${timestamp}`;
@@ -126,7 +130,7 @@ async function* fallbackStream(
 async function createChunks(
 	messages: UIMessage[],
 	{ abortController }: { abortController: AbortController },
-): Promise<AsyncIterable<StreamChunk>> {
+): Promise<AsyncIterable<Chunk>> {
 	const modelMessages = convertMessagesToModelMessages(messages);
 	const latestPrompt =
 		getModelMessageText(
@@ -161,7 +165,28 @@ async function createChunks(
 		adapter: openaiText(model),
 		messages: modelMessages,
 		abortController,
-	}) as AsyncIterable<StreamChunk>;
+	}) as AsyncIterable<Chunk>;
+}
+
+// Wraps the chunk stream so we yield each event through, see what's terminal,
+// and clear the active-generations entry on completion / abort.
+function withActiveTracking(
+	name: string,
+	active: AbortController,
+	source: AsyncIterable<Chunk>,
+): AsyncIterable<Chunk> {
+	return (async function* () {
+		try {
+			for await (const chunk of source) {
+				if (active.signal.aborted) return;
+				yield chunk;
+			}
+		} finally {
+			if (activeGenerations.get(name) === active) {
+				activeGenerations.delete(name);
+			}
+		}
+	})();
 }
 
 function routeError(error: unknown): Response {
@@ -178,15 +203,34 @@ export async function postChat(request: Request): Promise<Response> {
 		if (!isValidChatId(body.id)) {
 			return new Response("Missing or invalid id", { status: 400 });
 		}
-
 		if (!Array.isArray(body.messages) || body.messages.length === 0) {
 			return new Response("Expected at least one message", { status: 400 });
 		}
 
-		return chat.makeSessionResponse(streamName(body.id), {
-			messages: body.messages,
-			source: createChunks,
+		const name = streamName(body.id);
+		if (activeGenerations.has(name)) {
+			return new Response("Stream already has an active generation", {
+				status: 409,
+			});
+		}
+
+		const active = new AbortController();
+		activeGenerations.set(name, active);
+
+		const source = await createChunks(body.messages as UIMessage[], {
+			abortController: active,
 		});
+
+		try {
+			return await chat.makeResumable(
+				name,
+				withActiveTracking(name, active, source),
+				{ delivery: "replay" },
+			);
+		} catch (err) {
+			activeGenerations.delete(name);
+			throw err;
+		}
 	} catch (error) {
 		return routeError(error);
 	}
@@ -198,8 +242,12 @@ export async function stopChat(request: Request): Promise<Response> {
 		if (!isValidChatId(body.id)) {
 			return new Response("Missing or invalid id", { status: 400 });
 		}
-
-		return chat.stopSession(streamName(body.id));
+		const active = activeGenerations.get(streamName(body.id));
+		active?.abort();
+		return new Response(null, {
+			status: active ? 202 : 204,
+			headers: { "Cache-Control": "no-store" },
+		});
 	} catch (error) {
 		return routeError(error);
 	}
@@ -213,7 +261,6 @@ export async function replayChat(
 		if (!isValidChatId(chatId)) {
 			return new Response("Missing id query parameter", { status: 400 });
 		}
-
 		return chat.replay(streamName(chatId), {
 			fromSeqNum: parseFromSeqNum(fromSeqNumValue ?? null),
 		});

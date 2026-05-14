@@ -117,6 +117,121 @@ export async function fetchOk(
 	return response;
 }
 
+export interface SubscribeSseOptions {
+	/**
+	 * SSE URL. A string gets `?from=<cursor>` appended on reconnect; a function
+	 * receives the cursor and returns the full URL.
+	 */
+	url: string | ((cursor?: number) => string);
+	/** Abort the subscription. */
+	signal?: AbortSignal;
+	/** Fetch implementation override. */
+	fetch?: typeof fetch;
+	/** Static or lazy headers sent with every request. */
+	headers?: HeadersOption;
+	/** Forwarded to fetch. Defaults to `same-origin`. */
+	credentials?: RequestCredentials;
+	/**
+	 * Backoff schedule (ms) between reconnect attempts. Index `n` is the wait
+	 * before the `n`-th reconnect; the last value is reused after that. The
+	 * counter resets on every received event. Pass `[]` to disable reconnect.
+	 */
+	reconnectBackoffMs?: readonly number[];
+	/**
+	 * Optional shared cursor holder. The subscription reads `current` to build
+	 * the initial URL and updates it after every SSE `id:`. Pass the same ref
+	 * across multiple `subscribeSse` calls to resume where the previous one
+	 * left off.
+	 */
+	cursorRef?: { current: number | undefined };
+}
+
+const DEFAULT_BACKOFF_MS = [0, 250, 500, 1000, 2000, 5000] as const;
+
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+	if (ms <= 0 || signal.aborted) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		signal.addEventListener("abort", finish, { once: true });
+	});
+}
+
+/**
+ * Tails an SSE replay. Parses each frame as JSON of type `T`, advances a
+ * cursor from each frame's `id:`, and reconnects with `?from=<cursor>` on
+ * body drop or fetch failure. Ends on HTTP 204, aborted signal, or empty
+ * `reconnectBackoffMs`.
+ */
+export async function* subscribeSse<T>(
+	options: SubscribeSseOptions,
+): AsyncIterable<T> {
+	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+	const credentials = options.credentials ?? "same-origin";
+	const backoffMs = options.reconnectBackoffMs ?? DEFAULT_BACKOFF_MS;
+	const signal = options.signal ?? new AbortController().signal;
+	const cursorRef = options.cursorRef ?? { current: undefined };
+
+	let attempt = 0;
+	let needsReconnect = false;
+
+	while (!signal.aborted) {
+		if (needsReconnect) {
+			const wait = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 0;
+			attempt += 1;
+			await sleepAbortable(wait, signal);
+			if (signal.aborted) return;
+		}
+
+		let response: Response;
+		try {
+			response = await fetchOk(
+				doFetch,
+				resolveCursorUrl(options.url, cursorRef.current),
+				{
+					method: "GET",
+					headers: await resolveHeaders(options.headers),
+					credentials,
+					signal,
+				},
+			);
+		} catch (err) {
+			if (signal.aborted) return;
+			if (backoffMs.length === 0) throw err;
+			needsReconnect = true;
+			continue;
+		}
+
+		if (response.status === 204 || !response.body) return;
+
+		for await (const frame of pipeSseFrames(response.body, signal)) {
+			if (frame.id) {
+				const parsed = Number.parseInt(frame.id, 10);
+				if (
+					Number.isSafeInteger(parsed) &&
+					parsed >= 0 &&
+					(cursorRef.current === undefined || parsed > cursorRef.current)
+				) {
+					cursorRef.current = parsed;
+				}
+			}
+			if (!frame.data) continue;
+			attempt = 0;
+			try {
+				yield JSON.parse(frame.data) as T;
+			} catch {}
+		}
+
+		if (signal.aborted) return;
+		if (backoffMs.length === 0) return;
+		needsReconnect = true;
+	}
+}
+
 /**
  * AbortController whose signal aborts when `external` aborts, but which can
  * also be aborted independently. Lets a caller's signal propagate without

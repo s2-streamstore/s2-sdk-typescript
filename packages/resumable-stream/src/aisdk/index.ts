@@ -5,20 +5,19 @@ import {
 	createChat,
 	DEFAULT_ERROR_TEXT,
 	type ResumableChatConfig,
-} from "./adapter.js";
+} from "../adapter.js";
 
 export type {
 	MakeResumableOptions,
+	ReplayOptions,
 	ResumableChatConfig,
 	ResumableChatMode,
-} from "./adapter.js";
+} from "../adapter.js";
 
-/**
- * Server-side helpers for writing and replaying resumable AI SDK streams.
- */
-export type ResumableChat = Chat<UIMessageChunk>;
+export type Chunk = UIMessageChunk;
+export type ResumableChat = Chat<Chunk>;
 
-const adapter: ChatAdapter<UIMessageChunk> = {
+const adapter: ChatAdapter<Chunk> = {
 	makeErrorChunk(err, onError) {
 		return {
 			type: "error",
@@ -28,9 +27,7 @@ const adapter: ChatAdapter<UIMessageChunk> = {
 	responseHeaders: UI_MESSAGE_STREAM_HEADERS,
 };
 
-/**
- * Creates server-side helpers for making AI SDK streams resumable in S2.
- */
+/** Persists AI SDK UI message chunks to S2 and replays them. */
 export function createResumableChat(
 	config: ResumableChatConfig,
 ): ResumableChat {

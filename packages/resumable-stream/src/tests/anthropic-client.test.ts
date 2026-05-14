@@ -1,6 +1,6 @@
 import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { describe, expect, it } from "vitest";
-import { createChatClient, messagesFromEvents } from "../anthropic/client.js";
+import { subscribe } from "../anthropic/client.js";
 
 const baseUsage = {
 	input_tokens: 5,
@@ -111,125 +111,111 @@ function truncatedSseResponse(
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-describe("createChatClient", () => {
-	it("uses history nextSeqNum as the next replay cursor", async () => {
-		const { fetch, calls } = recordingFetch([
-			Response.json({
-				turns: [{ user: "hello" }],
-				messages: [],
-				nextSeqNum: 42,
-			}),
-			new Response(null, { status: 204 }),
-		]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
-			historyUrl: "/history",
-			fetch,
-		});
+describe("subscribe", () => {
+	it("yields parsed events from an SSE response", async () => {
+		const events = textTurnEvents("msg_1", "hi");
+		const { fetch, calls } = recordingFetch([sseResponse(events)]);
 
-		const history = await chat.loadHistory();
-		await chat.subscribe();
-
-		expect(history.nextSeqNum).toBe(42);
-		expect(history.turns).toEqual([{ user: "hello" }]);
-		expect(calls[0]!.url).toBe("/history");
-		expect(calls[1]!.url).toBe("/stream?from=42");
-	});
-
-	it("send reads from subscribeUrl when POST returns 202", async () => {
-		const { fetch, calls } = recordingFetch([
-			new Response(null, { status: 202 }),
-			sseResponse([
-				{ type: "user_message", message: "hello" },
-				...textTurnEvents("msg_1", "hi"),
-			]),
-		]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
-			fetch,
-		});
-
-		const subscription = await chat.send({ message: "hello" });
-		const events = [];
-		for await (const event of subscription.events) {
-			events.push(event);
-		}
-
-		expect(calls[0]!.url).toBe("/send");
-		expect(calls[1]!.url).toBe("/stream");
-		expect(events[0]).toEqual({ type: "user_message", message: "hello" });
-		expect(events.at(-1)?.type).toBe("message_stop");
-		expect((calls[1]!.init.signal as AbortSignal).aborted).toBe(true);
-	});
-
-	it("closes a subscription fetch after a terminal event", async () => {
-		const { fetch, calls } = recordingFetch([
-			sseResponse(textTurnEvents("msg_1", "done")),
-		]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
-			fetch,
-		});
-
-		const subscription = await chat.subscribe();
-		const events = [];
-		for await (const event of subscription.events) events.push(event);
-
-		expect(events.at(-1)?.type).toBe("message_stop");
-		expect((calls[0]!.init.signal as AbortSignal).aborted).toBe(true);
-	});
-
-	it("can keep a live subscription open after terminal events", async () => {
-		const { fetch, calls } = recordingFetch([
-			sseResponse([
-				...textTurnEvents("msg_1", "done"),
-				{ type: "user_message", message: "next" },
-			]),
-		]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
+		const collected: RawMessageStreamEvent[] = [];
+		for await (const event of subscribe({
+			url: "/stream",
 			fetch,
 			reconnectBackoffMs: [],
-		});
+		})) {
+			collected.push(event as RawMessageStreamEvent);
+		}
 
-		const subscription = await chat.subscribe({ stopOnTerminal: false });
-		const events = [];
-		for await (const event of subscription.events) events.push(event);
-
-		expect(events.at(-1)).toEqual({ type: "user_message", message: "next" });
-		expect((calls[0]!.init.signal as AbortSignal).aborted).toBe(false);
+		expect(collected).toHaveLength(events.length);
+		expect(collected.at(-1)?.type).toBe("message_stop");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.url).toBe("/stream");
 	});
 
-	it("messagesFromEvents pipes a subscription into reconstructed Messages", async () => {
+	it("drains multiple turns from the same body", async () => {
 		const { fetch } = recordingFetch([
-			sseResponse(textTurnEvents("msg_1", "hi")),
+			sseResponse([
+				...textTurnEvents("msg_1", "done"),
+				...textTurnEvents("msg_2", "next"),
+			]),
 		]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
+
+		const collected: RawMessageStreamEvent[] = [];
+		for await (const event of subscribe({
+			url: "/stream",
 			fetch,
-		});
-
-		const subscription = await chat.subscribe();
-		const messages: Awaited<ReturnType<typeof chat.loadHistory>>["messages"] =
-			[];
-		for await (const message of messagesFromEvents(subscription.events)) {
-			messages.push(message);
+			reconnectBackoffMs: [],
+		})) {
+			collected.push(event as RawMessageStreamEvent);
 		}
 
-		expect(messages).toHaveLength(1);
-		expect(messages[0]?.id).toBe("msg_1");
-		expect(messages[0]?.content[0]?.type).toBe("text");
-		if (messages[0]?.content[0]?.type === "text") {
-			expect(messages[0]?.content[0].text).toBe("hi");
-		}
+		const stopCount = collected.filter((e) => e.type === "message_stop").length;
+		expect(stopCount).toBe(2);
 	});
 
-	it("cancel aborts an active subscription reader", async () => {
+	it("auto-reconnects with ?from=<cursor> when the body drops mid-turn", async () => {
+		const events = textTurnEvents("msg_resume", "resumed");
+		const partial = truncatedSseResponse(events.slice(0, 3), 1);
+		const rest = truncatedSseResponse(events.slice(3), 4);
+		const done = new Response(null, { status: 204 });
+		const { fetch, calls } = recordingFetch([partial, rest, done]);
+
+		const collected: RawMessageStreamEvent[] = [];
+		for await (const event of subscribe({
+			url: "/stream",
+			fetch,
+			reconnectBackoffMs: [0],
+		})) {
+			collected.push(event as RawMessageStreamEvent);
+		}
+
+		expect(collected).toHaveLength(events.length);
+		expect(collected.at(-1)?.type).toBe("message_stop");
+
+		expect(calls).toHaveLength(3);
+		expect(calls[0]!.url).toBe("/stream");
+		// Last id seen in partial was 3.
+		expect(calls[1]!.url).toBe("/stream?from=3");
+		// Last id seen in rest was 6 (partial ids 1..3, rest ids 4..6).
+		expect(calls[2]!.url).toBe("/stream?from=6");
+	});
+
+	it("stops when reconnect returns HTTP 204", async () => {
+		const events = textTurnEvents("msg_done", "ok");
+		const done = new Response(null, { status: 204 });
+		const { fetch, calls } = recordingFetch([sseResponse(events), done]);
+
+		const collected: RawMessageStreamEvent[] = [];
+		for await (const event of subscribe({
+			url: "/stream",
+			fetch,
+			reconnectBackoffMs: [0],
+		})) {
+			collected.push(event as RawMessageStreamEvent);
+		}
+
+		expect(collected).toHaveLength(events.length);
+		expect(calls).toHaveLength(2);
+	});
+
+	it("respects an explicitly empty backoff schedule", async () => {
+		const events = textTurnEvents("msg_no_retry", "partial");
+		const partial = truncatedSseResponse(events.slice(0, 2), 1);
+		const { fetch, calls } = recordingFetch([partial]);
+
+		const collected: RawMessageStreamEvent[] = [];
+		for await (const event of subscribe({
+			url: "/stream",
+			fetch,
+			reconnectBackoffMs: [],
+		})) {
+			collected.push(event as RawMessageStreamEvent);
+		}
+
+		expect(collected).toHaveLength(2);
+		expect(calls).toHaveLength(1);
+	});
+
+	it("aborts via signal", async () => {
 		const encoder = new TextEncoder();
 		let resolveCancelled: () => void = () => {};
 		const cancelled = new Promise<void>((resolve) => {
@@ -253,95 +239,22 @@ describe("createChatClient", () => {
 				headers: { "Content-Type": "text/event-stream" },
 			}),
 		]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
-			fetch,
-		});
 
-		const subscription = await chat.subscribe();
-		const iterator = subscription.events[Symbol.asyncIterator]();
-		const first = await iterator.next();
-		expect(first.value?.type).toBe("message_start");
+		const ac = new AbortController();
+		const iter = subscribe({ url: "/stream", fetch, signal: ac.signal })[
+			Symbol.asyncIterator
+		]();
+		const first = await iter.next();
+		expect((first.value as RawMessageStreamEvent | undefined)?.type).toBe(
+			"message_start",
+		);
 
-		subscription.cancel();
+		ac.abort();
 		const didCancel = await Promise.race([
 			cancelled.then(() => true),
 			sleep(100).then(() => false),
 		]);
-		await iterator.return?.();
-
+		await iter.return?.();
 		expect(didCancel).toBe(true);
-	});
-
-	it("auto-reconnects with ?from=<cursor> when the body drops mid-turn", async () => {
-		const events = textTurnEvents("msg_resume", "resumed");
-		// First response: partial — message_start, content_block_start, one text_delta, then EOF.
-		const partial = truncatedSseResponse(events.slice(0, 3), 1);
-		// Second response: the rest, with ids continuing from 4.
-		const rest = truncatedSseResponse(events.slice(3), 4);
-		const { fetch, calls } = recordingFetch([partial, rest]);
-
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
-			fetch,
-			reconnectBackoffMs: [0],
-		});
-
-		const sub = await chat.subscribe();
-		const collected: typeof events = [];
-		for await (const event of sub.events) {
-			collected.push(event as RawMessageStreamEvent);
-		}
-
-		expect(collected).toHaveLength(events.length);
-		expect(collected.at(-1)?.type).toBe("message_stop");
-
-		// Reconnect must carry the latest cursor (id of the last frame in the
-		// truncated response, which was 3) on the GET URL.
-		expect(calls).toHaveLength(2);
-		expect(calls[0]!.url).toBe("/stream");
-		expect(calls[1]!.url).toBe("/stream?from=3");
-	});
-
-	it("stops reconnecting after a terminal message_stop", async () => {
-		const events = textTurnEvents("msg_done", "ok");
-		const { fetch, calls } = recordingFetch([sseResponse(events)]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
-			fetch,
-			reconnectBackoffMs: [0],
-		});
-
-		const sub = await chat.subscribe();
-		// Drain — should end naturally on message_stop without hitting reconnect.
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		for await (const _event of sub.events) {
-			// no-op
-		}
-		expect(calls).toHaveLength(1);
-	});
-
-	it("reconnect respects an explicitly empty backoff schedule", async () => {
-		const events = textTurnEvents("msg_no_retry", "partial");
-		const partial = truncatedSseResponse(events.slice(0, 2), 1);
-		const { fetch, calls } = recordingFetch([partial]);
-		const chat = createChatClient({
-			sendUrl: "/send",
-			subscribeUrl: "/stream",
-			fetch,
-			reconnectBackoffMs: [],
-		});
-
-		const sub = await chat.subscribe();
-		const collected: RawMessageStreamEvent[] = [];
-		for await (const event of sub.events) {
-			collected.push(event as RawMessageStreamEvent);
-		}
-		// Body ended without terminal, but reconnect is disabled — single fetch.
-		expect(collected).toHaveLength(2);
-		expect(calls).toHaveLength(1);
 	});
 });

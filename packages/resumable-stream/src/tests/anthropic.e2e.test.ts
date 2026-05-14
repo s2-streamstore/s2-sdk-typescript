@@ -1,10 +1,6 @@
-import type {
-	Message,
-	RawMessageStreamEvent,
-} from "@anthropic-ai/sdk/resources/messages";
+import type { RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages";
 import { S2, S2Environment } from "@s2-dev/streamstore";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { accumulateMessage } from "../anthropic/accumulator.js";
 import { type Chunk, createResumableChat } from "../anthropic/index.js";
 
 const TEST_TIMEOUT_MS = 120_000;
@@ -290,10 +286,11 @@ describeIf("resumable-stream/anthropic", () => {
 			for (let i = 1; i < ids.length; i += 1) {
 				expect((ids[i] as number) > (ids[i - 1] as number)).toBe(true);
 			}
-			const reconstructed = accumulateMessage(
-				replayFrames.map((f) => f.data) as RawMessageStreamEvent[],
+			// First and last frames are message_start / message_stop verbatim.
+			expect((replayFrames[0]?.data as RawMessageStreamEvent).type).toBe(
+				"message_start",
 			);
-			expect(reconstructed.id).toBe("msg_replay");
+			expect(replayFrames.at(-1)?.event).toBe("message_stop");
 		},
 		TEST_TIMEOUT_MS,
 	);
@@ -369,126 +366,19 @@ describeIf("resumable-stream/anthropic", () => {
 				expect((f.id as number) > (cursor as number)).toBe(true);
 			}
 
-			// Head + tail recombines to the full message.
+			// Head + tail recombines to the full event sequence verbatim.
 			const head = liveFrames.slice(0, splitIdx + 1);
 			const combined = [...head, ...tailFrames];
-			const recovered = accumulateMessage(
-				combined.map((f) => f.data) as RawMessageStreamEvent[],
-			);
-			expect(recovered.id).toBe("msg_cursor");
-		},
-		TEST_TIMEOUT_MS,
-	);
-
-	it(
-		"session mode persists multiple turns; history returns each as a Message",
-		async () => {
-			const chat = createResumableChat({
-				accessToken: process.env.S2_ACCESS_TOKEN!,
-				basin: basinName,
-				mode: "session",
-				...s2EndpointsFromEnv(),
-			});
-			const streamName = makeStreamName("anthr-session");
-			const turn1 = textTurnEvents("msg_t1", "Hi from turn one");
-			const turn2 = textTurnEvents("msg_t2", "And turn two");
-
-			let bg1: Promise<unknown> | undefined;
-			const r1 = await chat.makeResumable(
-				streamName,
-				arrayToAsyncIterable(turn1) as AsyncIterable<Chunk>,
-				{
-					waitUntil: (p) => {
-						bg1 = p;
-					},
-				},
-			);
-			await r1.body?.cancel();
-			await bg1;
-
-			let bg2: Promise<unknown> | undefined;
-			const r2 = await chat.makeResumable(
-				streamName,
-				arrayToAsyncIterable(turn2) as AsyncIterable<Chunk>,
-				{
-					waitUntil: (p) => {
-						bg2 = p;
-					},
-				},
-			);
-			await r2.body?.cancel();
-			await bg2;
-
-			// History returns one Message per closed turn, in order.
-			const hist = await chat.history(streamName);
-			expect(hist.status).toBe(200);
-			const json = (await hist.json()) as { messages: Message[] };
-			expect(json.messages).toHaveLength(2);
-			expect(json.messages[0]?.id).toBe("msg_t1");
-			expect(json.messages[1]?.id).toBe("msg_t2");
-			if (json.messages[0]?.content[0]?.type === "text") {
-				expect(json.messages[0].content[0].text).toBe("Hi from turn one");
-			}
-			if (json.messages[1]?.content[0]?.type === "text") {
-				expect(json.messages[1].content[0].text).toBe("And turn two");
+			expect(combined).toHaveLength(events.length);
+			for (let i = 0; i < events.length; i += 1) {
+				expect(combined[i]?.data).toEqual(events[i]);
 			}
 		},
 		TEST_TIMEOUT_MS,
 	);
 
 	it(
-		"history excludes a turn that hasn't yet emitted message_stop",
-		async () => {
-			const chat = createResumableChat({
-				accessToken: process.env.S2_ACCESS_TOKEN!,
-				basin: basinName,
-				mode: "session",
-				...s2EndpointsFromEnv(),
-			});
-			const streamName = makeStreamName("anthr-inflight");
-
-			// Turn 1: closed.
-			let bg1: Promise<unknown> | undefined;
-			const r1 = await chat.makeResumable(
-				streamName,
-				arrayToAsyncIterable(
-					textTurnEvents("msg_done", "done"),
-				) as AsyncIterable<Chunk>,
-				{
-					waitUntil: (p) => {
-						bg1 = p;
-					},
-				},
-			);
-			await r1.body?.cancel();
-			await bg1;
-
-			// Turn 2: only message_start + a delta, no message_stop. Use a short
-			// delay so the persist task lands the events before we read history.
-			const partial = textTurnEvents("msg_inflight", "in flight").slice(0, 3);
-			let bg2: Promise<unknown> | undefined;
-			const r2 = await chat.makeResumable(
-				streamName,
-				arrayToAsyncIterable(partial) as AsyncIterable<Chunk>,
-				{
-					waitUntil: (p) => {
-						bg2 = p;
-					},
-				},
-			);
-			await r2.body?.cancel();
-			await bg2;
-
-			const hist = await chat.history(streamName);
-			const json = (await hist.json()) as { messages: Message[] };
-			expect(json.messages).toHaveLength(1);
-			expect(json.messages[0]?.id).toBe("msg_done");
-		},
-		TEST_TIMEOUT_MS,
-	);
-
-	it(
-		"reconstructs a tool_use turn from input_json_delta partials end-to-end",
+		"persists tool_use input_json_delta partials and replays them verbatim",
 		async () => {
 			const chat = createResumableChat({
 				accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -554,12 +444,9 @@ describeIf("resumable-stream/anthropic", () => {
 			);
 			const frames = await readAnthropicSse(live);
 			await bg;
-			const message = accumulateMessage(
-				frames.map((f) => f.data) as RawMessageStreamEvent[],
-			);
-			expect(message.content[0]?.type).toBe("tool_use");
-			if (message.content[0]?.type === "tool_use") {
-				expect(message.content[0].input).toEqual({ q: "hi" });
+			expect(frames).toHaveLength(events.length);
+			for (let i = 0; i < events.length; i += 1) {
+				expect(frames[i]?.data).toEqual(events[i]);
 			}
 		},
 		TEST_TIMEOUT_MS,

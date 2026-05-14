@@ -6,7 +6,7 @@ import {
 } from "@s2-dev/streamstore";
 import type { UIMessageChunk } from "ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createResumableChat } from "../aisdk.js";
+import { createResumableChat } from "../aisdk/index.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 
