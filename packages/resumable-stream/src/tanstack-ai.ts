@@ -383,6 +383,11 @@ export function createResumableChat(
 			if (mode !== "session") {
 				throw new Error('makeSessionResponse requires mode: "session"');
 			}
+			if (activeGenerations?.has(streamName)) {
+				return new Response("Stream already has an active generation", {
+					status: 409,
+				});
+			}
 			const active: ActiveGeneration = {
 				abortController: new AbortController(),
 			};
