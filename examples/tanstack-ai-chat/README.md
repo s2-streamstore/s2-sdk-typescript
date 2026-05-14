@@ -1,17 +1,10 @@
 # TanStack AI Chat With S2 Replay
 
-This example keeps TanStack AI in charge of chat state and model chunks. S2 is
-only the durable replay layer:
+TanStack AI keeps chat state; S2 is the durable replay layer.
 
-- `POST /api/chat` receives TanStack `messages`, stores stream events in S2,
-  and runs the model.
-- `GET /api/chat/replay?id=...` tails the same S2 session stream and returns
-  Server-Sent Events for `useChat`. Completed history is compacted into a
-  replay-only `MESSAGES_SNAPSHOT` on page load.
-- `DELETE /api/chat` stops the active in-process generation. The running
-  persistence pipeline writes the final stop chunk.
-- The browser uses the normal TanStack `useChat` API with an S2 connection
-  adapter.
+- `POST /api/chat` runs the model and persists stream chunks to S2.
+- `GET /api/chat/replay?id=...&from=N` tails the same session stream as SSE for `useChat`.
+- `DELETE /api/chat` aborts the active in-process generation (tracked in the example, not in the library).
 
 ## Run
 
@@ -26,10 +19,7 @@ export S2_BASIN=my-basin
 bun run example:tanstack-ai-chat
 ```
 
-Without `OPENAI_API_KEY`, the server uses a deterministic local echo stream so
-refresh and replay can be tested without a model provider.
-
-To use real TanStack AI generation:
+Without `OPENAI_API_KEY`, a local echo stream is used so refresh/replay can be tested without a model provider.
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -40,8 +30,6 @@ bun run example:tanstack-ai-chat
 
 ## Server
 
-Create one session helper:
-
 ```ts
 import { createResumableChat } from "@s2-dev/resumable-stream/tanstack-ai";
 
@@ -49,35 +37,36 @@ const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
   mode: "session",
-  enableStop: true,
 });
+
+// Process-local map of active turns so a DELETE route can abort the upstream
+// model call. The library no longer owns this — it's plain user code.
+const activeGenerations = new Map<string, AbortController>();
 ```
 
-Start a turn with `makeSessionResponse`:
+Start a turn:
 
 ```ts
-import {
-  chat as tanstackChat,
-  convertMessagesToModelMessages,
-} from "@tanstack/ai";
+import { chat as tanstackChat, convertMessagesToModelMessages } from "@tanstack/ai";
 import { openaiText } from "@tanstack/ai-openai";
 
 export async function POST(request: Request) {
   const body = await request.json();
+  const name = `tanstack-ai-chat-${body.id}`;
+  const active = new AbortController();
+  activeGenerations.set(name, active);
 
-  return chat.makeSessionResponse(`tanstack-ai-chat-${body.id}`, {
-    messages: body.messages,
-    source: (messages, { abortController }) =>
-      tanstackChat({
-        adapter: openaiText(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
-        messages: convertMessagesToModelMessages(messages),
-        abortController,
-      }),
+  const source = tanstackChat({
+    adapter: openaiText(process.env.OPENAI_MODEL ?? "gpt-4o-mini"),
+    messages: convertMessagesToModelMessages(body.messages),
+    abortController: active,
   });
+
+  return chat.makeResumable(name, source, { delivery: "replay" });
 }
 ```
 
-Replay the session stream:
+Replay:
 
 ```ts
 export async function GET(request: Request) {
@@ -91,39 +80,31 @@ Stop the active generation:
 ```ts
 export async function DELETE(request: Request) {
   const { id } = await request.json();
-  return chat.stopSession(`tanstack-ai-chat-${id}`);
+  activeGenerations.get(`tanstack-ai-chat-${id}`)?.abort();
+  return new Response(null, { status: 202 });
 }
 ```
 
 ## Client
 
-Use the S2 connection adapter with TanStack `useChat`:
-
 ```tsx
-import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client";
+import { createConnection } from "@s2-dev/resumable-stream/tanstack-ai/client";
 import { useChat } from "@tanstack/ai-react";
 import { useMemo } from "react";
 
 function Chat({ chatId }: { chatId: string }) {
   const connection = useMemo(
     () =>
-      createS2Connection({
-        mode: "session",
+      createConnection({
         sendUrl: "/api/chat",
-        stopUrl: "/api/chat",
-        subscribeUrl: `/api/chat/replay?id=${encodeURIComponent(chatId)}`,
+        subscribeUrl: (cursor) =>
+          `/api/chat/replay?id=${encodeURIComponent(chatId)}&from=${cursor ?? 0}`,
         body: { id: chatId },
       }),
     [chatId],
   );
 
-  const chat = useChat({ connection, live: true });
-  const isStreaming = chat.isLoading || chat.sessionGenerating;
-
-  function stop() {
-    chat.stop();
-    void connection.stop?.();
-  }
+  const chat = useChat({ connection });
 
   return (
     <form
@@ -141,12 +122,7 @@ function Chat({ chatId }: { chatId: string }) {
         <article key={message.id}>{message.role}</article>
       ))}
       <input name="message" />
-      <button disabled={isStreaming}>Send</button>
-      {isStreaming ? (
-        <button type="button" onClick={stop}>
-          Stop
-        </button>
-      ) : null}
+      <button disabled={chat.isLoading}>Send</button>
     </form>
   );
 }
@@ -155,6 +131,6 @@ function Chat({ chatId }: { chatId: string }) {
 ## Files
 
 - `src/routes/index.tsx`: React chat UI and TanStack `useChat`.
-- `src/routes/api.chat.ts`: starts a generation.
+- `src/routes/api.chat.ts`: starts a generation, owns the abort map.
 - `src/routes/api.chat.replay.ts`: replays/tails the durable session stream.
 - `src/server/chat.ts`: S2 setup, stream naming, and TanStack model wiring.

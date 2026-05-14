@@ -12,7 +12,7 @@
 
 ## Usage
 
-To use this package, you need to create an S2 [access token](https://s2.dev/docs/access-control) and basin to store all your streams.
+To use this package, create an S2 [access token](https://s2.dev/docs/access-control) and a basin.
 
 1. Sign up [here](https://s2.dev/dashboard), generate an access token and set it as `S2_ACCESS_TOKEN` in your env.
 
@@ -22,11 +22,11 @@ The incoming stream is batched and the batch size can be changed by setting `S2_
 
 The package exposes these entry points:
 
-- **`@s2-dev/resumable-stream`**: a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams or anything that isn't AI SDK.
+- **`@s2-dev/resumable-stream`**: a generic `ReadableStream<string>` resumer (`createResumableStreamContext`). Use for plain text streams.
 - **`@s2-dev/resumable-stream/aisdk`**: a thin helper over `UIMessageChunk` streams for the AI SDK's `useChat`. See the [AI SDK section](#ai-sdk) below.
 - **`@s2-dev/resumable-stream/anthropic`**: persists and replays raw `client.messages.stream(...)` events. See the [Anthropic section](#anthropic) below.
 - **`@s2-dev/resumable-stream/anthropic/client`**: browser helpers for subscribing to and reconnecting against the replay.
-- **`@s2-dev/resumable-stream/tanstack-ai`**: a thin helper over TanStack AI `StreamChunk` streams. See the [TanStack AI section](#tanstack-ai) below.
+- **`@s2-dev/resumable-stream/tanstack-ai`**: a thin helper over TanStack AI stream chunks. See the [TanStack AI section](#tanstack-ai) below.
 - **`@s2-dev/resumable-stream/tanstack-ai/client`**: TanStack AI client helpers.
 
 ### Generic resumer
@@ -95,7 +95,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
 
 The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResumable` writes `UIMessageChunk`s to S2 and streams the response by reading those records. The wire format matches the AI SDK's `createUIMessageStreamResponse`, so the stock `DefaultChatTransport` works out of the box.
 
-A runnable end-to-end demo (Bun server + vanilla-JS client): [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
+Demo (Bun server + vanilla-JS client): [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
 
 ```ts
 // lib/s2.ts
@@ -166,21 +166,9 @@ export default function Chat() {
 ## Anthropic
 
 The `./anthropic` subpath persists raw `client.messages.stream(...)` events to
-S2 and replays them as SSE that matches the Anthropic wire format:
+S2 and replays them as SSE that matches the Anthropic wire format.
 
-```
-event: <event_type>
-data:  <json>
-id:    <seqNum>
-```
-
-That's the entire mission. Chat history, message reconstruction, and prompt
-assembly stay in your application — pair this with the SDK's
-[`MessageStream`](https://github.com/anthropics/anthropic-sdk-typescript) or
-your own folding logic to turn replayed events back into a `Message`.
-
-A runnable end-to-end demo (Bun server + vanilla-JS client maintaining its own
-chat state in `localStorage`): [`examples/anthropic-resumable-chat`](../../examples/anthropic-resumable-chat/).
+Demo (Bun server + vanilla-JS client): [`examples/anthropic-resumable-chat`](../../examples/anthropic-resumable-chat/).
 
 For chat apps, use `mode: "session"` and read responses from a replay route:
 
@@ -288,24 +276,11 @@ Server fields:
 
 ## TanStack AI
 
-The `./tanstack-ai` subpath makes TanStack AI chat streams durable as S2 stores and replays the stream chunks
-on reconnects.
-
-For full chat apps, use `mode: "session"`:
-
-- `POST` starts a generation and appends chunks to one durable S2 session log.
-- `GET` replays completed history and tails live chunks as SSE.
-- `DELETE` stops the active in-process generation; that generation writes its
-  own `RUN_FINISHED` stop chunk while closing.
-
-Configure the S2 basin to create streams on append/read. Streams are not
-created before replay or generation.
+The `./tanstack-ai` subpath persists TanStack AI stream chunks to S2 and replays
+them as SSE.
 
 ```ts
-import {
-  chat as tanstackChat,
-  convertMessagesToModelMessages,
-} from "@tanstack/ai";
+import { chat as tanstackChat, convertMessagesToModelMessages } from "@tanstack/ai";
 import { openaiText } from "@tanstack/ai-openai";
 import { createResumableChat } from "@s2-dev/resumable-stream/tanstack-ai";
 
@@ -313,21 +288,17 @@ const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
   mode: "session",
-  enableStop: true,
 });
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-
-  return chat.makeSessionResponse(`chat-${id}`, {
-    messages,
-    source: (messages, { abortController }) =>
-      tanstackChat({
-        adapter: openaiText("gpt-4o-mini"),
-        messages: convertMessagesToModelMessages(messages),
-        abortController,
-      }),
-    waitUntil,
+  const source = tanstackChat({
+    adapter: openaiText("gpt-4o-mini"),
+    messages: convertMessagesToModelMessages(messages),
+  });
+  return chat.makeResumable(`chat-${id}`, source, {
+    delivery: "replay",
+    waitUntil: (p) => p.catch(console.error),
   });
 }
 
@@ -339,68 +310,25 @@ export async function GET(req: Request) {
       : undefined,
   });
 }
-
-export async function DELETE(req: Request) {
-  const { id } = await req.json();
-  return chat.stopSession(`chat-${id}`);
-}
 ```
 
-The `./tanstack-ai/client` subpath exposes a `useChat` connection adapter for
-those endpoints:
+The `./tanstack-ai/client` subpath builds a `SubscribeConnectionAdapter` for
+`useChat`. `subscribe()` GETs the replay; `send()` POSTs the request body.
 
 ```tsx
 import { useChat } from "@tanstack/ai-react";
-import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client";
+import { createConnection } from "@s2-dev/resumable-stream/tanstack-ai/client";
 
-const connection = createS2Connection({
-  mode: "session",
+const connection = createConnection({
   sendUrl: "/api/chat",
-  stopUrl: "/api/chat",
-  subscribeUrl: `/api/chat/replay?id=${chatId}`,
+  subscribeUrl: (cursor) => `/api/chat/stream?id=${chatId}&from=${cursor ?? 0}`,
   body: { id: chatId },
 });
 
-const { messages, sendMessage, stop, isLoading, sessionGenerating } = useChat({
-  connection,
-  live: true,
-});
-
-const isGenerating = isLoading || sessionGenerating;
-
-function stopGeneration() {
-  stop();
-  void connection.stop?.();
-}
+const { messages, sendMessage } = useChat({ connection });
 ```
 
-Notes:
-
-- `makeSessionResponse` passes the submitted TanStack messages to `source`.
-  It stores stream events only: the latest user text event and model chunks.
-- Session starts read only the last record to claim the next turn. `stopSession`
-  does not scan the stream i.e. it aborts the active local generation and lets the running
-  persistence pipeline close the run.
-- Local stop tracking is opt-in. Set `enableStop: true` only when this
-  server instance exposes `stopSession`; otherwise no active-generation map is
-  created and `stopSession` returns 204.
-- Pass your platform's `waitUntil` when available. Without it,
-  `makeSessionResponse` waits for persistence before returning so serverless
-  runtimes do not abandon the stream after a 202 response.
-- First page load compacts completed history into an in-memory
-  `MESSAGES_SNAPSHOT` SSE event. Snapshots are not stored on an S2 stream.
-- Replay frames carry the next S2 sequence number as the SSE `id`, so the
-  client can reconnect from the last processed record.
-- `stop()` only cancels TanStack's local request. Call `connection.stop?.()` to
-  stop server-side generation and persistence too. This is intentionally
-  explicit so refresh/unmount does not stop a run.
-
-For request-scoped streaming, keep the default `mode: "single-use"` and call
-`makeResumable`. Omit `subscribeUrl` on the client to stream chunks on the POST
-response; pass `subscribeUrl` only if the client should recover an active run on
-mount.
-
-Runnable examples:
-
-- [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat): small local
-  S2 session chat.
+If you want server-side cancel, track `AbortController`s per stream name in
+your route handlers and abort on a DELETE route. See
+[`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat) for a reference
+implementation.
