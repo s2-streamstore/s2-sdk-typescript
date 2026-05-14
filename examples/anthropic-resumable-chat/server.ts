@@ -97,7 +97,10 @@ async function readHistory(chatId: string): Promise<ChatMessage[]> {
 	try {
 		const session = await stream
 			.readSession(
-				{ start: { from: { seqNum: 0 } }, stop: { waitSecs: 0 } },
+				{
+					start: { from: { seqNum: 0 }, clamp: true },
+					stop: { waitSecs: 0 },
+				},
 				{ as: "string" },
 			)
 			.catch((err: unknown) => {
@@ -205,6 +208,10 @@ function handleEvent(
 			block.thinking = (block.thinking || "") + d.thinking;
 		} else if (d.type === "signature_delta" && block.type === "thinking") {
 			block.signature = d.signature;
+		} else if (d.type === "citations_delta" && block.type === "text") {
+			const citations = block.citations ? [...block.citations] : [];
+			citations.push(d.citation);
+			block.citations = citations;
 		}
 		return;
 	}
