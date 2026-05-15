@@ -1,10 +1,8 @@
-import { type SubscribeSseOptions, subscribeSse } from "../client-utils.js";
+import { type SubscribeOptions, subscribeSse } from "../client-utils.js";
 import type { Chunk } from "./types.js";
 
+export type { SubscribeOptions } from "../client-utils.js";
 export type { Chunk } from "./types.js";
-
-/** Options for `subscribe`. */
-export type SubscribeOptions = SubscribeSseOptions;
 
 /**
  * Tails an Anthropic resumable-chat replay. Yields parsed Anthropic events;

@@ -1,5 +1,5 @@
 /**
- * Shared client-side utilities for `tanstack-ai-client` and `anthropic-client`.
+ * Shared client-side utilities for provider-specific browser helpers.
  * Resolves URLs, headers, and the SSE byte-to-event pipeline.
  */
 import { EventSourceParserStream } from "eventsource-parser/stream";
@@ -117,7 +117,7 @@ export async function fetchOk(
 	return response;
 }
 
-export interface SubscribeSseOptions {
+export interface SubscribeOptions {
 	/**
 	 * SSE URL. A string gets `?from=<cursor>` appended on reconnect; a function
 	 * receives the cursor and returns the full URL.
@@ -137,13 +137,6 @@ export interface SubscribeSseOptions {
 	 * counter resets on every received event. Pass `[]` to disable reconnect.
 	 */
 	reconnectBackoffMs?: readonly number[];
-	/**
-	 * Optional shared cursor holder. The subscription reads `current` to build
-	 * the initial URL and updates it after every SSE `id:`. Pass the same ref
-	 * across multiple `subscribeSse` calls to resume where the previous one
-	 * left off.
-	 */
-	cursorRef?: { current: number | undefined };
 }
 
 const DEFAULT_BACKOFF_MS = [0, 250, 500, 1000, 2000, 5000] as const;
@@ -168,13 +161,13 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
  * `reconnectBackoffMs`.
  */
 export async function* subscribeSse<T>(
-	options: SubscribeSseOptions,
+	options: SubscribeOptions,
 ): AsyncIterable<T> {
 	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const credentials = options.credentials ?? "same-origin";
 	const backoffMs = options.reconnectBackoffMs ?? DEFAULT_BACKOFF_MS;
 	const signal = options.signal ?? new AbortController().signal;
-	const cursorRef = options.cursorRef ?? { current: undefined };
+	let cursor: number | undefined;
 
 	let attempt = 0;
 	let needsReconnect = false;
@@ -189,16 +182,12 @@ export async function* subscribeSse<T>(
 
 		let response: Response;
 		try {
-			response = await fetchOk(
-				doFetch,
-				resolveCursorUrl(options.url, cursorRef.current),
-				{
-					method: "GET",
-					headers: await resolveHeaders(options.headers),
-					credentials,
-					signal,
-				},
-			);
+			response = await fetchOk(doFetch, resolveCursorUrl(options.url, cursor), {
+				method: "GET",
+				headers: await resolveHeaders(options.headers),
+				credentials,
+				signal,
+			});
 		} catch (err) {
 			if (signal.aborted) return;
 			if (backoffMs.length === 0) throw err;
@@ -214,9 +203,9 @@ export async function* subscribeSse<T>(
 				if (
 					Number.isSafeInteger(parsed) &&
 					parsed >= 0 &&
-					(cursorRef.current === undefined || parsed > cursorRef.current)
+					(cursor === undefined || parsed > cursor)
 				) {
-					cursorRef.current = parsed;
+					cursor = parsed;
 				}
 			}
 			if (!frame.data) continue;

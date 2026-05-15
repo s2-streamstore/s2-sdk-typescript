@@ -1,16 +1,17 @@
 /**
  * Client-side connection adapter for TanStack AI's `useChat`, wired to a
  * `@s2-dev/resumable-stream/tanstack-ai` server. Types come from `@tanstack/ai`
- * / `@tanstack/ai-client` (type-only — both are optional peer deps).
+ * / `@tanstack/ai-client` (type-only; both are optional peer deps).
  */
 import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 import type { SubscribeConnectionAdapter } from "@tanstack/ai-client";
 import {
 	fetchOk,
 	type HeadersOption,
+	pipeSseFrames,
+	resolveCursorUrl,
 	resolveHeaders,
 	resolveUrl,
-	subscribeSse,
 } from "../client-utils.js";
 
 export type { ConnectionAdapter } from "@tanstack/ai-client";
@@ -22,7 +23,7 @@ export interface ConnectionOptions {
 	sendUrl: string | (() => string);
 	/**
 	 * Endpoint that GETs the SSE replay. String URLs receive `?from=<cursor>`
-	 * automatically on reconnect; function URLs receive the cursor.
+	 * automatically after chunks have been seen; function URLs receive the cursor.
 	 */
 	subscribeUrl: string | ((cursor?: number) => string);
 	/** Extra headers added to both fetches. May be a (possibly async) factory. */
@@ -42,9 +43,97 @@ export interface ConnectionOptions {
 	 * Backoff schedule (ms) between reconnect attempts on `subscribe`. Index `n`
 	 * is the wait before the `n`-th reconnect; the last value is reused after
 	 * that. The counter resets on every received event. Pass `[]` to disable
-	 * reconnect.
+	 * reconnect. Defaults to `[]` so TanStack owns the subscription lifecycle.
 	 */
 	reconnectBackoffMs?: readonly number[];
+}
+
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+	if (ms <= 0 || signal.aborted) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		signal.addEventListener("abort", finish, { once: true });
+	});
+}
+
+function advanceCursor(
+	state: { cursor: number | undefined },
+	id: string | undefined,
+): void {
+	if (!id) return;
+	const parsed = Number.parseInt(id, 10);
+	if (
+		Number.isSafeInteger(parsed) &&
+		parsed >= 0 &&
+		(state.cursor === undefined || parsed > state.cursor)
+	) {
+		state.cursor = parsed;
+	}
+}
+
+async function* subscribeChunks(
+	options: ConnectionOptions,
+	state: { cursor: number | undefined },
+	signal: AbortSignal,
+): AsyncIterable<StreamChunk> {
+	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+	const credentials = options.credentials ?? "same-origin";
+	const backoffMs = options.reconnectBackoffMs ?? [];
+	let attempt = 0;
+	let needsReconnect = false;
+
+	while (!signal.aborted) {
+		if (needsReconnect) {
+			const wait = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 0;
+			attempt += 1;
+			await sleepAbortable(wait, signal);
+			if (signal.aborted) return;
+		}
+
+		let response: Response;
+		try {
+			response = await fetchOk(
+				doFetch,
+				resolveCursorUrl(options.subscribeUrl, state.cursor),
+				{
+					method: "GET",
+					headers: await resolveHeaders(options.headers),
+					credentials,
+					signal,
+				},
+			);
+		} catch (err) {
+			if (signal.aborted) return;
+			if (backoffMs.length === 0) throw err;
+			needsReconnect = true;
+			continue;
+		}
+
+		if (response.status === 204 || !response.body) return;
+
+		try {
+			for await (const frame of pipeSseFrames(response.body, signal)) {
+				advanceCursor(state, frame.id);
+				if (!frame.data) continue;
+				attempt = 0;
+				try {
+					yield JSON.parse(frame.data) as StreamChunk;
+				} catch {}
+			}
+		} catch (err) {
+			if (signal.aborted) return;
+			if (backoffMs.length === 0) throw err;
+		}
+
+		if (signal.aborted) return;
+		if (backoffMs.length === 0) return;
+		needsReconnect = true;
+	}
 }
 
 /** Builds a TanStack `SubscribeConnectionAdapter` backed by an S2 replay. */
@@ -53,25 +142,17 @@ export function createConnection(
 ): SubscribeConnectionAdapter {
 	const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	const credentials = options.credentials ?? "same-origin";
-
-	// TanStack's `useChat` drives subscription lifecycle, so default to a
-	// single-shot fetch with no internal reconnect. Override via options.
-	const reconnectBackoffMs = options.reconnectBackoffMs ?? [];
-	// Cursor persists across subscribe() calls so successive turns resume
-	// from where the previous one left off.
-	const cursorRef: { current: number | undefined } = { current: undefined };
+	const subscriptionState: { cursor: number | undefined } = {
+		cursor: undefined,
+	};
 
 	return {
 		subscribe(signal): AsyncIterable<StreamChunk> {
-			return subscribeSse<StreamChunk>({
-				url: options.subscribeUrl,
-				signal,
-				fetch: options.fetch,
-				headers: options.headers,
-				credentials,
-				reconnectBackoffMs,
-				cursorRef,
-			});
+			return subscribeChunks(
+				options,
+				subscriptionState,
+				signal ?? new AbortController().signal,
+			);
 		},
 		async send(messages, data, signal): Promise<void> {
 			const extra =

@@ -40,7 +40,7 @@ const chat = createResumableChat({
 });
 
 // Process-local map of active turns so a DELETE route can abort the upstream
-// model call. The library no longer owns this — it's plain user code.
+// model call. The library no longer owns this; it's plain user code.
 const activeGenerations = new Map<string, AbortController>();
 ```
 
@@ -97,14 +97,13 @@ function Chat({ chatId }: { chatId: string }) {
     () =>
       createConnection({
         sendUrl: "/api/chat",
-        subscribeUrl: (cursor) =>
-          `/api/chat/replay?id=${encodeURIComponent(chatId)}&from=${cursor ?? 0}`,
+        subscribeUrl: `/api/chat/replay?id=${encodeURIComponent(chatId)}&live=1`,
         body: { id: chatId },
       }),
     [chatId],
   );
 
-  const chat = useChat({ connection });
+  const chat = useChat({ connection, live: true });
 
   return (
     <form

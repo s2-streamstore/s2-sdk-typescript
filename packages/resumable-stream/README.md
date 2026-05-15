@@ -27,7 +27,7 @@ The package exposes these entry points:
 - **`@s2-dev/resumable-stream/anthropic`**: persists and replays raw `client.messages.stream(...)` events. See the [Anthropic section](#anthropic) below.
 - **`@s2-dev/resumable-stream/anthropic/client`**: browser helpers for subscribing to and reconnecting against the replay.
 - **`@s2-dev/resumable-stream/tanstack-ai`**: a thin helper over TanStack AI stream chunks. See the [TanStack AI section](#tanstack-ai) below.
-- **`@s2-dev/resumable-stream/tanstack-ai/client`**: TanStack AI client helpers.
+- **`@s2-dev/resumable-stream/tanstack-ai/client`**: a TanStack AI `useChat` connection helper.
 
 ### Generic resumer
 
@@ -253,8 +253,8 @@ Server fields:
 
 | Field | Description |
 | --- | --- |
-| `delivery` | `response` streams on the POST response; `replay` returns `202` and expects clients to read from `replay`. Defaults to `response`. |
-| `waitUntil` | Keeps persistence running after the response returns in serverless runtimes. |
+| `delivery` | `response` streams on the POST response; `replay` returns `202` and expects clients to read from `replay`. Defaults to `response`. With `replay`, also pass `waitUntil`; otherwise the POST is held open until persistence finishes so background work isn't dropped by serverless runtimes. |
+| `waitUntil` | Keeps persistence running after the response returns. Pass your runtime's hook on Vercel/Cloudflare; on long-running servers, pass `(p) => p.catch(...)` so the POST returns immediately and the task continues. |
 
 `replay` fields:
 
@@ -313,22 +313,25 @@ export async function GET(req: Request) {
 ```
 
 The `./tanstack-ai/client` subpath builds a `SubscribeConnectionAdapter` for
-`useChat`. `subscribe()` GETs the replay; `send()` POSTs the request body.
+TanStack `useChat`. It tracks the last seen SSE `id:` internally, so repeated
+`subscribe()` calls resume from the previous chunk without exposing cursor
+state to app code.
 
 ```tsx
-import { useChat } from "@tanstack/ai-react";
 import { createConnection } from "@s2-dev/resumable-stream/tanstack-ai/client";
+import { useChat } from "@tanstack/ai-react";
 
 const connection = createConnection({
   sendUrl: "/api/chat",
-  subscribeUrl: (cursor) => `/api/chat/stream?id=${chatId}&from=${cursor ?? 0}`,
+  subscribeUrl: `/api/chat/replay?id=${encodeURIComponent(chatId)}&live=1`,
   body: { id: chatId },
 });
 
-const { messages, sendMessage } = useChat({ connection });
+const chat = useChat({ connection, live: true });
 ```
 
-If you want server-side cancel, track `AbortController`s per stream name in
-your route handlers and abort on a DELETE route. See
-[`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat) for a reference
-implementation.
+Server-side stop/cancel remains application code. For example, keep a
+process-local `Map<string, AbortController>` and expose a `DELETE` route that
+aborts the active model call. See
+[`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat) for a complete
+TanStack `useChat` setup.
