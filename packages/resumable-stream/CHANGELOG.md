@@ -1,5 +1,11 @@
 # @s2-dev/resumable-stream
 
+## 3.0.0
+
+### Major Changes
+
+- 6c4686a: Simplify the resumable-stream integrations.
+
 ## 2.1.0
 
 ### Minor Changes
