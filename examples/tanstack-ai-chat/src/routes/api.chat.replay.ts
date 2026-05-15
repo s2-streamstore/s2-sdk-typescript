@@ -9,6 +9,7 @@ export const Route = createFileRoute("/api/chat/replay")({
 				return replayChat(
 					url.searchParams.get("id"),
 					url.searchParams.get("from"),
+					url.searchParams.get("live") === "1",
 				);
 			},
 		},

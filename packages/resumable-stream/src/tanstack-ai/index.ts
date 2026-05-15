@@ -5,7 +5,6 @@ import {
 	DEFAULT_ERROR_TEXT,
 	type ResumableChatConfig,
 } from "../adapter.js";
-import type { Chunk } from "./types.js";
 
 export type {
 	MakeResumableOptions,
@@ -13,7 +12,13 @@ export type {
 	ResumableChatConfig,
 	ResumableChatMode,
 } from "../adapter.js";
-export type { Chunk } from "./types.js";
+
+/** Structural shape that matches `@tanstack/ai`'s `StreamChunk`. */
+export type Chunk = {
+	type: string;
+	timestamp?: number;
+	[key: string]: unknown;
+};
 
 export type ResumableChat = Chat<Chunk>;
 
@@ -28,24 +33,16 @@ const adapter: ChatAdapter<Chunk> = {
 	makeErrorChunk(err, onError) {
 		const message = onError ? onError(err) : DEFAULT_ERROR_TEXT;
 		return {
-			type: "error",
-			error: { type: "api_error", message },
+			type: "RUN_ERROR",
+			timestamp: Date.now(),
+			message,
+			error: { message },
 		};
 	},
 	responseHeaders: SSE_HEADERS,
-	formatSseFrame(storedBody) {
-		try {
-			const parsed = JSON.parse(storedBody) as { type?: string };
-			return parsed.type
-				? { event: parsed.type, data: storedBody }
-				: { data: storedBody };
-		} catch {
-			return { data: storedBody };
-		}
-	},
 };
 
-/** Persists `client.messages.stream(...)` events to S2 and replays them as Anthropic-shaped SSE. */
+/** Persists TanStack AI stream chunks to S2 and replays them as SSE. */
 export function createResumableChat(
 	config: ResumableChatConfig,
 ): ResumableChat {

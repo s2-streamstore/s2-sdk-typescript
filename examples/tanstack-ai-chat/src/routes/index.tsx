@@ -1,4 +1,4 @@
-import { createS2Connection } from "@s2-dev/resumable-stream/tanstack-ai/client";
+import { createConnection } from "@s2-dev/resumable-stream/tanstack-ai/client";
 import type { UIMessage } from "@tanstack/ai-react";
 import { useChat } from "@tanstack/ai-react";
 import { createFileRoute } from "@tanstack/react-router";
@@ -6,7 +6,13 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const API = "/api/chat";
+const HISTORY_API = `${API}/history`;
 const SUBSCRIBE_API = `${API}/replay`;
+
+type ChatHistory = {
+	messages: UIMessage[];
+	cursor?: number;
+};
 
 export const Route = createFileRoute("/")({
 	component: ChatRoute,
@@ -33,8 +39,23 @@ function chatUrl(chatId: string): URL {
 	return url;
 }
 
-function subscribeUrl(chatId: string): string {
-	return `${SUBSCRIBE_API}?${new URLSearchParams({ id: chatId })}`;
+function subscribeUrl(chatId: string, from?: number): string {
+	const params = new URLSearchParams({ id: chatId, live: "1" });
+	if (from !== undefined) params.set("from", String(from));
+	return `${SUBSCRIBE_API}?${params}`;
+}
+
+function historyUrl(chatId: string): string {
+	return `${HISTORY_API}?${new URLSearchParams({ id: chatId })}`;
+}
+
+function isChatHistory(value: unknown): value is ChatHistory {
+	if (typeof value !== "object" || value === null) return false;
+	const history = value as { messages?: unknown; cursor?: unknown };
+	return (
+		Array.isArray(history.messages) &&
+		(history.cursor === undefined || typeof history.cursor === "number")
+	);
 }
 
 function renderMessageText(message: UIMessage): string {
@@ -92,21 +113,97 @@ function ChatInner({
 	chatId: string;
 	chatEndRef: React.RefObject<HTMLDivElement | null>;
 }) {
+	const [history, setHistory] = useState<ChatHistory | null>(null);
+	const [historyError, setHistoryError] = useState<string | null>(null);
+
+	useEffect(() => {
+		const ac = new AbortController();
+		setHistory(null);
+		setHistoryError(null);
+		fetch(historyUrl(chatId), { signal: ac.signal })
+			.then(async (response) => {
+				if (!response.ok) throw new Error(await response.text());
+				const body = (await response.json()) as unknown;
+				if (!isChatHistory(body)) throw new Error("Invalid history response");
+				setHistory(body);
+			})
+			.catch((error) => {
+				if (!ac.signal.aborted) {
+					setHistoryError(
+						error instanceof Error ? error.message : String(error),
+					);
+				}
+			});
+		return () => ac.abort();
+	}, [chatId]);
+
+	if (historyError !== null) {
+		return (
+			<main className="chat-shell">
+				<header className="topbar">
+					<div className="brand">
+						<span className="brand-mark">S2</span>
+						<div>
+							<h1>TanStack AI Chat</h1>
+							<p>{historyError}</p>
+						</div>
+					</div>
+				</header>
+			</main>
+		);
+	}
+
+	if (history === null) {
+		return (
+			<main className="chat-shell">
+				<header className="topbar">
+					<div className="brand">
+						<span className="brand-mark">S2</span>
+						<div>
+							<h1>TanStack AI Chat</h1>
+							<p>loading history</p>
+						</div>
+					</div>
+				</header>
+			</main>
+		);
+	}
+
+	return (
+		<ChatConversation
+			chatEndRef={chatEndRef}
+			chatId={chatId}
+			history={history}
+			key={chatId}
+		/>
+	);
+}
+
+function ChatConversation({
+	chatId,
+	chatEndRef,
+	history,
+}: {
+	chatId: string;
+	chatEndRef: React.RefObject<HTMLDivElement | null>;
+	history: ChatHistory;
+}) {
 	const connection = useMemo(
 		() =>
-			createS2Connection({
+			createConnection({
 				sendUrl: API,
-				stopUrl: API,
-				subscribeUrl: subscribeUrl(chatId),
-				mode: "session",
+				subscribeUrl: (cursor) =>
+					subscribeUrl(chatId, cursor ?? history.cursor),
 				body: { id: chatId },
 			}),
-		[chatId],
+		[chatId, history.cursor],
 	);
 
 	const { messages, sendMessage, isLoading, sessionGenerating, stop } = useChat(
 		{
 			connection,
+			id: chatId,
+			initialMessages: history.messages,
 			live: true,
 		},
 	);
@@ -136,7 +233,12 @@ function ChatInner({
 
 	function onStop() {
 		stop();
-		void connection.stop?.();
+		// Server-side cancel lives in user code now (DELETE to activeGenerations map).
+		void fetch(API, {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ id: chatId }),
+		}).catch(() => {});
 	}
 
 	return (

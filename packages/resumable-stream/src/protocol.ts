@@ -131,10 +131,12 @@ export async function persistToS2<T>({
 		let sourceError: unknown | undefined;
 		try {
 			for await (const value of source) {
-				producer.submit(toRecord(value)).catch((err: unknown) => {
+				await producer.submit(toRecord(value)).catch((err: unknown) => {
 					if (err instanceof SeqNumMismatchError) {
 						onSeqNumMismatch?.(err);
+						return;
 					}
+					throw err;
 				});
 			}
 		} catch (err) {

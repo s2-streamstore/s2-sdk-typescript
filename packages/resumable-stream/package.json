@@ -20,16 +20,16 @@
       "default": "./dist/index.js"
     },
     "./aisdk": {
-      "types": "./dist/aisdk.d.ts",
-      "default": "./dist/aisdk.js"
+      "types": "./dist/aisdk/index.d.ts",
+      "default": "./dist/aisdk/index.js"
     },
     "./tanstack-ai": {
-      "types": "./dist/tanstack-ai.d.ts",
-      "default": "./dist/tanstack-ai.js"
+      "types": "./dist/tanstack-ai/index.d.ts",
+      "default": "./dist/tanstack-ai/index.js"
     },
     "./tanstack-ai/client": {
-      "types": "./dist/tanstack-ai-client.d.ts",
-      "default": "./dist/tanstack-ai-client.js"
+      "types": "./dist/tanstack-ai/client.d.ts",
+      "default": "./dist/tanstack-ai/client.js"
     },
     "./anthropic": {
       "types": "./dist/anthropic/index.d.ts",
@@ -45,7 +45,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
     "check": "tsc --noEmit",
     "format": "biome format --write",
     "lint": "biome check",

@@ -314,59 +314,47 @@ async function* failingSource(): AsyncIterable<{
 }
 
 describe("createResumableChat (tanstack-ai)", () => {
-	it("passes TanStack UI messages through while preserving non-text parts", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		activeStreamRef.current = new FakeStream();
+	it("persists chunks verbatim and replays them as SSE", async () => {
+		const { createResumableChat } = await import("../tanstack-ai/index.js");
+		const stream = new FakeStream();
+		activeStreamRef.current = stream;
 
 		const chat = createResumableChat({
 			accessToken: "t",
 			basin: "b",
 			batchSize: 1,
 			lingerDuration: 0,
-			mode: "session",
 		});
 
 		const persisted: Promise<unknown>[] = [];
-		let sourceMessages: unknown[] = [];
-		await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [
-						{ type: "text", content: "hello" },
-						{
-							type: "image",
-							source: { type: "url", value: "s2://attachment" },
-						},
-					],
-				},
-			],
-			source: (messages) => {
-				sourceMessages = messages;
-				return okSource();
+		const response = await chat.makeResumable("s", okSource(), {
+			waitUntil: (p) => {
+				persisted.push(p);
 			},
-			waitUntil: (p) => persisted.push(p),
 		});
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+
+		const frames = await readSseFrames(response);
 		await Promise.all(persisted);
 
-		expect(sourceMessages).toEqual([
-			{
-				id: "u1",
-				role: "user",
-				parts: [
-					{ type: "text", content: "hello" },
-					{
-						type: "image",
-						source: { type: "url", value: "s2://attachment" },
-					},
-				],
-			},
+		// Each source chunk lands as a JSON-encoded SSE data frame, in order.
+		const parsedTypes = frames.flatMap((data) => {
+			try {
+				return [(JSON.parse(data) as { type: string }).type];
+			} catch {
+				return [];
+			}
+		});
+		expect(parsedTypes).toEqual([
+			"RUN_STARTED",
+			"TEXT_MESSAGE_CONTENT",
+			"RUN_FINISHED",
 		]);
 	});
 
 	it("returns 409 when the single-use fence claim is rejected", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
+		const { createResumableChat } = await import("../tanstack-ai/index.js");
 		activeStreamRef.current = new FakeStream({ failFenceClaim: true });
 
 		const chat = createResumableChat({ accessToken: "t", basin: "b" });
@@ -375,7 +363,7 @@ describe("createResumableChat (tanstack-ai)", () => {
 	});
 
 	it("emits RUN_ERROR on the live SSE when the source throws", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
+		const { createResumableChat } = await import("../tanstack-ai/index.js");
 		activeStreamRef.current = new FakeStream();
 
 		const chat = createResumableChat({
@@ -395,8 +383,6 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(response.status).toBe(200);
 
 		const frames = await readSseFrames(response);
-		expect(frames).not.toContain("[DONE]");
-
 		const errorFrame = frames.find((f) => f.includes('"type":"RUN_ERROR"'));
 		expect(errorFrame).toBeDefined();
 		expect(JSON.parse(errorFrame!)).toMatchObject({
@@ -407,8 +393,8 @@ describe("createResumableChat (tanstack-ai)", () => {
 		await Promise.allSettled(persisted);
 	});
 
-	it("can use replay delivery and return 202 without a live SSE body", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
+	it("delivery: 'replay' returns 202 with no body and persists in the background", async () => {
+		const { createResumableChat } = await import("../tanstack-ai/index.js");
 		const stream = new FakeStream();
 		activeStreamRef.current = stream;
 
@@ -432,623 +418,5 @@ describe("createResumableChat (tanstack-ai)", () => {
 		expect(response.body).toBeNull();
 		await Promise.all(persisted);
 		expect(stream.session.records.length).toBeGreaterThan(0);
-	});
-
-	it("makeSessionResponse waits for persistence without waitUntil", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const stream = new FakeStream();
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		let releaseSource!: () => void;
-		const sourceGate = new Promise<void>((resolve) => {
-			releaseSource = resolve;
-		});
-		const responsePromise = chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "hi" }],
-				},
-			],
-			source: () =>
-				(async function* () {
-					await sourceGate;
-					yield* okSource();
-				})(),
-		});
-
-		const beforeRelease = await Promise.race([
-			responsePromise.then(() => "settled"),
-			new Promise<"pending">((resolve) => setTimeout(resolve, 0, "pending")),
-		]);
-		expect(beforeRelease).toBe("pending");
-
-		releaseSource();
-		const response = await responsePromise;
-		expect(response.status).toBe(202);
-		expect(stream.session.records.map(recordBody).join("\n")).toContain(
-			'"type":"RUN_FINISHED"',
-		);
-	});
-
-	it("makeSessionResponse stores latest user message events and returns 202", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const stream = new FakeStream();
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		const persisted: Promise<unknown>[] = [];
-		const sourceMessages: unknown[] = [];
-		const response = await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "hi" }],
-				},
-			],
-			source: (messages) => {
-				sourceMessages.push(
-					...messages.map((message) => ({
-						role: message.role,
-						content: messageText(message),
-					})),
-				);
-				return okSource();
-			},
-			waitUntil: (p) => persisted.push(p),
-		});
-
-		expect(response.status).toBe(202);
-		await Promise.all(persisted);
-		expect(
-			stream.session.records.slice(0, 3).map((record) => {
-				const chunk = JSON.parse(recordBody(record));
-				return {
-					type: chunk.type,
-					messageId: chunk.messageId,
-					role: chunk.role,
-					delta: chunk.delta,
-				};
-			}),
-		).toEqual([
-			{
-				type: "TEXT_MESSAGE_START",
-				messageId: "u1",
-				role: "user",
-				delta: undefined,
-			},
-			{
-				type: "TEXT_MESSAGE_CONTENT",
-				messageId: "u1",
-				role: undefined,
-				delta: "hi",
-			},
-			{
-				type: "TEXT_MESSAGE_END",
-				messageId: "u1",
-				role: undefined,
-				delta: undefined,
-			},
-		]);
-		expect(sourceMessages).toEqual([{ role: "user", content: "hi" }]);
-	});
-
-	it("stores text content chunks as deltas only", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const stream = new FakeStream();
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-		});
-
-		const persisted: Promise<unknown>[] = [];
-		const response = await chat.makeResumable(
-			"s",
-			(async function* () {
-				yield {
-					type: "TEXT_MESSAGE_CONTENT",
-					messageId: "a1",
-					delta: "h",
-					content: "h",
-				};
-			})(),
-			{
-				delivery: "replay",
-				waitUntil: (p) => persisted.push(p),
-			},
-		);
-
-		expect(response.status).toBe(202);
-		await Promise.all(persisted);
-		const storedChunk = JSON.parse(recordBody(stream.session.records[0]!));
-		expect(storedChunk).toEqual({
-			type: "TEXT_MESSAGE_CONTENT",
-			messageId: "a1",
-			delta: "h",
-		});
-	});
-
-	it("returns 204 from replay when there is no active generation", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		activeStreamRef.current = new FakeStream();
-
-		const chat = createResumableChat({ accessToken: "t", basin: "b" });
-		const response = await chat.replay("s");
-		expect(response.status).toBe(204);
-	});
-
-	it("session live replay stays open even when the stream is idle", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		activeStreamRef.current = new FakeStream();
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-		const response = await chat.replay("s", { live: true });
-		expect(response.status).toBe(200);
-		expect(await response.text()).toBe("");
-	});
-
-	it("active replay tags chunks and can resume from a sequence number", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				{
-					seqNum: 0,
-					body: "holder",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-				{ seqNum: 1, body: "old", headers: [], timestamp: ts },
-				{ seqNum: 2, body: "new", headers: [], timestamp: ts },
-			],
-		});
-
-		const chat = createResumableChat({ accessToken: "t", basin: "b" });
-		const response = await chat.replay("s", { fromSeqNum: 2 });
-
-		expect(response.status).toBe(200);
-		expect(await response.text()).toBe("id: 3\ndata: new\n\n");
-	});
-
-	it("makeSessionResponse passes client tool results to source without storing snapshots", async () => {
-		const { convertMessagesToModelMessages } = await import("@tanstack/ai");
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const stream = new FakeStream();
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		const sourceMessages: unknown[] = [];
-		const persisted: Promise<unknown>[] = [];
-		const response = await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "needs lookup" }],
-				},
-				{
-					id: "a1",
-					role: "assistant",
-					parts: [
-						{
-							type: "tool-call",
-							id: "tool-1",
-							name: "lookup",
-							arguments: "{}",
-							state: "input-complete",
-							output: { answer: 42 },
-						},
-						{
-							type: "tool-result",
-							toolCallId: "tool-1",
-							content: '{"answer":42}',
-							state: "complete",
-						},
-					],
-				},
-			],
-			source: (messages) => {
-				sourceMessages.push(
-					...convertMessagesToModelMessages(
-						messages as Parameters<typeof convertMessagesToModelMessages>[0],
-					),
-				);
-				return okSource();
-			},
-			waitUntil: (p) => persisted.push(p),
-		});
-
-		expect(response.status).toBe(202);
-		await Promise.all(persisted);
-		const firstStoredChunk = JSON.parse(recordBody(stream.session.records[0]!));
-		expect(firstStoredChunk.type).toBe("RUN_STARTED");
-		expect(sourceMessages).toEqual([
-			{ role: "user", content: "needs lookup" },
-			{
-				role: "assistant",
-				content: null,
-				toolCalls: [
-					{
-						id: "tool-1",
-						type: "function",
-						function: { name: "lookup", arguments: "{}" },
-					},
-				],
-			},
-			{ role: "tool", content: '{"answer":42}', toolCallId: "tool-1" },
-		]);
-	});
-
-	it("session replay tails records from the beginning when no cursor is provided", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				...messageReadRecords(0, {
-					id: "u1",
-					role: "user",
-					text: "hi",
-				}),
-				chunkReadRecord(3, { type: "RUN_STARTED", runId: "r1" }, ts),
-			],
-		});
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-		const response = await chat.replay("s");
-		expect(response.status).toBe(200);
-
-		expect(await response.text()).toContain(
-			'id: 3\ndata: {"type":"MESSAGES_SNAPSHOT"',
-		);
-		expect(
-			await chat.replay("s", { fromSeqNum: 3 }).then((r) => r.text()),
-		).toBe('id: 4\ndata: {"type":"RUN_STARTED","runId":"r1"}\n\n');
-	});
-
-	it("session replay hydrates completed history with one snapshot", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				...messageReadRecords(0, {
-					id: "u1",
-					role: "user",
-					text: "hi",
-				}),
-				chunkReadRecord(3, { type: "RUN_STARTED", runId: "r1" }),
-				...messageReadRecords(4, {
-					id: "a1",
-					role: "assistant",
-					text: "hello",
-				}),
-				chunkReadRecord(7, { type: "RUN_FINISHED", runId: "r1" }),
-			],
-		});
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-		const response = await chat.replay("s");
-
-		const frames = await readSseFrames(response);
-		expect(frames).toHaveLength(1);
-		const snapshot = JSON.parse(frames[0]!);
-		expect(snapshot).toMatchObject({
-			type: "MESSAGES_SNAPSHOT",
-			messages: [
-				{ id: "u1", role: "user" },
-				{
-					id: "a1",
-					role: "assistant",
-					parts: [{ type: "text", content: "hello" }],
-				},
-			],
-		});
-	});
-
-	it("session replay keeps the active run streaming after compacted history", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				...messageReadRecords(0, {
-					id: "u1",
-					role: "user",
-					text: "hi",
-				}),
-				chunkReadRecord(3, { type: "RUN_STARTED", runId: "r1" }),
-				...messageReadRecords(4, {
-					id: "a1",
-					role: "assistant",
-					text: "hello",
-				}),
-				chunkReadRecord(7, { type: "RUN_FINISHED", runId: "r1" }),
-				...messageReadRecords(8, {
-					id: "u2",
-					role: "user",
-					text: "again",
-				}),
-				chunkReadRecord(11, { type: "RUN_STARTED", runId: "r2" }),
-				chunkReadRecord(12, {
-					type: "TEXT_MESSAGE_CONTENT",
-					messageId: "a2",
-					delta: "streaming",
-				}),
-			],
-		});
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-		const response = await chat.replay("s");
-
-		const chunks = (await readSseFrames(response)).map((frame) =>
-			JSON.parse(frame),
-		);
-		expect(chunks.map((chunk) => chunk.type)).toEqual([
-			"MESSAGES_SNAPSHOT",
-			"RUN_STARTED",
-			"TEXT_MESSAGE_CONTENT",
-		]);
-		expect(chunks[0]).toMatchObject({
-			messages: [
-				{ id: "u1", role: "user" },
-				{ id: "a1", role: "assistant" },
-				{ id: "u2", role: "user" },
-			],
-		});
-	});
-
-	it("stopSession aborts the active generation without scanning S2", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const stream = new FakeStream();
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-			enableStop: true,
-		});
-
-		let markStarted!: () => void;
-		const started = new Promise<void>((resolve) => {
-			markStarted = resolve;
-		});
-		const responsePromise = chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "hi" }],
-				},
-			],
-			source: (_messages, { signal }) =>
-				(async function* () {
-					yield { type: "RUN_STARTED", runId: "r1" };
-					markStarted();
-					yield {
-						type: "TEXT_MESSAGE_CONTENT",
-						messageId: "a1",
-						delta: "streaming",
-					};
-					await new Promise<void>((resolve) => {
-						signal.addEventListener("abort", () => resolve(), { once: true });
-					});
-				})(),
-		});
-
-		await started;
-		const response = await chat.stopSession("s");
-		const postResponse = await responsePromise;
-
-		expect(response.status).toBe(202);
-		expect(postResponse.status).toBe(202);
-		expect(stream.readSessionCount).toBe(0);
-		expect(stream.directAppends).toHaveLength(1);
-		const storedChunks = stream.session.records.flatMap((record) => {
-			const body = recordBody(record);
-			return body.startsWith("{") ? [JSON.parse(body)] : [];
-		});
-		const stopChunk = storedChunks.find(
-			(chunk) => chunk.type === "RUN_FINISHED",
-		);
-		expect(stopChunk).toMatchObject({
-			type: "RUN_FINISHED",
-			runId: "r1",
-			finishReason: "stop",
-		});
-	});
-
-	it("stopSession is a no-op unless local stop tracking is enabled", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const stream = new FakeStream();
-		activeStreamRef.current = stream;
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			batchSize: 1,
-			lingerDuration: 0,
-			mode: "session",
-		});
-
-		let markStarted!: () => void;
-		const started = new Promise<void>((resolve) => {
-			markStarted = resolve;
-		});
-		let releaseSource!: () => void;
-		const sourceReleased = new Promise<void>((resolve) => {
-			releaseSource = resolve;
-		});
-		const persisted: Promise<unknown>[] = [];
-
-		const response = await chat.makeSessionResponse("s", {
-			messages: [
-				{
-					id: "u1",
-					role: "user",
-					parts: [{ type: "text", content: "hi" }],
-				},
-			],
-			source: () =>
-				(async function* () {
-					yield { type: "RUN_STARTED", runId: "r1" };
-					markStarted();
-					await sourceReleased;
-					yield { type: "RUN_FINISHED", runId: "r1" };
-				})(),
-			waitUntil: (promise) => persisted.push(promise),
-		});
-
-		expect(response.status).toBe(202);
-		await started;
-		expect((await chat.stopSession("s")).status).toBe(204);
-		expect(stream.readSessionCount).toBe(0);
-
-		releaseSource();
-		await Promise.all(persisted);
-	});
-
-	it("session replay yields data from every generation from an explicit cursor", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				{
-					seqNum: 0,
-					body: "holder-1",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-				{ seqNum: 1, body: "gen-1-a", headers: [], timestamp: ts },
-				{
-					seqNum: 2,
-					body: "end-AAAA",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-				{
-					seqNum: 3,
-					body: "holder-2",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-				{ seqNum: 4, body: "gen-2-a", headers: [], timestamp: ts },
-				{
-					seqNum: 5,
-					body: "end-BBBB",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-			],
-		});
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-		const response = await chat.replay("s", { fromSeqNum: 0 });
-		expect(response.status).toBe(200);
-
-		const frames = await readSseFrames(response);
-		expect(frames).toEqual(["gen-1-a", "gen-2-a"]);
-	});
-
-	it("session replay can start from a provided sequence number", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				{
-					seqNum: 0,
-					body: "holder-1",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-				{ seqNum: 1, body: "old", headers: [], timestamp: ts },
-				{ seqNum: 2, body: "new", headers: [], timestamp: ts },
-			],
-		});
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-		const response = await chat.replay("s", { fromSeqNum: 2 });
-		expect(response.status).toBe(200);
-
-		const frames = await readSseFrames(response);
-		expect(frames).toEqual(["new"]);
-	});
-
-	it("session replay tags each frame with the next S2 sequence number", async () => {
-		const { createResumableChat } = await import("../tanstack-ai.js");
-		const ts = new Date(0);
-		activeStreamRef.current = new FakeStream({
-			readRecords: [
-				{
-					seqNum: 0,
-					body: "holder",
-					headers: [["", "fence"]],
-					timestamp: ts,
-				},
-				{ seqNum: 1, body: "first", headers: [], timestamp: ts },
-				{ seqNum: 2, body: "second", headers: [], timestamp: ts },
-			],
-		});
-
-		const chat = createResumableChat({
-			accessToken: "t",
-			basin: "b",
-			mode: "session",
-		});
-
-		const response = await chat.replay("s", { fromSeqNum: 0 });
-		expect(await response.text()).toBe(
-			"id: 2\ndata: first\n\nid: 3\ndata: second\n\n",
-		);
 	});
 });

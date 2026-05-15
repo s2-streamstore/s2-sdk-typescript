@@ -219,6 +219,30 @@ describe("persistToS2", () => {
 		]);
 		expect(handle.directAppends).toHaveLength(0);
 	});
+
+	it("passes producer submit failures to finalRecords", async () => {
+		const handle = new RecordingStreamHandle();
+		let finalRecordsError: unknown;
+
+		await expect(
+			persistToS2({
+				s2: makeFakeS2(handle),
+				basin: "test-basin",
+				stream: "test-stream",
+				source: fromValues(["x".repeat(1024 * 1024 + 1)]),
+				fencingToken: "session-1",
+				batchSize: 1,
+				lingerDuration: 0,
+				toRecord: (value) => AppendRecord.string({ body: value }),
+				finalRecords: (sourceError) => {
+					finalRecordsError = sourceError;
+					return [AppendRecord.fence("end-token")];
+				},
+			}),
+		).rejects.toThrow();
+
+		expect(finalRecordsError).toBeInstanceOf(Error);
+	});
 });
 
 describe("createTerminalRecords", () => {
