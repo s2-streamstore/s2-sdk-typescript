@@ -1,7 +1,8 @@
 /**
- * Client-side connection adapter for TanStack AI's `useChat`, wired to a
- * `@s2-dev/resumable-stream/tanstack-ai` server. Types come from `@tanstack/ai`
- * / `@tanstack/ai-client` (type-only; both are optional peer deps).
+ * Connects TanStack AI's `useChat` to a resumable S2 chat endpoint.
+ *
+ * `send` starts a turn on your server; `subscribe` reads the replay stream so
+ * the same turn can keep going after a refresh or reconnect.
  */
 import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 import type { SubscribeConnectionAdapter } from "@tanstack/ai-client";
