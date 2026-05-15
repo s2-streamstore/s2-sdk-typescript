@@ -132,4 +132,5 @@ function Chat({ chatId }: { chatId: string }) {
 - `src/routes/index.tsx`: React chat UI and TanStack `useChat`.
 - `src/routes/api.chat.ts`: starts a generation, owns the abort map.
 - `src/routes/api.chat.replay.ts`: replays/tails the durable session stream.
+- `src/routes/api.chat.history.ts`: returns chat history from S2.
 - `src/server/chat.ts`: S2 setup, stream naming, and TanStack model wiring.
