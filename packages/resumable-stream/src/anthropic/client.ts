@@ -5,9 +5,8 @@ export type { SubscribeOptions } from "../client-utils.js";
 export type { Chunk } from "./types.js";
 
 /**
- * Tails an Anthropic resumable-chat replay. Yields parsed Anthropic events;
- * reconnects with `?from=<seqNum>` on body drop or fetch failure; ends on
- * HTTP 204, abort, or empty backoff schedule.
+ * Reads an Anthropic replay endpoint and yields the original stream events.
+ * If the connection drops, it resumes from the last seen S2 record.
  */
 export function subscribe(options: SubscribeOptions): AsyncIterable<Chunk> {
 	return subscribeSse<Chunk>(options);
