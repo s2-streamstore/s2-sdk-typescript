@@ -1,6 +1,6 @@
 # Anthropic Resumable Chat with S2
 
-A Bun server + vanilla-JS browser client that streams `client.messages.stream(...)` through S2 so the response can be resumed across page refreshes and disconnects. Chat history is server-side, persisted directly to S2 — no localStorage, no client-side state.
+A Bun server + vanilla-JS browser client that streams `client.messages.stream(...)` and persists them to S2 so they can be resumed across page refreshes and disconnects.
 
 ## How it works
 
@@ -12,30 +12,6 @@ Two S2 streams per chat:
 | `${LIVE_PREFIX}-${chatId}-${turnIdx}` | `createResumableChat` from `@s2-dev/resumable-stream/anthropic` | The raw Anthropic event sequence for one turn. One stream per turn (single-use mode). |
 
 The server is the source of truth. The browser fetches `/api/chat/history` to render the conversation, then tails `/api/chat/stream` if a turn is in flight.
-
-### Flow
-
-```
-POST /api/chat { id, message }
-  ├─► read history stream → list of ChatMessage
-  ├─► append { role: "user", content: message } to history
-  ├─► anthropic.messages.stream({ messages: [...history, user] })
-  ├─► wrap stream: yield events to S2 live stream, fold into Message,
-  │     append { role: "assistant", content } on message_stop
-  └─► chat.makeResumable(liveStream, wrappedSource, { delivery: "replay" }) → 202
-
-GET /api/chat/stream?id=...
-  ├─► read history → count user vs assistant messages
-  ├─► if user > assistant: replay liveStreamName(id, userCount - 1) → SSE
-  └─► else: 204
-
-GET /api/chat/history?id=...
-  └─► read history stream → { messages: ChatMessage[] }
-```
-
-F5 mid-generation: page reloads, `/history` returns the already-persisted user message, `/stream` replays the in-flight assistant turn from the start, browser renders the deltas. Once `message_stop` lands, the assistant message is in the history stream — the next `/history` call returns it.
-
-Multi-tab on the same `chatId` works for free: each tab independently fetches `/history` and tails `/stream`. The server-side history is shared state.
 
 ## Configuration
 
