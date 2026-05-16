@@ -34,7 +34,7 @@ export class S2 {
 	/**
 	 * Account-scoped basin management operations.
 	 *
-	 * - List, create, delete and reconfigure basins.
+	 * - List, create, ensure, delete and reconfigure basins.
 	 */
 	public readonly basins: S2Basins;
 	/** Manage access tokens for the account (list, issue, revoke). */

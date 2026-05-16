@@ -4,12 +4,17 @@ import type { Client } from "./generated/client/types.gen.js";
 import {
 	createBasin,
 	deleteBasin,
+	ensureBasin,
 	getBasinConfig,
 	listBasins,
 	reconfigureBasin,
 } from "./generated/index.js";
 import type * as API from "./generated/types.gen.js";
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
+import {
+	provisionResultFromResponse,
+	withS2DataAndResponse,
+} from "./internal/provisioning.js";
 import { randomToken } from "./lib/base64.js";
 import { filterAsync, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
@@ -84,7 +89,7 @@ function toSDKBasinConfig(config: any): Types.BasinConfig {
 }
 
 /**
- * Account-scoped helper for listing, creating, deleting, and reconfiguring basins.
+ * Account-scoped helper for listing, creating, ensuring, deleting, and reconfiguring basins.
  *
  * Retrieve this via {@link S2.basins}. Each method retries according to the client-level retry config.
  */
@@ -223,6 +228,42 @@ export class S2Basins {
 				}),
 			);
 		});
+	}
+
+	/**
+	 * Ensure a basin.
+	 *
+	 * Creates the basin if it doesn't exist, or ensures its config exactly matches the
+	 * provided configuration after defaults are applied. Uses HTTP PUT semantics and is always
+	 * idempotent.
+	 *
+	 * Returns `result: "created"` with the basin info if the basin was newly created,
+	 * `result: "updated"` if its config changed, or `result: "noop"` if no write was needed.
+	 */
+	public async ensure(
+		args: Types.EnsureBasinInput,
+		options?: S2RequestOptions,
+	): Promise<Types.EnsureBasinResponse> {
+		const { basin, ...ensureArgs } = args;
+		const apiArgs = {
+			...ensureArgs,
+			config: toAPIBasinConfig(args.config),
+		};
+		const hasBody = apiArgs.config !== undefined || apiArgs.scope !== undefined;
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2DataAndResponse<API.BasinInfo>(() =>
+				ensureBasin({
+					client: this.client,
+					path: { basin },
+					body: hasBody ? toSnakeCase(apiArgs) : undefined,
+					...options,
+				}),
+			);
+		});
+		return {
+			result: provisionResultFromResponse(response.response),
+			basin: toCamelCase<Types.BasinInfo>(response.data),
+		};
 	}
 
 	/**
