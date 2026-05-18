@@ -658,8 +658,10 @@ export interface BasinInfo {
 	name: string;
 	/** Basin scope. */
 	scope?: API.BasinScope | null;
-	/** Basin state. */
-	state: API.BasinState;
+	/** Creation time. */
+	createdAt: Date;
+	/** Deletion time if the basin is being deleted. */
+	deletedAt?: Date | null;
 }
 
 /**
@@ -689,14 +691,7 @@ export interface ListBasinsResponse {
 /**
  * Response from creating a basin.
  */
-export interface CreateBasinResponse {
-	/** Basin name. */
-	name: string;
-	/** Basin scope. */
-	scope?: API.BasinScope | null;
-	/** Basin state. */
-	state: API.BasinState;
-}
+export type CreateBasinResponse = BasinInfo;
 
 /**
  * Response from ensuring a basin.
@@ -706,7 +701,7 @@ export interface EnsureBasinResponse {
 	 * Provisioning outcome.
 	 */
 	result: ProvisionResult;
-	/** Current basin state. */
+	/** Current basin info. */
 	basin: BasinInfo;
 }
 

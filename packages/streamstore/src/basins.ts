@@ -20,6 +20,20 @@ import { filterAsync, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
 
+function toDate(value: string | null | undefined): Date | null | undefined {
+	if (value === null) return null;
+	if (value === undefined) return undefined;
+	return new Date(value);
+}
+
+function transformBasinInfo(basin: any): Types.BasinInfo {
+	return {
+		...basin,
+		createdAt: toDate(basin.createdAt) as Date,
+		deletedAt: toDate(basin.deletedAt),
+	};
+}
+
 /** Convert SDK RetentionPolicy (ageSecs) to API RetentionPolicy (age). */
 function toAPIRetentionPolicy(
 	policy: Types.RetentionPolicy | null | undefined,
@@ -122,7 +136,11 @@ export class S2Basins {
 				}),
 			);
 		});
-		return toCamelCase<Types.ListBasinsResponse>(response);
+		const camelCased = toCamelCase<any>(response);
+		return {
+			...camelCased,
+			basins: camelCased.basins.map(transformBasinInfo),
+		};
 	}
 
 	/**
@@ -155,7 +173,7 @@ export class S2Basins {
 		if (includeDeleted) {
 			return allItems;
 		}
-		return filterAsync(allItems, (b) => b.state !== "deleting");
+		return filterAsync(allItems, (b) => !b.deletedAt);
 	}
 
 	/**
@@ -185,7 +203,7 @@ export class S2Basins {
 				}),
 			);
 		});
-		return toCamelCase<Types.CreateBasinResponse>(response);
+		return transformBasinInfo(toCamelCase(response));
 	}
 
 	/**
@@ -262,7 +280,7 @@ export class S2Basins {
 		});
 		return {
 			result: provisionResultFromResponse(response.response),
-			basin: toCamelCase<Types.BasinInfo>(response.data),
+			basin: transformBasinInfo(toCamelCase(response.data)),
 		};
 	}
 

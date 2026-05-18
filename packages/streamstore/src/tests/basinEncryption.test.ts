@@ -19,7 +19,11 @@ describe("Basin encryption config", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
 		vi.mocked(Generated.createBasin).mockResolvedValue({
-			data: { name: "demo-basin", state: "active" },
+			data: {
+				created_at: "2024-01-01T00:00:00Z",
+				deleted_at: null,
+				name: "demo-basin",
+			},
 			response: { status: 201 },
 		} as any);
 		vi.mocked(Generated.getBasinConfig).mockResolvedValue({

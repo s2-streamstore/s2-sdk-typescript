@@ -22,7 +22,11 @@ describe("ensure provisioning", () => {
 
 	it("ensures a basin and parses the provisioning result header", async () => {
 		vi.mocked(Generated.ensureBasin).mockResolvedValue({
-			data: { name: "demo-basin", state: "active" },
+			data: {
+				created_at: "2024-01-01T00:00:00Z",
+				deleted_at: null,
+				name: "demo-basin",
+			},
 			response: {
 				headers: new Headers({ "s2-provision-result": "noop" }),
 				status: 200,
@@ -34,7 +38,11 @@ describe("ensure provisioning", () => {
 
 		expect(response).toEqual({
 			result: "noop",
-			basin: { name: "demo-basin", state: "active" },
+			basin: {
+				createdAt: new Date("2024-01-01T00:00:00Z"),
+				deletedAt: null,
+				name: "demo-basin",
+			},
 		});
 
 		const call = vi.mocked(Generated.ensureBasin).mock.calls[0]?.[0] as any;
@@ -44,7 +52,11 @@ describe("ensure provisioning", () => {
 
 	it("sends basin ensure config in wire format", async () => {
 		vi.mocked(Generated.ensureBasin).mockResolvedValue({
-			data: { name: "demo-basin", state: "active" },
+			data: {
+				created_at: "2024-01-01T00:00:00Z",
+				deleted_at: null,
+				name: "demo-basin",
+			},
 			response: {
 				headers: new Headers({ "s2-provision-result": "updated" }),
 				status: 200,

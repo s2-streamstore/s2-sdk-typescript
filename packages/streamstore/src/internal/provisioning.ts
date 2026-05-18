@@ -37,7 +37,8 @@ export async function withS2DataAndResponse<T>(
 		result &&
 		typeof result === "object" &&
 		(Object.prototype.hasOwnProperty.call(result, "data") ||
-			Object.prototype.hasOwnProperty.call(result, "response"))
+			Object.prototype.hasOwnProperty.call(result, "response") ||
+			Object.prototype.hasOwnProperty.call(result, "error"))
 	) {
 		const response = (result as { response?: ResponseLike }).response;
 		const data = (result as { data?: T }).data;
