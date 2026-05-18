@@ -28,7 +28,8 @@ function toDate(value: string | null | undefined): Date | null | undefined {
 
 function transformBasinInfo(basin: any): Types.BasinInfo {
 	return {
-		...basin,
+		name: basin.name,
+		scope: basin.scope,
 		createdAt: toDate(basin.createdAt) as Date,
 		deletedAt: toDate(basin.deletedAt),
 	};
