@@ -141,7 +141,7 @@ describeIf("Correctness Integration Tests", () => {
 							recordsObserved: observedRecords,
 						};
 					} finally {
-						await readSession.cancel().catch(() => { });
+						await readSession.cancel().catch(() => {});
 					}
 				})();
 
@@ -165,7 +165,7 @@ describeIf("Correctness Integration Tests", () => {
 							}),
 						);
 					} finally {
-						await producer.close().catch(() => { });
+						await producer.close().catch(() => {});
 					}
 				})();
 
