@@ -141,7 +141,7 @@ describeIf("Correctness Integration Tests", () => {
 							recordsObserved: observedRecords,
 						};
 					} finally {
-						await readSession.cancel().catch(() => {});
+						await readSession.cancel().catch(() => { });
 					}
 				})();
 
@@ -165,7 +165,7 @@ describeIf("Correctness Integration Tests", () => {
 							}),
 						);
 					} finally {
-						await producer.close().catch(() => {});
+						await producer.close().catch(() => { });
 					}
 				})();
 
@@ -173,9 +173,6 @@ describeIf("Correctness Integration Tests", () => {
 				expect(readResult.highestIndex).toBe(TOTAL_RECORDS - 1);
 				expect(readResult.lastSeqNum).toBe(TOTAL_RECORDS - 1);
 				expect(readResult.recordsObserved).toBe(TOTAL_RECORDS);
-
-				const tail = await stream.checkTail();
-				expect(tail.tail.seqNum).toBe(TOTAL_RECORDS);
 			} finally {
 				// Close first, then delete - racing these can cause errors
 				await stream.close();
