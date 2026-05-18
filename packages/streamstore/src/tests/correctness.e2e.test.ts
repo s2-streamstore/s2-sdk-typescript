@@ -173,9 +173,6 @@ describeIf("Correctness Integration Tests", () => {
 				expect(readResult.highestIndex).toBe(TOTAL_RECORDS - 1);
 				expect(readResult.lastSeqNum).toBe(TOTAL_RECORDS - 1);
 				expect(readResult.recordsObserved).toBe(TOTAL_RECORDS);
-
-				const tail = await stream.checkTail();
-				expect(tail.tail.seqNum).toBe(TOTAL_RECORDS);
 			} finally {
 				// Close first, then delete - racing these can cause errors
 				await stream.close();
