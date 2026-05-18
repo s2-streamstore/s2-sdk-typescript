@@ -394,6 +394,11 @@ export interface ListStreamsInput {
 export type ListAllStreamsInput = ListAllArgs<ListStreamsInput>;
 
 /**
+ * Result of provisioning a resource.
+ */
+export type ProvisionResult = "created" | "updated" | "noop";
+
+/**
  * Input for creating a stream.
  */
 export interface CreateStreamInput {
@@ -420,6 +425,22 @@ export interface GetStreamConfigInput {
 export interface DeleteStreamInput {
 	/** Stream name. */
 	stream: string;
+}
+
+/**
+ * Input for ensuring a stream.
+ */
+export interface EnsureStreamInput {
+	/** Stream name. */
+	stream: string;
+	/**
+	 * Desired stream configuration before basin defaults are applied.
+	 *
+	 * Missing fields are filled from the current basin default stream configuration and then
+	 * global defaults before comparing or writing. If omitted, the stream is ensured using those
+	 * defaults.
+	 */
+	config?: StreamConfig | null;
 }
 
 /**
@@ -525,6 +546,18 @@ export interface CreateStreamResponse {
 	config: StreamConfig;
 }
 
+/**
+ * Response from ensuring a stream.
+ */
+export interface EnsureStreamResponse {
+	/**
+	 * Provisioning outcome.
+	 */
+	result: ProvisionResult;
+	/** Current stream state. */
+	stream: StreamInfo;
+}
+
 export type ReconfigureStreamResponse = StreamConfig;
 
 // =============================================================================
@@ -580,6 +613,26 @@ export interface DeleteBasinInput {
 }
 
 /**
+ * Input for ensuring a basin.
+ */
+export interface EnsureBasinInput {
+	/** Basin name. */
+	basin: string;
+	/**
+	 * Desired configuration for the basin.
+	 *
+	 * If omitted, the basin is ensured with the default configuration.
+	 */
+	config?: BasinConfig | null;
+	/**
+	 * Basin scope.
+	 *
+	 * Defaults to `aws:us-east-1`. Cannot be changed once set.
+	 */
+	scope?: API.BasinScope | null;
+}
+
+/**
  * Input for reconfiguring a basin.
  */
 export interface ReconfigureBasinInput {
@@ -605,8 +658,10 @@ export interface BasinInfo {
 	name: string;
 	/** Basin scope. */
 	scope?: API.BasinScope | null;
-	/** Basin state. */
-	state: API.BasinState;
+	/** Creation time. */
+	createdAt: Date;
+	/** Deletion time if the basin is being deleted. */
+	deletedAt?: Date | null;
 }
 
 /**
@@ -636,13 +691,18 @@ export interface ListBasinsResponse {
 /**
  * Response from creating a basin.
  */
-export interface CreateBasinResponse {
-	/** Basin name. */
-	name: string;
-	/** Basin scope. */
-	scope?: API.BasinScope | null;
-	/** Basin state. */
-	state: API.BasinState;
+export type CreateBasinResponse = BasinInfo;
+
+/**
+ * Response from ensuring a basin.
+ */
+export interface EnsureBasinResponse {
+	/**
+	 * Provisioning outcome.
+	 */
+	result: ProvisionResult;
+	/** Current basin info. */
+	basin: BasinInfo;
 }
 
 export type ReconfigureBasinResponse = BasinConfig;

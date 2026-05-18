@@ -4,12 +4,17 @@ import type { Client } from "./generated/client/types.gen.js";
 import {
 	createStream,
 	deleteStream,
+	ensureStream,
 	getStreamConfig,
 	listStreams,
 	reconfigureStream,
 } from "./generated/index.js";
 import type * as API from "./generated/types.gen.js";
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
+import {
+	provisionResultFromResponse,
+	withS2DataAndResponse,
+} from "./internal/provisioning.js";
 import { randomToken } from "./lib/base64.js";
 import { filterAsync, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
@@ -228,6 +233,43 @@ export class S2Streams {
 				}),
 			);
 		});
+	}
+
+	/**
+	 * Ensure a stream.
+	 *
+	 * Creates the stream if it doesn't exist, or ensures its config exactly matches the provided
+	 * configuration after basin defaults and global defaults are applied. Uses HTTP PUT semantics
+	 * and is always idempotent.
+	 *
+	 * Returns `result: "created"` with the stream info if the stream was newly created,
+	 * `result: "updated"` if its config changed, or `result: "noop"` if no write was needed.
+	 */
+	public async ensure(
+		args: Types.EnsureStreamInput,
+		options?: S2RequestOptions,
+	): Promise<Types.EnsureStreamResponse> {
+		const body =
+			args.config === undefined
+				? undefined
+				: (toSnakeCase(
+						toAPIStreamConfig(args.config),
+					) as API.StreamConfig | null);
+		const response = await withRetries(this.retryConfig, async () => {
+			return await withS2DataAndResponse<API.StreamInfo>(() =>
+				ensureStream({
+					client: this.client,
+					path: { stream: args.stream },
+					body,
+					...options,
+				}),
+			);
+		});
+		const stream = toCamelCase<any>(response.data);
+		return {
+			result: provisionResultFromResponse(response.response),
+			stream: transformStreamInfo(stream),
+		};
 	}
 
 	/**

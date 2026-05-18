@@ -83,10 +83,8 @@ describeIf("Basin Management Integration Tests", () => {
 			});
 
 			expect(createResponse.name).toBe(basinName);
-			expect(createResponse.state).toBe("active");
-			console.log(
-				`Basin created: ${createResponse.name}, state: ${createResponse.state}`,
-			);
+			expect(createResponse.createdAt).toBeInstanceOf(Date);
+			console.log(`Basin created: ${createResponse.name}`);
 
 			// Step 3: Get basin config and verify it matches expectations
 			const basinConfig = await s2.basins.getConfig({ basin: basinName });

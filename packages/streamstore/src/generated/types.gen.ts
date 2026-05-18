@@ -177,7 +177,7 @@ export type BasinReconfiguration = {
     stream_cipher?: null | EncryptionAlgorithm;
 };
 
-export type BasinScope = 'aws:us-east-1';
+export type BasinScope = 'aws:us-east-1' | 'aws:us-west-2' | 'aws:eu-north-1';
 
 export type BasinState = 'active' | 'deleting';
 
@@ -189,11 +189,6 @@ export type CreateBasinRequest = {
      */
     basin: BasinNameStr;
     config?: null | BasinConfig;
-    scope?: null | BasinScope;
-};
-
-export type CreateOrReconfigureBasinRequest = {
-    config?: null | BasinReconfiguration;
     scope?: null | BasinScope;
 };
 
@@ -223,6 +218,11 @@ export type DeleteOnEmptyReconfiguration = {
 };
 
 export type EncryptionAlgorithm = 'aegis-256' | 'aes-256-gcm';
+
+export type EnsureBasinRequest = {
+    config?: null | BasinConfig;
+    scope?: null | BasinScope;
+};
 
 export type ErrorInfo = {
     code: string;
@@ -760,8 +760,8 @@ export type ReconfigureBasinResponses = {
 
 export type ReconfigureBasinResponse = ReconfigureBasinResponses[keyof ReconfigureBasinResponses];
 
-export type CreateOrReconfigureBasinData = {
-    body?: null | CreateOrReconfigureBasinRequest;
+export type EnsureBasinData = {
+    body?: null | EnsureBasinRequest;
     path: {
         /**
          * Basin name.
@@ -772,19 +772,19 @@ export type CreateOrReconfigureBasinData = {
     url: '/basins/{basin}';
 };
 
-export type CreateOrReconfigureBasinErrors = {
+export type EnsureBasinErrors = {
     400: ErrorInfo;
     408: ErrorInfo;
 };
 
-export type CreateOrReconfigureBasinError = CreateOrReconfigureBasinErrors[keyof CreateOrReconfigureBasinErrors];
+export type EnsureBasinError = EnsureBasinErrors[keyof EnsureBasinErrors];
 
-export type CreateOrReconfigureBasinResponses = {
+export type EnsureBasinResponses = {
     200: BasinInfo;
     201: BasinInfo;
 };
 
-export type CreateOrReconfigureBasinResponse = CreateOrReconfigureBasinResponses[keyof CreateOrReconfigureBasinResponses];
+export type EnsureBasinResponse = EnsureBasinResponses[keyof EnsureBasinResponses];
 
 export type AccountMetricsData = {
     body?: never;
@@ -1060,8 +1060,8 @@ export type ReconfigureStreamResponses = {
 
 export type ReconfigureStreamResponse = ReconfigureStreamResponses[keyof ReconfigureStreamResponses];
 
-export type CreateOrReconfigureStreamData = {
-    body?: null | StreamReconfiguration;
+export type EnsureStreamData = {
+    body?: null | StreamConfig;
     path: {
         /**
          * Stream name.
@@ -1072,7 +1072,7 @@ export type CreateOrReconfigureStreamData = {
     url: '/streams/{stream}';
 };
 
-export type CreateOrReconfigureStreamErrors = {
+export type EnsureStreamErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     404: ErrorInfo;
@@ -1080,14 +1080,14 @@ export type CreateOrReconfigureStreamErrors = {
     409: ErrorInfo;
 };
 
-export type CreateOrReconfigureStreamError = CreateOrReconfigureStreamErrors[keyof CreateOrReconfigureStreamErrors];
+export type EnsureStreamError = EnsureStreamErrors[keyof EnsureStreamErrors];
 
-export type CreateOrReconfigureStreamResponses = {
+export type EnsureStreamResponses = {
     200: StreamInfo;
     201: StreamInfo;
 };
 
-export type CreateOrReconfigureStreamResponse = CreateOrReconfigureStreamResponses[keyof CreateOrReconfigureStreamResponses];
+export type EnsureStreamResponse = EnsureStreamResponses[keyof EnsureStreamResponses];
 
 export type ReadData = {
     body?: never;

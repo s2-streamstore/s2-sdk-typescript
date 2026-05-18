@@ -169,18 +169,18 @@ describeIf("Basins spec parity", () => {
 				await s2.basins.delete({ basin });
 
 				const seen: string[] = [];
-				let deletingState: string | undefined;
+				let deletedAt: Date | null | undefined;
 				for await (const info of s2.basins.listAll({
 					prefix: basin,
 					includeDeleted: true,
 				})) {
 					seen.push(info.name);
 					if (info.name === basin) {
-						deletingState = info.state;
+						deletedAt = info.deletedAt;
 					}
 				}
 				if (seen.includes(basin)) {
-					expect(deletingState).toBe("deleting");
+					expect(deletedAt).toBeInstanceOf(Date);
 				}
 			},
 			TEST_TIMEOUT_MS,
@@ -547,7 +547,7 @@ describeIf("Basins spec parity", () => {
 		);
 
 		it(
-			"reports deleting state after delete when listed",
+			"reports deletion time after delete when listed",
 			async () => {
 				const basin = trackBasin(makeBasinName("ts-dstate"));
 				await s2.basins.create({ basin });
@@ -557,7 +557,7 @@ describeIf("Basins spec parity", () => {
 				const resp = await s2.basins.list({ prefix: basin });
 				const info = resp.basins.find((b) => b.name === basin);
 				if (info) {
-					expect(info.state).toBe("deleting");
+					expect(info.deletedAt).toBeInstanceOf(Date);
 				}
 			},
 			TEST_TIMEOUT_MS,
