@@ -698,6 +698,7 @@ export type DeleteBasinErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type DeleteBasinError = DeleteBasinErrors[keyof DeleteBasinErrors];
@@ -723,6 +724,7 @@ export type GetBasinConfigErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type GetBasinConfigError = GetBasinConfigErrors[keyof GetBasinConfigErrors];
@@ -775,6 +777,7 @@ export type EnsureBasinData = {
 export type EnsureBasinErrors = {
     400: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type EnsureBasinError = EnsureBasinErrors[keyof EnsureBasinErrors];
@@ -996,6 +999,7 @@ export type DeleteStreamErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type DeleteStreamError = DeleteStreamErrors[keyof DeleteStreamErrors];
