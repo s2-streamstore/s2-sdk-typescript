@@ -1,13 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { S2Endpoints } from "../endpoints.js";
-import {
-	AppendInput,
-	AppendRecord,
-	BatchTransform,
-	Producer,
-	S2,
-} from "../index.js";
+import { AppendRecord, BatchTransform, Producer, S2 } from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
@@ -16,6 +10,7 @@ const describeIf = hasEnv ? describe : describe.skip;
 
 const TEST_TIMEOUT_MS = 600_000;
 const TOTAL_RECORDS = 64;
+const READ_IDLE_TIMEOUT_SECS = 60;
 
 const generateBasinName = (): string => {
 	const prefix = "typescript-correctness";
@@ -98,7 +93,9 @@ describeIf("Correctness Integration Tests", () => {
 
 				const readSession = await stream.readSession({
 					start: { from: { seqNum: 0 } },
-					stop: { limits: { count: TOTAL_RECORDS }, waitSecs: 60 },
+					// Bound idle sessions without capping the number of records observed:
+					// append retries may duplicate records before later indexes arrive.
+					stop: { waitSecs: READ_IDLE_TIMEOUT_SECS },
 				});
 
 				const readPromise = (async () => {
@@ -108,8 +105,6 @@ describeIf("Correctness Integration Tests", () => {
 
 					try {
 						for await (const record of readSession) {
-							expect(observedRecords).toBeLessThan(TOTAL_RECORDS);
-
 							const seqNum = record.seqNum;
 							if (lastSeqNum === undefined) {
 								expect(seqNum).toBe(0);
@@ -129,11 +124,16 @@ describeIf("Correctness Integration Tests", () => {
 								highestContiguousIndex = index;
 							}
 							observedRecords += 1;
+
+							if (highestContiguousIndex === TOTAL_RECORDS - 1) {
+								await readSession.cancel().catch(() => {});
+								break;
+							}
 						}
 
 						expect(highestContiguousIndex).toBe(TOTAL_RECORDS - 1);
-						expect(lastSeqNum).toBe(TOTAL_RECORDS - 1);
-						expect(observedRecords).toBe(TOTAL_RECORDS);
+						expect(lastSeqNum! + 1).toBe(observedRecords);
+						expect(observedRecords).toBeGreaterThanOrEqual(TOTAL_RECORDS);
 
 						return {
 							highestIndex: highestContiguousIndex,
@@ -171,8 +171,10 @@ describeIf("Correctness Integration Tests", () => {
 
 				const [readResult] = await Promise.all([readPromise, appendPromise]);
 				expect(readResult.highestIndex).toBe(TOTAL_RECORDS - 1);
-				expect(readResult.lastSeqNum).toBe(TOTAL_RECORDS - 1);
-				expect(readResult.recordsObserved).toBe(TOTAL_RECORDS);
+				expect(readResult.lastSeqNum! + 1).toBe(readResult.recordsObserved);
+				expect(readResult.recordsObserved).toBeGreaterThanOrEqual(
+					TOTAL_RECORDS,
+				);
 			} finally {
 				// Close first, then delete - racing these can cause errors
 				await stream.close();
