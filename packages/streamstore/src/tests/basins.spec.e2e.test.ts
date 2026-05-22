@@ -12,6 +12,7 @@ import {
 
 const hasEnv = !!process.env.S2_ACCESS_TOKEN;
 const describeIf = hasEnv ? describe : describe.skip;
+const itUnlessLite = process.env.S2_LITE ? it.skip : it;
 
 describeIf("Basins spec parity", () => {
 	let s2: S2;
@@ -219,7 +220,7 @@ describeIf("Basins spec parity", () => {
 			TEST_TIMEOUT_MS,
 		);
 
-		it(
+		itUnlessLite(
 			"creates with location",
 			async () => {
 				const basin = trackBasin(makeBasinName("ts-location"));
