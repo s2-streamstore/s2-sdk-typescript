@@ -153,11 +153,11 @@ export type BasinInfo = {
      * Deletion time in RFC 3339 format, if the basin is being deleted.
      */
     deleted_at?: string | null;
+    location?: null | LocationName;
     /**
      * Basin name.
      */
     name: BasinNameStr;
-    scope?: null | BasinScope;
 };
 
 export type BasinMetricSet = 'storage' | 'append-ops' | 'read-ops' | 'read-throughput' | 'append-throughput' | 'basin-ops';
@@ -177,8 +177,6 @@ export type BasinReconfiguration = {
     stream_cipher?: null | EncryptionAlgorithm;
 };
 
-export type BasinScope = 'aws:us-east-1' | 'aws:us-west-2' | 'aws:eu-north-1';
-
 export type BasinState = 'active' | 'deleting';
 
 export type CreateBasinRequest = {
@@ -189,7 +187,7 @@ export type CreateBasinRequest = {
      */
     basin: BasinNameStr;
     config?: null | BasinConfig;
-    scope?: null | BasinScope;
+    location?: null | LocationName;
 };
 
 export type CreateStreamRequest = {
@@ -221,7 +219,7 @@ export type EncryptionAlgorithm = 'aegis-256' | 'aes-256-gcm';
 
 export type EnsureBasinRequest = {
     config?: null | BasinConfig;
-    scope?: null | BasinScope;
+    location?: null | LocationName;
 };
 
 export type ErrorInfo = {
@@ -313,6 +311,19 @@ export type ListStreamsResponse = {
     streams: Array<StreamInfo>;
 };
 
+export type LocationInfo = {
+    /**
+     * Location represents a private placement, limited by account.
+     */
+    is_private: boolean;
+    /**
+     * Location name.
+     */
+    name: LocationName;
+};
+
+export type LocationName = string;
+
 export type Metric = {
     /**
      * Single named value.
@@ -344,7 +355,7 @@ export type MetricSetResponse = {
 
 export type MetricUnit = 'bytes' | 'operations';
 
-export type Operation = 'list-basins' | 'create-basin' | 'delete-basin' | 'reconfigure-basin' | 'get-basin-config' | 'issue-access-token' | 'revoke-access-token' | 'list-access-tokens' | 'list-streams' | 'create-stream' | 'delete-stream' | 'get-stream-config' | 'reconfigure-stream' | 'check-tail' | 'append' | 'read' | 'trim' | 'fence' | 'account-metrics' | 'basin-metrics' | 'stream-metrics';
+export type Operation = 'list-basins' | 'create-basin' | 'delete-basin' | 'reconfigure-basin' | 'get-basin-config' | 'issue-access-token' | 'revoke-access-token' | 'list-access-tokens' | 'list-streams' | 'create-stream' | 'delete-stream' | 'get-stream-config' | 'reconfigure-stream' | 'check-tail' | 'append' | 'read' | 'trim' | 'fence' | 'account-metrics' | 'basin-metrics' | 'stream-metrics' | 'list-locations' | 'get-default-location' | 'set-default-location';
 
 export type PermittedOperationGroups = {
     account?: null | ReadWritePermissions;
@@ -698,6 +709,7 @@ export type DeleteBasinErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type DeleteBasinError = DeleteBasinErrors[keyof DeleteBasinErrors];
@@ -723,6 +735,7 @@ export type GetBasinConfigErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type GetBasinConfigError = GetBasinConfigErrors[keyof GetBasinConfigErrors];
@@ -775,6 +788,7 @@ export type EnsureBasinData = {
 export type EnsureBasinErrors = {
     400: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type EnsureBasinError = EnsureBasinErrors[keyof EnsureBasinErrors];
@@ -785,6 +799,68 @@ export type EnsureBasinResponses = {
 };
 
 export type EnsureBasinResponse = EnsureBasinResponses[keyof EnsureBasinResponses];
+
+export type ListLocationsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/locations';
+};
+
+export type ListLocationsErrors = {
+    400: ErrorInfo;
+    403: ErrorInfo;
+    408: ErrorInfo;
+};
+
+export type ListLocationsError = ListLocationsErrors[keyof ListLocationsErrors];
+
+export type ListLocationsResponses = {
+    200: Array<LocationInfo>;
+};
+
+export type ListLocationsResponse = ListLocationsResponses[keyof ListLocationsResponses];
+
+export type GetDefaultLocationData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/locations/default';
+};
+
+export type GetDefaultLocationErrors = {
+    403: ErrorInfo;
+    408: ErrorInfo;
+};
+
+export type GetDefaultLocationError = GetDefaultLocationErrors[keyof GetDefaultLocationErrors];
+
+export type GetDefaultLocationResponses = {
+    200: LocationInfo;
+};
+
+export type GetDefaultLocationResponse = GetDefaultLocationResponses[keyof GetDefaultLocationResponses];
+
+export type SetDefaultLocationData = {
+    body: LocationName;
+    path?: never;
+    query?: never;
+    url: '/locations/default';
+};
+
+export type SetDefaultLocationErrors = {
+    400: ErrorInfo;
+    403: ErrorInfo;
+    408: ErrorInfo;
+};
+
+export type SetDefaultLocationError = SetDefaultLocationErrors[keyof SetDefaultLocationErrors];
+
+export type SetDefaultLocationResponses = {
+    200: LocationInfo;
+};
+
+export type SetDefaultLocationResponse = SetDefaultLocationResponses[keyof SetDefaultLocationResponses];
 
 export type AccountMetricsData = {
     body?: never;
@@ -996,6 +1072,7 @@ export type DeleteStreamErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    409: ErrorInfo;
 };
 
 export type DeleteStreamError = DeleteStreamErrors[keyof DeleteStreamErrors];
