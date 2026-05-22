@@ -125,10 +125,10 @@ export type {
 	AccountMetricSet,
 	BasinMetricSet,
 	// Enums and string literals
-	BasinScope,
 	BasinState,
 	// Retention
 	InfiniteRetention,
+	LocationName,
 	Operation,
 	// Scope configuration
 	PermittedOperationGroups,

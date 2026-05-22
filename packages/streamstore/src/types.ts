@@ -592,8 +592,8 @@ export interface CreateBasinInput {
 	basin: string;
 	/** Basin configuration. */
 	config?: BasinConfig | null;
-	/** Basin scope. */
-	scope?: API.BasinScope | null;
+	/** Basin location. */
+	location?: API.LocationName | null;
 }
 
 /**
@@ -625,11 +625,11 @@ export interface EnsureBasinInput {
 	 */
 	config?: BasinConfig | null;
 	/**
-	 * Basin scope.
+	 * Basin location.
 	 *
-	 * Defaults to `aws:us-east-1`. Cannot be changed once set.
+	 * If omitted when creating, uses the default location for the service. Cannot be changed once set.
 	 */
-	scope?: API.BasinScope | null;
+	location?: API.LocationName | null;
 }
 
 /**
@@ -656,8 +656,8 @@ export interface ReconfigureBasinInput {
 export interface BasinInfo {
 	/** Basin name. */
 	name: string;
-	/** Basin scope. */
-	scope?: API.BasinScope | null;
+	/** Basin location. */
+	location?: API.LocationName | null;
 	/** Creation time. */
 	createdAt: Date;
 	/** Deletion time if the basin is being deleted. */

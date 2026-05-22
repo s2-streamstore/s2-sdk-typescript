@@ -71,7 +71,7 @@ describe("ensure provisioning", () => {
 					retentionPolicy: { ageSecs: 3600 },
 				},
 			},
-			scope: "aws:us-west-2",
+			location: "aws:us-west-2",
 		});
 
 		expect(response.result).toBe("updated");
@@ -79,7 +79,7 @@ describe("ensure provisioning", () => {
 		expect(call.body.config.default_stream_config.retention_policy).toEqual({
 			age: 3600,
 		});
-		expect(call.body.scope).toBe("aws:us-west-2");
+		expect(call.body.location).toBe("aws:us-west-2");
 	});
 
 	it("ensures a stream and falls back to 201 as created", async () => {

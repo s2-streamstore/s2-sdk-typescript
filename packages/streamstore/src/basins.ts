@@ -29,7 +29,7 @@ function toDate(value: string | null | undefined): Date | null | undefined {
 function transformBasinInfo(basin: any): Types.BasinInfo {
 	return {
 		name: basin.name,
-		scope: basin.scope,
+		location: basin.location,
 		createdAt: toDate(basin.createdAt) as Date,
 		deletedAt: toDate(basin.deletedAt),
 	};
@@ -182,7 +182,7 @@ export class S2Basins {
 	 *
 	 * @param args.basin Globally unique basin name (8-48 chars, lowercase letters, numbers, hyphens; cannot begin or end with a hyphen)
 	 * @param args.config Optional basin configuration (e.g. defaultStreamConfig)
-	 * @param args.scope Basin scope
+	 * @param args.location Basin location
 	 */
 	public async create(
 		args: Types.CreateBasinInput,
@@ -268,7 +268,8 @@ export class S2Basins {
 			...ensureArgs,
 			config: toAPIBasinConfig(args.config),
 		};
-		const hasBody = apiArgs.config !== undefined || apiArgs.scope !== undefined;
+		const hasBody =
+			apiArgs.config !== undefined || apiArgs.location !== undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2DataAndResponse<API.BasinInfo>(() =>
 				ensureBasin({

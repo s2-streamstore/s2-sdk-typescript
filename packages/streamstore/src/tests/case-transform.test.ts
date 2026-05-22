@@ -207,7 +207,7 @@ describe("case-transform", () => {
 				basins: [
 					{
 						name: "my-basin",
-						scope: "aws:us-east-1",
+						location: "aws:us-east-1",
 						createdAt: "2024-01-01T00:00:00Z",
 					},
 				],

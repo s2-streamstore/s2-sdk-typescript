@@ -27,9 +27,9 @@ describeIf("Basins spec parity", () => {
 	const createBasin = async (
 		name: string,
 		config?: Parameters<S2["basins"]["create"]>[0]["config"],
-		scope?: Parameters<S2["basins"]["create"]>[0]["scope"],
+		location?: Parameters<S2["basins"]["create"]>[0]["location"],
 	) => {
-		await s2.basins.create({ basin: name, config, scope });
+		await s2.basins.create({ basin: name, config, location });
 		await waitForBasinReady(s2, name);
 	};
 
@@ -212,12 +212,12 @@ describeIf("Basins spec parity", () => {
 		);
 
 		it(
-			"creates with scope",
+			"creates with location",
 			async () => {
-				const basin = trackBasin(makeBasinName("ts-scope"));
+				const basin = trackBasin(makeBasinName("ts-location"));
 				const resp = await s2.basins.create({
 					basin,
-					scope: "aws:us-east-1",
+					location: "aws:us-east-1",
 				});
 				expect(resp.name).toBe(basin);
 				await waitForBasinReady(s2, basin);
