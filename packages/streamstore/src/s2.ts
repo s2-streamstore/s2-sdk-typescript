@@ -11,6 +11,7 @@ import {
 	canSetUserAgentHeader,
 	DEFAULT_USER_AGENT,
 } from "./lib/stream/runtime.js";
+import { S2Locations } from "./locations.js";
 import { S2Metrics } from "./metrics.js";
 
 /**
@@ -39,6 +40,8 @@ export class S2 {
 	public readonly basins: S2Basins;
 	/** Manage access tokens for the account (list, issue, revoke). */
 	public readonly accessTokens: S2AccessTokens;
+	/** Account location operations. */
+	public readonly locations: S2Locations;
 	/** Account, basin and stream level metrics. */
 	public readonly metrics: S2Metrics;
 
@@ -82,6 +85,7 @@ export class S2 {
 
 		this.basins = new S2Basins(this.client, this.retryConfig);
 		this.accessTokens = new S2AccessTokens(this.client, this.retryConfig);
+		this.locations = new S2Locations(this.client, this.retryConfig);
 		this.metrics = new S2Metrics(this.client, this.retryConfig);
 	}
 
