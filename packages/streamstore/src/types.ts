@@ -561,6 +561,43 @@ export interface EnsureStreamResponse {
 export type ReconfigureStreamResponse = StreamConfig;
 
 // =============================================================================
+// Location Types
+// =============================================================================
+
+/**
+ * Information about a location.
+ */
+export interface LocationInfo {
+	/** Location name. */
+	name: API.LocationName;
+	/** Whether the location represents a private placement limited by account. */
+	isPrivate: boolean;
+}
+
+/**
+ * Response from listing locations.
+ */
+export type ListLocationsResponse = LocationInfo[];
+
+/**
+ * Response from getting the default location.
+ */
+export type GetDefaultLocationResponse = LocationInfo;
+
+/**
+ * Input for setting the default location.
+ */
+export interface SetDefaultLocationInput {
+	/** Location name. */
+	location: API.LocationName;
+}
+
+/**
+ * Response from setting the default location.
+ */
+export type SetDefaultLocationResponse = LocationInfo;
+
+// =============================================================================
 // Basin Types
 // =============================================================================
 

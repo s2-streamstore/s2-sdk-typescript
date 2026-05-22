@@ -15,6 +15,7 @@ export { S2Stream } from "./stream.js";
 
 export { S2AccessTokens } from "./accessTokens.js";
 export { S2Basins } from "./basins.js";
+export { S2Locations } from "./locations.js";
 export { S2Metrics } from "./metrics.js";
 export { S2Streams } from "./streams.js";
 
@@ -62,6 +63,7 @@ export type {
 	EnsureStreamResponse,
 	GaugeMetric,
 	GetBasinConfigInput,
+	GetDefaultLocationResponse,
 	GetStreamConfigInput,
 	IssueAccessTokenInput,
 	IssueAccessTokenResponse,
@@ -73,8 +75,10 @@ export type {
 	ListAllStreamsInput,
 	ListBasinsInput,
 	ListBasinsResponse,
+	ListLocationsResponse,
 	ListStreamsInput,
 	ListStreamsResponse,
+	LocationInfo,
 	Metric,
 	MetricSetResponse,
 	ProvisionResult,
@@ -92,6 +96,8 @@ export type {
 	RetentionPolicy,
 	RevokeAccessTokenInput,
 	ScalarMetric,
+	SetDefaultLocationInput,
+	SetDefaultLocationResponse,
 	StreamConfig,
 	StreamInfo,
 	StreamMetricsInput,

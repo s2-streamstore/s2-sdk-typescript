@@ -53,6 +53,14 @@ export type BasinInfo = CamelCaseKeys<API.BasinInfo>;
  */
 export type BasinReconfiguration = CamelCaseKeys<API.BasinReconfiguration>;
 
+/**
+ * Location information.
+ *
+ * Generated: `is_private`
+ * SDK: `isPrivate`
+ */
+export type LocationInfo = CamelCaseKeys<API.LocationInfo>;
+
 // =============================================================================
 // Stream Types
 // =============================================================================
