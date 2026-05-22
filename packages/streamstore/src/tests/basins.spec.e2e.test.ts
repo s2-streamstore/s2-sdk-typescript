@@ -24,6 +24,14 @@ describeIf("Basins spec parity", () => {
 		return name;
 	};
 
+	const getRandomLocation = async () => {
+		const locations = await s2.locations.list();
+		if (locations.length === 0) {
+			throw new Error("No available S2 locations returned");
+		}
+		return locations[Math.floor(Math.random() * locations.length)]!.name;
+	};
+
 	const createBasin = async (
 		name: string,
 		config?: Parameters<S2["basins"]["create"]>[0]["config"],
@@ -215,9 +223,10 @@ describeIf("Basins spec parity", () => {
 			"creates with location",
 			async () => {
 				const basin = trackBasin(makeBasinName("ts-location"));
+				const location = await getRandomLocation();
 				const resp = await s2.basins.create({
 					basin,
-					location: "aws:us-east-1",
+					location,
 				});
 				expect(resp.name).toBe(basin);
 				await waitForBasinReady(s2, basin);
