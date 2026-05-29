@@ -145,7 +145,10 @@ export class S2Stream {
 	 * - When `as: "bytes"` is provided, bodies and headers are decoded from base64 to `Uint8Array`.
 	 * - Supports starting position by `seq_num`, `timestamp`, or `tail_offset` and can clamp to the tail.
 	 * - Non-streaming reads are bounded by `count` and `bytes` (defaults 1000 and 1 MiB).
-	 * - Use `readSession` for streaming reads
+	 * - When `ignoreCommandRecords` is set, command records are filtered out of the
+	 *   single returned batch client-side. The batch may be empty if every record in
+	 *   it was a command record; use `readSession` to transparently keep reading until
+	 *   data records are found.
 	 */
 	public async read<Format extends "string" | "bytes" = "string">(
 		input?: Types.ReadInput,
@@ -154,44 +157,33 @@ export class S2Stream {
 		this.ensureOpen();
 		const { as, ...requestOptions } = options ?? {};
 		return await withRetries(this.retryConfig, async () => {
-			let currentInput = input;
-			while (true) {
-				// Convert ReadInput to ReadArgs using mapper
-				const readArgs: ReadArgs<Format> = {
-					...toAPIReadQuery(currentInput),
-					as,
-					ignore_command_records: input?.ignoreCommandRecords,
-				} as ReadArgs<Format>;
-				const genBatch = await streamRead(
-					this.name,
-					this.client,
-					readArgs,
-					this.withEncryptionHeaders(requestOptions),
-				);
-				// Convert from API to SDK ReadBatch
-				const batch = (
-					as === "bytes"
-						? fromAPIReadBatchBytes(genBatch)
-						: fromAPIReadBatchString(genBatch)
-				) as Types.ReadBatch<Format>;
-				if (!input?.ignoreCommandRecords) {
-					return batch;
-				}
-				const filtered = batch.records.filter((r) => !isCommandRecord(r));
-				if (filtered.length > 0 || batch.records.length === 0) {
-					return { ...batch, records: filtered };
-				}
-				// All records in this batch were command records.
-				// Advance past them and read again.
-				const lastRecord = batch.records[batch.records.length - 1]!;
-				currentInput = {
-					...input,
-					start: {
-						from: { seqNum: lastRecord.seqNum + 1 },
-						clamp: input?.start?.clamp,
-					},
-				};
+			// Convert ReadInput to ReadArgs using mapper
+			const readArgs: ReadArgs<Format> = {
+				...toAPIReadQuery(input),
+				as,
+				ignore_command_records: input?.ignoreCommandRecords,
+			} as ReadArgs<Format>;
+			const genBatch = await streamRead(
+				this.name,
+				this.client,
+				readArgs,
+				this.withEncryptionHeaders(requestOptions),
+			);
+			// Convert from API to SDK ReadBatch
+			const batch = (
+				as === "bytes"
+					? fromAPIReadBatchBytes(genBatch)
+					: fromAPIReadBatchString(genBatch)
+			) as Types.ReadBatch<Format>;
+			if (!input?.ignoreCommandRecords) {
+				return batch;
 			}
+			// Command records are filtered out of this single batch. The result may be
+			// empty when every record was a command record.
+			return {
+				...batch,
+				records: batch.records.filter((r) => !isCommandRecord(r)),
+			};
 		});
 	}
 	/**
