@@ -145,9 +145,8 @@ export class S2Stream {
 	 * - When `as: "bytes"` is provided, bodies and headers are decoded from base64 to `Uint8Array`.
 	 * - Supports starting position by `seq_num`, `timestamp`, or `tail_offset` and can clamp to the tail.
 	 * - Non-streaming reads are bounded by `count` and `bytes` (defaults 1000 and 1 MiB).
-	 * - When `ignoreCommandRecords` is set, command records are filtered out of the
-	 *   single returned batch client-side. The batch may be empty if every record in
-	 *   it was a command record; use `readSession` to transparently keep reading until
+	 * - When `ignoreCommandRecords` is set, command records are filtered from the single
+	 *   returned batch, which may then be empty. Use `readSession` to keep reading until
 	 *   data records are found.
 	 */
 	public async read<Format extends "string" | "bytes" = "string">(
@@ -178,8 +177,6 @@ export class S2Stream {
 			if (!input?.ignoreCommandRecords) {
 				return batch;
 			}
-			// Command records are filtered out of this single batch. The result may be
-			// empty when every record was a command record.
 			return {
 				...batch,
 				records: batch.records.filter((r) => !isCommandRecord(r)),
