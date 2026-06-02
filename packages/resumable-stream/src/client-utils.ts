@@ -105,6 +105,16 @@ export async function* pipeSseFrames(
 	}
 }
 
+/** Error thrown by {@link fetchOk} for a non-2xx response, carrying the status. */
+export class HttpError extends Error {
+	readonly status: number;
+	constructor(status: number, statusText: string) {
+		super(`HTTP ${status} ${statusText}`.trim());
+		this.name = "HttpError";
+		this.status = status;
+	}
+}
+
 export async function fetchOk(
 	doFetch: typeof fetch,
 	url: string,
@@ -112,9 +122,22 @@ export async function fetchOk(
 ): Promise<Response> {
 	const response = await doFetch(url, init);
 	if (!response.ok) {
-		throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+		throw new HttpError(response.status, response.statusText);
 	}
 	return response;
+}
+
+/**
+ * Whether an error from {@link fetchOk} represents a permanent failure that
+ * reconnecting cannot fix. A 4xx response (e.g. 401/403/404) is permanent,
+ * except 408 (Request Timeout) and 429 (Too Many Requests), which are worth
+ * retrying. Errors without a status (network failures) are treated as transient.
+ */
+export function isPermanentError(err: unknown): boolean {
+	const status = err instanceof HttpError ? err.status : undefined;
+	if (status === undefined) return false;
+	if (status === 408 || status === 429) return false;
+	return status >= 400 && status < 500;
 }
 
 export interface SubscribeOptions {
@@ -157,8 +180,9 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Tails an SSE replay. Parses each frame as JSON of type `T`, advances a
  * cursor from each frame's `id:`, and reconnects with `?from=<cursor>` on
- * body drop or fetch failure. Ends on HTTP 204, aborted signal, or empty
- * `reconnectBackoffMs`.
+ * body drop or transient fetch failure. Ends on HTTP 204, aborted signal, or
+ * empty `reconnectBackoffMs`. Throws on a permanent HTTP error (4xx other than
+ * 408/429) instead of retrying.
  */
 export async function* subscribeSse<T>(
 	options: SubscribeOptions,
@@ -190,7 +214,9 @@ export async function* subscribeSse<T>(
 			});
 		} catch (err) {
 			if (signal.aborted) return;
-			if (backoffMs.length === 0) throw err;
+			// Permanent failures (e.g. 401/403/404) can't be fixed by reconnecting,
+			// so surface them instead of retrying forever.
+			if (backoffMs.length === 0 || isPermanentError(err)) throw err;
 			needsReconnect = true;
 			continue;
 		}
