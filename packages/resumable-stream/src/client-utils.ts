@@ -122,6 +122,9 @@ export async function fetchOk(
 ): Promise<Response> {
 	const response = await doFetch(url, init);
 	if (!response.ok) {
+		// Drain the error body so the connection can return to the keep-alive
+		// pool; an un-consumed body leaks connections under sustained failures.
+		response.body?.cancel().catch(() => {});
 		throw new HttpError(response.status, response.statusText);
 	}
 	return response;
