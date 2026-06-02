@@ -462,6 +462,15 @@ export function makeAppendPreconditionError(
 	if (json && typeof json === "object") {
 		if ("seq_num_mismatch" in json) {
 			const expected = Number(json.seq_num_mismatch);
+			// Don't hand back a sequence number that lost precision.
+			if (!Number.isSafeInteger(expected)) {
+				throw new S2Error({
+					message: `seq_num_mismatch exceeds JavaScript Number.MAX_SAFE_INTEGER (${Number.MAX_SAFE_INTEGER}); use protobuf transport with bigint support or ensure values stay within 53-bit range`,
+					code: "UNSAFE_INTEGER",
+					status: 0,
+					origin: "sdk",
+				});
+			}
 			return new SeqNumMismatchError({
 				message: "Append condition failed: sequence number mismatch",
 				code: "APPEND_CONDITION_FAILED",
