@@ -159,6 +159,12 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 
 export interface DeserializingReadSessionOptions {
 	enableDedupe?: boolean;
+	/**
+	 * Maximum declared frame size to allocate while reassembling messages.
+	 * Frames whose `_frame_bytes` header exceeds this are dropped instead of
+	 * allocated. Defaults to {@link DEFAULT_MAX_FRAME_BYTES} (100 MiB).
+	 */
+	maxFrameBytes?: number;
 }
 
 export class DeserializingReadSession<Message> extends ReadableStream<Message> {
@@ -170,7 +176,9 @@ export class DeserializingReadSession<Message> extends ReadableStream<Message> {
 		super({
 			start: async (controller) => {
 				const reader = session.getReader();
-				const assembler = new FrameAssembler();
+				const assembler = new FrameAssembler({
+					maxFrameBytes: options?.maxFrameBytes,
+				});
 				const dedupe = new DedupeFilter();
 
 				try {
@@ -237,7 +245,9 @@ export {
 } from "./dedupe.js";
 export {
 	type CompletedFrame,
+	DEFAULT_MAX_FRAME_BYTES,
 	FrameAssembler,
+	type FrameAssemblerOptions,
 	type FrameMeta,
 	frameChunksToRecords,
 } from "./framing.js";
