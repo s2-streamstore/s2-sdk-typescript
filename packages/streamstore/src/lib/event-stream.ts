@@ -88,7 +88,9 @@ export class EventStream<T>
 					}
 				} catch (e) {
 					downstream.error(e);
-					await upstream.cancel(e);
+					try {
+						await upstream.cancel(e);
+					} catch {}
 				}
 			},
 			cancel: (reason) => upstream.cancel(reason),

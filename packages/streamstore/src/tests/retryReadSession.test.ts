@@ -127,6 +127,55 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 	}
 }
 
+class ThrowingReadSession<Format extends "string" | "bytes" = "string">
+	extends ReadableStream<ReadResult<Format>>
+	implements TransportReadSession<Format>
+{
+	constructor(private readonly error: Error) {
+		super({
+			pull: () => {
+				throw error;
+			},
+		});
+	}
+
+	nextReadPosition(): StreamPosition | undefined {
+		return undefined;
+	}
+
+	lastObservedTail(): StreamPosition | undefined {
+		return undefined;
+	}
+
+	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
+		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		if (typeof fn === "function") return fn.call(this);
+		const reader = this.getReader();
+		return {
+			next: async () => {
+				const r = await reader.read();
+				if (r.done) return { done: true, value: undefined };
+				return { done: false, value: r.value };
+			},
+			return: async (value?: any) => {
+				reader.releaseLock();
+				return { done: true, value };
+			},
+			throw: async (e?: any) => {
+				reader.releaseLock();
+				throw e;
+			},
+			[Symbol.asyncIterator]() {
+				return this;
+			},
+		};
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.cancel();
+	}
+}
+
 describe("ReadSession (unit)", () => {
 	// Note: Not using fake timers here because they don't play well with async iteration
 	// Instead, we use very short backoff times (1ms) to make tests run fast
@@ -309,6 +358,41 @@ describe("ReadSession (unit)", () => {
 		expect(capturedArgs).toHaveLength(2);
 		expect(capturedArgs[0]?.seq_num).toBe(100);
 		expect(capturedArgs[1]?.seq_num).toBe(103);
+	});
+
+	it("retries when a transport stream throws a raw browser network error", async () => {
+		let callCount = 0;
+		const capturedArgs: Array<ReadArgs<"string">> = [];
+		const recoveredRecord: InternalReadRecord<"string"> = {
+			seq_num: 10,
+			timestamp: 123,
+			body: "recovered",
+		};
+
+		const session = await RetryReadSession.create(
+			async (args) => {
+				capturedArgs.push({ ...args });
+				callCount++;
+				if (callCount === 1) {
+					return new ThrowingReadSession<"string">(
+						new TypeError("network error"),
+					);
+				}
+				return new FakeReadSession({ records: [recoveredRecord] });
+			},
+			{ seq_num: 10 },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 2 },
+		);
+
+		const results: SDKReadRecord<"string">[] = [];
+		for await (const record of session) {
+			results.push(record);
+		}
+
+		expect(results).toHaveLength(1);
+		expect(results[0]?.body).toBe("recovered");
+		expect(capturedArgs).toHaveLength(2);
+		expect(capturedArgs[1]?.seq_num).toBe(10);
 	});
 
 	it("does not adjust until parameter on retry (absolute boundary)", async () => {

@@ -28,6 +28,15 @@ describe("browser network error classification (#117)", () => {
 		expect(err.origin).toBe("sdk");
 	});
 
+	it("classifies browser body stream 'network error' as a connection error (status 502)", () => {
+		const err = s2Error(new TypeError("network error"));
+
+		expect(err).toBeInstanceOf(S2Error);
+		expect(err.status).toBe(502);
+		expect(err.code).toBe("NETWORK_ERROR");
+		expect(err.origin).toBe("sdk");
+	});
+
 	it("classifies Safari 'Load failed' as a connection error (status 502)", () => {
 		const err = s2Error(new TypeError("Load failed"));
 
