@@ -71,7 +71,14 @@ Replay:
 ```ts
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  return chat.replay(`tanstack-ai-chat-${url.searchParams.get("id")}`);
+  return chat.replay(`tanstack-ai-chat-${url.searchParams.get("id")}`, {
+    fromSeqNum: url.searchParams.has("from")
+      ? Number(url.searchParams.get("from"))
+      : undefined,
+    // Pass `live` through so the client's `&live=1` keeps the SSE open at the
+    // tail; without it an idle replay returns 204.
+    live: url.searchParams.get("live") === "1",
+  });
 }
 ```
 
