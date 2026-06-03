@@ -1118,6 +1118,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Wait for head with timeout
 			debugSession("[%s] [PUMP] waiting for head result", this.streamName);
 			const result = await this.waitForHead(head);
+			if (this.pumpStopped) {
+				// abort() may have fired (and reset capacity accounting) while we were
+				// parked here; don't process the now-stale result.
+				debugSession("[%s] [PUMP] stopped after waitForHead", this.streamName);
+				return;
+			}
 			debugSession(
 				"[%s] [PUMP] got result: kind=%s",
 				this.streamName,

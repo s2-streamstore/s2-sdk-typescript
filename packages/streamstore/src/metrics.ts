@@ -118,11 +118,12 @@ export class S2Metrics {
 			return await withS2Data(() =>
 				basinMetrics({
 					client: this.client,
-					path: args,
+					path: { basin: args.basin },
 					query: toSnakeCase({
-						...args,
+						set: args.set,
 						start: toEpochSeconds(args.start),
 						end: toEpochSeconds(args.end),
+						interval: args.interval,
 					}),
 					...options,
 				}),
@@ -149,11 +150,12 @@ export class S2Metrics {
 			return await withS2Data(() =>
 				streamMetrics({
 					client: this.client,
-					path: args,
+					path: { basin: args.basin, stream: args.stream },
 					query: toSnakeCase({
-						...args,
+						set: args.set,
 						start: toEpochSeconds(args.start),
 						end: toEpochSeconds(args.end),
+						interval: args.interval,
 					}),
 					...options,
 				}),
