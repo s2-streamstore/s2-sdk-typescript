@@ -133,6 +133,12 @@ async function* subscribeChunks(
 		}
 
 		if (response.status === 204 || !response.body) {
+			// A 204 means there is nothing (more) to replay, so it is terminal
+			// even when `reconnectBackoffMs` is set: retrying would busy-loop on
+			// a genuinely idle replay. Yield a synthetic terminal chunk so
+			// TanStack's `processingComplete` resolves instead of hanging. (Live
+			// setups should forward `live` to the replay so it streams rather
+			// than returning 204 in the first place.)
 			yield makeSyntheticRunFinished();
 			return;
 		}
