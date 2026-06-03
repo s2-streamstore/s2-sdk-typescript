@@ -109,6 +109,14 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		return new FetchReadSession(response.response.body, format);
 	}
 
+	/** @internal */
+	static _createForTesting<Format extends "string" | "bytes" = "string">(
+		stream: ReadableStream<Uint8Array>,
+		format: Format,
+	): FetchReadSession<Format> {
+		return new FetchReadSession(stream, format);
+	}
+
 	private _nextReadPosition: API.StreamPosition | undefined = undefined;
 	private _lastObservedTail: API.StreamPosition | undefined = undefined;
 
@@ -116,9 +124,11 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		// Track error from parser
 		let parserError: S2Error | null = null;
 
-		// Track last ping time for timeout detection (20s without a ping = timeout)
+		// Track last SSE event time for timeout detection. Server heartbeats are
+		// randomized up to 15s apart; allow some scheduling and network slack
+		// before declaring the stream dead.
 		let lastPingTimeMs = performance.now();
-		const PING_TIMEOUT_MS = 20000; // 20 seconds
+		const PING_TIMEOUT_MS = 25000; // 25 seconds
 
 		// Create EventStream that parses SSE and yields records
 		const eventStream = new EventStream<ReadRecord<Format>>(stream, (msg) => {
@@ -183,6 +193,11 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 		// Wrap the EventStream to convert records to ReadResult and check for errors
 		const reader = eventStream.getReader();
+		const cancelReader = async (reason?: unknown) => {
+			try {
+				await reader.cancel(reason);
+			} catch {}
+		};
 		let done = false;
 		// Track pending read to reuse across timeout retries
 		type ReaderResult = Awaited<ReturnType<typeof reader.read>>;
@@ -229,8 +244,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 										debug("read session ping timeout");
 										resolve({ type: "timeout" });
 									} else {
-										// Activity happened - this timeout is stale, retry with new timeout
-										debug("stale timeout, activity detected, retrying");
+										// Activity happened - this timeout is stale, retry with new timeout.
 										resolve({ type: "stale" });
 									}
 								}, remainingTimeMs),
@@ -249,9 +263,16 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 								status: 408,
 								code: "TIMEOUT",
 							});
+							debug(
+								"read session timeout elapsed_ms=%d timeout_ms=%d status=%d code=%s",
+								Math.floor(elapsed),
+								PING_TIMEOUT_MS,
+								timeoutError.status,
+								timeoutError.code,
+							);
 							controller.enqueue({ ok: false, error: timeoutError });
 							done = true;
-							await reader.cancel();
+							await cancelReader(timeoutError);
 							controller.close();
 							return;
 						}
@@ -271,16 +292,24 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 						return;
 					} catch (error) {
 						// Convert unexpected errors to S2Error and emit as error result
-						controller.enqueue({ ok: false, error: s2Error(error) });
+						const readError = s2Error(error);
+						debug(
+							"read session body error status=%d code=%s origin=%s message=%s",
+							readError.status,
+							readError.code,
+							readError.origin,
+							readError.message,
+						);
+						controller.enqueue({ ok: false, error: readError });
 						done = true;
-						await reader.cancel();
+						await cancelReader(error);
 						controller.close();
 						return;
 					}
 				}
 			},
 			cancel: async () => {
-				await reader.cancel();
+				await cancelReader("cancelled");
 			},
 		});
 	}

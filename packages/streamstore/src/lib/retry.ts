@@ -19,6 +19,7 @@ import type {
 	AppendSession as AppendSessionType,
 	ReadArgs,
 	ReadRecord,
+	ReadResult,
 	ReadSession as ReadSessionType,
 	TransportAppendSession,
 	TransportReadSession,
@@ -366,7 +367,24 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					const reader = session.getReader();
 
 					while (true) {
-						const { done, value: result } = await reader.read();
+						let read: Awaited<ReturnType<typeof reader.read>>;
+						try {
+							read = await reader.read();
+						} catch (err) {
+							const error = s2Error(err);
+							debugRead(
+								"transport stream threw, normalized status=%d code=%s origin=%s message=%s",
+								error.status,
+								error.code,
+								error.origin,
+								error.message,
+							);
+							read = {
+								done: false,
+								value: { ok: false, error },
+							};
+						}
+						const { done, value: result } = read;
 						// Update last observed tail if transport exposes it
 						try {
 							const tail = session.lastObservedTail?.();
@@ -389,6 +407,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							// Check if we can retry (track session attempts, not record reads)
 							const effectiveMax = Math.max(1, retryConfig.maxAttempts);
 							if (isRetryable(error) && attempt < effectiveMax - 1) {
+								const retryFromSeqNum =
+									this._nextReadPosition?.seq_num ?? nextArgs.seq_num;
 								if (this._nextReadPosition) {
 									nextArgs.seq_num = this._nextReadPosition.seq_num;
 									// Clear alternative start position fields to avoid conflicting params
@@ -439,9 +459,14 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								session = undefined;
 
 								debugRead(
-									"will retry after %dms, status=%s",
+									"will retry after %dms, status=%s code=%s attempt=%d/%d next_seq_num=%s records_read=%d",
 									delay,
 									error.status,
+									error.code,
+									attempt + 1,
+									effectiveMax - 1,
+									retryFromSeqNum ?? "unknown",
+									this._recordsRead,
 								);
 								await sleep(delay);
 								if (cancelled) {
