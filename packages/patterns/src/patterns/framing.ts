@@ -69,12 +69,9 @@ export type CompletedFrame = {
 };
 
 /**
- * Default upper bound on a single frame's declared size (100 MiB).
- *
- * The `_frame_bytes` header is attacker-controlled: a tiny record can declare a
- * huge frame and force the reader to eagerly allocate that much memory. Frames
- * declaring more than this are dropped instead of allocated. Override via
- * {@link FrameAssemblerOptions.maxFrameBytes} when larger messages are expected.
+ * Default cap on a frame's declared size (100 MiB). `_frame_bytes` is
+ * attacker-controlled, so frames declaring more than this are dropped rather
+ * than allocated. Override via {@link FrameAssemblerOptions.maxFrameBytes}.
  */
 export const DEFAULT_MAX_FRAME_BYTES = 100 * 1024 * 1024;
 
@@ -112,8 +109,10 @@ export class FrameAssembler {
 				this.reset();
 			}
 			if (maybeMeta.bytes <= 0 || maybeMeta.bytes > this.maxFrameBytes) {
-				// Invalid or oversized declared frame size: drop it without
-				// allocating, so a malicious header can't exhaust reader memory.
+				// Drop without allocating, so a bad header can't exhaust memory.
+				console.error(
+					`FrameAssembler: dropping frame with invalid declared size ${maybeMeta.bytes} bytes (max ${this.maxFrameBytes})`,
+				);
 				return completed;
 			}
 			this.buffer = new Uint8Array(maybeMeta.bytes);

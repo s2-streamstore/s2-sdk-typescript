@@ -160,9 +160,8 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 export interface DeserializingReadSessionOptions {
 	enableDedupe?: boolean;
 	/**
-	 * Maximum declared frame size to allocate while reassembling messages.
-	 * Frames whose `_frame_bytes` header exceeds this are dropped instead of
-	 * allocated. Defaults to {@link DEFAULT_MAX_FRAME_BYTES} (100 MiB).
+	 * Max declared frame size to allocate. Frames exceeding this are dropped.
+	 * Defaults to {@link DEFAULT_MAX_FRAME_BYTES} (100 MiB).
 	 */
 	maxFrameBytes?: number;
 }

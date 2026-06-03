@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	DEFAULT_MAX_FRAME_BYTES,
 	FrameAssembler,
@@ -6,14 +6,9 @@ import {
 } from "../../patterns/framing.js";
 
 /**
- * Issue #230: Untrusted `_frame_bytes` header can trigger reader OOM.
- *
- * `FrameAssembler` sized its buffer directly from the attacker-controlled
- * `_frame_bytes` header (`new Uint8Array(maybeMeta.bytes)`), so a tiny record
- * declaring a huge frame forced the reader to eagerly allocate that much memory.
- *
- * The fix drops frames whose declared size is non-positive or exceeds
- * `maxFrameBytes` (default 100 MiB) before allocating.
+ * Issue #230: an untrusted `_frame_bytes` header could trigger reader OOM,
+ * since `FrameAssembler` sized its buffer straight from it. The fix drops
+ * frames whose declared size is non-positive or over `maxFrameBytes`.
  */
 
 function frameRecord(
@@ -28,6 +23,16 @@ function frameRecord(
 }
 
 describe("Issue #230: FrameAssembler rejects oversized declared frames", () => {
+	let errorSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("drops a frame declaring more than the default max without allocating", () => {
 		const assembler = new FrameAssembler();
 		// 54-byte record declaring a 100 MiB frame.
@@ -40,6 +45,9 @@ describe("Issue #230: FrameAssembler rejects oversized declared frames", () => {
 		expect(frames).toEqual([]);
 		const more = assembler.push({ body: new Uint8Array(4) });
 		expect(more).toEqual([]);
+
+		// The drop is logged, not silent.
+		expect(errorSpy).toHaveBeenCalledOnce();
 	});
 
 	it("drops a frame declaring zero bytes", () => {
