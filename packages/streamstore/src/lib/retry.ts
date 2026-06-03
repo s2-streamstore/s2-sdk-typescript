@@ -367,7 +367,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					const reader = session.getReader();
 
 					while (true) {
-						let read: ReadableStreamReadResult<ReadResult<Format>>;
+						let read: Awaited<ReturnType<typeof reader.read>>;
 						try {
 							read = await reader.read();
 						} catch (err) {

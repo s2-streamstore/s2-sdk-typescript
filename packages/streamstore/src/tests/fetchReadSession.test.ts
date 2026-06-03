@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ReadResult } from "../lib/stream/types.js";
 import { FetchReadSession } from "../lib/stream/transport/fetch/index.js";
+import type { ReadResult } from "../lib/stream/types.js";
 
 const FetchReadSessionConstructor = FetchReadSession as unknown as {
 	new (
