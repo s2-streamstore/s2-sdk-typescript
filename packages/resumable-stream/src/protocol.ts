@@ -104,6 +104,22 @@ function combineErrors(errors: ReadonlyArray<unknown>): unknown | undefined {
 	);
 }
 
+/**
+ * Locate a {@link SeqNumMismatchError} in a persist failure. A mismatch is a
+ * terminal pump error, so it surfaces from `producer.close()` and may be
+ * combined with the generic "producer has failed" error that later `submit()`
+ * calls throw — hence the `AggregateError` case.
+ */
+function findSeqNumMismatch(failure: unknown): SeqNumMismatchError | undefined {
+	if (failure instanceof SeqNumMismatchError) return failure;
+	if (failure instanceof AggregateError) {
+		for (const error of failure.errors) {
+			if (error instanceof SeqNumMismatchError) return error;
+		}
+	}
+	return undefined;
+}
+
 export async function persistToS2<T>({
 	s2,
 	basin,
@@ -131,13 +147,7 @@ export async function persistToS2<T>({
 		let sourceError: unknown | undefined;
 		try {
 			for await (const value of source) {
-				await producer.submit(toRecord(value)).catch((err: unknown) => {
-					if (err instanceof SeqNumMismatchError) {
-						onSeqNumMismatch?.(err);
-						return;
-					}
-					throw err;
-				});
+				await producer.submit(toRecord(value));
 			}
 		} catch (err) {
 			sourceError = err;
@@ -161,6 +171,13 @@ export async function persistToS2<T>({
 
 		const failure = combineErrors([sourceError, finalizationError, closeError]);
 		if (failure !== undefined) {
+			// A seq-num mismatch means another writer fenced/advanced this stream;
+			// treat it as an expected, handled condition rather than an error.
+			const mismatch = findSeqNumMismatch(failure);
+			if (mismatch && onSeqNumMismatch) {
+				onSeqNumMismatch(mismatch);
+				return;
+			}
 			throw failure;
 		}
 	} finally {
