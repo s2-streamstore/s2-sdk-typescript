@@ -95,7 +95,8 @@ export interface PersistToS2Options<T> {
 }
 
 function combineErrors(errors: ReadonlyArray<unknown>): unknown | undefined {
-	const failures = errors.filter((error) => error !== undefined);
+	// Dedupe by identity: a terminal pump error surfaces from multiple phases.
+	const failures = [...new Set(errors.filter((error) => error !== undefined))];
 	if (failures.length === 0) return undefined;
 	if (failures.length === 1) return failures[0];
 	return new AggregateError(
@@ -107,8 +108,8 @@ function combineErrors(errors: ReadonlyArray<unknown>): unknown | undefined {
 /**
  * Locate a {@link SeqNumMismatchError} in a persist failure. A mismatch is a
  * terminal pump error, so it surfaces from `producer.close()` and may be
- * combined with the generic "producer has failed" error that later `submit()`
- * calls throw — hence the `AggregateError` case.
+ * combined with distinct errors from other phases (e.g. a source failure) —
+ * hence the `AggregateError` case.
  */
 function findSeqNumMismatch(failure: unknown): SeqNumMismatchError | undefined {
 	if (failure instanceof SeqNumMismatchError) return failure;

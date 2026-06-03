@@ -132,7 +132,6 @@ export async function createResumableStream(
 	const { accessToken, basin, batchSize, lingerDuration, endpoints } =
 		getS2Config();
 	const s2 = new S2({ accessToken, endpoints });
-	const [persistentStream, clientStream] = makeStream().tee();
 	const sessionFencingToken = "session-" + generateFencingToken();
 
 	try {
@@ -176,6 +175,10 @@ export async function createResumableStream(
 		debugLog("Error initializing stream:", error);
 		return null;
 	}
+
+	// Created only after validation so the early returns above don't leak
+	// the teed branches.
+	const [persistentStream, clientStream] = makeStream().tee();
 
 	const persistStream = async () => {
 		try {

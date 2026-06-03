@@ -77,7 +77,8 @@ export interface ParsedSseFrame {
 
 /**
  * Pipe a fetch response body through SSE parsing and yield raw frames. Cancels
- * the reader when `abortSignal` fires so the upstream fetch is freed promptly.
+ * the reader when `abortSignal` fires, and on any other early termination
+ * (consumer `break`/`return`/throw), so the upstream fetch is freed promptly.
  */
 export async function* pipeSseFrames(
 	body: ReadableStream<Uint8Array>,
@@ -101,6 +102,9 @@ export async function* pipeSseFrames(
 		}
 	} finally {
 		abortSignal?.removeEventListener("abort", cancel);
+		// Cancel (not just release) so early termination without an abort
+		// signal closes the fetch body.
+		await reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
 }
