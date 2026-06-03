@@ -351,18 +351,15 @@ export class Producer implements AsyncDisposable {
 			this.inflightRecords.length,
 		);
 
-		// Check if pump has already failed
+		// Pump already failed: rethrow the original error (as close() does)
+		// so its type is preserved.
 		if (this.pumpError) {
 			debugProducer(
 				"[%s] submit #%d: pump already failed",
 				this.debugName,
 				submitId,
 			);
-			throw new S2Error({
-				message: `Cannot submit: producer has failed: ${this.pumpError.message}`,
-				status: 500,
-				origin: "sdk",
-			});
+			throw this.pumpError;
 		}
 
 		// Create the ack promise (resolved later by pump)
