@@ -11,6 +11,7 @@ import type * as API from "../../../../generated/index.js";
 import { append, read } from "../../../../generated/index.js";
 import {
 	fromAPIAppendAck,
+	fromAPIStreamPosition,
 	toAPIAppendRecord,
 } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
@@ -80,7 +81,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 			};
 			throw new RangeNotSatisfiableError({
 				status,
-				tail: err?.tail,
+				tail: err?.tail ? fromAPIStreamPosition(err.tail) : undefined,
 				code: err?.code,
 			});
 		}

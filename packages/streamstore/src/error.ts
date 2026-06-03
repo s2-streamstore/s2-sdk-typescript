@@ -1,3 +1,5 @@
+import type { StreamPosition } from "./types.js";
+
 type ErrorWithCode = Error & {
 	code?: unknown;
 	cause?: unknown;
@@ -394,7 +396,7 @@ export class FencingTokenMismatchError extends S2Error {
  */
 export class RangeNotSatisfiableError extends S2Error {
 	/** The current tail position of the stream. */
-	public readonly tail?: { seq_num: number; timestamp: number };
+	public readonly tail?: StreamPosition;
 
 	constructor({
 		code,
@@ -403,10 +405,10 @@ export class RangeNotSatisfiableError extends S2Error {
 	}: {
 		code?: string;
 		status?: number;
-		tail?: { seq_num: number; timestamp: number };
+		tail?: StreamPosition;
 	} = {}) {
 		const message = tail
-			? `Range not satisfiable: starting point is out of range (tail seq_num=${tail.seq_num}).`
+			? `Range not satisfiable: starting point is out of range (tail seqNum=${tail.seqNum}).`
 			: "Range not satisfiable: starting point is out of range.";
 		super({
 			message,

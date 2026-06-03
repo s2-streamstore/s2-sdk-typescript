@@ -23,6 +23,7 @@ import {
 } from "../../../../error.js";
 import type * as API from "../../../../generated/index.js";
 import * as Proto from "../../../../generated/proto/s2.js";
+import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import * as Redacted from "../../../redacted.js";
@@ -486,7 +487,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											new RangeNotSatisfiableError({
 												status,
 												code: errorJson.code,
-												tail: errorJson.tail,
+												tail: errorJson.tail
+													? fromAPIStreamPosition(errorJson.tail)
+													: undefined,
 											}),
 										);
 									} catch {
@@ -533,7 +536,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 													new RangeNotSatisfiableError({
 														status,
 														code: errorJson.code,
-														tail: errorJson.tail,
+														tail: errorJson.tail
+															? fromAPIStreamPosition(errorJson.tail)
+															: undefined,
 													}),
 												);
 											} else {

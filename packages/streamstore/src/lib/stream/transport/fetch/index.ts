@@ -18,6 +18,7 @@ import {
 } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
+import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
@@ -78,6 +79,20 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		if (response.error) {
 			// Convert error to S2Error and throw - let caller handle connection errors
 			const status = response.response.status;
+			if (status === 416) {
+				const err =
+					typeof response.error === "object" && response.error !== null
+						? (response.error as {
+								code?: string;
+								tail?: API.StreamPosition;
+							})
+						: undefined;
+				throw new RangeNotSatisfiableError({
+					status,
+					code: err?.code,
+					tail: err?.tail ? fromAPIStreamPosition(err.tail) : undefined,
+				});
+			}
 			const error =
 				typeof response.error === "object" &&
 				response.error !== null &&
@@ -87,14 +102,10 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 							code: response.error.code ?? undefined,
 							status,
 						})
-					: status === 416
-						? new RangeNotSatisfiableError({
-								status,
-							})
-						: new S2Error({
-								message: response.response.statusText ?? "Request failed",
-								status,
-							});
+					: new S2Error({
+							message: response.response.statusText ?? "Request failed",
+							status,
+						});
 			throw error;
 		}
 		if (!response.response.body) {
