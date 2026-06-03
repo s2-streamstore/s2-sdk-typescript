@@ -234,7 +234,8 @@ for await (const event of subscribe({
 
 The loop ends on body close followed by HTTP 204 from a reconnect, on an
 aborted `signal`, or when `reconnectBackoffMs: []` is passed and the body
-ends without 204.
+ends without 204. Permanent HTTP errors (4xx except 408/429) are thrown
+rather than retried.
 
 Server fields:
 
