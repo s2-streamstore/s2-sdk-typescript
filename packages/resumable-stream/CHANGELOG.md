@@ -1,5 +1,43 @@
 # @s2-dev/resumable-stream
 
+## 3.0.1
+
+### Patch Changes
+
+- a478434: fix: `persistToS2` now actually invokes `onSeqNumMismatch` (#248)
+
+  The per-record `instanceof SeqNumMismatchError` check was unreachable — `Producer.submit()`
+  wraps a pump failure in a generic `S2Error`, so the callback never fired. The genuine
+  `SeqNumMismatchError` surfaces from `producer.close()`, so the handling now runs after the
+  producer is closed: when the persist failure is (or contains) a `SeqNumMismatchError` and an
+  `onSeqNumMismatch` callback was provided, it's invoked and treated as an expected
+  fenced/concurrent-writer condition instead of being thrown. Callers without the callback are
+  unaffected (the failure still throws).
+
+- 6019944: fix: SSE reconnect now fails fast on permanent HTTP errors instead of retrying forever (#232)
+
+  The auto-reconnect loop in `subscribeSse` retried on every fetch error, so a permanent
+  failure (401/403/404) was retried indefinitely. `fetchOk` now throws an `HttpError`
+  carrying the status, and the loop surfaces permanent errors (4xx other than 408/429)
+  to the caller instead of reconnecting. Transient errors (network failures, 408, 429, 5xx)
+  are still retried.
+
+- f3ec15a: fix: SSE subscriptions reconnect on mid-stream errors instead of crashing (#249)
+
+  `subscribeSse` only wrapped the `fetchOk` call in try/catch, not the `for await`
+  over `pipeSseFrames`. When the response body errored mid-iteration, the throw
+  escaped before the reconnection logic could run, so the subscription crashed with
+  no recovery. The loop is now wrapped: it reconnects from the last cursor when
+  `reconnectBackoffMs` is set and rethrows when reconnect is disabled, matching the
+  TanStack `subscribeChunks` path. This restores behavior dropped in #241.
+
+- b4499c6: fix: TanStack AI chat no longer hangs when the replay endpoint returns HTTP 204 (#250)
+
+  `subscribeChunks` returned an empty stream on a 204/no-body replay response, so
+  TanStack's subscription loop ended without a terminal chunk and `streamResponse()`
+  hung forever on `processingComplete`. It now yields a synthetic `RUN_FINISHED` so
+  the subscription terminates cleanly. This restores the behavior dropped in #241.
+
 ## 3.0.0
 
 ### Major Changes
