@@ -109,6 +109,14 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		return new FetchReadSession(response.response.body, format);
 	}
 
+	/** @internal */
+	static _createForTesting<Format extends "string" | "bytes" = "string">(
+		stream: ReadableStream<Uint8Array>,
+		format: Format,
+	): FetchReadSession<Format> {
+		return new FetchReadSession(stream, format);
+	}
+
 	private _nextReadPosition: API.StreamPosition | undefined = undefined;
 	private _lastObservedTail: API.StreamPosition | undefined = undefined;
 

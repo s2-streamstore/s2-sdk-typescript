@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { FetchReadSession } from "../lib/stream/transport/fetch/index.js";
-import type { ReadResult } from "../lib/stream/types.js";
-
-const FetchReadSessionConstructor = FetchReadSession as unknown as {
-	new (
-		stream: ReadableStream<Uint8Array>,
-		format: "string",
-	): ReadableStream<ReadResult<"string">>;
-};
 
 describe("FetchReadSession", () => {
 	it("converts raw browser body stream errors into transport error results", async () => {
@@ -16,7 +8,7 @@ describe("FetchReadSession", () => {
 				throw new TypeError("network error");
 			},
 		});
-		const session = new FetchReadSessionConstructor(body, "string");
+		const session = FetchReadSession._createForTesting(body, "string");
 		const reader = session.getReader();
 
 		const first = await reader.read();
