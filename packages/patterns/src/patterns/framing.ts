@@ -69,6 +69,18 @@ export type CompletedFrame = {
 };
 
 /**
+ * Default cap on a frame's declared size (100 MiB). `_frame_bytes` is
+ * attacker-controlled, so frames declaring more than this are dropped rather
+ * than allocated. Override via {@link FrameAssemblerOptions.maxFrameBytes}.
+ */
+export const DEFAULT_MAX_FRAME_BYTES = 100 * 1024 * 1024;
+
+export type FrameAssemblerOptions = {
+	/** Maximum declared frame size to allocate. Defaults to {@link DEFAULT_MAX_FRAME_BYTES}. */
+	maxFrameBytes?: number;
+};
+
+/**
  * Stateful helper that consumes byte records and yields complete frames when
  * all pieces have been received.
  */
@@ -78,6 +90,11 @@ export class FrameAssembler {
 	private writtenBytes = 0;
 	private expectedBytes = 0;
 	private currentMeta: FrameMeta | undefined;
+	private readonly maxFrameBytes: number;
+
+	constructor(options?: FrameAssemblerOptions) {
+		this.maxFrameBytes = options?.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+	}
 
 	push(record: ByteRecord): CompletedFrame[] {
 		const completed: CompletedFrame[] = [];
@@ -90,6 +107,13 @@ export class FrameAssembler {
 			if (this.buffer && this.buffer.length > 0) {
 				// Incomplete frame: drop existing buffered data on new frame boundary.
 				this.reset();
+			}
+			if (maybeMeta.bytes <= 0 || maybeMeta.bytes > this.maxFrameBytes) {
+				// Drop without allocating, so a bad header can't exhaust memory.
+				console.error(
+					`FrameAssembler: dropping frame with invalid declared size ${maybeMeta.bytes} bytes (max ${this.maxFrameBytes})`,
+				);
+				return completed;
 			}
 			this.buffer = new Uint8Array(maybeMeta.bytes);
 			this.remainingRecords = maybeMeta.records;

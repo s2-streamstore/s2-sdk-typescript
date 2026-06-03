@@ -226,22 +226,30 @@ export async function* subscribeSse<T>(
 
 		if (response.status === 204 || !response.body) return;
 
-		for await (const frame of pipeSseFrames(response.body, signal)) {
-			if (frame.id) {
-				const parsed = Number.parseInt(frame.id, 10);
-				if (
-					Number.isSafeInteger(parsed) &&
-					parsed >= 0 &&
-					(cursor === undefined || parsed > cursor)
-				) {
-					cursor = parsed;
+		try {
+			for await (const frame of pipeSseFrames(response.body, signal)) {
+				if (frame.id) {
+					const parsed = Number.parseInt(frame.id, 10);
+					if (
+						Number.isSafeInteger(parsed) &&
+						parsed >= 0 &&
+						(cursor === undefined || parsed > cursor)
+					) {
+						cursor = parsed;
+					}
 				}
+				if (!frame.data) continue;
+				attempt = 0;
+				try {
+					yield JSON.parse(frame.data) as T;
+				} catch {}
 			}
-			if (!frame.data) continue;
-			attempt = 0;
-			try {
-				yield JSON.parse(frame.data) as T;
-			} catch {}
+		} catch (err) {
+			// A mid-stream error (e.g. the body drops) is recoverable: fall
+			// through to reconnect from the last cursor unless aborted, or
+			// rethrow when reconnect is disabled.
+			if (signal.aborted) return;
+			if (backoffMs.length === 0) throw err;
 		}
 
 		if (signal.aborted) return;
