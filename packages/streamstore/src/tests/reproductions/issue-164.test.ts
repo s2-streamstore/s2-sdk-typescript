@@ -12,8 +12,8 @@ import { S2Stream } from "../../stream.js";
  * Issue #164 / #231: `S2Stream.read()` with `ignoreCommandRecords`.
  *
  * A unary `read()` performs exactly ONE request and filters command records out
- * of that single batch. The result may be empty when every record in the batch 
- * was a command record; this is intended behavior. Consumers that need to transparently 
+ * of that single batch. The result may be empty when every record in the batch
+ * was a command record; this is intended behavior. Consumers that need to transparently
  * keep reading until data records are found should use `readSession()`.
  *
  * #231 was caused by an earlier loop that re-issued a full read (with the
