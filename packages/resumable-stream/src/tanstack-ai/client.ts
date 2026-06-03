@@ -49,6 +49,23 @@ export interface ConnectionOptions {
 	reconnectBackoffMs?: readonly number[];
 }
 
+/**
+ * Terminal chunk yielded when a replay response has no body (HTTP 204).
+ *
+ * TanStack waits for a terminal chunk after `send()`; a 204 means there is
+ * nothing active to replay, so without this the subscription ends empty and
+ * `streamResponse()` hangs on `await processingComplete`.
+ */
+function makeSyntheticRunFinished(): StreamChunk {
+	return {
+		type: "RUN_FINISHED",
+		threadId: "s2-replay",
+		runId: `s2-replay-${Date.now()}`,
+		timestamp: Date.now(),
+		finishReason: "stop",
+	} as StreamChunk;
+}
+
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 	if (ms <= 0 || signal.aborted) return Promise.resolve();
 	return new Promise<void>((resolve) => {
@@ -115,7 +132,10 @@ async function* subscribeChunks(
 			continue;
 		}
 
-		if (response.status === 204 || !response.body) return;
+		if (response.status === 204 || !response.body) {
+			yield makeSyntheticRunFinished();
+			return;
+		}
 
 		try {
 			for await (const frame of pipeSseFrames(response.body, signal)) {

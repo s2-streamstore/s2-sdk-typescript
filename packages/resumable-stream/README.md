@@ -308,6 +308,9 @@ export async function GET(req: Request) {
     fromSeqNum: url.searchParams.has("from")
       ? Number(url.searchParams.get("from"))
       : undefined,
+    // Pass `live` through so the client's `&live=1` keeps the SSE open at the
+    // tail; without it an idle replay returns 204.
+    live: url.searchParams.get("live") === "1",
   });
 }
 ```
