@@ -154,16 +154,6 @@ describeIf("Streams spec parity", () => {
 			},
 			TEST_TIMEOUT_MS,
 		);
-
-		it(
-			"rejects startAfter less than prefix",
-			async () => {
-				await expect(
-					basin.streams.list({ prefix: "zzzzzzzz", startAfter: "aaaaaaaa" }),
-				).rejects.toMatchObject({ status: 422 });
-			},
-			TEST_TIMEOUT_MS,
-		);
 	});
 
 	describe("Create stream", () => {

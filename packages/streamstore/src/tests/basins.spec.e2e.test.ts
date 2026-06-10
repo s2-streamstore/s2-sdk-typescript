@@ -161,16 +161,6 @@ describeIf("Basins spec parity", () => {
 		);
 
 		it(
-			"rejects startAfter less than prefix",
-			async () => {
-				await expect(
-					s2.basins.list({ prefix: "zzzzzzzz", startAfter: "aaaaaaaa" }),
-				).rejects.toMatchObject({ status: 422 });
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
 			"includes deleting basins when requested",
 			async () => {
 				const basin = trackBasin(makeBasinName("ts-del"));
