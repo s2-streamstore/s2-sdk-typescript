@@ -161,11 +161,20 @@ describeIf("Basins spec parity", () => {
 		);
 
 		it(
-			"rejects startAfter less than prefix",
+			"allows startAfter less than prefix",
 			async () => {
-				await expect(
-					s2.basins.list({ prefix: "zzzzzzzz", startAfter: "aaaaaaaa" }),
-				).rejects.toMatchObject({ status: 422 });
+				const base = makeBasinName("ts-salp");
+				const names = [`${base}-a-a`, `${base}-a-b`, `${base}-b-a`];
+				for (const name of names) {
+					trackBasin(name);
+					await createBasin(name);
+				}
+				const resp = await s2.basins.list({
+					prefix: `${base}-b`,
+					startAfter: `${base}-a`,
+				});
+				expect(resp.basins.map((b) => b.name)).toEqual([`${base}-b-a`]);
+				expect(resp.hasMore).toBe(false);
 			},
 			TEST_TIMEOUT_MS,
 		);

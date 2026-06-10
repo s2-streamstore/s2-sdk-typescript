@@ -156,11 +156,25 @@ describeIf("Streams spec parity", () => {
 		);
 
 		it(
-			"rejects startAfter less than prefix",
+			"allows startAfter less than prefix",
 			async () => {
-				await expect(
-					basin.streams.list({ prefix: "zzzzzzzz", startAfter: "aaaaaaaa" }),
-				).rejects.toMatchObject({ status: 422 });
+				const base = makeStreamName("ts-salp");
+				const names = [`${base}-a-a`, `${base}-a-b`, `${base}-b-a`];
+				for (const name of names) {
+					await basin.streams.create({ stream: name });
+				}
+				try {
+					const resp = await basin.streams.list({
+						prefix: `${base}-b`,
+						startAfter: `${base}-a`,
+					});
+					expect(resp.streams.map((s) => s.name)).toEqual([`${base}-b-a`]);
+					expect(resp.hasMore).toBe(false);
+				} finally {
+					for (const name of names) {
+						await basin.streams.delete({ stream: name }).catch(() => {});
+					}
+				}
 			},
 			TEST_TIMEOUT_MS,
 		);
