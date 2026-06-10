@@ -154,7 +154,6 @@ describeIf("Streams spec parity", () => {
 			},
 			TEST_TIMEOUT_MS,
 		);
-
 	});
 
 	describe("Create stream", () => {
