@@ -190,7 +190,7 @@ export class S2Streams {
 				}),
 			);
 		});
-		return toCamelCase<Types.CreateStreamResponse>(response);
+		return transformStreamInfo(toCamelCase<any>(response));
 	}
 
 	/**

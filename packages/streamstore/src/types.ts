@@ -541,10 +541,7 @@ export interface ListStreamsResponse {
 /**
  * Response from creating a stream.
  */
-export interface CreateStreamResponse {
-	/** Stream configuration. */
-	config: StreamConfig;
-}
+export type CreateStreamResponse = StreamInfo;
 
 /**
  * Response from ensuring a stream.
