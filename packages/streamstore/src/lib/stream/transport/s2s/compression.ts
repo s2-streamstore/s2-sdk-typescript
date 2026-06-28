@@ -38,8 +38,6 @@ async function loadZlib(): Promise<CompressionModule> {
 
 function getLoadedZlib(type: CompressionType): CompressionModule {
 	if (!zlibModule) {
-		// zlib is only loaded when compression is negotiated. Reaching here means
-		// the server sent a compressed frame the client never advertised support for.
 		throw new Error(
 			`received unexpected ${type}-compressed frame: compression was not negotiated`,
 		);

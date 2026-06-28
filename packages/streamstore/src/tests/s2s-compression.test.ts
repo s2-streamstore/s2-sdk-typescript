@@ -138,9 +138,7 @@ describe("s2s frame compression round-trip", () => {
 	});
 
 	it("reports a protocol error for unnegotiated compressed frames", async () => {
-		// Re-import a fresh module so zlib is unloaded, mimicking a client running
-		// with compression "none" that receives a compressed frame anyway. This
-		// must surface as a negotiation error, not a generic module-load failure.
+		// Fresh module so zlib is unloaded, as it would be with compression "none".
 		vi.resetModules();
 		const fresh = await import("../lib/stream/transport/s2s/compression.js");
 		const compressed = zlib.gzipSync(new Uint8Array([1, 2, 3]));
