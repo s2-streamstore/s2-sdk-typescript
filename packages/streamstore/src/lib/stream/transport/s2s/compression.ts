@@ -36,9 +36,13 @@ async function loadZlib(): Promise<CompressionModule> {
 	return zlibPromise;
 }
 
-function getLoadedZlib(): CompressionModule {
+function getLoadedZlib(type: CompressionType): CompressionModule {
 	if (!zlibModule) {
-		throw new Error("zlib module has not been loaded");
+		// zlib is only loaded when compression is negotiated. Reaching here means
+		// the server sent a compressed frame the client never advertised support for.
+		throw new Error(
+			`received unexpected ${type}-compressed frame: compression was not negotiated`,
+		);
 	}
 	return zlibModule;
 }
@@ -117,11 +121,11 @@ export function decompressFrameBody(
 			return body;
 		}
 		case "gzip":
-			return getLoadedZlib().gunzipSync(body, {
+			return getLoadedZlib(type).gunzipSync(body, {
 				maxOutputLength: MAX_DECOMPRESSED_PAYLOAD_BYTES,
 			});
 		case "zstd": {
-			const z = getLoadedZlib();
+			const z = getLoadedZlib(type);
 			if (!z.zstdDecompressSync) {
 				throw new Error("zstd decompression requires Node.js v22.15+");
 			}

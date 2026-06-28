@@ -1,5 +1,5 @@
 import * as zlib from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	acceptEncodingHeader,
 	compressFrameBody,
@@ -134,6 +134,18 @@ describe("s2s frame compression round-trip", () => {
 		parser.push(rawFrame(1, 0x80));
 		expect(() => parser.parseFrame()).toThrow(
 			"terminal message missing status code",
+		);
+	});
+
+	it("reports a protocol error for unnegotiated compressed frames", async () => {
+		// Re-import a fresh module so zlib is unloaded, mimicking a client running
+		// with compression "none" that receives a compressed frame anyway. This
+		// must surface as a negotiation error, not a generic module-load failure.
+		vi.resetModules();
+		const fresh = await import("../lib/stream/transport/s2s/compression.js");
+		const compressed = zlib.gzipSync(new Uint8Array([1, 2, 3]));
+		expect(() => fresh.decompressFrameBody(compressed, "gzip")).toThrow(
+			/unexpected gzip-compressed frame/,
 		);
 	});
 
