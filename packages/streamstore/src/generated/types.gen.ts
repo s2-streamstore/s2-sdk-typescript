@@ -638,7 +638,6 @@ export type ListBasinsData = {
         prefix?: string;
         /**
          * Filter to basins whose names lexicographically start after this string.
-         * It must be greater than or equal to the `prefix` if specified.
          */
         start_after?: string;
         /**
@@ -1000,7 +999,6 @@ export type ListStreamsData = {
         prefix?: string;
         /**
          * Filter to streams whose names lexicographically start after this string.
-         * It must be greater than or equal to the `prefix` if specified.
          */
         start_after?: string;
         /**
