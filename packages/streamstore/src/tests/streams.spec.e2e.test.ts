@@ -171,6 +171,21 @@ describeIf("Streams spec parity", () => {
 		);
 
 		it(
+			"returns StreamInfo with normalized dates",
+			async () => {
+				const streamName = makeStreamName("ts-info");
+				try {
+					const info = await basin.streams.create({ stream: streamName });
+					expect(info.name).toBe(streamName);
+					expect(info.createdAt).toBeInstanceOf(Date);
+				} finally {
+					await basin.streams.delete({ stream: streamName }).catch(() => {});
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
 			"creates with full config",
 			async () => {
 				const streamName = await createStream("ts-full", {
