@@ -332,7 +332,8 @@ function isStreamDone(readBatch: ReadBatch): boolean {
 	return isTerminalFence(lastRecord);
 }
 
-async function* readableStreamToAsyncIterable(
+/** @internal */
+export async function* readableStreamToAsyncIterable(
 	stream: ReadableStream<string>,
 ): AsyncIterable<string> {
 	const reader = stream.getReader();
@@ -343,6 +344,8 @@ async function* readableStreamToAsyncIterable(
 			yield value;
 		}
 	} finally {
+		// Cancel so the other tee branch's cancel() can resolve.
+		reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
 }
