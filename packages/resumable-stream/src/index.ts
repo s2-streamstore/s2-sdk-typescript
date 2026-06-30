@@ -332,7 +332,7 @@ function isStreamDone(readBatch: ReadBatch): boolean {
 	return isTerminalFence(lastRecord);
 }
 
-/** @internal Exported for testing. */
+/** @internal */
 export async function* readableStreamToAsyncIterable(
 	stream: ReadableStream<string>,
 ): AsyncIterable<string> {
@@ -344,8 +344,7 @@ export async function* readableStreamToAsyncIterable(
 			yield value;
 		}
 	} finally {
-		// Cancel (fire-and-forget) so this teed branch is released rather than
-		// abandoned; otherwise cancel() on the sibling branch never resolves.
+		// Cancel so the other tee branch's cancel() can resolve.
 		reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}

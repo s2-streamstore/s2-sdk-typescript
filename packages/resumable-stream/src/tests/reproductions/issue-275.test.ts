@@ -1,20 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { readableStreamToAsyncIterable } from "../../index.js";
 
-/**
- * Issue #275: persistence consumes one teed branch via
- * readableStreamToAsyncIterable. When that iteration stops early it released
- * the reader lock without cancelling, leaving the branch abandoned — so a
- * later cancel() on the sibling (client) branch never resolved. The fix
- * fire-and-forget cancels the branch in the generator's finally block.
- */
+// Issue #275: stopping one tee branch early must not hang cancel() on the other.
 
 function ongoingSource(): ReadableStream<string> {
 	return new ReadableStream<string>({
 		start(controller) {
 			controller.enqueue("a");
 			controller.enqueue("b");
-			// Never closes: simulates a producer still emitting tokens.
 		},
 	});
 }
@@ -31,17 +24,15 @@ async function withTimeout<T>(
 	]);
 }
 
-describe("Issue #275: cancelling the client branch after persistence stops early", () => {
-	it("does not hang the sibling branch's cancel()", async () => {
+describe("Issue #275: cancelling one tee branch after the other stops early", () => {
+	it("does not hang cancel() on the other branch", async () => {
 		const [persistent, client] = ongoingSource().tee();
 
-		// Persistence reads one value, then stops early (loop body breaks/throws).
-		const iterable = readableStreamToAsyncIterable(persistent);
-		const iterator = iterable[Symbol.asyncIterator]();
+		const iterator =
+			readableStreamToAsyncIterable(persistent)[Symbol.asyncIterator]();
 		await iterator.next();
-		await iterator.return?.(undefined); // runs the generator's finally
+		await iterator.return?.(undefined);
 
-		// The client now cancels its branch; this must resolve promptly.
 		const result = await withTimeout(client.cancel(), 500);
 		expect(result).not.toBe("TIMEOUT");
 	});
