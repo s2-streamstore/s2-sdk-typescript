@@ -338,6 +338,21 @@ describe("serialization patterns", () => {
 		await expect(session.submit("ok")).resolves.toBeDefined();
 	});
 
+	it("errors the writable stream permanently on an oversized message", async () => {
+		const session = new SerializingAppendSession<string>(
+			new FakeAppendSession() as any,
+			(m) => textEncoder.encode(m),
+			{ maxFrameBytes: 8 },
+		);
+		const writer = session.getWriter();
+
+		await expect(writer.write("way too large")).rejects.toThrow(
+			FrameSizeError,
+		);
+		// Unlike submit(), the stream interface stays errored for later writes.
+		await expect(writer.write("ok")).rejects.toThrow(FrameSizeError);
+	});
+
 	it("DeserializingReadSession errors on oversized frames instead of dropping them", async () => {
 		const readStream = new ReadableStream<any>({
 			start(controller) {
