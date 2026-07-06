@@ -346,9 +346,7 @@ describe("serialization patterns", () => {
 		);
 		const writer = session.getWriter();
 
-		await expect(writer.write("way too large")).rejects.toThrow(
-			FrameSizeError,
-		);
+		await expect(writer.write("way too large")).rejects.toThrow(FrameSizeError);
 		// Unlike submit(), the stream interface stays errored for later writes.
 		await expect(writer.write("ok")).rejects.toThrow(FrameSizeError);
 	});
