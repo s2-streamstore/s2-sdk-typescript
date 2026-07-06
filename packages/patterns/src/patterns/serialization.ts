@@ -31,7 +31,9 @@ import { chunkBytes, MAX_CHUNK_BODY_BYTES } from "./chunking.js";
 import { DedupeFilter, injectDedupeHeaders } from "./dedupe.js";
 import {
 	CompletedFrame,
+	DEFAULT_MAX_FRAME_BYTES,
 	FrameAssembler,
+	FrameSizeError,
 	frameChunksToRecords,
 } from "./framing.js";
 
@@ -39,6 +41,12 @@ export interface SerializingAppendSessionOptions {
 	chunkSize?: number;
 	matchSeqNum?: number;
 	dedupeSeq?: number;
+	/**
+	 * Max serialized message size to append. Larger messages throw
+	 * {@link FrameSizeError}, since readers reject frames above their own
+	 * limit. Defaults to {@link DEFAULT_MAX_FRAME_BYTES} (100 MiB).
+	 */
+	maxFrameBytes?: number;
 }
 
 type MessageRange = {
@@ -51,6 +59,7 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 	private readonly session: AppendSession;
 	private readonly serializer: (message: Message) => Uint8Array;
 	private readonly chunkSize: number;
+	private readonly maxFrameBytes: number;
 
 	private matchSeqNum?: number;
 	private dedupeSeq?: number;
@@ -103,6 +112,7 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 		this.session = session;
 		this.serializer = serializer;
 		this.chunkSize = options?.chunkSize ?? MAX_CHUNK_BODY_BYTES;
+		this.maxFrameBytes = options?.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
 		this.matchSeqNum = options?.matchSeqNum;
 		this.dedupeSeq = options?.dedupeSeq;
 		this.writerId = nanoid(12);
@@ -117,6 +127,11 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 
 	private toRecords(message: Message): AppendRecord[] {
 		const serialized = this.serializer(message);
+		if (serialized.byteLength > this.maxFrameBytes) {
+			throw new FrameSizeError(
+				`Serialized message is ${serialized.byteLength} bytes, exceeding maxFrameBytes (${this.maxFrameBytes}); readers would reject it. Raise maxFrameBytes on both sessions to allow larger messages`,
+			);
+		}
 		const chunks = chunkBytes(serialized, this.chunkSize);
 		const records = frameChunksToRecords(chunks);
 
@@ -160,8 +175,9 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 export interface DeserializingReadSessionOptions {
 	enableDedupe?: boolean;
 	/**
-	 * Max declared frame size to allocate. Frames exceeding this are dropped.
-	 * Defaults to {@link DEFAULT_MAX_FRAME_BYTES} (100 MiB).
+	 * Max declared frame size to allocate. Frames exceeding this error the
+	 * stream with {@link FrameSizeError}. Defaults to
+	 * {@link DEFAULT_MAX_FRAME_BYTES} (100 MiB).
 	 */
 	maxFrameBytes?: number;
 }
@@ -248,6 +264,7 @@ export {
 	FrameAssembler,
 	type FrameAssemblerOptions,
 	type FrameMeta,
+	FrameSizeError,
 	frameChunksToRecords,
 } from "./framing.js";
 export { decodeU64, encodeU64 } from "./u64.js";

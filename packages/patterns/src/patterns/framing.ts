@@ -1,5 +1,5 @@
 import type { AppendHeaders, ReadHeaders } from "@s2-dev/streamstore";
-import { AppendRecord } from "@s2-dev/streamstore";
+import { AppendRecord, S2Error } from "@s2-dev/streamstore";
 
 import {
 	FRAME_BYTES_HEADER_BYTES,
@@ -70,10 +70,19 @@ export type CompletedFrame = {
 
 /**
  * Default cap on a frame's declared size (100 MiB). `_frame_bytes` is
- * attacker-controlled, so frames declaring more than this are dropped rather
- * than allocated. Override via {@link FrameAssemblerOptions.maxFrameBytes}.
+ * attacker-controlled, so frames declaring more than this are rejected with
+ * {@link FrameSizeError} before allocating. Override via
+ * {@link FrameAssemblerOptions.maxFrameBytes}.
  */
 export const DEFAULT_MAX_FRAME_BYTES = 100 * 1024 * 1024;
+
+/** Thrown when a frame's size is invalid or exceeds the configured maximum. */
+export class FrameSizeError extends S2Error {
+	constructor(message: string) {
+		super({ message, code: "FRAME_SIZE", status: 0, origin: "sdk" });
+		this.name = "FrameSizeError";
+	}
+}
 
 export type FrameAssemblerOptions = {
 	/** Maximum declared frame size to allocate. Defaults to {@link DEFAULT_MAX_FRAME_BYTES}. */
@@ -109,11 +118,10 @@ export class FrameAssembler {
 				this.reset();
 			}
 			if (maybeMeta.bytes <= 0 || maybeMeta.bytes > this.maxFrameBytes) {
-				// Drop without allocating, so a bad header can't exhaust memory.
-				console.error(
-					`FrameAssembler: dropping frame with invalid declared size ${maybeMeta.bytes} bytes (max ${this.maxFrameBytes})`,
+				// Reject before allocating, so a bad header can't exhaust memory.
+				throw new FrameSizeError(
+					`Frame declares ${maybeMeta.bytes} bytes, outside the allowed range (1..=${this.maxFrameBytes}); raise maxFrameBytes to read larger frames`,
 				);
-				return completed;
 			}
 			this.buffer = new Uint8Array(maybeMeta.bytes);
 			this.remainingRecords = maybeMeta.records;
