@@ -15,7 +15,11 @@ import {
 	extractDedupeSeq,
 	injectDedupeHeaders,
 } from "../patterns/dedupe.js";
-import { FrameAssembler } from "../patterns/framing.js";
+import {
+	FrameAssembler,
+	FrameSizeError,
+	makeFrameHeaders,
+} from "../patterns/framing.js";
 import {
 	DeserializingReadSession,
 	SerializingAppendSession,
@@ -298,5 +302,60 @@ describe("serialization patterns", () => {
 			["writer-2", 0],
 			["writer-2", 1],
 		]);
+	});
+
+	it("FrameAssembler throws on frames declaring more than maxFrameBytes", () => {
+		const assembler = new FrameAssembler({ maxFrameBytes: 16 });
+
+		expect(() =>
+			assembler.push({
+				headers: makeFrameHeaders(17, 1) as any,
+				body: new Uint8Array(17),
+			}),
+		).toThrow(FrameSizeError);
+
+		// The assembler stays usable for subsequent valid frames.
+		const frames = assembler.push({
+			headers: makeFrameHeaders(4, 1) as any,
+			body: new Uint8Array([1, 2, 3, 4]),
+		});
+		expect(frames.length).toBe(1);
+	});
+
+	it("SerializingAppendSession rejects messages larger than maxFrameBytes", async () => {
+		const fakeSession = new FakeAppendSession();
+		const session = new SerializingAppendSession<string>(
+			fakeSession as any,
+			(m) => textEncoder.encode(m),
+			{ maxFrameBytes: 8 },
+		);
+
+		await expect(session.submit("way too large")).rejects.toThrow(
+			FrameSizeError,
+		);
+		expect(fakeSession.submitted.length).toBe(0);
+
+		await expect(session.submit("ok")).resolves.toBeDefined();
+	});
+
+	it("DeserializingReadSession errors on oversized frames instead of dropping them", async () => {
+		const readStream = new ReadableStream<any>({
+			start(controller) {
+				controller.enqueue({
+					headers: makeFrameHeaders(32, 1),
+					body: new Uint8Array(32),
+				});
+				controller.close();
+			},
+		});
+
+		const deserializing = new DeserializingReadSession<string>(
+			readStream as any,
+			(bytes) => textDecoder.decode(bytes),
+			{ maxFrameBytes: 16 },
+		);
+
+		const reader = deserializing.getReader();
+		await expect(reader.read()).rejects.toThrow(FrameSizeError);
 	});
 });
