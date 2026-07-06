@@ -39,7 +39,9 @@ function refine_biome() {
   biome_bin="${root_dir}/node_modules/.bin/biome"
   if [ ! -x "${biome_bin}" ]; then
     echo "biome could not be found, please run 'bun install'"
-    exit 1
+    # Don't exit here: unstaged changes must be restored before we bail.
+    biome_status=1
+    return
   fi
 
   biome_staged_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc)$')
