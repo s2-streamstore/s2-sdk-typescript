@@ -25,6 +25,7 @@ import {
 	AppendSession,
 	BatchSubmitTicket,
 	ReadSession,
+	S2Error,
 } from "@s2-dev/streamstore";
 import { nanoid } from "nanoid";
 import { chunkBytes, MAX_CHUNK_BODY_BYTES } from "./chunking.js";
@@ -127,6 +128,13 @@ export class SerializingAppendSession<Message> extends WritableStream<Message> {
 
 	private toRecords(message: Message): AppendRecord[] {
 		const serialized = this.serializer(message);
+		if (serialized.byteLength === 0) {
+			throw new S2Error({
+				message:
+					"Serialized message is empty; the serializer must produce at least one byte",
+				origin: "sdk",
+			});
+		}
 		if (serialized.byteLength > this.maxFrameBytes) {
 			throw new FrameSizeError(
 				`Serialized message is ${serialized.byteLength} bytes, exceeding maxFrameBytes (${this.maxFrameBytes}); readers would reject it. Raise maxFrameBytes on both sessions to allow larger messages`,
