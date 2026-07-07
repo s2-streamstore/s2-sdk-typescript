@@ -26,6 +26,7 @@ import * as Proto from "../../../../generated/proto/s2.js";
 import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
+import { FifoQueue } from "../../../queue.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
@@ -769,10 +770,10 @@ class S2SAppendSession implements TransportAppendSession {
 	private http2Stream?: ClientHttp2Stream;
 	private parser = new S2SFrameParser();
 	private closed = false;
-	private pendingAcks: Array<{
+	private pendingAcks = new FifoQueue<{
 		resolve: (result: AppendResult) => void;
 		batchSize: number;
-	}> = [];
+	}>();
 	private initPromise?: Promise<void>;
 	private _effectSignalled = false;
 
@@ -856,7 +857,7 @@ class S2SAppendSession implements TransportAppendSession {
 			for (const pending of this.pendingAcks) {
 				pending.resolve(err(s2Error(error)));
 			}
-			this.pendingAcks = [];
+			this.pendingAcks.clear();
 			// Note: do NOT reset _effectSignalled here. Data may have been
 			// written to the wire before the error occurred, so the flag
 			// must stay true until the session is recreated.
@@ -1021,10 +1022,7 @@ class S2SAppendSession implements TransportAppendSession {
 			this.http2Stream!.write(frame, (writeErr) => {
 				if (writeErr) {
 					// Remove from pending acks on write error
-					const idx = this.pendingAcks.findIndex((p) => p.resolve === resolve);
-					if (idx !== -1) {
-						this.pendingAcks.splice(idx, 1);
-					}
+					this.pendingAcks.removeFirst((p) => p.resolve === resolve);
 					// Note: do NOT reset _effectSignalled here. The write call
 					// was attempted, so data may have partially entered the
 					// kernel buffer before the error was reported.

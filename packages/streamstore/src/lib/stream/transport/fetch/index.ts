@@ -24,6 +24,7 @@ import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import { EventStream } from "../../../event-stream.js";
+import { FifoQueue } from "../../../queue.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
@@ -392,10 +393,10 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
 export class FetchAppendSession implements TransportAppendSession {
-	private queue: Array<Types.AppendInput> = [];
-	private pendingResolvers: Array<{
+	private queue = new FifoQueue<Types.AppendInput>();
+	private pendingResolvers = new FifoQueue<{
 		resolve: (result: AppendResult) => void;
-	}> = [];
+	}>();
 	private inFlight = false;
 	private _effectSignalled = false;
 	private readonly options?: S2RequestOptions;
@@ -635,10 +636,10 @@ export class FetchAppendSession implements TransportAppendSession {
 				for (const pendingResolver of this.pendingResolvers) {
 					pendingResolver.resolve(err(s2Err));
 				}
-				this.pendingResolvers = [];
+				this.pendingResolvers.clear();
 
 				// Clear the queue
-				this.queue = [];
+				this.queue.clear();
 
 				this.inFlight = false;
 				this.processingPromise = null;
