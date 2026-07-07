@@ -10,6 +10,7 @@ import {
 import type * as API from "../generated/index.js";
 import * as Types from "../types.js";
 import { isCommandRecord, meteredBytes } from "../utils.js";
+import { FifoQueue } from "./queue.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import type {
@@ -639,8 +640,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		requestTimeoutMillis: number;
 	};
 
-	private readonly inflight: InflightEntry[] = [];
-	private capacityWaiters: CapacityWaiter[] = []; // Queue of waiters for capacity
+	private readonly inflight = new FifoQueue<InflightEntry>();
+	private readonly capacityWaiters = new FifoQueue<CapacityWaiter>(); // Queue of waiters for capacity
 
 	private session?: TransportAppendSession;
 	private queuedBytes = 0;
@@ -972,7 +973,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					);
 
 		while (this.capacityWaiters.length > 0) {
-			const next = this.capacityWaiters[0]!;
+			const next = this.capacityWaiters.peek()!;
 			const needsBytes = next.bytes;
 			const needsBatches = next.batches;
 			const hasBatchCapacity =
@@ -1067,7 +1068,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 
 			// Get head entry (we know it exists because we checked length above)
-			const head = this.inflight[0]!;
+			const head = this.inflight.peek()!;
 			debugSession(
 				"[%s] [PUMP] processing head: expectedCount=%d, meteredBytes=%d, match_seq_num=%s",
 				this.streamName,
@@ -1519,7 +1520,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				entry.maybeResolve(err(error));
 			}
 		}
-		this.inflight.length = 0;
+		this.inflight.clear();
 		this.queuedBytes = 0;
 		this.pendingBytes = 0;
 		this.pendingBatches = 0;
@@ -1539,7 +1540,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		for (const waiter of this.capacityWaiters) {
 			waiter.resolve();
 		}
-		this.capacityWaiters = [];
+		this.capacityWaiters.clear();
 
 		// Close inner session
 		if (this.session) {
@@ -1578,7 +1579,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		for (const waiter of this.capacityWaiters) {
 			waiter.resolve();
 		}
-		this.capacityWaiters = [];
+		this.capacityWaiters.clear();
 
 		// Wake pump if it's sleeping so it can check closing flag
 		if (this.pumpWakeup) {
