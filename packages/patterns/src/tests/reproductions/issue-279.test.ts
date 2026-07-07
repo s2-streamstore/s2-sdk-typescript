@@ -54,9 +54,8 @@ describe("Issue #279: empty serialization throws S2Error instead of TypeError", 
 		);
 		const writer = session.getWriter();
 
-		await expect(writer.write(undefined)).rejects.toThrow(S2Error);
-		await expect(writer.write(undefined)).rejects.toThrow(
-			"Serialized message is empty",
-		);
+		const err = await writer.write(undefined).catch((e) => e);
+		expect(err).toBeInstanceOf(S2Error);
+		expect(err.message).toContain("Serialized message is empty");
 	});
 });
