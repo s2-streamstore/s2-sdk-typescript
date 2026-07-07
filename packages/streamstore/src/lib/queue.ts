@@ -67,9 +67,17 @@ export class FifoQueue<T> implements Iterable<T> {
 		return false;
 	}
 
-	*[Symbol.iterator](): IterableIterator<T> {
-		for (let i = this.head; i < this.items.length; i++) {
-			yield this.items[i] as T;
-		}
+	// Hand-rolled iterator: generators are ~10x slower per element in hot scans
+	[Symbol.iterator](): IterableIterator<T> {
+		let i = this.head;
+		const items = this.items;
+		const iter: IterableIterator<T> = {
+			next: (): IteratorResult<T> =>
+				i < items.length
+					? { value: items[i++] as T, done: false }
+					: { value: undefined, done: true },
+			[Symbol.iterator]: () => iter,
+		};
+		return iter;
 	}
 }

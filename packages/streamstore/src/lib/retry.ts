@@ -641,6 +641,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	};
 
 	private readonly inflight = new FifoQueue<InflightEntry>();
+	// Entries awaiting first submission to the transport; drained by the pump.
+	// Avoids rescanning the full inflight queue on every pump cycle.
+	private readonly toSubmit = new FifoQueue<InflightEntry>();
 	private readonly capacityWaiters = new FifoQueue<CapacityWaiter>(); // Queue of waiters for capacity
 
 	private session?: TransportAppendSession;
@@ -923,6 +926,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			);
 
 			this.inflight.push(entry);
+			this.toSubmit.push(entry);
 			this.queuedBytes += batchMeteredSize;
 
 			// Wake pump if it's sleeping
@@ -1125,8 +1129,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 
 			// Submit ALL entries that need submitting (enables HTTP/2 pipelining for S2S)
-			for (const entry of this.inflight) {
-				if (!entry.innerPromise || entry.needsSubmit) {
+			// Recovery may have already resubmitted an entry (needsSubmit cleared) - skip those.
+			for (
+				let entry = this.toSubmit.shift();
+				entry !== undefined;
+				entry = this.toSubmit.shift()
+			) {
+				if (entry.needsSubmit) {
 					debugSession(
 						"[%s] [PUMP] submitting entry to inner session (%d records, %d bytes, match_seq_num=%s)",
 						this.streamName,
@@ -1521,6 +1530,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 		}
 		this.inflight.clear();
+		this.toSubmit.clear();
 		this.queuedBytes = 0;
 		this.pendingBytes = 0;
 		this.pendingBatches = 0;

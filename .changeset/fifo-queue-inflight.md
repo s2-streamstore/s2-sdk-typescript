@@ -2,4 +2,4 @@
 "@s2-dev/streamstore": patch
 ---
 
-Replace array `shift()` with an O(1) amortized FIFO queue for inflight batches, capacity waiters, and pending acks. Avoids quadratic behavior when many small batches are queued (hundreds of thousands of entries fit within the default 3 MiB `maxInflightBytes`).
+Make append-session bookkeeping O(1) per ack instead of O(queue depth): replace array `shift()` with an amortized O(1) FIFO queue (inflight batches, capacity waiters, pending acks), and drain new submissions from a dedicated queue instead of rescanning the full inflight queue every pump cycle. At ~30k queued batches this cuts client CPU for a 100k-append session from ~142s to ~7.5s.
