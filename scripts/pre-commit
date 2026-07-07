@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Enable debugging
+# set -x
+# LINK ME (from the root of the repo): ln -sf `pwd`/scripts/pre-commit .git/hooks/pre-commit
+
+function save_stage_changes() {
+  # To avoid any unexpected behavior, we need to "stash" any unstaged changes.
+  # We could use "git stash" but the situation gets complicated because we
+  # need to make additional changes with the formatter.
+  # Here's how we could do this if we didn't need to make additional changes:
+  #   http://stackoverflow.com/a/20480591
+  # But since we do, we follow the same general pattern as the "pre-commit" lib:
+  #   https://github.com/pre-commit/pre-commit/blob/master/pre_commit/staged_files_only.py#L15
+  # Basically we just diff the unstaged changes, store the patch, and apply it later.
+  staged_changes_diff=$(mktemp -t format_patch.XXXXXX)
+  set +e
+  git diff --ignore-submodules --binary --exit-code --no-color >"${staged_changes_diff}"
+  if [ $? -eq 1 ]; then
+    echo "Found unstaged changes, storing in ${staged_changes_diff}"
+    echo "Clearing unstaged changes for formatting, will restore after formatting."
+    git checkout -- "${root_dir}"
+    stored_staged_changes=true
+  fi
+}
+
+function restore_stage_changes() {
+  echo "Restoring unstaged changes"
+  set +e
+  git apply "${staged_changes_diff}"
+
+  if [ $? -eq 1 ]; then
+    # shellcheck disable=SC2016
+    echo 'We failed to re-apply your unstaged changes with `git apply`.'
+    echo "The patch for these changes is preserved at ${staged_changes_diff}"
+  fi
+}
+
+function refine_biome() {
+  biome_bin="${root_dir}/node_modules/.bin/biome"
+  if [ ! -x "${biome_bin}" ]; then
+    echo "biome could not be found, please run 'bun install'"
+    # Don't exit here: unstaged changes must be restored before we bail.
+    biome_status=1
+    return
+  fi
+
+  biome_staged_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc)$')
+  if [ -z "$biome_staged_files" ]; then
+    return
+  else
+    echo "Executing: biome check --write"
+  fi
+
+  # Files ignored by biome.json (e.g. scripts/) should not fail the hook.
+  # shellcheck disable=SC2086
+  "${biome_bin}" check --write --no-errors-on-unmatched $biome_staged_files
+  biome_status=$?
+
+  for file in $biome_staged_files; do
+    git add "$file"
+  done
+}
+
+stored_staged_changes=false
+biome_status=0
+root_dir="$(git rev-parse --show-toplevel)"
+if [ ! -d "${root_dir}" ]; then
+  echo "${root_dir} is not a directory"
+  exit 1
+fi
+
+echo "Running pre-commit hooks"
+
+save_stage_changes
+
+set -o pipefail
+
+refine_biome
+
+if ${stored_staged_changes}; then
+  restore_stage_changes
+fi
+
+# Block the commit if biome found issues it could not fix.
+exit ${biome_status}
