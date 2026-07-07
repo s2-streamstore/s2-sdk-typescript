@@ -3,9 +3,15 @@ import {
 	type AppendRecord,
 	meteredBytes,
 	type ReadHeaders,
+	S2Error,
 } from "@s2-dev/streamstore";
 
-import { DEDUPE_SEQ_HEADER_BYTES, DEDUPE_WRITER_UNIQ_ID } from "./constants.js";
+import {
+	DEDUPE_SEQ_HEADER,
+	DEDUPE_SEQ_HEADER_BYTES,
+	DEDUPE_WRITER_UNIQ_ID,
+	WRITER_UNIQ_ID,
+} from "./constants.js";
 import { decodeU64, encodeU64 } from "./u64.js";
 
 const textEncoder = new TextEncoder();
@@ -101,17 +107,60 @@ export class DedupeFilter {
 	}
 }
 
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
+/** Return the name of a reserved dedupe header present in headers, if any. */
+function findReservedDedupeHeader(
+	headers: AppendHeaders<"string"> | AppendHeaders<"bytes"> | undefined,
+): string | undefined {
+	if (!headers) return undefined;
+	for (const [key] of headers as Array<[string | Uint8Array, unknown]>) {
+		if (typeof key === "string") {
+			if (key === DEDUPE_SEQ_HEADER) return DEDUPE_SEQ_HEADER;
+			if (key === WRITER_UNIQ_ID) return WRITER_UNIQ_ID;
+		} else {
+			if (bytesEqual(key, DEDUPE_SEQ_HEADER_BYTES)) return DEDUPE_SEQ_HEADER;
+			if (bytesEqual(key, DEDUPE_WRITER_UNIQ_ID)) return WRITER_UNIQ_ID;
+		}
+	}
+	return undefined;
+}
+
 /**
  * Inject a monotonically increasing dedupe sequence header into each record.
  *
  * Returns the next sequence number after the last record, so callers can
  * maintain state across multiple batches.
+ *
+ * @throws {S2Error} If a record already carries a reserved dedupe header
+ * (`_dedupe_seq` or `_writer_id`); no record is modified in that case.
  */
 export function injectDedupeHeaders(
 	records: AppendRecord[],
 	writerId: string,
 	startSeq: number,
 ): number {
+	for (const record of records) {
+		const reserved = findReservedDedupeHeader(
+			record.headers as
+				| AppendHeaders<"string">
+				| AppendHeaders<"bytes">
+				| undefined,
+		);
+		if (reserved !== undefined) {
+			throw new S2Error({
+				message: `Record already contains reserved dedupe header "${reserved}"; remove it or skip dedupe injection`,
+				origin: "sdk",
+			});
+		}
+	}
+
 	let seq = startSeq;
 
 	for (const record of records) {
