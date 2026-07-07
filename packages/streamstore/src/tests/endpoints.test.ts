@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { EndpointTemplate, S2Endpoints } from "../endpoints.js";
 
 describe("S2Endpoints", () => {
-	it("defaults to aws endpoints with inferred /v1", () => {
+	it("defaults to a.s2.dev + b.s2.dev endpoints with inferred /v1", () => {
 		const endpoints = new S2Endpoints();
-		expect(endpoints.accountBaseUrl()).toBe("https://aws.s2.dev/v1");
+		expect(endpoints.accountBaseUrl()).toBe("https://a.s2.dev/v1");
 		expect(endpoints.basinBaseUrl("my-basin")).toBe(
 			"https://my-basin.b.s2.dev/v1",
 		);

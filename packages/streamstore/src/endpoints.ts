@@ -130,7 +130,7 @@ export type S2EndpointsInit = {
 	basin?: string;
 };
 
-const DEFAULT_ACCOUNT_ENDPOINT = "aws.s2.dev";
+const DEFAULT_ACCOUNT_ENDPOINT = "a.s2.dev";
 const DEFAULT_BASIN_ENDPOINT = "{basin}.b.s2.dev";
 
 /**
