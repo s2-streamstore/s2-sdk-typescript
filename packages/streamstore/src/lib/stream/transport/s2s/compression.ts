@@ -1,4 +1,5 @@
 import type { InputType } from "node:zlib";
+import { loadNodeBuiltin } from "../../../../internal/node-builtin.js";
 import {
 	type CompressionType,
 	MAX_DECOMPRESSED_PAYLOAD_BYTES,
@@ -18,17 +19,12 @@ interface CompressionModule {
 	zstdDecompressSync?: CompressionSyncFn;
 }
 
-const nodeZlibSpecifier = "node:zlib";
 let zlibModule: CompressionModule | undefined;
 let zlibPromise: Promise<CompressionModule> | undefined;
 
 async function loadZlib(): Promise<CompressionModule> {
 	if (!zlibPromise) {
-		zlibPromise = import(
-			/* webpackIgnore: true */
-			/* @vite-ignore */
-			nodeZlibSpecifier
-		).then((mod) => {
+		zlibPromise = loadNodeBuiltin("node:zlib").then((mod) => {
 			zlibModule = mod as CompressionModule;
 			return zlibModule;
 		});

@@ -34,6 +34,7 @@ export class S2Basin {
 			includeBasinHeader: boolean;
 			retryConfig?: RetryConfig;
 			compression?: S2Compression;
+			fetch?: typeof globalThis.fetch;
 		},
 	) {
 		this.name = name;
@@ -46,6 +47,7 @@ export class S2Basin {
 			requestTimeoutMillis: options.retryConfig?.requestTimeoutMillis,
 			retry: options.retryConfig,
 			compression: options.compression,
+			fetch: options.fetch,
 		};
 		const headers: Record<string, string> = {};
 		if (options.includeBasinHeader) {
@@ -59,6 +61,7 @@ export class S2Basin {
 				baseUrl: options.baseUrl,
 				auth: () => Redacted.value(this.transportConfig.accessToken),
 				headers: headers,
+				fetch: options.fetch,
 			}),
 		);
 

@@ -31,6 +31,7 @@ export class S2 {
 	private readonly endpoints: S2Endpoints;
 	private readonly retryConfig: RetryConfig;
 	private readonly compression?: S2Compression;
+	private readonly fetch?: typeof globalThis.fetch;
 
 	/**
 	 * Account-scoped basin management operations.
@@ -67,6 +68,7 @@ export class S2 {
 				? options.endpoints
 				: new S2Endpoints(options.endpoints);
 		this.compression = options.compression;
+		this.fetch = options.fetch;
 		const headers: Record<string, string> = {};
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
@@ -76,6 +78,7 @@ export class S2 {
 				baseUrl: this.endpoints.accountBaseUrl(),
 				auth: () => Redacted.value(this.accessToken),
 				headers: headers,
+				fetch: this.fetch,
 			}),
 		);
 
@@ -110,6 +113,7 @@ export class S2 {
 			includeBasinHeader: this.endpoints.includeBasinHeader,
 			retryConfig: this.retryConfig,
 			compression: this.compression,
+			fetch: this.fetch,
 		});
 	}
 }

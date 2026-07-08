@@ -7,6 +7,7 @@
 
 import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
 import createDebug from "debug";
+import { loadNodeBuiltin } from "../../../../internal/node-builtin.js";
 
 /** Type for ReadableStream with optional async iterator support. */
 type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
@@ -73,13 +74,8 @@ type Http2Module = typeof import("node:http2");
 
 let http2ModulePromise: Promise<Http2Module> | undefined;
 async function loadHttp2(): Promise<Http2Module> {
-	// Hint bundlers to skip bundling node:http2 while keeping the specifier static for type inference.
 	if (!http2ModulePromise) {
-		http2ModulePromise = import(
-			/* webpackIgnore: true */
-			/* @vite-ignore */
-			"node:http2"
-		);
+		http2ModulePromise = loadNodeBuiltin("node:http2") as Promise<Http2Module>;
 	}
 	return http2ModulePromise;
 }

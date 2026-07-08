@@ -371,6 +371,76 @@ const stream = basin.stream(streamName, {
 > [!IMPORTANT]
 > HTTP/2 library use, required for `s2s`, is currently only enabled by default for Node.js. Bun defaults to HTTP/1 (see [tracking issue](https://github.com/s2-streamstore/s2-sdk-typescript/issues/113)), but can be forced using the mechanism described above. Same with Deno ([issue](https://github.com/s2-streamstore/s2-sdk-typescript/issues/169)).
 
+### React Native / Expo
+
+The SDK runs on React Native (Hermes) with a small amount of setup. Two things
+differ from other runtimes:
+
+1. React Native's built-in `fetch` buffers entire response bodies and never
+   exposes `response.body` as a stream, which breaks read sessions. Pass a
+   streaming-capable fetch via `S2ClientOptions.fetch`.
+2. Hermes is missing two globals the SDK uses: `ReadableStream` (touched at
+   module load, so required even if you only make unary calls) and
+   `crypto.getRandomValues` (idempotency tokens for `basins.create` /
+   `streams.create`).
+
+**Setup.** Install the polyfills:
+
+```sh
+npm install web-streams-polyfill react-native-get-random-values
+```
+
+Load them in your app's entry file, before anything imports the SDK:
+
+```ts
+// index.ts — polyfill order matters, keep these first
+import "react-native-get-random-values";
+import "web-streams-polyfill/polyfill";
+```
+
+Then construct the client with a streaming fetch. On Expo SDK 52+ use
+[`expo/fetch`](https://docs.expo.dev/versions/latest/sdk/expo/#expofetch):
+
+```ts
+import { fetch as expoFetch } from "expo/fetch";
+import { S2 } from "@s2-dev/streamstore";
+
+const s2 = new S2({
+	accessToken: "...",
+	fetch: expoFetch as unknown as typeof globalThis.fetch,
+});
+```
+
+On bare React Native (no Expo), use
+[`react-native-fetch-api`](https://github.com/react-native-community/fetch)
+with `reactNative: { textStreaming: true }` as the fetch implementation.
+
+**What works.** The full public API: management operations, unary
+appends/reads in both `string` and `bytes` formats, tailing read sessions
+(SSE), append sessions, and the producer/batcher helpers. Sessions use the
+`fetch` transport; `s2s` requires Node's HTTP/2 and is never selected on
+React Native (forcing it fails). The `compression` option is `s2s`-only and
+therefore inert, and append sessions make one HTTP request per batch rather
+than pipelining — same as in browsers.
+
+**Caveats.**
+
+- Environment-variable configuration (`S2_ACCESS_TOKEN`, `S2Environment.parse()`)
+  does not apply — pass the token explicitly.
+- `await using` on sessions requires `Symbol.asyncDispose`, which Hermes lacks;
+  call `.close()` / `.cancel()` instead.
+- Older React Native versions (before ~0.74/0.77) also need a
+  `TextEncoder`/`TextDecoder` polyfill.
+- A token that ships inside an app binary is only as private as the app.
+  Issue narrowly scoped tokens per user or device with `accessTokens.issue`
+  (scope to specific basins/streams and operations), or keep S2 access behind
+  your backend and relay over SSE — see
+  [expo-resumable-chat](https://github.com/s2-streamstore/expo-resumable-chat)
+  for that pattern.
+
+A runnable Expo app demonstrating direct-from-device usage lives at
+[`packages/streamstore/examples/react-native`](packages/streamstore/examples/react-native).
+
 ## Patterns
 
 For higher-level, more opinionated building blocks (typed append/read sessions, framing, dedupe helpers), see the [patterns](packages/patterns/README.md) package.

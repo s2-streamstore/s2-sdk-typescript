@@ -87,6 +87,40 @@ for (const record of batch.records) {
 
 > Tip: snippets look for `S2_ACCESS_TOKEN`, `S2_BASIN`, and `S2_STREAM` so you can run them with `npx tsx examples/<file>.ts`.
 
+## React Native / Expo
+
+The SDK works on React Native with two adjustments:
+
+1. **Pass a streaming-capable fetch.** React Native's built-in fetch buffers
+   entire responses and never exposes `response.body`, which breaks read
+   sessions. On Expo SDK 52+, pass `expo/fetch`:
+
+   ```typescript
+   import { fetch as expoFetch } from "expo/fetch";
+   import { S2 } from "@s2-dev/streamstore";
+
+   const s2 = new S2({
+   	accessToken: "...",
+   	fetch: expoFetch as unknown as typeof globalThis.fetch,
+   });
+   ```
+
+   On bare React Native, use `react-native-fetch-api` backed by
+   `web-streams-polyfill` and pass it the same way.
+
+2. **Polyfill missing globals.** Hermes does not provide `ReadableStream`
+   (required even for unary calls) or `crypto.getRandomValues` (used for
+   idempotency tokens by `basins.create` / `streams.create`). Install
+   `web-streams-polyfill` and `react-native-get-random-values`, and import
+   them once at app startup before the SDK.
+
+Environment-variable configuration (`S2_ACCESS_TOKEN` etc.) does not apply on
+React Native — pass the access token explicitly.
+
+See [`examples/react-native`](./examples/react-native) for a runnable Expo app
+with this setup, and the [React Native guide](https://github.com/s2-streamstore/s2-sdk-typescript#react-native--expo)
+in the repo README for the full story (what works, caveats, token scoping).
+
 ## More documentation
 
 - Full SDK overview and additional examples: see the root repo README at <https://github.com/s2-streamstore/s2-sdk-typescript>.

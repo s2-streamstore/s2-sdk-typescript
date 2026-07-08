@@ -152,6 +152,14 @@ export type S2ClientOptions = {
 	 * Defaults to `"none"`.
 	 */
 	compression?: S2Compression;
+	/**
+	 * Custom fetch implementation used for all HTTP requests.
+	 *
+	 * Useful in cases like React Native where the built-in fetch buffers responses,
+	 * pass a streaming-capable implementation there (e.g. `expo/fetch`).
+	 * @default globalThis.fetch
+	 */
+	fetch?: typeof globalThis.fetch | (() => Promise<Response>);
 };
 
 /**

@@ -9,6 +9,7 @@ export type Runtime =
 	| "deno"
 	| "bun"
 	| "workerd"
+	| "react-native"
 	| "unknown";
 
 /**
@@ -30,6 +31,11 @@ export function detectRuntime(): Runtime {
 	// @ts-expect-error - WebSocketPair global is not in types
 	if (typeof WebSocketPair !== "undefined") {
 		return "workerd";
+	}
+
+	// Check for React Native (before Node: Metro provides a `process` shim)
+	if (typeof navigator !== "undefined" && navigator.product === "ReactNative") {
+		return "react-native";
 	}
 
 	// Check for Node.js
@@ -69,7 +75,8 @@ export function supportsHttp2(): boolean {
 
 		case "browser":
 		case "workerd":
-			// Browsers and workerd don't support raw HTTP/2
+		case "react-native":
+			// No raw HTTP/2 access in these runtimes
 			return false;
 
 		default:

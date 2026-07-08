@@ -262,4 +262,9 @@ export interface TransportConfig {
 	 * `Accept-Encoding`. Defaults to `"none"`.
 	 */
 	compression?: CompressionType;
+	/**
+	 * Custom fetch implementation. Used by the fetch transport; the s2s
+	 * transport uses Node's http2 and ignores it.
+	 */
+	fetch?: typeof globalThis.fetch;
 }
