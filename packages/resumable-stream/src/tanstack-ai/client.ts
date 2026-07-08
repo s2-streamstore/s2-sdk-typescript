@@ -9,6 +9,7 @@ import type { SubscribeConnectionAdapter } from "@tanstack/ai-client";
 import {
 	fetchOk,
 	type HeadersOption,
+	isPermanentError,
 	pipeSseFrames,
 	resolveCursorUrl,
 	resolveHeaders,
@@ -127,7 +128,9 @@ async function* subscribeChunks(
 			);
 		} catch (err) {
 			if (signal.aborted) return;
-			if (backoffMs.length === 0) throw err;
+			// Permanent failures (e.g. 401/403/404) can't be fixed by reconnecting,
+			// so surface them instead of retrying forever.
+			if (backoffMs.length === 0 || isPermanentError(err)) throw err;
 			needsReconnect = true;
 			continue;
 		}
