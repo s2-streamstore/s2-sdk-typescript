@@ -1,5 +1,15 @@
 # @s2-dev/streamstore
 
+## 0.24.2
+
+### Patch Changes
+
+- 2149094: Change the default account endpoint from `aws.s2.dev` to `a.s2.dev`. The previous endpoint continues to work, so existing configurations are unaffected.
+- 825cb7d: Fix `streams.create()` to return `StreamInfo` (with `name`, `createdAt`, `deletedAt`) and normalize date fields to `Date` objects, matching `list()` and `ensure()`. It was previously typed as `{ config }` and left dates as raw strings.
+- 7cf9eb0: Make append-session bookkeeping O(1) per ack instead of O(queue depth): replace array `shift()` with an amortized O(1) FIFO queue (inflight batches, capacity waiters, pending acks), and drain new submissions from a dedicated queue instead of rescanning the full inflight queue every pump cycle.
+- 19a3e23: Fix read-session cancellation being silently dropped: `RetryReadSession.cancel` called `cancel()` on the inner transport stream, which is always locked by the retry pump's reader, so it rejected with `ERR_INVALID_STATE` (swallowed) and the underlying HTTP/2 stream stayed open. A live tail kept receiving server heartbeats indefinitely, which made a subsequent `S2Stream.close()` hang forever in the graceful HTTP/2 session close. Cancellation now goes through the pump's reader, so the transport stream and its HTTP/2 stream are torn down and `close()` completes.
+- 8287128: Report a clear protocol error when the S2S transport receives a compressed frame for an algorithm that was never negotiated, instead of the misleading "zlib module has not been loaded".
+
 ## 0.24.1
 
 ### Patch Changes

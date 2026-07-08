@@ -1,5 +1,12 @@
 # @s2-dev/streamstore-patterns
 
+## 2.1.4
+
+### Patch Changes
+
+- f7408f2: `injectDedupeHeaders` now throws a clear `S2Error` when a record already carries a reserved `_dedupe_seq` or `_writer_id` header, instead of silently appending duplicates. Previously the stale pre-existing header shadowed the injected sequence on the read side (readers pick the first match), corrupting dedupe filtering or crashing `decodeU64` on a malformed value. Validation runs before any record is mutated.
+- 3e857be: Reject empty serializations in `SerializingAppendSession` with a clear `S2Error` instead of crashing. Previously a serializer producing zero bytes (e.g. `JSON.stringify(undefined)`) made `submit()` throw an opaque `TypeError` while `write()` threw an `S2Error`; both paths now throw the same `S2Error` explaining that the serializer must produce at least one byte.
+
 ## 2.1.3
 
 ### Patch Changes
