@@ -46,6 +46,8 @@ export interface ConnectionOptions {
 	 * is the wait before the `n`-th reconnect; the last value is reused after
 	 * that. The counter resets on every received event. Pass `[]` to disable
 	 * reconnect. Defaults to `[]` so TanStack owns the subscription lifecycle.
+	 * Permanent HTTP errors (4xx other than 408/429) throw immediately instead
+	 * of retrying.
 	 */
 	reconnectBackoffMs?: readonly number[];
 }

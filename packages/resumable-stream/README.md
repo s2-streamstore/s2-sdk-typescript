@@ -233,8 +233,8 @@ for await (const event of subscribe({
 ```
 
 The loop ends on body close followed by HTTP 204 from a reconnect, on an
-aborted `signal`, or when `reconnectBackoffMs: []` is passed and the body
-ends without 204.
+aborted `signal`, when `reconnectBackoffMs: []` is passed and the body
+ends without 204, or on a permanent HTTP error (4xx other than 408/429).
 
 Server fields:
 
@@ -272,7 +272,7 @@ Server fields:
 | `fetch` | Optional fetch implementation override. |
 | `headers` | Static or lazy headers sent on every request. |
 | `credentials` | Fetch credentials mode. Defaults to `same-origin`. |
-| `reconnectBackoffMs` | Millisecond backoff schedule for reconnects. Pass `[]` to disable reconnect. |
+| `reconnectBackoffMs` | Millisecond backoff schedule for reconnects. Pass `[]` to disable reconnect. Permanent HTTP errors (4xx other than 408/429) throw immediately. |
 
 ## TanStack AI
 
