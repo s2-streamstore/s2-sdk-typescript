@@ -5,6 +5,7 @@ import {
 	S2,
 	type S2Endpoints,
 	type S2EndpointsInit,
+	type S2Stream,
 	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
 import {
@@ -138,6 +139,21 @@ function streamInUseResponse(): Response {
 	return new Response(STREAM_IN_USE_TEXT, { status: 409 });
 }
 
+/**
+ * Closes the stream handle (releasing its HTTP/2 session in Node) once the
+ * records have been fully consumed, errored, or cancelled.
+ */
+async function* closeHandleWhenDone(
+	handle: S2Stream,
+	source: AsyncIterable<TailedStringRecord>,
+): AsyncIterable<TailedStringRecord> {
+	try {
+		yield* source;
+	} finally {
+		await handle.close();
+	}
+}
+
 async function replayResponse(
 	source: AsyncIterable<TailedStringRecord>,
 	headers: Readonly<Record<string, string>>,
@@ -154,11 +170,16 @@ async function replayResponse(
 
 	return tailAsSse(
 		(async function* () {
-			yield first.value;
-			while (true) {
-				const next = await iterator.next();
-				if (next.done) return;
-				yield next.value;
+			try {
+				yield first.value;
+				while (true) {
+					const next = await iterator.next();
+					if (next.done) return;
+					yield next.value;
+				}
+			} finally {
+				// Propagate early termination so the source's cleanup runs.
+				await iterator.return?.();
 			}
 		})(),
 		headers,
@@ -205,6 +226,7 @@ export function createChat<T>(
 			const handle = s2.basin(basin).stream(streamName);
 			const delivery = options?.delivery ?? "response";
 
+			let claimed = false;
 			try {
 				if (isSession) {
 					const claim = await claimSessionGeneration({
@@ -232,6 +254,7 @@ export function createChat<T>(
 					});
 					matchSeqNumStart = ack.end.seqNum;
 				}
+				claimed = true;
 			} catch (err) {
 				if (
 					err instanceof FencingTokenMismatchError ||
@@ -240,6 +263,8 @@ export function createChat<T>(
 					return streamInUseResponse();
 				}
 				throw err;
+			} finally {
+				if (!claimed) await handle.close();
 			}
 
 			const persistPromise = persistToS2({
@@ -293,6 +318,7 @@ export function createChat<T>(
 			}
 
 			if (delivery === "replay") {
+				await handle.close();
 				return new Response(null, {
 					status: 202,
 					headers: { "Cache-Control": "no-store" },
@@ -300,9 +326,9 @@ export function createChat<T>(
 			}
 
 			return tailAsSse(
-				tailGenerationStringRecords(
-					s2.basin(basin).stream(streamName),
-					matchSeqNumStart,
+				closeHandleWhenDone(
+					handle,
+					tailGenerationStringRecords(handle, matchSeqNumStart),
 				),
 				adapter.responseHeaders,
 				adapter.formatSseFrame,
@@ -318,16 +344,23 @@ export function createChat<T>(
 			if (isSession) {
 				if (options?.live) {
 					return tailAsSse(
-						tailStringRecords(handle, options.fromSeqNum),
+						closeHandleWhenDone(
+							handle,
+							tailStringRecords(handle, options.fromSeqNum),
+						),
 						adapter.responseHeaders,
 						adapter.formatSseFrame,
 					);
 				}
-				const state = await readSessionReplayState(handle);
-				const records = replaySessionStringRecords(
+				const state = await readSessionReplayState(handle).catch(
+					async (err) => {
+						await handle.close();
+						throw err;
+					},
+				);
+				const records = closeHandleWhenDone(
 					handle,
-					options?.fromSeqNum,
-					state,
+					replaySessionStringRecords(handle, options?.fromSeqNum, state),
 				);
 				if (state.hasActiveGeneration) {
 					return tailAsSse(
@@ -344,7 +377,10 @@ export function createChat<T>(
 			}
 
 			return replayResponse(
-				replayActiveGenerationStringRecords(handle, options?.fromSeqNum),
+				closeHandleWhenDone(
+					handle,
+					replayActiveGenerationStringRecords(handle, options?.fromSeqNum),
+				),
 				adapter.responseHeaders,
 				adapter.formatSseFrame,
 			);

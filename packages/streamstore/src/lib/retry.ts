@@ -304,6 +304,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		};
 		const format = (args?.as ?? "string") as Format;
 		let session: TransportReadSession<Format> | undefined = initialSession;
+		let currentReader:
+			| ReadableStreamDefaultReader<ReadResult<Format>>
+			| undefined;
 		let cancelled = false;
 		super({
 			start: async (controller) => {
@@ -366,6 +369,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					}
 
 					const reader = session.getReader();
+					currentReader = reader;
 
 					while (true) {
 						let read: Awaited<ReturnType<typeof reader.read>>;
@@ -394,15 +398,18 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								this._lastTailAtMs = performance.now();
 							}
 						} catch {}
-						if (done) {
+						if (done || cancelled) {
 							reader.releaseLock();
-							controller.close();
+							currentReader = undefined;
+							// After a cancel the stream no longer accepts close().
+							if (!cancelled) controller.close();
 							return;
 						}
 
 						// Check if result is an error
 						if (!result.ok) {
 							reader.releaseLock();
+							currentReader = undefined;
 							const error = result.error;
 
 							// Check if we can retry (track session attempts, not record reads)
@@ -503,7 +510,14 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			cancel: async (reason) => {
 				cancelled = true;
 				try {
-					await session?.cancel(reason);
+					// While the pump holds a reader lock, session.cancel() would
+					// reject with ERR_INVALID_STATE and the transport stream (and
+					// its HTTP/2 stream) would stay open; cancel via the reader.
+					if (currentReader) {
+						await currentReader.cancel(reason);
+					} else {
+						await session?.cancel(reason);
+					}
 				} catch (err) {
 					// Ignore ERR_INVALID_STATE - stream may already be closed/cancelled
 					if (!hasErrorCode(err, "ERR_INVALID_STATE")) {
