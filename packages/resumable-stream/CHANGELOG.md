@@ -1,5 +1,13 @@
 # @s2-dev/resumable-stream
 
+## 3.0.2
+
+### Patch Changes
+
+- 19a3e23: Fix HTTP/2 connection leaks in the chat adapter: `makeResumable` and `replay` created `S2Stream` handles that were never closed, leaking one persistent HTTP/2 session per streaming request in Node. Handles are now closed when the SSE response body completes, errors, or is cancelled; on claim failure; and before the 202 replay-delivery response. The streaming path also reuses the claim handle instead of opening a second connection, and `replay`'s SSE wrapper now propagates early termination to the underlying reader so read sessions are disposed on client cancel.
+- 038a23c: Fix client `cancel()` hanging when the persistence branch of the teed stream stops iterating early. `readableStreamToAsyncIterable` now fire-and-forget cancels its reader before releasing the lock, so the abandoned teed branch is released and the sibling branch's `cancel()` resolves.
+- f323626: TanStack AI `subscribe()` now fails fast on permanent HTTP errors (4xx other than 408/429) when `reconnectBackoffMs` is configured, matching `subscribeSse`. Previously it retried forever on 401/403/404, busy-looping until the caller aborted instead of surfacing the error.
+
 ## 3.0.1
 
 ### Patch Changes
