@@ -22,6 +22,16 @@ export type S2Compression = CompressionType;
 export type AppendRetryPolicy = "all" | "noSideEffects";
 
 /**
+ * Minimal fetch shape the SDK requires.
+ *
+ * Structural on purpose: `typeof fetch` drags in runtime-specific statics
+ * (e.g. Bun's `fetch.preconnect`), which would reject plain-function
+ * implementations like `expo/fetch`. The SDK always invokes it with a
+ * `Request` object, so implementations must accept one.
+ */
+export type FetchLike = (request: Request) => Promise<Response>;
+
+/**
  * Retry configuration for handling transient failures.
  */
 export type RetryConfig = {
@@ -159,7 +169,7 @@ export type S2ClientOptions = {
 	 * pass a streaming-capable implementation there (e.g. `expo/fetch`).
 	 * @default globalThis.fetch
 	 */
-	fetch?: typeof globalThis.fetch | (() => Promise<Response>);
+	fetch?: FetchLike;
 };
 
 /**

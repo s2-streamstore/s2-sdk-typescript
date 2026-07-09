@@ -1,7 +1,12 @@
 import { S2AccessTokens } from "./accessTokens.js";
 import { S2Basin } from "./basin.js";
 import { S2Basins } from "./basins.js";
-import type { RetryConfig, S2ClientOptions, S2Compression } from "./common.js";
+import type {
+	FetchLike,
+	RetryConfig,
+	S2ClientOptions,
+	S2Compression,
+} from "./common.js";
 import { S2Endpoints } from "./endpoints.js";
 import { makeServerError, S2Error } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
@@ -31,7 +36,7 @@ export class S2 {
 	private readonly endpoints: S2Endpoints;
 	private readonly retryConfig: RetryConfig;
 	private readonly compression?: S2Compression;
-	private readonly fetch?: typeof globalThis.fetch;
+	private readonly fetch?: FetchLike;
 
 	/**
 	 * Account-scoped basin management operations.
@@ -78,7 +83,9 @@ export class S2 {
 				baseUrl: this.endpoints.accountBaseUrl(),
 				auth: () => Redacted.value(this.accessToken),
 				headers: headers,
-				fetch: this.fetch,
+				// Generated client config requires `typeof fetch`; FetchLike is the
+				// call-compatible subset it actually uses.
+				fetch: this.fetch as typeof globalThis.fetch | undefined,
 			}),
 		);
 

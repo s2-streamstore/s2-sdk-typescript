@@ -1,4 +1,4 @@
-import type { RetryConfig, S2Compression } from "./common.js";
+import type { FetchLike, RetryConfig, S2Compression } from "./common.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import type { EncryptionKeyInput } from "./lib/encryption.js";
@@ -34,7 +34,7 @@ export class S2Basin {
 			includeBasinHeader: boolean;
 			retryConfig?: RetryConfig;
 			compression?: S2Compression;
-			fetch?: typeof globalThis.fetch;
+			fetch?: FetchLike;
 		},
 	) {
 		this.name = name;
@@ -61,7 +61,7 @@ export class S2Basin {
 				baseUrl: options.baseUrl,
 				auth: () => Redacted.value(this.transportConfig.accessToken),
 				headers: headers,
-				fetch: options.fetch,
+				fetch: options.fetch as typeof globalThis.fetch | undefined,
 			}),
 		);
 

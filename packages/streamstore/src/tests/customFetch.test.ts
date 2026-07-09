@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { adaptFetch } from "../lib/fetch-adapter.js";
 import { S2 } from "../s2.js";
 
 const BASIN = "custom-fetch-basin";
@@ -99,5 +100,60 @@ describe("custom fetch injection", () => {
 		expect(requests.length).toBeGreaterThanOrEqual(1);
 		expect(requests[0]!.url).toContain(STREAM);
 		expect(requests[0]!.headers.get("authorization")).toBe("Bearer test-token");
+	});
+});
+
+describe("adaptFetch", () => {
+	it("unpacks a Request into (url, init) with buffered body", async () => {
+		const calls: Array<{ url: string; init?: any }> = [];
+		const adapted = adaptFetch(async (url, init) => {
+			calls.push({ url, init });
+			return jsonResponse({ ok: true });
+		});
+
+		await adapted(
+			new Request("https://example.s2.dev/v1/streams/foo/records", {
+				method: "POST",
+				headers: { authorization: "Bearer t", "content-type": "text/plain" },
+				body: "hello",
+			}),
+		);
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.url).toBe("https://example.s2.dev/v1/streams/foo/records");
+		expect(calls[0]!.init.method).toBe("POST");
+		expect(calls[0]!.init.headers).toContainEqual([
+			"authorization",
+			"Bearer t",
+		]);
+		expect(new TextDecoder().decode(calls[0]!.init.body)).toBe("hello");
+	});
+
+	it("omits the body for GET requests", async () => {
+		const calls: Array<{ url: string; init?: any }> = [];
+		const adapted = adaptFetch(async (url, init) => {
+			calls.push({ url, init });
+			return jsonResponse({ ok: true });
+		});
+
+		await adapted(new Request("https://example.s2.dev/v1/basins"));
+
+		expect(calls[0]!.init.method).toBe("GET");
+		expect(calls[0]!.init.body).toBeUndefined();
+	});
+
+	it("works end-to-end through the client", async () => {
+		const calls: Array<{ url: string }> = [];
+		const adapted = adaptFetch(async (url) => {
+			calls.push({ url });
+			return jsonResponse({ basins: [], has_more: false });
+		});
+		const s2 = new S2({ accessToken: "test-token", fetch: adapted });
+
+		await s2.basins.list();
+
+		expect(calls).toHaveLength(1);
+		expect(typeof calls[0]!.url).toBe("string");
+		expect(calls[0]!.url).toContain("a.s2.dev");
 	});
 });

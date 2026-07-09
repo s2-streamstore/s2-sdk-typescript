@@ -1,4 +1,5 @@
 import {
+	adaptFetch,
 	AppendInput,
 	AppendRecord,
 	S2,
@@ -67,8 +68,10 @@ export default function App() {
 			const s2 = new S2({
 				accessToken,
 				// React Native's built-in fetch buffers response bodies; expo/fetch
-				// streams them, which read sessions require.
-				fetch: expoFetch as unknown as typeof globalThis.fetch,
+				// streams them, which read sessions require. adaptFetch bridges
+				// expo/fetch's (url, init) signature to the Request objects the
+				// SDK passes.
+				fetch: adaptFetch(expoFetch),
 			});
 			const basin = s2.basin(basinName);
 			await basin.streams.create({ stream: streamName }).catch((error) => {

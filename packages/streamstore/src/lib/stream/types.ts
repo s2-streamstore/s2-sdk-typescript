@@ -1,4 +1,4 @@
-import type { RetryConfig, S2RequestOptions } from "../../common.js";
+import type { FetchLike, RetryConfig, S2RequestOptions } from "../../common.js";
 import { S2Error } from "../../error.js";
 import type * as API from "../../generated/index.js";
 import type * as Types from "../../types.js";
@@ -266,5 +266,5 @@ export interface TransportConfig {
 	 * Custom fetch implementation. Used by the fetch transport; the s2s
 	 * transport uses Node's http2 and ignores it.
 	 */
-	fetch?: typeof globalThis.fetch;
+	fetch?: FetchLike;
 }

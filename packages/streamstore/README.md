@@ -93,20 +93,22 @@ The SDK works on React Native with two adjustments:
 
 1. **Pass a streaming-capable fetch.** React Native's built-in fetch buffers
    entire responses and never exposes `response.body`, which breaks read
-   sessions. On Expo SDK 52+, pass `expo/fetch`:
+   sessions. On Expo SDK 52+, pass `expo/fetch` wrapped in `adaptFetch`
+   (the SDK calls fetch with a `Request` object; `expo/fetch` only accepts
+   `(url, init)`):
 
    ```typescript
    import { fetch as expoFetch } from "expo/fetch";
-   import { S2 } from "@s2-dev/streamstore";
+   import { adaptFetch, S2 } from "@s2-dev/streamstore";
 
    const s2 = new S2({
    	accessToken: "...",
-   	fetch: expoFetch as unknown as typeof globalThis.fetch,
+   	fetch: adaptFetch(expoFetch),
    });
    ```
 
    On bare React Native, use `react-native-fetch-api` backed by
-   `web-streams-polyfill` and pass it the same way.
+   `web-streams-polyfill`; it accepts `Request` objects, so pass it directly.
 
 2. **Polyfill missing globals.** Hermes does not provide `ReadableStream`
    (required even for unary calls) or `crypto.getRandomValues` (used for

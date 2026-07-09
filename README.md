@@ -399,21 +399,27 @@ import "web-streams-polyfill/polyfill";
 ```
 
 Then construct the client with a streaming fetch. On Expo SDK 52+ use
-[`expo/fetch`](https://docs.expo.dev/versions/latest/sdk/expo/#expofetch):
+[`expo/fetch`](https://docs.expo.dev/versions/latest/sdk/expo/#expofetch),
+wrapped in `adaptFetch`:
 
 ```ts
 import { fetch as expoFetch } from "expo/fetch";
-import { S2 } from "@s2-dev/streamstore";
+import { adaptFetch, S2 } from "@s2-dev/streamstore";
 
 const s2 = new S2({
 	accessToken: "...",
-	fetch: expoFetch as unknown as typeof globalThis.fetch,
+	fetch: adaptFetch(expoFetch),
 });
 ```
 
+`adaptFetch` is required for `expo/fetch` (not just a typing convenience): the
+SDK invokes fetch with a `Request` object, while `expo/fetch` only accepts
+`(url, init)` arguments — the adapter unpacks one into the other.
+
 On bare React Native (no Expo), use
 [`react-native-fetch-api`](https://github.com/react-native-community/fetch)
-with `reactNative: { textStreaming: true }` as the fetch implementation.
+with `reactNative: { textStreaming: true }`; it accepts `Request` objects, so
+pass it directly without the adapter.
 
 **What works.** The full public API: management operations, unary
 appends/reads in both `string` and `bytes` formats, tailing read sessions

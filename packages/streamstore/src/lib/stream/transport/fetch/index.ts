@@ -448,7 +448,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				baseUrl: transportConfig.baseUrl,
 				auth: () => Redacted.value(transportConfig.accessToken),
 				headers: headers,
-				fetch: transportConfig.fetch,
+				fetch: transportConfig.fetch as typeof globalThis.fetch | undefined,
 			}),
 		);
 	}
@@ -695,7 +695,7 @@ export class FetchTransport implements SessionTransport {
 				baseUrl: config.baseUrl,
 				auth: () => Redacted.value(config.accessToken),
 				headers: headers,
-				fetch: config.fetch,
+				fetch: config.fetch as typeof globalThis.fetch | undefined,
 			}),
 		);
 		this.transportConfig = config;
