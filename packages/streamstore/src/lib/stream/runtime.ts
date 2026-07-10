@@ -62,10 +62,9 @@ export function supportsHttp2(): boolean {
 			return false;
 
 		case "bun":
-			// via node:http2
-			// NOTE: bun's http2 support appears to be buggy, re: https://github.com/s2-streamstore/s2-sdk-typescript/issues/113
-			// so we disable http2 for now
-			return false;
+			// Bun < 1.3.11 never sends connection-level WINDOW_UPDATE frames, so
+			// HTTP/2 reads stall at 64 KiB (issue #113, fixed by oven-sh/bun#26917).
+			return Bun.semver.satisfies(Bun.version, ">=1.3.11");
 
 		case "browser":
 		case "workerd":
