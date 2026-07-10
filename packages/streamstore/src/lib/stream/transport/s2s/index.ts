@@ -644,8 +644,8 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					};
 
 					stream.on("data", (chunk: Buffer) => {
-						// Some runtimes (Deno >= 2.7.5) emit "data" before "response";
-						// buffer until the status is known so frames aren't misread as an error body.
+						// Deno >= 2.7.5 emits "data" before "response";
+						// buffer until the status is known so an error body isn't parsed as acks.
 						if (responseCode === undefined) {
 							(pendingChunks ??= []).push(chunk);
 							return;
@@ -988,7 +988,7 @@ class S2SAppendSession implements TransportAppendSession {
 		};
 
 		stream.on("data", (chunk: Buffer) => {
-			// Some runtimes (Deno >= 2.7.5) emit "data" before "response";
+			// Deno >= 2.7.5 emits "data" before "response";
 			// buffer until the status is known so an error body isn't parsed as acks.
 			if (responseCode === undefined) {
 				(pendingChunks ??= []).push(chunk);

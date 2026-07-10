@@ -56,9 +56,7 @@ export function supportsHttp2(): boolean {
 			return true;
 
 		case "deno":
-			// Deno < 2.7.5 lacks ClientHttp2Stream._writev, which append sessions
-			// need (issue #169). The data-before-response event ordering on newer
-			// Deno is handled by chunk buffering in the s2s transport.
+			// Deno < 2.7.5 not supported
 			// @ts-expect-error - Deno global not in types
 			return versionAtLeast(Deno.version?.deno, "2.7.5");
 
