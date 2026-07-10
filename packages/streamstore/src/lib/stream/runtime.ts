@@ -56,10 +56,9 @@ export function supportsHttp2(): boolean {
 			return true;
 
 		case "deno":
-			// Deno's node:http2 has data-chunking differences that cause
-			// "premature EOF" errors in the s2s frame parser.
-			// Fall back to fetch transport until Deno's compat improves.
-			return false;
+			// Deno < 2.7.5 not supported
+			// @ts-expect-error - Deno global not in types
+			return versionAtLeast(Deno.version?.deno, "2.7.5");
 
 		case "bun":
 			// Bun < 1.3.11 never sends connection-level WINDOW_UPDATE frames, so
@@ -74,6 +73,21 @@ export function supportsHttp2(): boolean {
 		default:
 			return false;
 	}
+}
+
+function versionAtLeast(version: string | undefined, minimum: string): boolean {
+	if (!version) return false;
+	const [core, prerelease] = version.split("-");
+	const actual = core?.split(".").map(Number) ?? [];
+	const wanted = minimum.split(".").map(Number);
+	for (let i = 0; i < wanted.length; i++) {
+		const a = actual[i] ?? 0;
+		const b = wanted[i] ?? 0;
+		if (Number.isNaN(a)) return false;
+		if (a !== b) return a > b;
+	}
+	// A prerelease (e.g. 2.7.5-rc.1) precedes its stable release.
+	return prerelease === undefined;
 }
 
 /**
