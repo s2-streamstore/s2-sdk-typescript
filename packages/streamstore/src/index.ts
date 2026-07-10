@@ -157,12 +157,14 @@ export * as API from "./generated/types.gen.js";
 
 export type {
 	AppendRetryPolicy,
+	FetchLike,
 	RetryConfig,
 	S2ClientOptions,
 	S2Compression,
 	S2RequestOptions,
 } from "./common.js";
 export type { S2EndpointsInit } from "./endpoints.js";
+export { adaptFetch, type UrlAndInitFetch } from "./lib/fetch-adapter.js";
 
 // =============================================================================
 // Error Types

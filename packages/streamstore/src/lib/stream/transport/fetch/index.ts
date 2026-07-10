@@ -111,7 +111,10 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		}
 		if (!response.response.body) {
 			throw new S2Error({
-				message: "No body in SSE response",
+				message:
+					"SSE response has no streamable body. The fetch implementation must " +
+					"expose response bodies as a ReadableStream; on React Native, pass a " +
+					"streaming-capable fetch (e.g. expo/fetch) via S2ClientOptions.fetch.",
 				code: "INVALID_RESPONSE",
 				status: 502,
 				origin: "sdk",
@@ -445,6 +448,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				baseUrl: transportConfig.baseUrl,
 				auth: () => Redacted.value(transportConfig.accessToken),
 				headers: headers,
+				fetch: transportConfig.fetch as typeof globalThis.fetch | undefined,
 			}),
 		);
 	}
@@ -691,6 +695,7 @@ export class FetchTransport implements SessionTransport {
 				baseUrl: config.baseUrl,
 				auth: () => Redacted.value(config.accessToken),
 				headers: headers,
+				fetch: config.fetch as typeof globalThis.fetch | undefined,
 			}),
 		);
 		this.transportConfig = config;

@@ -1,0 +1,11 @@
+{
+	"expo": {
+		"name": "S2 Streamstore Example",
+		"slug": "s2-streamstore-example",
+		"version": "1.0.0",
+		"orientation": "portrait",
+		"userInterfaceStyle": "automatic",
+		"newArchEnabled": true,
+		"platforms": ["ios", "android"]
+	}
+}
