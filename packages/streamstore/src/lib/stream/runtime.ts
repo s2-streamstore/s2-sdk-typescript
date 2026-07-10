@@ -77,7 +77,8 @@ export function supportsHttp2(): boolean {
 
 function versionAtLeast(version: string | undefined, minimum: string): boolean {
 	if (!version) return false;
-	const actual = version.split("-")[0]?.split(".").map(Number) ?? [];
+	const [core, prerelease] = version.split("-");
+	const actual = core?.split(".").map(Number) ?? [];
 	const wanted = minimum.split(".").map(Number);
 	for (let i = 0; i < wanted.length; i++) {
 		const a = actual[i] ?? 0;
@@ -85,7 +86,8 @@ function versionAtLeast(version: string | undefined, minimum: string): boolean {
 		if (Number.isNaN(a)) return false;
 		if (a !== b) return a > b;
 	}
-	return true;
+	// A prerelease (e.g. 2.7.5-rc.1) precedes its stable release.
+	return prerelease === undefined;
 }
 
 /**

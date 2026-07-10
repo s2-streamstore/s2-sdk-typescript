@@ -369,7 +369,7 @@ const stream = basin.stream(streamName, {
 ... or rely on environment auto-detection to specify the transport, as is the default behavior.
 
 > [!IMPORTANT]
-> HTTP/2 library use, required for `s2s`, is currently only enabled by default for Node.js. Bun defaults to HTTP/1 (see [tracking issue](https://github.com/s2-streamstore/s2-sdk-typescript/issues/113)), but can be forced using the mechanism described above. Same with Deno ([issue](https://github.com/s2-streamstore/s2-sdk-typescript/issues/169)).
+> HTTP/2 library use, required for `s2s`, is enabled by default on Node.js, Bun >= 1.3.11, and Deno >= 2.7.5. Older Bun and Deno versions default to HTTP/1.1 due to `node:http2` bugs in those runtimes ([#113](https://github.com/s2-streamstore/s2-sdk-typescript/issues/113), [#169](https://github.com/s2-streamstore/s2-sdk-typescript/issues/169)), but `s2s` can be forced using the mechanism described above.
 
 ## Patterns
 
