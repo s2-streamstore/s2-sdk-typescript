@@ -1,0 +1,296 @@
+/**
+ * Shared HTTP/2 connection pool for the s2s transport.
+ *
+ * One connection per endpoint origin, dialed lazily on the first request.
+ * Each connection carries up to `maxConcurrentStreamsPerConnection`
+ * concurrent streams; excess load spills over to additional connections.
+ */
+
+import type { OutgoingHttpHeaders } from "node:http";
+import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
+import createDebug from "debug";
+import { S2Error } from "../../../../error.js";
+
+const debug = createDebug("s2:s2s:pool");
+
+export const MAX_CONCURRENT_STREAMS_PER_CONNECTION = 100;
+const DEFAULT_CONNECTION_TIMEOUT_MS = 3000;
+const INITIAL_WINDOW_SIZE = 10 * 1024 * 1024; // 10 MiB
+
+type Http2Module = typeof import("node:http2");
+
+let http2ModulePromise: Promise<Http2Module> | undefined;
+async function loadHttp2(): Promise<Http2Module> {
+	// Hint bundlers to skip bundling node:http2 while keeping the specifier static for type inference.
+	if (!http2ModulePromise) {
+		http2ModulePromise = import(
+			/* webpackIgnore: true */
+			/* @vite-ignore */
+			"node:http2"
+		);
+	}
+	return http2ModulePromise;
+}
+
+interface PooledConnection {
+	session: ClientHttp2Session;
+	activeStreams: number;
+}
+
+interface PendingConnection {
+	promise: Promise<PooledConnection>;
+	reservations: number;
+}
+
+interface Endpoint {
+	refCount: number;
+	connections: PooledConnection[];
+	pending: PendingConnection[];
+}
+
+export interface RequestStreamOptions {
+	connectionTimeoutMillis?: number;
+}
+
+export class Http2ConnectionPool {
+	private readonly endpoints = new Map<string, Endpoint>();
+	private readonly maxStreamsPerConnection: number;
+
+	constructor(options?: { maxConcurrentStreamsPerConnection?: number }) {
+		this.maxStreamsPerConnection =
+			options?.maxConcurrentStreamsPerConnection ??
+			MAX_CONCURRENT_STREAMS_PER_CONNECTION;
+	}
+
+	/**
+	 * Register interest in an endpoint. Must be paired with a `detach` call;
+	 * connections are shared by all attached users and closed on last detach.
+	 */
+	attach(origin: string): void {
+		const endpoint = this.endpoints.get(origin);
+		if (endpoint) {
+			endpoint.refCount += 1;
+		} else {
+			this.endpoints.set(origin, { refCount: 1, connections: [], pending: [] });
+		}
+	}
+
+	/**
+	 * Release interest in an endpoint. When the last user detaches, all
+	 * connections to the endpoint are closed gracefully.
+	 */
+	async detach(origin: string): Promise<void> {
+		const endpoint = this.endpoints.get(origin);
+		if (!endpoint) {
+			return;
+		}
+		endpoint.refCount -= 1;
+		if (endpoint.refCount > 0) {
+			return;
+		}
+		this.endpoints.delete(origin);
+
+		// Settle in-flight dials first; on success they land in `connections`.
+		await Promise.all(
+			endpoint.pending.map((p) => p.promise.catch(() => undefined)),
+		);
+		debug(
+			"closing %d connection(s) to %s",
+			endpoint.connections.length,
+			origin,
+		);
+		await Promise.all(
+			endpoint.connections.map((connection) => {
+				const { session } = connection;
+				if (session.closed || session.destroyed) {
+					return undefined;
+				}
+				return new Promise<void>((resolve) => {
+					session.close(() => resolve());
+				});
+			}),
+		);
+	}
+
+	/**
+	 * Open a new HTTP/2 stream to the endpoint, reusing a pooled connection
+	 * with spare capacity or dialing a new one. Requires a prior `attach`.
+	 */
+	async request(
+		origin: string,
+		headers: OutgoingHttpHeaders,
+		options?: RequestStreamOptions,
+	): Promise<ClientHttp2Stream> {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const endpoint = this.endpoints.get(origin);
+			if (!endpoint) {
+				throw new S2Error({
+					message: `HTTP/2 connection pool is not attached to ${origin}`,
+					status: 500,
+					origin: "sdk",
+				});
+			}
+
+			const usable = endpoint.connections.find(
+				(c) =>
+					!c.session.closed &&
+					!c.session.destroyed &&
+					c.activeStreams < this.maxStreamsPerConnection,
+			);
+			if (usable) {
+				return this.openStream(usable, headers);
+			}
+
+			// Coalesce onto an in-flight dial unless its capacity is spoken for.
+			let pending = endpoint.pending.find(
+				(p) => p.reservations < this.maxStreamsPerConnection,
+			);
+			if (!pending) {
+				pending = this.startDial(origin, endpoint, options);
+			}
+			pending.reservations += 1;
+			const connection = await pending.promise;
+			if (connection.session.closed || connection.session.destroyed) {
+				continue;
+			}
+			return this.openStream(connection, headers);
+		}
+		throw new S2Error({
+			message: `HTTP/2 connections to ${origin} closed repeatedly before use`,
+			status: 500,
+			origin: "sdk",
+		});
+	}
+
+	/** Number of live pooled connections to an endpoint. */
+	connectionCount(origin: string): number {
+		return this.endpoints.get(origin)?.connections.length ?? 0;
+	}
+
+	private openStream(
+		connection: PooledConnection,
+		headers: OutgoingHttpHeaders,
+	): ClientHttp2Stream {
+		const stream = connection.session.request(headers);
+		connection.activeStreams += 1;
+		stream.once("close", () => {
+			connection.activeStreams -= 1;
+		});
+		return stream;
+	}
+
+	private startDial(
+		origin: string,
+		endpoint: Endpoint,
+		options?: RequestStreamOptions,
+	): PendingConnection {
+		const pending: PendingConnection = {
+			reservations: 0,
+			promise: undefined as unknown as Promise<PooledConnection>,
+		};
+		pending.promise = this.dial(origin, options).then(
+			(connection) => {
+				removeFrom(endpoint.pending, pending);
+				endpoint.connections.push(connection);
+				return connection;
+			},
+			(err) => {
+				removeFrom(endpoint.pending, pending);
+				throw err;
+			},
+		);
+		endpoint.pending.push(pending);
+		return pending;
+	}
+
+	private async dial(
+		origin: string,
+		options?: RequestStreamOptions,
+	): Promise<PooledConnection> {
+		debug("dialing %s", origin);
+		const http2 = await loadHttp2();
+		const session = http2.connect(origin, {
+			settings: {
+				initialWindowSize: INITIAL_WINDOW_SIZE,
+			},
+		});
+
+		try {
+			// Pooled streams add per-request session listeners (e.g. goaway).
+			session.setMaxListeners(0);
+		} catch {
+			// EventEmitter shims in some runtimes may not implement this.
+		}
+
+		const connection: PooledConnection = { session, activeStreams: 0 };
+
+		const connectPromise = new Promise<PooledConnection>((resolve, reject) => {
+			session.once("connect", () => {
+				// Guard against session being destroyed before connect fires
+				if (session.destroyed) return;
+				try {
+					session.setLocalWindowSize(INITIAL_WINDOW_SIZE);
+				} catch {
+					// Not implemented in all runtimes (e.g. Deno).
+					// This is a performance optimization, not required for correctness.
+				}
+				resolve(connection);
+			});
+			session.once("error", (err) => {
+				reject(err);
+			});
+		});
+
+		// Stop routing new streams to sessions that are going away.
+		// Session-level errors surface on their individual streams.
+		session.on("goaway", () => this.evict(origin, connection));
+		session.on("close", () => this.evict(origin, connection));
+		session.on("error", () => this.evict(origin, connection));
+
+		const connectionTimeout =
+			options?.connectionTimeoutMillis ?? DEFAULT_CONNECTION_TIMEOUT_MS;
+
+		let timeoutId: NodeJS.Timeout | undefined;
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			timeoutId = setTimeout(() => {
+				if (!session.closed && !session.destroyed) {
+					session.destroy();
+				}
+				reject(
+					new S2Error({
+						message: `Connection timeout after ${connectionTimeout}ms`,
+						status: 408,
+						code: "CONNECTION_TIMEOUT",
+						origin: "sdk",
+					}),
+				);
+			}, connectionTimeout);
+		});
+
+		try {
+			return await Promise.race([connectPromise, timeoutPromise]);
+		} finally {
+			if (timeoutId) {
+				clearTimeout(timeoutId);
+			}
+		}
+	}
+
+	private evict(origin: string, connection: PooledConnection): void {
+		const endpoint = this.endpoints.get(origin);
+		if (!endpoint) {
+			return;
+		}
+		removeFrom(endpoint.connections, connection);
+	}
+}
+
+function removeFrom<T>(list: T[], item: T): void {
+	const index = list.indexOf(item);
+	if (index !== -1) {
+		list.splice(index, 1);
+	}
+}
+
+/** Process-wide pool shared by all s2s transports. */
+export const sharedConnectionPool = new Http2ConnectionPool();
