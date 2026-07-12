@@ -1,9 +1,9 @@
 /**
  * Shared HTTP/2 connection pool for the s2s transport.
  *
- * One connection per endpoint origin, dialed lazily on the first request.
- * Each connection carries up to `maxConcurrentStreamsPerConnection`
- * concurrent streams; excess load spills over to additional connections.
+ * One connection per endpoint, opened lazily on the first request. Each
+ * connection carries up to `maxConcurrentStreamsPerConnection` concurrent
+ * streams; beyond that, additional connections are opened.
  */
 
 import type { OutgoingHttpHeaders } from "node:http";
@@ -63,7 +63,7 @@ export class Http2ConnectionPool {
 	}
 
 	/**
-	 * Register interest in an endpoint. Must be paired with a `detach` call;
+	 * Register as a user of an endpoint. Must be paired with a `detach` call;
 	 * connections are shared by all attached users and closed on last detach.
 	 */
 	attach(origin: string): void {
@@ -76,8 +76,8 @@ export class Http2ConnectionPool {
 	}
 
 	/**
-	 * Release interest in an endpoint. When the last user detaches, all
-	 * connections to the endpoint are closed gracefully.
+	 * The inverse of `attach`. When the last user detaches, all connections
+	 * to the endpoint are closed gracefully.
 	 */
 	async detach(origin: string): Promise<void> {
 		const endpoint = this.endpoints.get(origin);
@@ -90,7 +90,7 @@ export class Http2ConnectionPool {
 		}
 		this.endpoints.delete(origin);
 
-		// Settle in-flight dials first; on success they land in `connections`.
+		// Wait for in-progress connects; successful ones land in `connections`.
 		await Promise.all(
 			endpoint.pending.map((p) => p.promise.catch(() => undefined)),
 		);
@@ -114,7 +114,7 @@ export class Http2ConnectionPool {
 
 	/**
 	 * Open a new HTTP/2 stream to the endpoint, reusing a pooled connection
-	 * with spare capacity or dialing a new one. Requires a prior `attach`.
+	 * with spare capacity or opening a new one. Requires a prior `attach`.
 	 */
 	async request(
 		origin: string,
@@ -141,12 +141,12 @@ export class Http2ConnectionPool {
 				return this.openStream(usable, headers);
 			}
 
-			// Coalesce onto an in-flight dial unless its capacity is spoken for.
+			// Join an in-progress connect if it still has room for this stream.
 			let pending = endpoint.pending.find(
 				(p) => p.reservations < this.maxStreamsPerConnection,
 			);
 			if (!pending) {
-				pending = this.startDial(origin, endpoint, options);
+				pending = this.startConnect(origin, endpoint, options);
 			}
 			pending.reservations += 1;
 			const connection = await pending.promise;
@@ -179,35 +179,30 @@ export class Http2ConnectionPool {
 		return stream;
 	}
 
-	private startDial(
+	private startConnect(
 		origin: string,
 		endpoint: Endpoint,
 		options?: RequestStreamOptions,
 	): PendingConnection {
-		const pending: PendingConnection = {
-			reservations: 0,
-			promise: undefined as unknown as Promise<PooledConnection>,
-		};
-		pending.promise = this.dial(origin, options).then(
-			(connection) => {
-				removeFrom(endpoint.pending, pending);
+		const pending = { reservations: 0 } as PendingConnection;
+		pending.promise = (async () => {
+			try {
+				const connection = await this.connect(origin, options);
 				endpoint.connections.push(connection);
 				return connection;
-			},
-			(err) => {
+			} finally {
 				removeFrom(endpoint.pending, pending);
-				throw err;
-			},
-		);
+			}
+		})();
 		endpoint.pending.push(pending);
 		return pending;
 	}
 
-	private async dial(
+	private async connect(
 		origin: string,
 		options?: RequestStreamOptions,
 	): Promise<PooledConnection> {
-		debug("dialing %s", origin);
+		debug("connecting to %s", origin);
 		const http2 = await loadHttp2();
 		const session = http2.connect(origin, {
 			settings: {
@@ -216,23 +211,21 @@ export class Http2ConnectionPool {
 		});
 
 		try {
-			// Pooled streams add per-request session listeners (e.g. goaway).
+			// Each pooled stream may add its own session listeners (e.g. goaway).
 			session.setMaxListeners(0);
 		} catch {
-			// EventEmitter shims in some runtimes may not implement this.
+			// Not available in every runtime.
 		}
 
 		const connection: PooledConnection = { session, activeStreams: 0 };
 
 		const connectPromise = new Promise<PooledConnection>((resolve, reject) => {
 			session.once("connect", () => {
-				// Guard against session being destroyed before connect fires
 				if (session.destroyed) return;
 				try {
 					session.setLocalWindowSize(INITIAL_WINDOW_SIZE);
 				} catch {
-					// Not implemented in all runtimes (e.g. Deno).
-					// This is a performance optimization, not required for correctness.
+					// Not available in every runtime; performance-only.
 				}
 				resolve(connection);
 			});
@@ -241,8 +234,8 @@ export class Http2ConnectionPool {
 			});
 		});
 
-		// Stop routing new streams to sessions that are going away.
-		// Session-level errors surface on their individual streams.
+		// A connection that errors or shuts down should get no new streams.
+		// Its open streams observe the failure through their own events.
 		session.on("goaway", () => this.evict(origin, connection));
 		session.on("close", () => this.evict(origin, connection));
 		session.on("error", () => this.evict(origin, connection));

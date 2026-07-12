@@ -21,8 +21,8 @@ interface TestServer {
 }
 
 /**
- * Plaintext (h2c) HTTP/2 server that responds 200 and holds streams open
- * until endAllStreams() is called, so client-side stream counts stay stable.
+ * Plaintext HTTP/2 server that responds 200 and holds streams open
+ * until endAllStreams() is called.
  */
 async function startServer(
 	onStream?: (stream: ServerHttp2Stream) => void,
@@ -182,15 +182,12 @@ describe("Http2ConnectionPool", () => {
 			await sleep(50);
 			expect(server.sessionCount()).toBe(2);
 
-			// Freed capacity is reused instead of dialing again.
+			// Freed capacity is reused instead of opening a third connection.
 			for (const stream of streams) {
 				stream.close();
 			}
 			server.endAllStreams();
-			await waitFor(() => {
-				// All client streams closed; both connections have spare capacity.
-				return streams.every((s) => s.closed);
-			});
+			await waitFor(() => streams.every((s) => s.closed));
 			const reused = await pool.request(server.origin, GET_HEADERS);
 			await sleep(50);
 			expect(server.sessionCount()).toBe(2);

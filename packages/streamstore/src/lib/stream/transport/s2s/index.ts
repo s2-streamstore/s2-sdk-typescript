@@ -140,10 +140,7 @@ export class S2STransport implements SessionTransport {
 		);
 	}
 
-	/**
-	 * Open an HTTP/2 stream via the shared per-endpoint connection pool,
-	 * registering interest in the endpoint on first use.
-	 */
+	/** Open an HTTP/2 stream through the shared connection pool. */
 	private openH2Stream(headers: OutgoingHttpHeaders) {
 		if (!this.attached) {
 			sharedConnectionPool.attach(this.endpointOrigin);
