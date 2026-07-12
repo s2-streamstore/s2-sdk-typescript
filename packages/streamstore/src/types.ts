@@ -191,14 +191,7 @@ export namespace AppendRecord {
 			readonly [string | Uint8Array, string | Uint8Array]
 		>,
 	): number {
-		let overhead = 8;
-		for (const [name, value] of headers ?? []) {
-			overhead += 2;
-			overhead += typeof name === "string" ? utf8ByteLength(name) : name.length;
-			overhead +=
-				typeof value === "string" ? utf8ByteLength(value) : value.length;
-		}
-		return Math.max(0, MAX_APPEND_BYTES - overhead);
+		return Math.max(0, MAX_APPEND_BYTES - calculateMeteredBytes({ headers }));
 	}
 }
 
