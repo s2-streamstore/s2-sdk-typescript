@@ -5,7 +5,8 @@
  * This file should only be imported in Node.js environments
  */
 
-import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
+import type { OutgoingHttpHeaders } from "node:http";
+import type { ClientHttp2Stream, Http2Session } from "node:http2";
 import createDebug from "debug";
 
 /** Type for ReadableStream with optional async iterator support. */
@@ -64,36 +65,29 @@ import {
 	frameMessage,
 	S2SFrameParser,
 } from "./framing.js";
+import { sharedConnectionPool } from "./pool.js";
 
 const debug = createDebug("s2:s2s");
 
 const COMPRESSION_THRESHOLD_BYTES = 1024;
 
-type Http2Module = typeof import("node:http2");
-
-let http2ModulePromise: Promise<Http2Module> | undefined;
-async function loadHttp2(): Promise<Http2Module> {
-	// Hint bundlers to skip bundling node:http2 while keeping the specifier static for type inference.
-	if (!http2ModulePromise) {
-		http2ModulePromise = import(
-			/* webpackIgnore: true */
-			/* @vite-ignore */
-			"node:http2"
-		);
-	}
-	return http2ModulePromise;
-}
+/** Opens an HTTP/2 stream to the transport's endpoint. */
+type OpenH2Stream = (
+	headers: OutgoingHttpHeaders,
+) => Promise<ClientHttp2Stream>;
 
 export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
 	private readonly compression: CompressionType;
-	private connection?: ClientHttp2Session;
-	private connectionPromise?: Promise<ClientHttp2Session>;
+	private readonly endpointOrigin: string;
+	private attached = false;
+	private closed = false;
 	private closingPromise?: Promise<void>;
 
 	constructor(config: TransportConfig) {
 		this.transportConfig = config;
 		this.compression = config.compression ?? "none";
+		this.endpointOrigin = new URL(config.baseUrl).origin;
 	}
 
 	async makeAppendSession(
@@ -108,7 +102,7 @@ export class S2STransport implements SessionTransport {
 					this.transportConfig.baseUrl,
 					this.transportConfig.accessToken,
 					stream,
-					() => this.getConnection(),
+					(headers) => this.openH2Stream(headers),
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
 					this.compression,
@@ -136,7 +130,7 @@ export class S2STransport implements SessionTransport {
 					stream,
 					myArgs,
 					options,
-					() => this.getConnection(),
+					(headers) => this.openH2Stream(headers),
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
 					this.compression,
@@ -147,122 +141,36 @@ export class S2STransport implements SessionTransport {
 		);
 	}
 
-	/**
-	 * Get or create HTTP/2 connection (one per transport)
-	 */
-	private async getConnection(): Promise<ClientHttp2Session> {
-		if (
-			this.connection &&
-			!this.connection.closed &&
-			!this.connection.destroyed
-		) {
-			return this.connection;
+	/** Open an HTTP/2 stream through the shared connection pool. */
+	private openH2Stream(headers: OutgoingHttpHeaders) {
+		// Retries may fire after close(); re-attaching then would leak the pool entry.
+		if (this.closed) {
+			throw new S2Error({
+				message: "S2STransport is closed",
+				status: 400,
+				origin: "sdk",
+			});
 		}
-
-		// If connection is in progress, wait for it
-		if (this.connectionPromise) {
-			return this.connectionPromise;
+		if (!this.attached) {
+			sharedConnectionPool.attach(this.endpointOrigin);
+			this.attached = true;
 		}
-
-		// Create new connection
-		this.connectionPromise = this.createConnection();
-
-		try {
-			this.connection = await this.connectionPromise;
-			return this.connection;
-		} finally {
-			this.connectionPromise = undefined;
-		}
-	}
-
-	private async createConnection(): Promise<ClientHttp2Session> {
-		const http2 = await loadHttp2();
-		const url = new URL(this.transportConfig.baseUrl);
-		const client = http2.connect(url.origin, {
-			// Use HTTPS settings
-			...(url.protocol === "https:"
-				? {
-						// TLS options can go here if needed
-					}
-				: {}),
-			settings: {
-				initialWindowSize: 10 * 1024 * 1024, // 10 MB
-			},
+		return sharedConnectionPool.request(this.endpointOrigin, headers, {
+			connectionTimeoutMillis: this.transportConfig.connectionTimeoutMillis,
 		});
-
-		const connectPromise = new Promise<ClientHttp2Session>(
-			(resolve, reject) => {
-				client.once("connect", () => {
-					// Guard against session being destroyed before connect fires
-					if (client.destroyed) return;
-					try {
-						client.setLocalWindowSize(10 * 1024 * 1024);
-					} catch {
-						// Not implemented in all runtimes (e.g. Deno).
-						// This is a performance optimization, not required for correctness.
-					}
-					resolve(client);
-				});
-
-				client.once("error", (err) => {
-					reject(err);
-				});
-
-				// Handle connection close
-				client.once("close", () => {
-					if (this.connection === client) {
-						this.connection = undefined;
-					}
-				});
-			},
-		);
-
-		// Apply connection timeout if configured
-		const connectionTimeout =
-			this.transportConfig.connectionTimeoutMillis ?? 3000;
-
-		let timeoutId: NodeJS.Timeout | undefined;
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			timeoutId = setTimeout(() => {
-				// Destroy the client on timeout
-				if (!client.closed && !client.destroyed) {
-					client.destroy();
-				}
-				reject(
-					new S2Error({
-						message: `Connection timeout after ${connectionTimeout}ms`,
-						status: 408,
-						code: "CONNECTION_TIMEOUT",
-						origin: "sdk",
-					}),
-				);
-			}, connectionTimeout);
-		});
-
-		try {
-			return await Promise.race([connectPromise, timeoutPromise]);
-		} finally {
-			if (timeoutId) {
-				clearTimeout(timeoutId);
-			}
-		}
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
 		if (this.closingPromise) {
 			return this.closingPromise;
 		}
 
 		this.closingPromise = (async () => {
-			const connection =
-				this.connection ??
-				(await this.connectionPromise?.catch(() => undefined));
-			if (connection && !connection.closed && !connection.destroyed) {
-				await new Promise<void>((resolve) => {
-					connection.close(() => resolve());
-				});
+			if (this.attached) {
+				this.attached = false;
+				await sharedConnectionPool.detach(this.endpointOrigin);
 			}
-			this.connection = undefined;
 		})();
 
 		try {
@@ -289,7 +197,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		streamName: string,
 		args: ReadArgs<Format> | undefined,
 		options: S2RequestOptions | undefined,
-		getConnection: () => Promise<ClientHttp2Session>,
+		openH2Stream: OpenH2Stream,
 		basinName?: string,
 		encryptionKey?: Redacted.Redacted<string>,
 		compression: CompressionType = "none",
@@ -301,7 +209,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			bearerToken,
 			url,
 			options,
-			getConnection,
+			openH2Stream,
 			basinName,
 			encryptionKey,
 			compression,
@@ -314,7 +222,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private authToken: Redacted.Redacted,
 		private url: URL,
 		private options: S2RequestOptions | undefined,
-		private getConnection: () => Promise<ClientHttp2Session>,
+		private openH2Stream: OpenH2Stream,
 		private basinName?: string,
 		private encryptionKey?: Redacted.Redacted<string>,
 		private compression: CompressionType = "none",
@@ -344,7 +252,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 							opaqueData: Buffer,
 					  ) => void)
 					| undefined;
-				let sessionConnection: ClientHttp2Session | undefined;
+				let sessionConnection: Http2Session | undefined;
 
 				const cleanupListeners = () => {
 					if (abortHandler && options?.signal) {
@@ -407,7 +315,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				try {
 					// Start the timeout timer - will fire in 20s if no tail received
 					resetTimeoutTimer();
-					const connection = await getConnection();
 
 					// Build query string
 					const queryParams = new URLSearchParams();
@@ -433,7 +340,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
 					const acceptEncoding = await acceptEncodingHeader(compression);
-					const stream = connection.request({
+					const stream = await openH2Stream({
 						":method": "GET",
 						":path": path,
 						":scheme": url.protocol.slice(0, -1),
@@ -473,11 +380,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						}
 					});
 
-					sessionConnection = connection;
+					sessionConnection = stream.session;
 					goawayHandler = (errorCode, lastStreamID, opaqueData) => {
 						debug("received GOAWAY from server");
 					};
-					connection.on("goaway", goawayHandler);
+					sessionConnection?.on("goaway", goawayHandler);
 
 					stream.on("error", (err) => {
 						safeError(err);
@@ -799,7 +706,7 @@ class S2SAppendSession implements TransportAppendSession {
 		baseUrl: string,
 		bearerToken: Redacted.Redacted,
 		streamName: string,
-		getConnection: () => Promise<ClientHttp2Session>,
+		openH2Stream: OpenH2Stream,
 		basinName: string | undefined,
 		encryptionKey: Redacted.Redacted<string> | undefined,
 		compression: CompressionType,
@@ -810,7 +717,7 @@ class S2SAppendSession implements TransportAppendSession {
 			baseUrl,
 			bearerToken,
 			streamName,
-			getConnection,
+			openH2Stream,
 			basinName,
 			encryptionKey,
 			compression,
@@ -823,7 +730,7 @@ class S2SAppendSession implements TransportAppendSession {
 		private baseUrl: string,
 		private authToken: Redacted.Redacted,
 		private streamName: string,
-		private getConnection: () => Promise<ClientHttp2Session>,
+		private openH2Stream: OpenH2Stream,
 		private basinName: string | undefined,
 		private encryptionKey: Redacted.Redacted<string> | undefined,
 		private compression: CompressionType,
@@ -836,12 +743,11 @@ class S2SAppendSession implements TransportAppendSession {
 
 	private async initializeStream(): Promise<void> {
 		const url = new URL(this.baseUrl);
-		const connection = await this.getConnection();
 
 		const path = `${url.pathname}/streams/${encodeURIComponent(this.streamName)}/records`;
 
 		const acceptEncoding = await acceptEncodingHeader(this.compression);
-		const stream = connection.request({
+		const stream = await this.openH2Stream({
 			":method": "POST",
 			":path": path,
 			":scheme": url.protocol.slice(0, -1),
