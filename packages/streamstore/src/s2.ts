@@ -11,6 +11,7 @@ import {
 	canSetUserAgentHeader,
 	DEFAULT_USER_AGENT,
 } from "./lib/stream/runtime.js";
+import type { Http2Settings } from "./lib/stream/types.js";
 import { S2Locations } from "./locations.js";
 import { S2Metrics } from "./metrics.js";
 
@@ -31,6 +32,7 @@ export class S2 {
 	private readonly endpoints: S2Endpoints;
 	private readonly retryConfig: RetryConfig;
 	private readonly compression?: S2Compression;
+	private readonly http2?: Http2Settings;
 
 	/**
 	 * Account-scoped basin management operations.
@@ -67,6 +69,8 @@ export class S2 {
 				? options.endpoints
 				: new S2Endpoints(options.endpoints);
 		this.compression = options.compression;
+		// Copy so later mutation of the caller's object cannot skew pool keying.
+		this.http2 = options.http2 ? { ...options.http2 } : undefined;
 		const headers: Record<string, string> = {};
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
@@ -110,6 +114,7 @@ export class S2 {
 			includeBasinHeader: this.endpoints.includeBasinHeader,
 			retryConfig: this.retryConfig,
 			compression: this.compression,
+			http2: this.http2,
 		});
 	}
 }

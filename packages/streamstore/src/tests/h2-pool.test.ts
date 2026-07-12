@@ -249,6 +249,121 @@ describe("Http2ConnectionPool", () => {
 	);
 
 	it(
+		"applies configured flow-control windows to new connections",
+		async () => {
+			const server = await newServer();
+			const pool = new Http2ConnectionPool();
+			const http2 = {
+				initialStreamWindowSize: 2 * 1024 * 1024,
+				connectionWindowSize: 4 * 1024 * 1024,
+			};
+
+			pool.attach(server.origin, http2);
+			const stream = await pool.request(server.origin, GET_HEADERS, { http2 });
+			await waitFor(() => server.sessionCount() === 1);
+			const [session] = [...server.openSessions()];
+			if (!session) throw new Error("no server session");
+
+			// The client's SETTINGS frame carries the stream window; its
+			// WINDOW_UPDATE raises the connection window the server may use.
+			await waitFor(
+				() =>
+					session.remoteSettings.initialWindowSize ===
+					http2.initialStreamWindowSize,
+			);
+			await waitFor(
+				() => session.state.remoteWindowSize === http2.connectionWindowSize,
+			);
+
+			stream.close();
+			server.endAllStreams();
+			await pool.detach(server.origin, http2);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"does not share connections across different flow-control settings",
+		async () => {
+			const server = await newServer();
+			const pool = new Http2ConnectionPool();
+			const a = { initialStreamWindowSize: 1024 * 1024 };
+			const b = { initialStreamWindowSize: 2 * 1024 * 1024 };
+
+			pool.attach(server.origin, a);
+			pool.attach(server.origin, b);
+			const s1 = await pool.request(server.origin, GET_HEADERS, { http2: a });
+			const s2 = await pool.request(server.origin, GET_HEADERS, { http2: b });
+
+			expect(pool.connectionCount(server.origin, a)).toBe(1);
+			expect(pool.connectionCount(server.origin, b)).toBe(1);
+			await waitFor(() => server.sessionCount() === 2);
+
+			s1.close();
+			s2.close();
+			server.endAllStreams();
+
+			// Detaching one settings bucket leaves the other's connection open.
+			await pool.detach(server.origin, a);
+			await sleep(50);
+			expect(server.openSessions().size).toBe(1);
+
+			await pool.detach(server.origin, b);
+			await waitFor(() => server.openSessions().size === 0);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"shares a connection across users attached with equal settings",
+		async () => {
+			const server = await newServer();
+			const pool = new Http2ConnectionPool();
+			const settings = () => ({ initialStreamWindowSize: 1024 * 1024 });
+
+			pool.attach(server.origin, settings());
+			pool.attach(server.origin, settings());
+			const s1 = await pool.request(server.origin, GET_HEADERS, {
+				http2: settings(),
+			});
+			const s2 = await pool.request(server.origin, GET_HEADERS, {
+				http2: settings(),
+			});
+
+			expect(pool.connectionCount(server.origin, settings())).toBe(1);
+			await waitFor(() => server.sessionCount() === 1);
+
+			s1.close();
+			s2.close();
+			server.endAllStreams();
+			await pool.detach(server.origin, settings());
+			await pool.detach(server.origin, settings());
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"rejects invalid flow-control window sizes",
+		async () => {
+			const pool = new Http2ConnectionPool();
+			const origin = "http://127.0.0.1:1";
+
+			expect(() => pool.attach(origin, { initialStreamWindowSize: 0 })).toThrow(
+				/initialStreamWindowSize/,
+			);
+			expect(() =>
+				pool.attach(origin, { connectionWindowSize: 2 ** 31 }),
+			).toThrow(/connectionWindowSize/);
+			expect(() =>
+				pool.attach(origin, {
+					initialStreamWindowSize: 1.5 * 1024 * 1024 + 0.5,
+				}),
+			).toThrow(/initialStreamWindowSize/);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
 		"replaces a connection that died on the next request",
 		async () => {
 			const server = await newServer();
@@ -270,6 +385,60 @@ describe("Http2ConnectionPool", () => {
 			second.close();
 			server.endAllStreams();
 			await pool.detach(server.origin);
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+describe("S2STransport http2 settings", () => {
+	it(
+		"plumbs configured windows through to the pooled connection",
+		async () => {
+			const server = await startServer((stream) => {
+				stream.end(
+					Buffer.from(
+						frameMessage({
+							terminal: true,
+							statusCode: 200,
+							body: new Uint8Array(0),
+						}),
+					),
+				);
+			});
+
+			try {
+				const transport = new S2STransport({
+					baseUrl: `${server.origin}/v1`,
+					accessToken: Redacted.make("test-token"),
+					http2: {
+						initialStreamWindowSize: 3 * 1024 * 1024,
+						connectionWindowSize: 5 * 1024 * 1024,
+					},
+				});
+
+				const session = await transport.makeReadSession("test-stream");
+				for await (const _record of session) {
+					// terminal frame carries no records
+				}
+
+				const [serverSession] = [...server.openSessions()];
+				if (!serverSession) throw new Error("no server session");
+				await waitFor(
+					() =>
+						serverSession.remoteSettings.initialWindowSize === 3 * 1024 * 1024,
+				);
+				// The terminal frame consumed a few bytes of the window already.
+				await waitFor(
+					() =>
+						(serverSession.state.remoteWindowSize ?? 0) >=
+						5 * 1024 * 1024 - 1024,
+				);
+
+				await transport.close();
+				await waitFor(() => server.openSessions().size === 0);
+			} finally {
+				await server.close().catch(() => {});
+			}
 		},
 		TEST_TIMEOUT_MS,
 	);

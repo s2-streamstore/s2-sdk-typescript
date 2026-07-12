@@ -185,6 +185,7 @@ export type {
 	AcksStream,
 	AppendHeaders,
 	AppendSession,
+	Http2Settings,
 	ReadHeaders,
 	ReadSession,
 	SessionTransports,

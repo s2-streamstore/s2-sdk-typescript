@@ -371,6 +371,36 @@ const stream = basin.stream(streamName, {
 > [!IMPORTANT]
 > HTTP/2 library use, required for `s2s`, is enabled by default on Node.js, Bun >= 1.3.11, and Deno >= 2.7.5. Older Bun and Deno versions default to HTTP/1.1 due to `node:http2` bugs in those runtimes ([#113](https://github.com/s2-streamstore/s2-sdk-typescript/issues/113), [#169](https://github.com/s2-streamstore/s2-sdk-typescript/issues/169)), but `s2s` can be forced using the mechanism described above.
 
+### HTTP/2 flow control
+
+The `s2s` transport pools HTTP/2 connections per endpoint and multiplexes up to
+100 sessions on each connection. Flow-control windows bound how much data the
+server can keep in flight before the client acknowledges it — per session, and
+summed across a connection. Both windows default to 10 MiB, which suits most
+workloads; they become worth raising when high-throughput reads traverse
+high-latency links (bandwidth-delay product exceeding the window), or when many
+concurrent read sessions share one connection:
+
+<!-- snippet:start h2-flow-control -->
+```ts
+// Larger flow-control windows let the server keep more read data in flight,
+// which helps saturate high-throughput reads over high-latency links.
+const s2 = new S2({
+	...S2Environment.parse(),
+	accessToken,
+	http2: {
+		// Per read session (HTTP/2 stream); S2 read batches are up to 1 MiB.
+		initialStreamWindowSize: 32 * 1024 * 1024,
+		// Per connection, shared by up to 100 sessions multiplexed on it.
+		connectionWindowSize: 64 * 1024 * 1024,
+	},
+});
+```
+<!-- snippet:end h2-flow-control -->
+
+Clients configured with different `http2` settings do not share pooled
+connections. These settings have no effect on the `fetch` transport.
+
 ## Patterns
 
 For higher-level, more opinionated building blocks (typed append/read sessions, framing, dedupe helpers), see the [patterns](packages/patterns/README.md) package.
