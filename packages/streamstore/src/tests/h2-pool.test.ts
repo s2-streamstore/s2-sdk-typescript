@@ -8,6 +8,7 @@ import * as Redacted from "../lib/redacted.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import { S2STransport } from "../lib/stream/transport/s2s/index.js";
 import { Http2ConnectionPool } from "../lib/stream/transport/s2s/pool.js";
+import { sleep } from "./helpers.js";
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -88,8 +89,6 @@ async function waitFor(
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 }
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const GET_HEADERS = { ":method": "GET", ":path": "/" };
 
@@ -223,6 +222,33 @@ describe("Http2ConnectionPool", () => {
 	);
 
 	it(
+		"evicts a connection on goaway and opens a new one",
+		async () => {
+			const server = await newServer();
+			const pool = new Http2ConnectionPool();
+
+			pool.attach(server.origin);
+			const first = await pool.request(server.origin, GET_HEADERS);
+			first.on("error", () => {});
+			await waitFor(() => server.sessionCount() === 1);
+
+			for (const session of server.openSessions()) {
+				session.goaway();
+			}
+			await waitFor(() => pool.connectionCount(server.origin) === 0);
+
+			const second = await pool.request(server.origin, GET_HEADERS);
+			await waitFor(() => server.sessionCount() === 2);
+
+			first.close();
+			second.close();
+			server.endAllStreams();
+			await pool.detach(server.origin);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
 		"replaces a connection that died on the next request",
 		async () => {
 			const server = await newServer();
@@ -296,6 +322,11 @@ describe("S2STransport connection sharing", () => {
 
 				await transport2.close();
 				await waitFor(() => server.openSessions().size === 0);
+
+				// A closed transport must not re-attach to the pool.
+				await expect(drain(transport2)).rejects.toThrow(/closed/);
+				await sleep(50);
+				expect(server.openSessions().size).toBe(0);
 			} finally {
 				await server.close().catch(() => {});
 			}

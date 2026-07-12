@@ -13,7 +13,7 @@ import { S2Error } from "../../../../error.js";
 
 const debug = createDebug("s2:s2s:pool");
 
-export const MAX_CONCURRENT_STREAMS_PER_CONNECTION = 100;
+const MAX_CONCURRENT_STREAMS_PER_CONNECTION = 100;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 3000;
 const INITIAL_WINDOW_SIZE = 10 * 1024 * 1024; // 10 MiB
 
@@ -35,6 +35,7 @@ async function loadHttp2(): Promise<Http2Module> {
 interface PooledConnection {
 	session: ClientHttp2Session;
 	activeStreams: number;
+	dead: boolean;
 }
 
 interface PendingConnection {
@@ -48,7 +49,7 @@ interface Endpoint {
 	pending: PendingConnection[];
 }
 
-export interface RequestStreamOptions {
+interface RequestStreamOptions {
 	connectionTimeoutMillis?: number;
 }
 
@@ -132,10 +133,7 @@ export class Http2ConnectionPool {
 			}
 
 			const usable = endpoint.connections.find(
-				(c) =>
-					!c.session.closed &&
-					!c.session.destroyed &&
-					c.activeStreams < this.maxStreamsPerConnection,
+				(c) => !c.dead && c.activeStreams < this.maxStreamsPerConnection,
 			);
 			if (usable) {
 				return this.openStream(usable, headers);
@@ -150,10 +148,11 @@ export class Http2ConnectionPool {
 			}
 			pending.reservations += 1;
 			const connection = await pending.promise;
-			if (connection.session.closed || connection.session.destroyed) {
+			if (connection.dead) {
 				continue;
 			}
-			return this.openStream(connection, headers);
+			// The reservation was already counted into activeStreams on connect.
+			return this.openStream(connection, headers, { reserved: true });
 		}
 		throw new S2Error({
 			message: `HTTP/2 connections to ${origin} closed repeatedly before use`,
@@ -170,9 +169,20 @@ export class Http2ConnectionPool {
 	private openStream(
 		connection: PooledConnection,
 		headers: OutgoingHttpHeaders,
+		opts?: { reserved: boolean },
 	): ClientHttp2Stream {
-		const stream = connection.session.request(headers);
-		connection.activeStreams += 1;
+		let stream: ClientHttp2Stream;
+		try {
+			stream = connection.session.request(headers);
+		} catch (err) {
+			if (opts?.reserved) {
+				connection.activeStreams -= 1;
+			}
+			throw err;
+		}
+		if (!opts?.reserved) {
+			connection.activeStreams += 1;
+		}
 		stream.once("close", () => {
 			connection.activeStreams -= 1;
 		});
@@ -188,7 +198,12 @@ export class Http2ConnectionPool {
 		pending.promise = (async () => {
 			try {
 				const connection = await this.connect(origin, options);
-				endpoint.connections.push(connection);
+				// Count reservations up front so requests arriving between now
+				// and the reserved openStream calls cannot oversubscribe it.
+				connection.activeStreams = pending.reservations;
+				if (!connection.dead) {
+					endpoint.connections.push(connection);
+				}
 				return connection;
 			} finally {
 				removeFrom(endpoint.pending, pending);
@@ -217,7 +232,11 @@ export class Http2ConnectionPool {
 			// Not available in every runtime.
 		}
 
-		const connection: PooledConnection = { session, activeStreams: 0 };
+		const connection: PooledConnection = {
+			session,
+			activeStreams: 0,
+			dead: false,
+		};
 
 		const connectPromise = new Promise<PooledConnection>((resolve, reject) => {
 			session.once("connect", () => {
@@ -270,11 +289,17 @@ export class Http2ConnectionPool {
 	}
 
 	private evict(origin: string, connection: PooledConnection): void {
+		connection.dead = true;
 		const endpoint = this.endpoints.get(origin);
-		if (!endpoint) {
-			return;
+		if (endpoint) {
+			removeFrom(endpoint.connections, connection);
 		}
-		removeFrom(endpoint.connections, connection);
+		// The pool loses track of the connection here, so make sure it winds
+		// down instead of relying on the server to close it.
+		const { session } = connection;
+		if (!session.closed && !session.destroyed) {
+			session.close();
+		}
 	}
 }
 

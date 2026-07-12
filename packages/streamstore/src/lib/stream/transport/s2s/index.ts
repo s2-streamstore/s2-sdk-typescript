@@ -81,6 +81,7 @@ export class S2STransport implements SessionTransport {
 	private readonly compression: CompressionType;
 	private readonly endpointOrigin: string;
 	private attached = false;
+	private closed = false;
 	private closingPromise?: Promise<void>;
 
 	constructor(config: TransportConfig) {
@@ -142,6 +143,14 @@ export class S2STransport implements SessionTransport {
 
 	/** Open an HTTP/2 stream through the shared connection pool. */
 	private openH2Stream(headers: OutgoingHttpHeaders) {
+		// Retries may fire after close(); re-attaching then would leak the pool entry.
+		if (this.closed) {
+			throw new S2Error({
+				message: "S2STransport is closed",
+				status: 400,
+				origin: "sdk",
+			});
+		}
 		if (!this.attached) {
 			sharedConnectionPool.attach(this.endpointOrigin);
 			this.attached = true;
@@ -152,6 +161,7 @@ export class S2STransport implements SessionTransport {
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
 		if (this.closingPromise) {
 			return this.closingPromise;
 		}
