@@ -135,6 +135,8 @@ export class Http2ConnectionPool {
 		const key = endpointKey(origin, resolveHttp2Settings(http2));
 		const endpoint = this.endpoints.get(key);
 		if (!endpoint) {
+			// Likely an attach/detach settings mismatch, which would leak the entry.
+			debug("detach for unknown endpoint %s", key);
 			return;
 		}
 		endpoint.refCount -= 1;
