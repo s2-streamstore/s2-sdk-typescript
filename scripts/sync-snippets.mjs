@@ -49,6 +49,12 @@ const SNIPPETS = [
 		region: "force-transport",
 		lang: "ts",
 	},
+	{
+		name: "h2-flow-control",
+		file: "examples/h2-flow-control.ts",
+		region: "h2-flow-control",
+		lang: "ts",
+	},
 ];
 
 const loadedSnippets = new Map(

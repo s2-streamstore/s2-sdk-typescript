@@ -152,11 +152,15 @@ export class S2STransport implements SessionTransport {
 			});
 		}
 		if (!this.attached) {
-			sharedConnectionPool.attach(this.endpointOrigin);
+			sharedConnectionPool.attach(
+				this.endpointOrigin,
+				this.transportConfig.http2,
+			);
 			this.attached = true;
 		}
 		return sharedConnectionPool.request(this.endpointOrigin, headers, {
 			connectionTimeoutMillis: this.transportConfig.connectionTimeoutMillis,
+			http2: this.transportConfig.http2,
 		});
 	}
 
@@ -169,7 +173,10 @@ export class S2STransport implements SessionTransport {
 		this.closingPromise = (async () => {
 			if (this.attached) {
 				this.attached = false;
-				await sharedConnectionPool.detach(this.endpointOrigin);
+				await sharedConnectionPool.detach(
+					this.endpointOrigin,
+					this.transportConfig.http2,
+				);
 			}
 		})();
 

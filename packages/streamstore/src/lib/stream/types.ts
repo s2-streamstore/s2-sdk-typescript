@@ -233,6 +233,38 @@ export interface SessionTransport {
 
 export type SessionTransports = "fetch" | "s2s";
 
+/**
+ * HTTP/2 flow-control settings for the s2s transport.
+ *
+ * Only applies where sessions run over `s2s` (HTTP/2); the fetch transport
+ * ignores these. Connections are pooled per endpoint, and clients configured
+ * with different settings do not share connections.
+ */
+export interface Http2Settings {
+	/**
+	 * Flow-control receive window for each HTTP/2 stream, in bytes.
+	 *
+	 * Bounds how much data the server can have in flight on a single read
+	 * session before the client acknowledges it. Raise this to keep
+	 * high-throughput reads saturated over high-latency links; S2 read
+	 * batches can be up to 1 MiB each.
+	 *
+	 * Must be an integer between 65,535 and 2^31 - 1.
+	 * @default 10_485_760 (10 MiB)
+	 */
+	initialStreamWindowSize?: number;
+	/**
+	 * Flow-control receive window for each HTTP/2 connection, in bytes.
+	 *
+	 * Bounds in-flight data summed across all sessions multiplexed on one
+	 * connection (up to 100 streams per connection).
+	 *
+	 * Must be an integer between 65,535 and 2^31 - 1.
+	 * @default 10_485_760 (10 MiB)
+	 */
+	connectionWindowSize?: number;
+}
+
 export interface TransportConfig {
 	baseUrl: string;
 	accessToken: Redacted.Redacted;
@@ -262,4 +294,8 @@ export interface TransportConfig {
 	 * `Accept-Encoding`. Defaults to `"none"`.
 	 */
 	compression?: CompressionType;
+	/**
+	 * HTTP/2 flow-control settings for the s2s transport.
+	 */
+	http2?: Http2Settings;
 }

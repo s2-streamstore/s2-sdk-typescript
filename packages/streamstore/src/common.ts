@@ -1,5 +1,6 @@
 import { S2Endpoints, type S2EndpointsInit } from "./endpoints.js";
 import type { CompressionType } from "./lib/stream/transport/s2s/framing.js";
+import type { Http2Settings } from "./lib/stream/types.js";
 
 /**
  * Compression algorithm for s2s session frame bodies.
@@ -152,6 +153,14 @@ export type S2ClientOptions = {
 	 * Defaults to `"none"`.
 	 */
 	compression?: S2Compression;
+	/**
+	 * HTTP/2 flow-control tuning for sessions using the s2s transport.
+	 *
+	 * The defaults (10 MiB windows) suit most workloads; raise the windows to
+	 * keep high-throughput reads saturated over high-latency links. Ignored
+	 * by the fetch transport.
+	 */
+	http2?: Http2Settings;
 };
 
 /**

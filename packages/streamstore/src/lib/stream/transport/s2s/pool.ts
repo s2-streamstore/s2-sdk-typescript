@@ -1,21 +1,60 @@
 /**
  * Shared HTTP/2 connection pool for the s2s transport.
  *
- * One connection per endpoint, opened lazily on the first request. Each
- * connection carries up to `maxConcurrentStreamsPerConnection` concurrent
- * streams; beyond that, additional connections are opened.
+ * Connections are pooled per endpoint and HTTP/2 settings, opened lazily on
+ * the first request. Each connection carries up to
+ * `maxConcurrentStreamsPerConnection` concurrent streams; beyond that,
+ * additional connections are opened.
  */
 
 import type { OutgoingHttpHeaders } from "node:http";
 import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
 import createDebug from "debug";
 import { S2Error } from "../../../../error.js";
+import type { Http2Settings } from "../../types.js";
 
 const debug = createDebug("s2:s2s:pool");
 
+// S2 advertises SETTINGS_MAX_CONCURRENT_STREAMS = 100; not a user knob.
 const MAX_CONCURRENT_STREAMS_PER_CONNECTION = 100;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 3000;
-const INITIAL_WINDOW_SIZE = 10 * 1024 * 1024; // 10 MiB
+const DEFAULT_WINDOW_SIZE = 10 * 1024 * 1024; // 10 MiB
+const MIN_WINDOW_SIZE = 65_535; // HTTP/2 default window
+const MAX_WINDOW_SIZE = 2 ** 31 - 1; // RFC 9113 maximum
+
+interface ResolvedHttp2Settings {
+	initialStreamWindowSize: number;
+	connectionWindowSize: number;
+}
+
+function validateWindowSize(name: string, value: number): void {
+	if (
+		!Number.isInteger(value) ||
+		value < MIN_WINDOW_SIZE ||
+		value > MAX_WINDOW_SIZE
+	) {
+		throw new S2Error({
+			message: `http2.${name} must be an integer between ${MIN_WINDOW_SIZE} and ${MAX_WINDOW_SIZE}, got ${value}`,
+			status: 400,
+			origin: "sdk",
+		});
+	}
+}
+
+function resolveHttp2Settings(settings?: Http2Settings): ResolvedHttp2Settings {
+	const initialStreamWindowSize =
+		settings?.initialStreamWindowSize ?? DEFAULT_WINDOW_SIZE;
+	const connectionWindowSize =
+		settings?.connectionWindowSize ?? DEFAULT_WINDOW_SIZE;
+	validateWindowSize("initialStreamWindowSize", initialStreamWindowSize);
+	validateWindowSize("connectionWindowSize", connectionWindowSize);
+	return { initialStreamWindowSize, connectionWindowSize };
+}
+
+// Clients with equal resolved settings share connections to an origin.
+function endpointKey(origin: string, settings: ResolvedHttp2Settings): string {
+	return `${origin}|isw=${settings.initialStreamWindowSize}|cw=${settings.connectionWindowSize}`;
+}
 
 type Http2Module = typeof import("node:http2");
 
@@ -47,10 +86,13 @@ interface Endpoint {
 	refCount: number;
 	connections: PooledConnection[];
 	pending: PendingConnection[];
+	origin: string;
+	settings: ResolvedHttp2Settings;
 }
 
 interface RequestStreamOptions {
 	connectionTimeoutMillis?: number;
+	http2?: Http2Settings;
 }
 
 export class Http2ConnectionPool {
@@ -64,15 +106,24 @@ export class Http2ConnectionPool {
 	}
 
 	/**
-	 * Register as a user of an endpoint. Must be paired with a `detach` call;
-	 * connections are shared by all attached users and closed on last detach.
+	 * Register as a user of an endpoint. Must be paired with a `detach` call
+	 * with the same settings; connections are shared by all users attached
+	 * with equal settings and closed on last detach.
 	 */
-	attach(origin: string): void {
-		const endpoint = this.endpoints.get(origin);
+	attach(origin: string, http2?: Http2Settings): void {
+		const settings = resolveHttp2Settings(http2);
+		const key = endpointKey(origin, settings);
+		const endpoint = this.endpoints.get(key);
 		if (endpoint) {
 			endpoint.refCount += 1;
 		} else {
-			this.endpoints.set(origin, { refCount: 1, connections: [], pending: [] });
+			this.endpoints.set(key, {
+				refCount: 1,
+				connections: [],
+				pending: [],
+				origin,
+				settings,
+			});
 		}
 	}
 
@@ -80,8 +131,9 @@ export class Http2ConnectionPool {
 	 * The inverse of `attach`. When the last user detaches, all connections
 	 * to the endpoint are closed gracefully.
 	 */
-	async detach(origin: string): Promise<void> {
-		const endpoint = this.endpoints.get(origin);
+	async detach(origin: string, http2?: Http2Settings): Promise<void> {
+		const key = endpointKey(origin, resolveHttp2Settings(http2));
+		const endpoint = this.endpoints.get(key);
 		if (!endpoint) {
 			return;
 		}
@@ -89,7 +141,7 @@ export class Http2ConnectionPool {
 		if (endpoint.refCount > 0) {
 			return;
 		}
-		this.endpoints.delete(origin);
+		this.endpoints.delete(key);
 
 		// Wait for in-progress connects; successful ones land in `connections`.
 		await Promise.all(
@@ -122,8 +174,9 @@ export class Http2ConnectionPool {
 		headers: OutgoingHttpHeaders,
 		options?: RequestStreamOptions,
 	): Promise<ClientHttp2Stream> {
+		const key = endpointKey(origin, resolveHttp2Settings(options?.http2));
 		for (let attempt = 0; attempt < 3; attempt++) {
-			const endpoint = this.endpoints.get(origin);
+			const endpoint = this.endpoints.get(key);
 			if (!endpoint) {
 				throw new S2Error({
 					message: `HTTP/2 connection pool is not attached to ${origin}`,
@@ -144,7 +197,7 @@ export class Http2ConnectionPool {
 				(p) => p.reservations < this.maxStreamsPerConnection,
 			);
 			if (!pending) {
-				pending = this.startConnect(origin, endpoint, options);
+				pending = this.startConnect(key, endpoint, options);
 			}
 			pending.reservations += 1;
 			const connection = await pending.promise;
@@ -162,8 +215,9 @@ export class Http2ConnectionPool {
 	}
 
 	/** Number of live pooled connections to an endpoint. */
-	connectionCount(origin: string): number {
-		return this.endpoints.get(origin)?.connections.length ?? 0;
+	connectionCount(origin: string, http2?: Http2Settings): number {
+		const key = endpointKey(origin, resolveHttp2Settings(http2));
+		return this.endpoints.get(key)?.connections.length ?? 0;
 	}
 
 	private openStream(
@@ -190,11 +244,11 @@ export class Http2ConnectionPool {
 	}
 
 	private startConnect(
-		origin: string,
+		key: string,
 		endpoint: Endpoint,
 		options?: RequestStreamOptions,
 	): PendingConnection {
-		const connectPromise = this.connect(origin, options);
+		const connectPromise = this.connect(key, endpoint, options);
 		const pending: PendingConnection = {
 			reservations: 0,
 			promise: connectPromise,
@@ -218,14 +272,25 @@ export class Http2ConnectionPool {
 	}
 
 	private async connect(
-		origin: string,
+		key: string,
+		endpoint: Endpoint,
 		options?: RequestStreamOptions,
 	): Promise<PooledConnection> {
+		const { origin, settings } = endpoint;
 		debug("connecting to %s", origin);
 		const http2 = await loadHttp2();
 		const session = http2.connect(origin, {
+			// Headroom above the flow-control windows so Node's session memory
+			// cap (default 10 MB) does not refuse streams when windows are raised.
+			maxSessionMemory: Math.max(
+				10,
+				Math.ceil(
+					(settings.connectionWindowSize + settings.initialStreamWindowSize) /
+						2 ** 20,
+				) + 8,
+			),
 			settings: {
-				initialWindowSize: INITIAL_WINDOW_SIZE,
+				initialWindowSize: settings.initialStreamWindowSize,
 			},
 		});
 
@@ -246,7 +311,7 @@ export class Http2ConnectionPool {
 			session.once("connect", () => {
 				if (session.destroyed) return;
 				try {
-					session.setLocalWindowSize(INITIAL_WINDOW_SIZE);
+					session.setLocalWindowSize(settings.connectionWindowSize);
 				} catch {
 					// Not available in every runtime; performance-only.
 				}
@@ -259,9 +324,9 @@ export class Http2ConnectionPool {
 
 		// A connection that errors or shuts down should get no new streams.
 		// Its open streams observe the failure through their own events.
-		session.on("goaway", () => this.evict(origin, connection));
-		session.on("close", () => this.evict(origin, connection));
-		session.on("error", () => this.evict(origin, connection));
+		session.on("goaway", () => this.evict(key, connection));
+		session.on("close", () => this.evict(key, connection));
+		session.on("error", () => this.evict(key, connection));
 
 		const connectionTimeout =
 			options?.connectionTimeoutMillis ?? DEFAULT_CONNECTION_TIMEOUT_MS;
@@ -292,9 +357,9 @@ export class Http2ConnectionPool {
 		}
 	}
 
-	private evict(origin: string, connection: PooledConnection): void {
+	private evict(key: string, connection: PooledConnection): void {
 		connection.dead = true;
-		const endpoint = this.endpoints.get(origin);
+		const endpoint = this.endpoints.get(key);
 		if (endpoint) {
 			removeFrom(endpoint.connections, connection);
 		}

@@ -8,7 +8,11 @@ import {
 	canSetUserAgentHeader,
 	DEFAULT_USER_AGENT,
 } from "./lib/stream/runtime.js";
-import type { SessionTransports, TransportConfig } from "./lib/stream/types.js";
+import type {
+	Http2Settings,
+	SessionTransports,
+	TransportConfig,
+} from "./lib/stream/types.js";
 import { S2Stream } from "./stream.js";
 import { S2Streams } from "./streams.js";
 
@@ -34,6 +38,7 @@ export class S2Basin {
 			includeBasinHeader: boolean;
 			retryConfig?: RetryConfig;
 			compression?: S2Compression;
+			http2?: Http2Settings;
 		},
 	) {
 		this.name = name;
@@ -46,6 +51,7 @@ export class S2Basin {
 			requestTimeoutMillis: options.retryConfig?.requestTimeoutMillis,
 			retry: options.retryConfig,
 			compression: options.compression,
+			http2: options.http2,
 		};
 		const headers: Record<string, string> = {};
 		if (options.includeBasinHeader) {
