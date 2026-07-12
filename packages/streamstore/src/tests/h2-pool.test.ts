@@ -279,7 +279,7 @@ describe("S2STransport connection sharing", () => {
 	it(
 		"shares one connection across transports and closes it on last close",
 		async () => {
-			// Speak just enough s2s: a terminal frame with status 200 ends a read cleanly.
+			// The server replies with a terminal s2s frame (status 200), which ends a read session cleanly.
 			const server = await startServer((stream) => {
 				stream.end(
 					Buffer.from(
