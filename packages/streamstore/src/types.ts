@@ -102,16 +102,26 @@ export namespace AppendRecord {
 
 	/**
 	 * Create a bytes-format append record with pre-calculated metered size.
+	 * String header names and values are encoded as UTF-8.
 	 */
 	export function bytes(params: {
 		readonly body: Uint8Array;
-		readonly headers?: ReadonlyArray<readonly [Uint8Array, Uint8Array]>;
+		readonly headers?: ReadonlyArray<
+			readonly [string | Uint8Array, string | Uint8Array]
+		>;
 		readonly timestamp?: number | Date;
 	}): BytesAppendRecord {
+		const headers = params.headers?.map(
+			([name, value]) =>
+				[
+					typeof name === "string" ? textEncoder.encode(name) : name,
+					typeof value === "string" ? textEncoder.encode(value) : value,
+				] as const,
+		);
 		// Create record with placeholder, then calculate actual size
 		const record: BytesAppendRecord = {
 			body: params.body,
-			headers: params.headers,
+			headers,
 			timestamp: params.timestamp,
 			meteredBytes: 0,
 		};
@@ -123,6 +133,7 @@ export namespace AppendRecord {
 
 	/**
 	 * Create a fence command record.
+	 * String-format, but can be batched freely alongside bytes records.
 	 */
 	export function fence(
 		fencingToken: string,
@@ -145,6 +156,7 @@ export namespace AppendRecord {
 
 	/**
 	 * Create a trim command record.
+	 * Bytes-format, but can be batched freely alongside string records.
 	 */
 	export function trim(
 		seqNum: number,
@@ -162,9 +174,24 @@ export namespace AppendRecord {
 
 		return bytes({
 			body: buffer,
-			headers: [[textEncoder.encode(""), textEncoder.encode("trim")]],
+			headers: [["", "trim"]],
 			timestamp,
 		});
+	}
+
+	/**
+	 * Maximum body size in bytes for a record with the given headers, such that
+	 * a batch containing only that record stays within {@link MAX_APPEND_BYTES}.
+	 *
+	 * When batching multiple records, the limit applies to the sum of their
+	 * metered sizes, so the available body size shrinks accordingly.
+	 */
+	export function maxBodyBytes(
+		headers?: ReadonlyArray<
+			readonly [string | Uint8Array, string | Uint8Array]
+		>,
+	): number {
+		return Math.max(0, MAX_APPEND_BYTES - calculateMeteredBytes({ headers }));
 	}
 }
 
@@ -214,6 +241,7 @@ export interface AppendInput {
 export namespace AppendInput {
 	/**
 	 * Create an AppendInput with validation.
+	 * A batch may contain both string and bytes records.
 	 *
 	 * @throws {S2Error} If validation fails (empty, too many records, or too large)
 	 */

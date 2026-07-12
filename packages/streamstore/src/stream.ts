@@ -186,10 +186,9 @@ export class S2Stream {
 	/**
 	 * Append a batch of records to the stream.
 	 *
-	 * - Automatically base64-encodes when format is "bytes".
 	 * - Supports conditional appends via `fencingToken` and `matchSeqNum` in the input.
 	 * - Returns the acknowledged range and the stream tail after the append.
-	 * - All records in a batch must use the same format (either all string or all bytes).
+	 * - A batch may contain both string and bytes records.
 	 *
 	 * Use {@link AppendInput.create} to construct a validated AppendInput.
 	 * For high-throughput sequential appends, use `appendSession()` instead.

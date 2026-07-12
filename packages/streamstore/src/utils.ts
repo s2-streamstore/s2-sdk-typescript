@@ -1,4 +1,4 @@
-import type { AppendRecord, ReadRecord } from "./lib/stream/types.js";
+import type { AppendRecord } from "./lib/stream/types.js";
 
 /**
  * Calculate the UTF-8 byte length of a string.
@@ -55,9 +55,12 @@ export function utf8ByteLength(str: string): number {
  * @param record The record to measure
  * @returns The size in bytes
  */
-export function meteredBytes<Format extends "string" | "bytes">(
-	record: AppendRecord | ReadRecord<Format>,
-): number {
+export function meteredBytes(record: {
+	readonly body?: string | Uint8Array;
+	readonly headers?: ReadonlyArray<
+		readonly [string | Uint8Array, string | Uint8Array]
+	>;
+}): number {
 	// Calculate header size based on actual data types
 	let numHeaders = 0;
 	let headersSize = 0;
