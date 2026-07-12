@@ -20,7 +20,7 @@ const MAX_CONCURRENT_STREAMS_PER_CONNECTION = 100;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 3000;
 const DEFAULT_WINDOW_SIZE = 10 * 1024 * 1024; // 10 MiB
 const MIN_WINDOW_SIZE = 65_535; // HTTP/2 default window
-const MAX_WINDOW_SIZE = 2 ** 31 - 1; // RFC 9113 maximum
+const MAX_WINDOW_SIZE = 2 ** 31 - 1; // RFC 9113 (https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5.2-2.8.3)
 
 interface ResolvedHttp2Settings {
 	initialStreamWindowSize: number;
@@ -283,11 +283,11 @@ export class Http2ConnectionPool {
 			// Headroom above the flow-control windows so Node's session memory
 			// cap (default 10 MB) does not refuse streams when windows are raised.
 			maxSessionMemory: Math.max(
-				10,
+				10, // default maxSessionMemory
 				Math.ceil(
 					(settings.connectionWindowSize + settings.initialStreamWindowSize) /
 						2 ** 20,
-				) + 8,
+				) + 8, // 8 is a fixed overhead
 			),
 			settings: {
 				initialWindowSize: settings.initialStreamWindowSize,
