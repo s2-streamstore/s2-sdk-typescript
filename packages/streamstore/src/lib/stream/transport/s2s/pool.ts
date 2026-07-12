@@ -194,10 +194,14 @@ export class Http2ConnectionPool {
 		endpoint: Endpoint,
 		options?: RequestStreamOptions,
 	): PendingConnection {
-		const pending = { reservations: 0 } as PendingConnection;
+		const connectPromise = this.connect(origin, options);
+		const pending: PendingConnection = {
+			reservations: 0,
+			promise: connectPromise,
+		};
 		pending.promise = (async () => {
 			try {
-				const connection = await this.connect(origin, options);
+				const connection = await connectPromise;
 				// Count reservations up front so requests arriving between now
 				// and the reserved openStream calls cannot oversubscribe it.
 				connection.activeStreams = pending.reservations;
