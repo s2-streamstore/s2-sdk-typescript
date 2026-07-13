@@ -1,4 +1,5 @@
 import type {
+	AppendAck,
 	ReadBatch,
 	S2Endpoints,
 	S2EndpointsInit,
@@ -17,6 +18,7 @@ import {
 	isTrimRecord,
 	persistToS2,
 } from "./protocol.js";
+import { isMissingStreamError } from "./shared.js";
 
 interface S2Config {
 	/**
@@ -152,13 +154,14 @@ export async function createResumableStream(
 			debugLog("Got RangeNotSatisfiableError:", error);
 		} else {
 			debugLog("Error checking stream status:", error);
-			return null;
+			throw error;
 		}
 	}
 
 	// in case of multiple writers, only one with the given fencing token will succeed
+	let fenceAck: AppendAck;
 	try {
-		await appendFenceCommand(
+		fenceAck = await appendFenceCommand(
 			s2.basin(basin).stream(streamId),
 			"",
 			sessionFencingToken,
@@ -173,7 +176,7 @@ export async function createResumableStream(
 			return await resumeStream(streamId);
 		}
 		debugLog("Error initializing stream:", error);
-		return null;
+		throw error;
 	}
 
 	// Created only after validation so the early returns above don't leak
@@ -196,8 +199,9 @@ export async function createResumableStream(
 						`${sourceError !== undefined ? "error" : "end"}-${generateFencingToken()}`,
 					),
 				],
+				matchSeqNumStart: fenceAck.end.seqNum,
 				onSeqNumMismatch: () => {
-					debugLog("seqNum mismatch, skipping record");
+					debugLog("seqNum mismatch, another writer advanced the stream");
 				},
 			});
 		} catch (error) {
@@ -294,9 +298,13 @@ async function resumeStream(
 			},
 		});
 	} catch (error: unknown) {
-		debugLog("Error reading stream:", error);
 		await handle.close?.();
-		return null;
+		if (isMissingStreamError(error)) {
+			debugLog("No stream to resume:", streamId, error);
+			return null;
+		}
+		debugLog("Error reading stream:", error);
+		throw error;
 	}
 }
 

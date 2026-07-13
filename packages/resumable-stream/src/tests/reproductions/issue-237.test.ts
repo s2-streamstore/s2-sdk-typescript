@@ -1,6 +1,7 @@
 import {
 	FencingTokenMismatchError,
 	RangeNotSatisfiableError,
+	S2Error,
 } from "@s2-dev/streamstore";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -96,9 +97,9 @@ describe("Issue #237: no stream is created when validation fails", () => {
 		const makeStream = vi.fn(() => new ReadableStream<string>());
 		const ctx = await makeCtx();
 
-		const result = await ctx.resumableStream("broken-stream", makeStream);
-
-		expect(result).toBeNull();
+		await expect(
+			ctx.resumableStream("broken-stream", makeStream),
+		).rejects.toThrow("boom");
 		expect(makeStream).not.toHaveBeenCalled();
 	}, 10_000);
 
@@ -112,8 +113,15 @@ describe("Issue #237: no stream is created when validation fails", () => {
 						expectedFencingToken: "other-writer",
 					}),
 				),
-			// resumeStream path; reject so it resolves to null.
-			readSession: () => Promise.reject(new Error("Not Found (404)")),
+			// resumeStream path; a missing stream resolves to null.
+			readSession: () =>
+				Promise.reject(
+					new S2Error({
+						message: "stream not found",
+						status: 404,
+						code: "stream_not_found",
+					}),
+				),
 		};
 		const makeStream = vi.fn(() => new ReadableStream<string>());
 		const ctx = await makeCtx();
@@ -132,9 +140,9 @@ describe("Issue #237: no stream is created when validation fails", () => {
 		const makeStream = vi.fn(() => new ReadableStream<string>());
 		const ctx = await makeCtx();
 
-		const result = await ctx.resumableStream("unappendable-stream", makeStream);
-
-		expect(result).toBeNull();
+		await expect(
+			ctx.resumableStream("unappendable-stream", makeStream),
+		).rejects.toThrow("append failed");
 		expect(makeStream).not.toHaveBeenCalled();
 	}, 10_000);
 

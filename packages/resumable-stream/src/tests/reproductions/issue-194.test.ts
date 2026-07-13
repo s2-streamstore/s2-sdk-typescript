@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  * After the fix, resumeStream() should return null when readSession() throws.
  */
 
-// Mock S2 so readSession throws immediately (simulating 404/403)
+// Mock S2 so readSession throws immediately (simulating a missing stream)
 vi.mock("@s2-dev/streamstore", async () => {
 	const actual = await vi.importActual<typeof import("@s2-dev/streamstore")>(
 		"@s2-dev/streamstore",
@@ -21,7 +21,14 @@ vi.mock("@s2-dev/streamstore", async () => {
 		basin() {
 			return {
 				stream: () => ({
-					readSession: () => Promise.reject(new Error("Not Found (404)")),
+					readSession: () =>
+						Promise.reject(
+							new actual.S2Error({
+								message: "stream not found",
+								status: 404,
+								code: "stream_not_found",
+							}),
+						),
 				}),
 			};
 		}
