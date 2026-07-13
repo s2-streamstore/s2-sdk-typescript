@@ -847,7 +847,7 @@ export interface AccessTokenInfo {
 	/** Access token scope. */
 	scope: AccessTokenScope;
 	/** Whether streams are auto-prefixed. */
-	autoPrefixStreams?: boolean;
+	autoPrefixStreams: boolean;
 	/** Expiration time. */
 	expiresAt?: Date | null;
 }
