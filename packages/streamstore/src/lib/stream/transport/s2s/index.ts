@@ -1000,6 +1000,16 @@ class S2SAppendSession implements TransportAppendSession {
 		try {
 			this.closed = true;
 
+			// Wait for any in-flight lazy initialization to finish. Otherwise a
+			// concurrent initializeStream() can open and assign the HTTP/2 stream
+			// after close() has already returned, orphaning it and permanently
+			// holding a pool slot (activeStreams only decrements on stream close).
+			// initPromise is only set by submit(), so if it's unset no stream was
+			// ever opened and there is nothing to await.
+			if (this.initPromise) {
+				await this.initPromise.catch(() => {});
+			}
+
 			// Wait for all pending acks to complete
 			while (this.pendingAcks.length > 0) {
 				await new Promise((resolve) => setTimeout(resolve, 10));
