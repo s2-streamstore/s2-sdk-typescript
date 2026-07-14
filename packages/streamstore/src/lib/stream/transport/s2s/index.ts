@@ -997,11 +997,6 @@ class S2SAppendSession implements TransportAppendSession {
 		return this._effectSignalled;
 	}
 
-	/**
-	 * Close the append session.
-	 * Waits for all pending appends to complete before resolving.
-	 * Never throws - returns CloseResult.
-	 */
 	/** Remove the abort listener from the caller-provided signal, if attached. */
 	private removeAbortListener(): void {
 		if (this.abortHandler && this.options?.signal) {
@@ -1010,6 +1005,11 @@ class S2SAppendSession implements TransportAppendSession {
 		this.abortHandler = undefined;
 	}
 
+	/**
+	 * Close the append session.
+	 * Waits for all pending appends to complete before resolving.
+	 * Never throws - returns CloseResult.
+	 */
 	async close(): Promise<CloseResult> {
 		try {
 			this.closed = true;
