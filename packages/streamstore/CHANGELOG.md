@@ -1,5 +1,13 @@
 # @s2-dev/streamstore
 
+## 0.24.3
+
+### Patch Changes
+
+- 46abdc9: Re-enable the HTTP/2 (s2s) transport on Bun >= 1.3.11, where Bun's `node:http2` connection-level flow control is fixed (oven-sh/bun#26917). Older Bun versions keep the fetch transport fallback.
+- 5cba2c2: Enable the HTTP/2 (s2s) transport on Deno >= 2.7.5. Buffers response body chunks until headers arrive, working around Deno's `node:http2` emitting `data` before `response`; older Deno versions keep the fetch transport fallback.
+- 51e38a7: Pool HTTP/2 connections in the s2s transport: all streams targeting the same endpoint now share one connection, opened lazily on the first request, instead of one connection per `S2Stream` handle. Each connection carries up to 100 concurrent requests; beyond that, additional connections are opened. Connections are closed when the last stream handle using the endpoint is closed.
+
 ## 0.24.2
 
 ### Patch Changes
