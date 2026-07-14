@@ -708,6 +708,7 @@ class S2SAppendSession implements TransportAppendSession {
 	}>();
 	private initPromise?: Promise<void>;
 	private _effectSignalled = false;
+	private abortHandler?: () => void;
 
 	static async create(
 		baseUrl: string,
@@ -774,11 +775,15 @@ class S2SAppendSession implements TransportAppendSession {
 
 		this.http2Stream = stream;
 
-		this.options?.signal?.addEventListener("abort", () => {
+		// Store the handler so close() can remove it. A caller-provided signal
+		// can outlive many sessions (RetryAppendSession recreates a session per
+		// recovery, reusing the same signal), so an unremovable listener leaks.
+		this.abortHandler = () => {
 			if (!stream.closed) {
 				stream.close();
 			}
-		});
+		};
+		this.options?.signal?.addEventListener("abort", this.abortHandler);
 
 		const textDecoder = new TextDecoder();
 		let responseCode: number | undefined;
@@ -915,6 +920,7 @@ class S2SAppendSession implements TransportAppendSession {
 		});
 
 		stream.on("close", () => {
+			this.removeAbortListener();
 			// Stream closed - resolve any remaining pending acks with error
 			// This can happen if the server closes the stream without sending all acks
 			if (this.pendingAcks.length > 0) {
@@ -991,6 +997,14 @@ class S2SAppendSession implements TransportAppendSession {
 		return this._effectSignalled;
 	}
 
+	/** Remove the abort listener from the caller-provided signal, if attached. */
+	private removeAbortListener(): void {
+		if (this.abortHandler && this.options?.signal) {
+			this.options.signal.removeEventListener("abort", this.abortHandler);
+		}
+		this.abortHandler = undefined;
+	}
+
 	/**
 	 * Close the append session.
 	 * Waits for all pending appends to complete before resolving.
@@ -1009,6 +1023,10 @@ class S2SAppendSession implements TransportAppendSession {
 			if (this.initPromise) {
 				await this.initPromise.catch(() => {});
 			}
+
+			// Detach from the caller-provided signal (init has now run, so the
+			// handler is registered if it ever will be).
+			this.removeAbortListener();
 
 			// Wait for all pending acks to complete
 			while (this.pendingAcks.length > 0) {
