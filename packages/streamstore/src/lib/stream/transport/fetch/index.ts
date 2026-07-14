@@ -241,6 +241,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					}
 					const currentRead = pendingRead;
 
+					let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 					try {
 						// Race reader.read() against timeout
 						// If timeout fires but activity happened since scheduling, it's "stale" and we retry
@@ -249,8 +250,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 								pendingRead = null;
 								return { type: "data" as const, value: r };
 							}),
-							new Promise<RaceResult>((resolve) =>
-								setTimeout(() => {
+							new Promise<RaceResult>((resolve) => {
+								timeoutHandle = setTimeout(() => {
 									if (lastPingTimeMs === capturedLastPingTime) {
 										// No activity since timeout was scheduled - actually timed out
 										debug("read session ping timeout");
@@ -259,8 +260,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 										// Activity happened - this timeout is stale, retry with new timeout.
 										resolve({ type: "stale" });
 									}
-								}, remainingTimeMs),
-							),
+								}, remainingTimeMs);
+							}),
 						]);
 
 						if (result.type === "stale") {
@@ -317,6 +318,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 						await cancelReader(error);
 						controller.close();
 						return;
+					} finally {
+						if (timeoutHandle) clearTimeout(timeoutHandle);
 					}
 				}
 			},
