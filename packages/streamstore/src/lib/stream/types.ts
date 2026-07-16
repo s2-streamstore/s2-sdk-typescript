@@ -151,11 +151,8 @@ export interface AppendSession extends AsyncDisposable {
  * Transport sessions yield ReadResult instead of throwing errors.
  *
  * The `caughtUp` variant is an in-band marker reporting the session's
- * caught-up state relative to the live tail. A position means caught up:
- * emitted on a server heartbeat (SSE `ping` / s2s empty batch), or after a
- * batch whose last record abuts the reported tail, pinning the tail at the
- * moment of transition. `null` means behind: a batch without a tail, or one
- * whose last record lags the reported tail.
+ * caught-up state relative to the live tail: a position means caught up,
+ * `null` means behind.
  */
 export type ReadResult<Format extends "string" | "bytes" = "string"> =
 	| { ok: true; value: ReadRecord<Format> }
@@ -182,29 +179,15 @@ export interface TransportReadSession<
  * Yields records directly (as an async iterable or `ReadableStream`) and translates transport errors into thrown exceptions.
  * Track progress using {@link ReadSession.nextReadPosition} / {@link ReadSession.lastObservedTail}.
  *
- * Also maintains a caught-up-to-tail signal, observable via
- * {@link ReadSession.isCaughtUp} and {@link ReadSession.caughtUp}, derived from
- * server reports already on the wire:
- *
- * - A heartbeat (SSE `ping` / s2s empty batch) marks the session as caught up.
- *   The first one marks the backlog-to-live transition, periodic ones confirm
- *   idle-at-tail.
- * - A batch carrying the tail marks the session as caught up iff its last
- *   record abuts the tail, and behind otherwise.
- * - A batch without a tail (reading old data) marks the session as behind.
- * - An internal retry resets to behind until the new connection re-signals.
- *
  * @example
  * ```ts
  * const session = await stream.readSession({
- *   start: { from: { seqNum: next } },
- *   stop: { wait: 60 },
+ *   start: { from: { tailOffset: 50 } },
+ *   stop: { wait: 15 },
  * });
  *
- * session.caughtUp().then((tail) => ui.setLive(tail));
- *
  * for await (const record of session) {
- *   render(record);
+ *   console.log(record.seqNum, record.body);
  * }
  * ```
  */
