@@ -141,8 +141,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		let lastPingTimeMs = performance.now();
 		const PING_TIMEOUT_MS = 25000; // 25 seconds
 
-		// Create EventStream that parses SSE and yields batches
-		const eventStream = new EventStream<ReadBatch<Format>>(stream, (msg) => {
+		// Create EventStream that parses SSE and yields ReadResults
+		const eventStream = new EventStream<ReadResult<Format>>(stream, (msg) => {
 			// Update ping time on ANY event from the server
 			lastPingTimeMs = performance.now();
 
@@ -182,7 +182,20 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 						timestamp: lastRecord.timestamp,
 					};
 				}
-				return { done: false, batch: false, value: batch };
+				const results: ReadResult<Format>[] = (batch.records ?? []).map(
+					(record) => ({ ok: true, value: record }),
+				);
+				// Caught up iff the batch reports a tail its last record abuts
+				results.push({
+					ok: true,
+					caughtUp:
+						batch.tail &&
+						(lastRecord === undefined ||
+							lastRecord.seq_num + 1 === batch.tail.seq_num)
+							? batch.tail
+							: null,
+				});
+				return { done: false, batch: true, value: results };
 			}
 			if (msg.event === "error") {
 				// Store error and signal end of stream
@@ -196,9 +209,9 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			}
 			if (msg.event === "ping") {
 				debug("ping");
-				// A heartbeat is an empty batch carrying the tail, as on the s2s
-				// protocol. Older servers omit the tail on pings, so fall back to
-				// the last batch-reported one.
+				// A heartbeat means the reader is at the live tail. It carries the
+				// tail position; older servers omit it, so fall back to the last
+				// batch-reported one.
 				let tail: API.StreamPosition | undefined;
 				if (msg.data) {
 					try {
@@ -212,7 +225,11 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					tail = this._lastObservedTail;
 				}
 				if (tail) {
-					return { done: false, batch: false, value: { records: [], tail } };
+					return {
+						done: false,
+						batch: false,
+						value: { ok: true, caughtUp: tail },
+					};
 				}
 			}
 
@@ -316,20 +333,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 							}
 							controller.close();
 						} else {
-							const batch = result.value.value;
-							for (const record of batch.records) {
-								controller.enqueue({ ok: true, value: record });
-							}
-							// Caught up iff the batch reports a tail its last record
-							// abuts (an empty batch with a tail is the heartbeat).
-							const lastRecord = batch.records.at(-1);
-							const caughtUp =
-								batch.tail &&
-								(lastRecord === undefined ||
-									lastRecord.seq_num + 1 === batch.tail.seq_num)
-									? batch.tail
-									: null;
-							controller.enqueue({ ok: true, caughtUp });
+							// Emit successful result
+							controller.enqueue(result.value.value);
 						}
 						return;
 					} catch (error) {
