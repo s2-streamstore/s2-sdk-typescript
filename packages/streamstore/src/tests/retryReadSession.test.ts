@@ -96,6 +96,8 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 		return this.behavior.tail;
 	}
 
+	setCaughtUpListener(): void {}
+
 	// Implement AsyncIterable (for await...of support)
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
@@ -147,6 +149,8 @@ class ThrowingReadSession<Format extends "string" | "bytes" = "string">
 		return undefined;
 	}
 
+	setCaughtUpListener(): void {}
+
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
@@ -177,8 +181,9 @@ class ThrowingReadSession<Format extends "string" | "bytes" = "string">
 }
 
 /**
- * Manually-driven TransportReadSession: results are pushed from the test,
- * so marker/record ordering relative to assertions is deterministic.
+ * Manually-driven TransportReadSession: results are pushed and caught-up
+ * reports fired from the test, so ordering relative to assertions is
+ * deterministic.
  */
 class ManualReadSession
 	extends ReadableStream<ReadResult<"string">>
@@ -186,6 +191,8 @@ class ManualReadSession
 {
 	private readonly queue: Array<ReadResult<"string"> | "close">;
 	private readonly notifyRef: { fn?: () => void };
+	private caughtUpListener?: (tail: StreamPosition | null) => void;
+	private lastCaughtUpReport?: StreamPosition | null;
 
 	constructor() {
 		const queue: Array<ReadResult<"string"> | "close"> = [];
@@ -216,12 +223,24 @@ class ManualReadSession
 		notify?.();
 	}
 
+	reportCaughtUp(tail: StreamPosition | null): void {
+		this.lastCaughtUpReport = tail;
+		this.caughtUpListener?.(tail);
+	}
+
 	nextReadPosition(): StreamPosition | undefined {
 		return undefined;
 	}
 
 	lastObservedTail(): StreamPosition | undefined {
 		return undefined;
+	}
+
+	setCaughtUpListener(listener: (tail: StreamPosition | null) => void): void {
+		this.caughtUpListener = listener;
+		if (this.lastCaughtUpReport !== undefined) {
+			listener(this.lastCaughtUpReport);
+		}
 	}
 
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<"string">> {
@@ -245,7 +264,7 @@ describe("ReadSession caught-up signal (unit)", () => {
 		timestamp: 1000,
 	});
 
-	it("resolves caughtUp() on a caught-up marker and reports isCaughtUp", async () => {
+	it("resolves caughtUp() on a caught-up report and reports isCaughtUp", async () => {
 		const transport = new ManualReadSession();
 		const session = await RetryReadSession.create(
 			async () => transport,
@@ -257,7 +276,7 @@ describe("ReadSession caught-up signal (unit)", () => {
 		const pending = session.caughtUp();
 
 		transport.push(record(0));
-		transport.push({ ok: true, caughtUp: tailAt(1) });
+		transport.reportCaughtUp(tailAt(1));
 
 		const tail = await pending;
 		expect(tail.seqNum).toBe(1);
@@ -266,14 +285,14 @@ describe("ReadSession caught-up signal (unit)", () => {
 		// Already caught up: resolves immediately.
 		await expect(session.caughtUp()).resolves.toMatchObject({ seqNum: 1 });
 
-		// Records still flow, markers are not surfaced as records.
+		// Records still flow.
 		const reader = session.getReader();
 		const first = await reader.read();
 		expect(first.value?.seqNum).toBe(0);
 		await reader.cancel();
 	});
 
-	it("falls behind on a behind marker", async () => {
+	it("falls behind on a behind report", async () => {
 		const transport = new ManualReadSession();
 		const session = await RetryReadSession.create(
 			async () => transport,
@@ -282,19 +301,19 @@ describe("ReadSession caught-up signal (unit)", () => {
 		);
 
 		const pending = session.caughtUp();
-		transport.push({ ok: true, caughtUp: tailAt(1) });
+		transport.reportCaughtUp(tailAt(1));
 		await pending;
 		expect(session.isCaughtUp()).toBe(true);
 
-		// Behind marker, then a record so consumption is a sync point.
-		transport.push({ ok: true, caughtUp: null });
-		transport.push(record(1));
-
-		const reader = session.getReader();
-		const first = await reader.read();
-		expect(first.value?.seqNum).toBe(1);
+		transport.reportCaughtUp(null);
 		expect(session.isCaughtUp()).toBe(false);
-		await reader.cancel();
+
+		// A new wait resolves on the next catch-up.
+		const pendingAgain = session.caughtUp();
+		transport.reportCaughtUp(tailAt(3));
+		await expect(pendingAgain).resolves.toMatchObject({ seqNum: 3 });
+
+		await session.cancel();
 	});
 
 	it("rejects a pending caughtUp() with SESSION_CLOSED when the session ends first", async () => {
@@ -359,7 +378,7 @@ describe("ReadSession caught-up signal (unit)", () => {
 		);
 
 		const pending = session.caughtUp();
-		transports[0]!.push({ ok: true, caughtUp: tailAt(5) });
+		transports[0]!.reportCaughtUp(tailAt(5));
 		await pending;
 		expect(session.isCaughtUp()).toBe(true);
 
@@ -376,8 +395,12 @@ describe("ReadSession caught-up signal (unit)", () => {
 		});
 		expect(session.isCaughtUp()).toBe(false);
 
+		// A late report from the superseded transport is ignored.
+		transports[0]!.reportCaughtUp(tailAt(6));
+		expect(session.isCaughtUp()).toBe(false);
+
 		const pendingAfterRetry = session.caughtUp();
-		transports[1]!.push({ ok: true, caughtUp: tailAt(7) });
+		transports[1]!.reportCaughtUp(tailAt(7));
 
 		await expect(pendingAfterRetry).resolves.toMatchObject({ seqNum: 7 });
 		expect(session.isCaughtUp()).toBe(true);

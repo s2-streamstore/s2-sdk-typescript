@@ -426,6 +426,20 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						}
 					}
 
+					// Track caught-up state reported by the current transport
+					// session, ignoring late reports from a superseded one.
+					const transportSession = session;
+					transportSession.setCaughtUpListener((tail) => {
+						if (transportSession !== session || cancelled) {
+							return;
+						}
+						if (tail) {
+							this.markCaughtUp(tail);
+						} else {
+							this.markBehind();
+						}
+					});
+
 					const reader = session.getReader();
 					currentReader = reader;
 
@@ -551,16 +565,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							this.settleTerminal(error);
 							controller.error(error);
 							return;
-						}
-
-						// In-band caught-up marker from the transport
-						if ("caughtUp" in result) {
-							if (result.caughtUp) {
-								this.markCaughtUp(result.caughtUp);
-							} else {
-								this.markBehind();
-							}
-							continue;
 						}
 
 						// Success: enqueue the record and reset retry attempt counter

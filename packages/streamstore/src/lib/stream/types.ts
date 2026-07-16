@@ -149,14 +149,9 @@ export interface AppendSession extends AsyncDisposable {
 /**
  * Result type for transport-level read operations.
  * Transport sessions yield ReadResult instead of throwing errors.
- *
- * The `caughtUp` variant is an in-band marker reporting the session's
- * caught-up state relative to the live tail: a position means caught up,
- * `null` means behind.
  */
 export type ReadResult<Format extends "string" | "bytes" = "string"> =
 	| { ok: true; value: ReadRecord<Format> }
-	| { ok: true; caughtUp: API.StreamPosition | null }
 	| { ok: false; error: S2Error };
 
 /**
@@ -171,6 +166,15 @@ export interface TransportReadSession<
 		AsyncDisposable {
 	nextReadPosition(): API.StreamPosition | undefined;
 	lastObservedTail(): API.StreamPosition | undefined;
+	/**
+	 * Register the caught-up state listener. Reports a position when the
+	 * session reaches the live tail (heartbeat, or a batch whose last record
+	 * abuts the reported tail) and null when it falls behind. Replays the
+	 * latest report on registration.
+	 */
+	setCaughtUpListener(
+		listener: (tail: API.StreamPosition | null) => void,
+	): void;
 }
 
 /**

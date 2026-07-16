@@ -14,7 +14,7 @@ function sseBody(events: string[]): ReadableStream<Uint8Array> {
 }
 
 describe("FetchReadSession", () => {
-	it("emits caught-up markers from batch tails and ping events", async () => {
+	it("reports caught-up state from batch tails and ping events", async () => {
 		const session = FetchReadSession._createForTesting(
 			sseBody([
 				// Batch abutting its tail: caught up.
@@ -29,6 +29,9 @@ describe("FetchReadSession", () => {
 			]),
 			"string",
 		);
+		const reports: Array<{ seq_num: number } | null> = [];
+		session.setCaughtUpListener((tail) => reports.push(tail));
+
 		const reader = session.getReader();
 		const results = [];
 		while (true) {
@@ -39,11 +42,13 @@ describe("FetchReadSession", () => {
 
 		expect(results).toMatchObject([
 			{ ok: true, value: { seq_num: 0 } },
-			{ ok: true, caughtUp: { seq_num: 1 } },
-			{ ok: true, caughtUp: { seq_num: 1 } },
 			{ ok: true, value: { seq_num: 1 } },
-			{ ok: true, caughtUp: null },
-			{ ok: true, caughtUp: { seq_num: 5 } },
+		]);
+		expect(reports).toMatchObject([
+			{ seq_num: 1 },
+			{ seq_num: 1 },
+			null,
+			{ seq_num: 5 },
 		]);
 		expect(session.lastObservedTail()).toMatchObject({ seq_num: 5 });
 	});

@@ -39,6 +39,7 @@ import type {
 	AppendSessionOptions,
 	ReadArgs,
 	ReadBatch,
+	ReadRecord,
 	ReadResult,
 	ReadSession,
 	SessionTransport,
@@ -130,6 +131,25 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 	private _nextReadPosition: API.StreamPosition | undefined = undefined;
 	private _lastObservedTail: API.StreamPosition | undefined = undefined;
+	private _caughtUpListener:
+		| ((tail: API.StreamPosition | null) => void)
+		| undefined = undefined;
+	private _lastCaughtUpReport: API.StreamPosition | null | undefined =
+		undefined;
+
+	private reportCaughtUp(tail: API.StreamPosition | null): void {
+		this._lastCaughtUpReport = tail;
+		this._caughtUpListener?.(tail);
+	}
+
+	public setCaughtUpListener(
+		listener: (tail: API.StreamPosition | null) => void,
+	): void {
+		this._caughtUpListener = listener;
+		if (this._lastCaughtUpReport !== undefined) {
+			listener(this._lastCaughtUpReport);
+		}
+	}
 
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
 		// Track error from parser
@@ -141,8 +161,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		let lastPingTimeMs = performance.now();
 		const PING_TIMEOUT_MS = 25000; // 25 seconds
 
-		// Create EventStream that parses SSE and yields ReadResults
-		const eventStream = new EventStream<ReadResult<Format>>(stream, (msg) => {
+		// Create EventStream that parses SSE and yields records
+		const eventStream = new EventStream<ReadRecord<Format>>(stream, (msg) => {
 			// Update ping time on ANY event from the server
 			lastPingTimeMs = performance.now();
 
@@ -182,20 +202,15 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 						timestamp: lastRecord.timestamp,
 					};
 				}
-				const results: ReadResult<Format>[] = (batch.records ?? []).map(
-					(record) => ({ ok: true, value: record }),
-				);
 				// Caught up iff the batch reports a tail its last record abuts
-				results.push({
-					ok: true,
-					caughtUp:
-						batch.tail &&
+				this.reportCaughtUp(
+					batch.tail &&
 						(lastRecord === undefined ||
 							lastRecord.seq_num + 1 === batch.tail.seq_num)
-							? batch.tail
-							: null,
-				});
-				return { done: false, batch: true, value: results };
+						? batch.tail
+						: null,
+				);
+				return { done: false, batch: true, value: batch.records ?? [] };
 			}
 			if (msg.event === "error") {
 				// Store error and signal end of stream
@@ -225,15 +240,11 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					tail = this._lastObservedTail;
 				}
 				if (tail) {
-					return {
-						done: false,
-						batch: false,
-						value: { ok: true, caughtUp: tail },
-					};
+					this.reportCaughtUp(tail);
 				}
 			}
 
-			// Skip other events
+			// Skip ping events and other events
 			return { done: false };
 		});
 
@@ -334,7 +345,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 							controller.close();
 						} else {
 							// Emit successful result
-							controller.enqueue(result.value.value);
+							controller.enqueue({ ok: true, value: result.value.value });
 						}
 						return;
 					} catch (error) {

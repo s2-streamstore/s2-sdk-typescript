@@ -196,7 +196,23 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	private _lastReadPosition?: API.StreamPosition;
 	private _nextReadPosition?: API.StreamPosition;
 	private _lastObservedTail?: API.StreamPosition;
+	private _caughtUpListener?: (tail: API.StreamPosition | null) => void;
+	private _lastCaughtUpReport?: API.StreamPosition | null;
 	private parser = new S2SFrameParser();
+
+	private reportCaughtUp(tail: API.StreamPosition | null): void {
+		this._lastCaughtUpReport = tail;
+		this._caughtUpListener?.(tail);
+	}
+
+	public setCaughtUpListener(
+		listener: (tail: API.StreamPosition | null) => void,
+	): void {
+		this._caughtUpListener = listener;
+		if (this._lastCaughtUpReport !== undefined) {
+			listener(this._lastCaughtUpReport);
+		}
+	}
 
 	static async create<Format extends "string" | "bytes" = "string">(
 		baseUrl: string,
@@ -536,13 +552,13 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										// Caught up iff the batch reports a tail its last
 										// record abuts (an empty batch with a tail is the
 										// server heartbeat).
-										const caughtUp =
+										this.reportCaughtUp(
 											tail &&
-											(protoBatch.records.length === 0 ||
-												this._nextReadPosition?.seq_num === tail.seq_num)
+												(protoBatch.records.length === 0 ||
+													this._nextReadPosition?.seq_num === tail.seq_num)
 												? tail
-												: null;
-										controller.enqueue({ ok: true, caughtUp });
+												: null,
+										);
 									} catch (err) {
 										safeError(
 											new S2Error({

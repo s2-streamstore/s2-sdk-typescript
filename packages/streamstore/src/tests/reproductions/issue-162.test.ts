@@ -70,6 +70,7 @@ describe("Issue #162: retry sessions should stop on cancel/abort", () => {
 					return Object.assign(stream, {
 						cancel: async () => {},
 						lastObservedTail: () => undefined,
+						setCaughtUpListener: () => {},
 					}) as any;
 				}
 				// Subsequent calls fail with retryable error
