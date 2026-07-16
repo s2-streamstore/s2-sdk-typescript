@@ -39,7 +39,6 @@ import type {
 	AppendSessionOptions,
 	ReadArgs,
 	ReadBatch,
-	ReadRecord,
 	ReadResult,
 	ReadSession,
 	SessionTransport,
@@ -50,14 +49,6 @@ import type {
 import { streamAppend } from "./shared.js";
 
 const debug = createDebug("s2:fetch");
-
-/**
- * Internal item yielded by the SSE parser: a record, or an in-band
- * caught-up marker (a position means caught up, null means behind).
- */
-type FetchReadItem<Format extends "string" | "bytes" = "string"> =
-	| { record: ReadRecord<Format> }
-	| { caughtUp: API.StreamPosition | null };
 
 export class FetchReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<ReadResult<Format>>
@@ -150,99 +141,84 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		let lastPingTimeMs = performance.now();
 		const PING_TIMEOUT_MS = 25000; // 25 seconds
 
-		// Create EventStream that parses SSE and yields records and caught-up markers
-		const eventStream = new EventStream<FetchReadItem<Format>>(
-			stream,
-			(msg) => {
-				// Update ping time on ANY event from the server
-				lastPingTimeMs = performance.now();
+		// Create EventStream that parses SSE and yields batches
+		const eventStream = new EventStream<ReadBatch<Format>>(stream, (msg) => {
+			// Update ping time on ANY event from the server
+			lastPingTimeMs = performance.now();
 
-				// Parse SSE events according to the S2 protocol
-				if (msg.event === "batch" && msg.data) {
-					const rawBatch: API.ReadBatch = JSON.parse(msg.data);
-					const batch = (() => {
-						// If format is bytes, decode base64 to Uint8Array
-						if (format === "bytes") {
-							return {
-								...rawBatch,
-								records: rawBatch.records.map((record) => ({
-									...record,
-									body: record.body ? decodeFromBase64(record.body) : undefined,
-									headers: record.headers?.map((header) =>
-										header.map((h) => decodeFromBase64(h)),
-									) as [Uint8Array, Uint8Array][],
-								})),
-							} satisfies ReadBatch<"bytes">;
-						} else {
-							return {
-								...rawBatch,
-								records: rawBatch.records.map((record) => ({
-									...record,
-									headers: record.headers || undefined,
-								})),
-							} satisfies ReadBatch<"string">;
-						}
-					})() as ReadBatch<Format>;
-					if (batch.tail) {
-						this._lastObservedTail = batch.tail;
-					}
-					let lastRecord = batch.records?.at(-1);
-					if (lastRecord) {
-						this._nextReadPosition = {
-							seq_num: lastRecord.seq_num + 1,
-							timestamp: lastRecord.timestamp,
-						};
-					}
-					const items: FetchReadItem<Format>[] = (batch.records ?? []).map(
-						(record) => ({ record }),
-					);
-					// Caught up iff the batch reports a tail its last record abuts
-					// (an empty batch with a tail is a heartbeat equivalent).
-					const caughtUp =
-						batch.tail &&
-						(lastRecord === undefined ||
-							lastRecord.seq_num + 1 === batch.tail.seq_num)
-							? batch.tail
-							: null;
-					items.push({ caughtUp });
-					return { done: false, batch: true, value: items };
-				}
-				if (msg.event === "error") {
-					// Store error and signal end of stream
-					// SSE error events are server errors - treat as 503 (Service Unavailable) for retry logic
-					debug("parse event error");
-					parserError = new S2Error({
-						message: msg.data ?? "Unknown error",
-						status: 503,
-					});
-					return { done: true };
-				}
-				if (msg.event === "ping") {
-					debug("ping");
-					// A heartbeat means the reader is at the live tail. It carries the
-					// tail position; older servers omit it, so fall back to the last
-					// batch-reported tail if there is one.
-					let tail: API.StreamPosition | undefined;
-					if (msg.data) {
-						try {
-							const ping: { tail?: API.StreamPosition } = JSON.parse(msg.data);
-							tail = ping.tail ?? undefined;
-						} catch {}
-					}
-					if (tail) {
-						this._lastObservedTail = tail;
+			// Parse SSE events according to the S2 protocol
+			if (msg.event === "batch" && msg.data) {
+				const rawBatch: API.ReadBatch = JSON.parse(msg.data);
+				const batch = (() => {
+					// If format is bytes, decode base64 to Uint8Array
+					if (format === "bytes") {
+						return {
+							...rawBatch,
+							records: rawBatch.records.map((record) => ({
+								...record,
+								body: record.body ? decodeFromBase64(record.body) : undefined,
+								headers: record.headers?.map((header) =>
+									header.map((h) => decodeFromBase64(h)),
+								) as [Uint8Array, Uint8Array][],
+							})),
+						} satisfies ReadBatch<"bytes">;
 					} else {
-						tail = this._lastObservedTail;
+						return {
+							...rawBatch,
+							records: rawBatch.records.map((record) => ({
+								...record,
+								headers: record.headers || undefined,
+							})),
+						} satisfies ReadBatch<"string">;
 					}
-					if (tail) {
-						return { done: false, batch: false, value: { caughtUp: tail } };
-					}
+				})() as ReadBatch<Format>;
+				if (batch.tail) {
+					this._lastObservedTail = batch.tail;
 				}
+				let lastRecord = batch.records?.at(-1);
+				if (lastRecord) {
+					this._nextReadPosition = {
+						seq_num: lastRecord.seq_num + 1,
+						timestamp: lastRecord.timestamp,
+					};
+				}
+				return { done: false, batch: false, value: batch };
+			}
+			if (msg.event === "error") {
+				// Store error and signal end of stream
+				// SSE error events are server errors - treat as 503 (Service Unavailable) for retry logic
+				debug("parse event error");
+				parserError = new S2Error({
+					message: msg.data ?? "Unknown error",
+					status: 503,
+				});
+				return { done: true };
+			}
+			if (msg.event === "ping") {
+				debug("ping");
+				// A heartbeat is an empty batch carrying the tail, as on the s2s
+				// protocol. Older servers omit the tail on pings, so fall back to
+				// the last batch-reported one.
+				let tail: API.StreamPosition | undefined;
+				if (msg.data) {
+					try {
+						const ping: { tail?: API.StreamPosition } = JSON.parse(msg.data);
+						tail = ping.tail ?? undefined;
+					} catch {}
+				}
+				if (tail) {
+					this._lastObservedTail = tail;
+				} else {
+					tail = this._lastObservedTail;
+				}
+				if (tail) {
+					return { done: false, batch: false, value: { records: [], tail } };
+				}
+			}
 
-				// Skip other events
-				return { done: false };
-			},
-		);
+			// Skip other events
+			return { done: false };
+		});
 
 		// Wrap the EventStream to convert records to ReadResult and check for errors
 		const reader = eventStream.getReader();
@@ -340,13 +316,20 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 							}
 							controller.close();
 						} else {
-							// Emit successful result
-							const item = result.value.value;
-							if ("caughtUp" in item) {
-								controller.enqueue({ ok: true, caughtUp: item.caughtUp });
-							} else {
-								controller.enqueue({ ok: true, value: item.record });
+							const batch = result.value.value;
+							for (const record of batch.records) {
+								controller.enqueue({ ok: true, value: record });
 							}
+							// Caught up iff the batch reports a tail its last record
+							// abuts (an empty batch with a tail is the heartbeat).
+							const lastRecord = batch.records.at(-1);
+							const caughtUp =
+								batch.tail &&
+								(lastRecord === undefined ||
+									lastRecord.seq_num + 1 === batch.tail.seq_num)
+									? batch.tail
+									: null;
+							controller.enqueue({ ok: true, caughtUp });
 						}
 						return;
 					} catch (error) {
