@@ -499,8 +499,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										resetTimeoutTimer();
 
 										// Update tail from batch
+										let tail: API.StreamPosition | undefined;
 										if (protoBatch.tail) {
-											const tail = convertStreamPosition(protoBatch.tail);
+											tail = convertStreamPosition(protoBatch.tail);
 											lastReadPosition = tail;
 											this._lastReadPosition = tail;
 											this._lastObservedTail = tail;
@@ -531,6 +532,17 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 												};
 											}
 										}
+
+										// Caught up iff the batch reports a tail its last
+										// record abuts (an empty batch with a tail is the
+										// server heartbeat).
+										const caughtUp =
+											tail &&
+											(protoBatch.records.length === 0 ||
+												this._nextReadPosition?.seq_num === tail.seq_num)
+												? tail
+												: null;
+										controller.enqueue({ ok: true, caughtUp });
 									} catch (err) {
 										safeError(
 											new S2Error({

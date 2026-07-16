@@ -149,9 +149,17 @@ export interface AppendSession extends AsyncDisposable {
 /**
  * Result type for transport-level read operations.
  * Transport sessions yield ReadResult instead of throwing errors.
+ *
+ * The `caughtUp` variant is an in-band marker reporting the session's
+ * caught-up state relative to the live tail. A position means caught up:
+ * emitted on a server heartbeat (SSE `ping` / s2s empty batch), or after a
+ * batch whose last record abuts the reported tail, pinning the tail at the
+ * moment of transition. `null` means behind: a batch without a tail, or one
+ * whose last record lags the reported tail.
  */
 export type ReadResult<Format extends "string" | "bytes" = "string"> =
 	| { ok: true; value: ReadRecord<Format> }
+	| { ok: true; caughtUp: API.StreamPosition | null }
 	| { ok: false; error: S2Error };
 
 /**
@@ -174,15 +182,29 @@ export interface TransportReadSession<
  * Yields records directly (as an async iterable or `ReadableStream`) and translates transport errors into thrown exceptions.
  * Track progress using {@link ReadSession.nextReadPosition} / {@link ReadSession.lastObservedTail}.
  *
+ * Also maintains a caught-up-to-tail signal, observable via
+ * {@link ReadSession.isCaughtUp} and {@link ReadSession.caughtUp}, derived from
+ * server reports already on the wire:
+ *
+ * - A heartbeat (SSE `ping` / s2s empty batch) marks the session as caught up.
+ *   The first one marks the backlog-to-live transition, periodic ones confirm
+ *   idle-at-tail.
+ * - A batch carrying the tail marks the session as caught up iff its last
+ *   record abuts the tail, and behind otherwise.
+ * - A batch without a tail (reading old data) marks the session as behind.
+ * - An internal retry resets to behind until the new connection re-signals.
+ *
  * @example
  * ```ts
  * const session = await stream.readSession({
- *   start: { from: { tailOffset: 50 } },
- *   stop: { wait: 15 },
+ *   start: { from: { seqNum: next } },
+ *   stop: { wait: 60 },
  * });
  *
+ * session.caughtUp().then((tail) => ui.setLive(tail));
+ *
  * for await (const record of session) {
- *   console.log(record.seqNum, record.body);
+ *   render(record);
  * }
  * ```
  */
@@ -195,9 +217,36 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 	 */
 	nextReadPosition(): Types.StreamPosition | undefined;
 	/**
-	 * Get the last observed tail position, if known.
+	 * Get the latest tail position reported by the server on this session.
+	 *
+	 * Populated from batches while catching up on recent data, and from
+	 * heartbeats while at the tail. Being set does NOT mean you are caught up:
+	 * a session far behind knows the tail from its first batch.
 	 */
 	lastObservedTail(): Types.StreamPosition | undefined;
+	/**
+	 * True while the session is at the live tail: every record that existed as
+	 * of the last server report has been consumed.
+	 *
+	 * Session-relative and not linearizable: concurrent appends may already
+	 * have advanced the true tail. For an authoritative tail, use
+	 * {@link S2Stream.checkTail}.
+	 */
+	isCaughtUp(): boolean;
+	/**
+	 * Resolves when the session reaches the live tail, with the last observed
+	 * tail position at that moment. Resolves immediately if already caught up.
+	 * Call again after falling behind to await the next catch-up. A pending
+	 * promise stays pending across internal retries.
+	 *
+	 * Rejects with the session's fatal error if it fails first, or with a
+	 * `SESSION_CLOSED` error if the session ends (count/bytes/until limit,
+	 * cancel, dispose) before reaching the tail.
+	 *
+	 * Session-relative and not linearizable: for an authoritative tail, use
+	 * {@link S2Stream.checkTail}.
+	 */
+	caughtUp(): Promise<Types.StreamPosition>;
 }
 
 /**

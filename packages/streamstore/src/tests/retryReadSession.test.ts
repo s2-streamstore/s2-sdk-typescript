@@ -176,6 +176,216 @@ class ThrowingReadSession<Format extends "string" | "bytes" = "string">
 	}
 }
 
+/**
+ * Manually-driven TransportReadSession: results are pushed from the test,
+ * so marker/record ordering relative to assertions is deterministic.
+ */
+class ManualReadSession
+	extends ReadableStream<ReadResult<"string">>
+	implements TransportReadSession<"string">
+{
+	private readonly queue: Array<ReadResult<"string"> | "close">;
+	private readonly notifyRef: { fn?: () => void };
+
+	constructor() {
+		const queue: Array<ReadResult<"string"> | "close"> = [];
+		const notifyRef: { fn?: () => void } = {};
+		super({
+			pull: async (controller) => {
+				while (queue.length === 0) {
+					await new Promise<void>((resolve) => {
+						notifyRef.fn = resolve;
+					});
+				}
+				const item = queue.shift()!;
+				if (item === "close") {
+					controller.close();
+				} else {
+					controller.enqueue(item);
+				}
+			},
+		});
+		this.queue = queue;
+		this.notifyRef = notifyRef;
+	}
+
+	push(item: ReadResult<"string"> | "close"): void {
+		this.queue.push(item);
+		const notify = this.notifyRef.fn;
+		this.notifyRef.fn = undefined;
+		notify?.();
+	}
+
+	nextReadPosition(): StreamPosition | undefined {
+		return undefined;
+	}
+
+	lastObservedTail(): StreamPosition | undefined {
+		return undefined;
+	}
+
+	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<"string">> {
+		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
+		if (typeof fn === "function") return fn.call(this);
+		throw new Error("not supported");
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.cancel();
+	}
+}
+
+describe("ReadSession caught-up signal (unit)", () => {
+	const record = (seq_num: number): ReadResult<"string"> => ({
+		ok: true,
+		value: { seq_num, timestamp: 1000, body: "x" },
+	});
+	const tailAt = (seq_num: number): StreamPosition => ({
+		seq_num,
+		timestamp: 1000,
+	});
+
+	it("resolves caughtUp() on a caught-up marker and reports isCaughtUp", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		expect(session.isCaughtUp()).toBe(false);
+		const pending = session.caughtUp();
+
+		transport.push(record(0));
+		transport.push({ ok: true, caughtUp: tailAt(1) });
+
+		const tail = await pending;
+		expect(tail.seqNum).toBe(1);
+		expect(session.isCaughtUp()).toBe(true);
+
+		// Already caught up: resolves immediately.
+		await expect(session.caughtUp()).resolves.toMatchObject({ seqNum: 1 });
+
+		// Records still flow, markers are not surfaced as records.
+		const reader = session.getReader();
+		const first = await reader.read();
+		expect(first.value?.seqNum).toBe(0);
+		await reader.cancel();
+	});
+
+	it("falls behind on a behind marker", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const pending = session.caughtUp();
+		transport.push({ ok: true, caughtUp: tailAt(1) });
+		await pending;
+		expect(session.isCaughtUp()).toBe(true);
+
+		// Behind marker, then a record so consumption is a sync point.
+		transport.push({ ok: true, caughtUp: null });
+		transport.push(record(1));
+
+		const reader = session.getReader();
+		const first = await reader.read();
+		expect(first.value?.seqNum).toBe(1);
+		expect(session.isCaughtUp()).toBe(false);
+		await reader.cancel();
+	});
+
+	it("rejects a pending caughtUp() with SESSION_CLOSED when the session ends first", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const pending = session.caughtUp();
+		transport.push(record(0));
+		transport.push("close");
+
+		const results: SDKReadRecord<"string">[] = [];
+		for await (const r of session) {
+			results.push(r);
+		}
+		expect(results).toHaveLength(1);
+
+		await expect(pending).rejects.toMatchObject({ code: "SESSION_CLOSED" });
+		// Terminal now: new calls reject too.
+		await expect(session.caughtUp()).rejects.toMatchObject({
+			code: "SESSION_CLOSED",
+		});
+	});
+
+	it("rejects a pending caughtUp() with the session's fatal error", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const pending = session.caughtUp();
+		transport.push({
+			ok: false,
+			error: new S2Error({ message: "bad request", status: 400 }),
+		});
+
+		await expect(async () => {
+			for await (const _record of session) {
+				// Should fail before yielding anything
+			}
+		}).rejects.toMatchObject({ status: 400 });
+
+		await expect(pending).rejects.toMatchObject({ status: 400 });
+		expect(session.isCaughtUp()).toBe(false);
+	});
+
+	it("stays pending across an internal retry and resolves on the new connection", async () => {
+		const transports: ManualReadSession[] = [];
+		const session = await RetryReadSession.create(
+			async () => {
+				const t = new ManualReadSession();
+				transports.push(t);
+				return t;
+			},
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 2 },
+		);
+
+		const pending = session.caughtUp();
+		transports[0]!.push({ ok: true, caughtUp: tailAt(5) });
+		await pending;
+		expect(session.isCaughtUp()).toBe(true);
+
+		// Transient error forces a reconnect: behind until the new
+		// connection re-signals.
+		transports[0]!.push({
+			ok: false,
+			error: new S2Error({ message: "transient", status: 503 }),
+		});
+
+		// Wait for the second transport to be created by the retry loop.
+		await vi.waitFor(() => {
+			expect(transports.length).toBe(2);
+		});
+		expect(session.isCaughtUp()).toBe(false);
+
+		const pendingAfterRetry = session.caughtUp();
+		transports[1]!.push({ ok: true, caughtUp: tailAt(7) });
+
+		await expect(pendingAfterRetry).resolves.toMatchObject({ seqNum: 7 });
+		expect(session.isCaughtUp()).toBe(true);
+
+		transports[1]!.push("close");
+	});
+});
+
 describe("ReadSession (unit)", () => {
 	// Note: Not using fake timers here because they don't play well with async iteration
 	// Instead, we use very short backoff times (1ms) to make tests run fast

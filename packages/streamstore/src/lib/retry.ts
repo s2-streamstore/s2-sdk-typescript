@@ -229,6 +229,21 @@ export async function withRetries<T>(
 
 	throw lastError;
 }
+/** Error a pending `caughtUp()` settles with when the session ends first. */
+function sessionClosedError(): S2Error {
+	return new S2Error({
+		message: "Read session ended before catching up",
+		code: "SESSION_CLOSED",
+		status: 0,
+		origin: "sdk",
+	});
+}
+
+type CaughtUpWaiter = {
+	resolve: (tail: Types.StreamPosition) => void;
+	reject: (error: S2Error) => void;
+};
+
 export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<Types.ReadRecord<Format>>
 	implements ReadSessionType<Format>
@@ -239,6 +254,48 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 	private _recordsRead: number = 0;
 	private _bytesRead: number = 0;
+
+	private _isCaughtUp = false;
+	private _caughtUpTail: API.StreamPosition | undefined = undefined;
+	private caughtUpWaiters: CaughtUpWaiter[] = [];
+	private terminal: { error?: S2Error } | undefined = undefined;
+
+	/** Transition to caught up, pinning the tail, and resolve pending waiters. */
+	private markCaughtUp(tail: API.StreamPosition): void {
+		this._isCaughtUp = true;
+		this._caughtUpTail = tail;
+		this._lastObservedTail = tail;
+		this._lastTailAtMs = performance.now();
+		const waiters = this.caughtUpWaiters.splice(0);
+		const position = toSDKStreamPosition(tail);
+		for (const waiter of waiters) {
+			waiter.resolve(position);
+		}
+	}
+
+	private markBehind(): void {
+		this._isCaughtUp = false;
+	}
+
+	/**
+	 * Settle the session terminally. Pending waiters reject with the fatal
+	 * error, or SESSION_CLOSED on a clean end. The caught-up state is
+	 * preserved on a clean end so late `caughtUp()` calls still resolve.
+	 */
+	private settleTerminal(error?: S2Error): void {
+		if (this.terminal) {
+			return;
+		}
+		this.terminal = { error };
+		if (error) {
+			this._isCaughtUp = false;
+		}
+		const waiters = this.caughtUpWaiters.splice(0);
+		const rejection = error ?? sessionClosedError();
+		for (const waiter of waiters) {
+			waiter.reject(rejection);
+		}
+	}
 
 	static async create<Format extends "string" | "bytes" = "string">(
 		generator: (
@@ -363,6 +420,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 							// Error is not retryable or attempts exhausted
 							debugRead("connection error not retryable: %s", error);
+							this.settleTerminal(error);
 							controller.error(error);
 							return;
 						}
@@ -401,6 +459,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						if (done || cancelled) {
 							reader.releaseLock();
 							currentReader = undefined;
+							this.settleTerminal();
 							// After a cancel the stream no longer accepts close().
 							if (!cancelled) controller.close();
 							return;
@@ -458,6 +517,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 										nextArgs.wait = baselineWait;
 									}
 								}
+								// Behind until the new connection re-signals caught up
+								this.markBehind();
+
 								// Proactively cancel the current transport session before retrying
 								try {
 									await session.cancel?.("retry");
@@ -486,8 +548,19 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 							// Error is not retryable or attempts exhausted
 							debugRead("error in retry loop: %s", error);
+							this.settleTerminal(error);
 							controller.error(error);
 							return;
+						}
+
+						// In-band caught-up marker from the transport
+						if ("caughtUp" in result) {
+							if (result.caughtUp) {
+								this.markCaughtUp(result.caughtUp);
+							} else {
+								this.markBehind();
+							}
+							continue;
 						}
 
 						// Success: enqueue the record and reset retry attempt counter
@@ -509,6 +582,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			},
 			cancel: async (reason) => {
 				cancelled = true;
+				this.settleTerminal();
 				try {
 					// While the pump holds a reader lock, session.cancel() would
 					// reject with ERR_INVALID_STATE and the transport stream (and
@@ -590,6 +664,26 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		return this._nextReadPosition
 			? toSDKStreamPosition(this._nextReadPosition)
 			: undefined;
+	}
+
+	isCaughtUp(): boolean {
+		return this._isCaughtUp;
+	}
+
+	caughtUp(): Promise<Types.StreamPosition> {
+		if (this._isCaughtUp && this._caughtUpTail) {
+			return Promise.resolve(toSDKStreamPosition(this._caughtUpTail));
+		}
+		if (this.terminal) {
+			return Promise.reject(this.terminal.error ?? sessionClosedError());
+		}
+		const promise = new Promise<Types.StreamPosition>((resolve, reject) => {
+			this.caughtUpWaiters.push({ resolve, reject });
+		});
+		// Mark handled so a dropped promise doesn't surface as an unhandled
+		// rejection; awaiting callers still observe the rejection.
+		promise.catch(() => {});
+		return promise;
 	}
 }
 
