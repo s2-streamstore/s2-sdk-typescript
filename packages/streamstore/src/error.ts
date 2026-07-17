@@ -39,13 +39,18 @@ function isConnectionError(error: unknown): boolean {
 		"networkerror when attempting to fetch resource",
 		"network error",
 		"load failed",
-		// undici (Node fetch): response body destroyed mid-stream
-		"terminated",
 		// undici SocketError: peer closed the connection
 		"other side closed",
 	];
 
 	if (knownConnectionMessages.includes(msg)) {
+		return true;
+	}
+
+	// undici reports a response body destroyed mid-stream as
+	// TypeError("terminated"). Restrict this generic message to TypeError so an
+	// unrelated application Error("terminated") is not made retryable.
+	if (error instanceof TypeError && msg === "terminated") {
 		return true;
 	}
 

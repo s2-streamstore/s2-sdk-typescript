@@ -75,12 +75,17 @@ describeIf("Correctness Integration Tests", () => {
 			const streamName = generateStreamName(transport);
 			await basin.streams.create({ stream: streamName });
 			const stream = basin.stream(streamName, { forceTransport: transport });
+			const abortController = new AbortController();
+			let concurrentTasks: readonly Promise<unknown>[] = [];
 
 			try {
-				const appendSession = await stream.appendSession({
-					maxInflightBatches: 4,
-					maxInflightBytes: 1024 * 1024,
-				});
+				const appendSession = await stream.appendSession(
+					{
+						maxInflightBatches: 4,
+						maxInflightBytes: 1024 * 1024,
+					},
+					{ signal: abortController.signal },
+				);
 
 				const producer = new Producer(
 					new BatchTransform({
@@ -90,14 +95,17 @@ describeIf("Correctness Integration Tests", () => {
 					appendSession,
 				);
 
-				const readSession = await stream.readSession({
-					start: { from: { seqNum: 0 } },
-					// No stop condition: the reader must match the appender's unbounded retry
-					// patience. A tail-wait bound lets a fault window that stalls appends past
-					// it end the session cleanly with too few records; the test timeout is the
-					// backstop instead. No record-count cap either, since append retries may
-					// duplicate records before later indexes arrive.
-				});
+				const readSession = await stream.readSession(
+					{
+						start: { from: { seqNum: 0 } },
+						// No stop condition: the reader must match the appender's unbounded retry
+						// patience. A tail-wait bound lets a fault window that stalls appends past
+						// it end the session cleanly with too few records; the test timeout is the
+						// backstop instead. No record-count cap either, since append retries may
+						// duplicate records before later indexes arrive.
+					},
+					{ signal: abortController.signal },
+				);
 
 				const readPromise = (async () => {
 					let highestContiguousIndex = -1;
@@ -170,6 +178,7 @@ describeIf("Correctness Integration Tests", () => {
 					}
 				})();
 
+				concurrentTasks = [readPromise, appendPromise];
 				const [readResult] = await Promise.all([readPromise, appendPromise]);
 				expect(readResult.highestIndex).toBe(TOTAL_RECORDS - 1);
 				expect(readResult.lastSeqNum! + 1).toBe(readResult.recordsObserved);
@@ -177,6 +186,10 @@ describeIf("Correctness Integration Tests", () => {
 					TOTAL_RECORDS,
 				);
 			} finally {
+				// Promise.all is fail-fast. Stop and join the sibling task before deleting
+				// the stream so recovery cannot race cleanup and obscure the first failure.
+				abortController.abort();
+				await Promise.allSettled(concurrentTasks);
 				// Close first, then delete - racing these can cause errors
 				await stream.close();
 				await basin.streams.delete({ stream: streamName });
