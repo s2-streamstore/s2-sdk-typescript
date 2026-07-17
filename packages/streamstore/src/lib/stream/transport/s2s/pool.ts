@@ -8,7 +8,11 @@
  */
 
 import type { OutgoingHttpHeaders } from "node:http";
-import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
+import type {
+	ClientHttp2Session,
+	ClientHttp2Stream,
+	ClientSessionOptions,
+} from "node:http2";
 import createDebug from "debug";
 import { S2Error } from "../../../../error.js";
 import type { Http2Settings } from "../../types.js";
@@ -57,6 +61,9 @@ function endpointKey(origin: string, settings: ResolvedHttp2Settings): string {
 }
 
 type Http2Module = typeof import("node:http2");
+// Node forwards this socket option through http2.connect, but @types/node
+// does not currently include it on ClientSessionOptions.
+type Http2ConnectOptions = ClientSessionOptions & { noDelay: boolean };
 
 let http2ModulePromise: Promise<Http2Module> | undefined;
 async function loadHttp2(): Promise<Http2Module> {
@@ -281,7 +288,8 @@ export class Http2ConnectionPool {
 		const { origin, settings } = endpoint;
 		debug("connecting to %s", origin);
 		const http2 = await loadHttp2();
-		const session = http2.connect(origin, {
+		const connectOptions: Http2ConnectOptions = {
+			noDelay: true,
 			// Headroom above the flow-control windows so Node's session memory
 			// cap (default 10 MB) does not refuse streams when windows are raised.
 			// This is just a heuristic to avoid memory issues in case.
@@ -296,7 +304,8 @@ export class Http2ConnectionPool {
 			settings: {
 				initialWindowSize: settings.initialStreamWindowSize,
 			},
-		});
+		};
+		const session = http2.connect(origin, connectOptions);
 
 		try {
 			// Each pooled stream may add its own session listeners (e.g. goaway).
