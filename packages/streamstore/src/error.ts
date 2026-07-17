@@ -39,6 +39,10 @@ function isConnectionError(error: unknown): boolean {
 		"networkerror when attempting to fetch resource",
 		"network error",
 		"load failed",
+		// undici (Node fetch): response body destroyed mid-stream
+		"terminated",
+		// undici SocketError: peer closed the connection
+		"other side closed",
 	];
 
 	if (knownConnectionMessages.includes(msg)) {
@@ -56,6 +60,10 @@ function isConnectionError(error: unknown): boolean {
 		"EHOSTUNREACH", // Host unreachable
 		"ECONNRESET", // Connection reset by peer
 		"EPIPE", // Broken pipe
+		"UND_ERR_SOCKET", // undici: socket closed mid-request/response
+		"UND_ERR_CONNECT_TIMEOUT", // undici: connect timeout
+		"UND_ERR_HEADERS_TIMEOUT", // undici: headers timeout
+		"UND_ERR_BODY_TIMEOUT", // undici: body timeout
 	];
 
 	return typeof code === "string" && connectionErrorCodes.includes(code);

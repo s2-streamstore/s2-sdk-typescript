@@ -82,4 +82,46 @@ describe("browser network error classification (#117)", () => {
 		expect(err.status).toBe(400);
 		expect(err.code).toBe("ENOTFOUND");
 	});
+
+	it("classifies undici 'terminated' (body destroyed mid-stream) as a connection error (status 502)", () => {
+		const terminated = new TypeError("terminated");
+		(terminated as any).cause = {
+			name: "SocketError",
+			message: "other side closed",
+			code: "UND_ERR_SOCKET",
+		};
+		const err = s2Error(terminated);
+
+		expect(err).toBeInstanceOf(S2Error);
+		expect(err.status).toBe(502);
+		expect(err.code).toBe("UND_ERR_SOCKET");
+	});
+
+	it("classifies undici 'terminated' without a cause as a connection error (status 502)", () => {
+		const err = s2Error(new TypeError("terminated"));
+
+		expect(err).toBeInstanceOf(S2Error);
+		expect(err.status).toBe(502);
+		expect(err.code).toBe("NETWORK_ERROR");
+	});
+
+	it("classifies undici SocketError 'other side closed' as a connection error (status 502)", () => {
+		const socketErr = new Error("other side closed");
+		(socketErr as any).code = "UND_ERR_SOCKET";
+		const err = s2Error(socketErr);
+
+		expect(err).toBeInstanceOf(S2Error);
+		expect(err.status).toBe(502);
+		expect(err.code).toBe("UND_ERR_SOCKET");
+	});
+
+	it("classifies undici UND_ERR_CONNECT_TIMEOUT as a connection error (status 502)", () => {
+		const fetchErr = new TypeError("fetch failed");
+		(fetchErr as any).cause = { code: "UND_ERR_CONNECT_TIMEOUT" };
+		const err = s2Error(fetchErr);
+
+		expect(err).toBeInstanceOf(S2Error);
+		expect(err.status).toBe(502);
+		expect(err.code).toBe("UND_ERR_CONNECT_TIMEOUT");
+	});
 });

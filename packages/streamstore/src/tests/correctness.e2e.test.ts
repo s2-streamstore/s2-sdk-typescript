@@ -10,7 +10,6 @@ const describeIf = hasEnv ? describe : describe.skip;
 
 const TEST_TIMEOUT_MS = 600_000;
 const TOTAL_RECORDS = 64;
-const READ_IDLE_TIMEOUT_SECS = 60;
 
 const generateBasinName = (): string => {
 	const prefix = "typescript-correctness";
@@ -93,9 +92,11 @@ describeIf("Correctness Integration Tests", () => {
 
 				const readSession = await stream.readSession({
 					start: { from: { seqNum: 0 } },
-					// Bound idle sessions without capping the number of records observed:
-					// append retries may duplicate records before later indexes arrive.
-					stop: { waitSecs: READ_IDLE_TIMEOUT_SECS },
+					// No stop condition: the reader must match the appender's unbounded retry
+					// patience. A tail-wait bound lets a fault window that stalls appends past
+					// it end the session cleanly with too few records; the test timeout is the
+					// backstop instead. No record-count cap either, since append retries may
+					// duplicate records before later indexes arrive.
 				});
 
 				const readPromise = (async () => {
