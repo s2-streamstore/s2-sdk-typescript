@@ -383,6 +383,13 @@ export type PermittedOperationGroups = {
 };
 
 export type PingEventData = {
+    /**
+     * Sequence number that will be assigned to the next record on the stream, and timestamp of the last record.
+     */
+    tail: StreamPosition;
+    /**
+     * Time the ping was emitted, as Unix epoch milliseconds.
+     */
     timestamp: number;
 };
 
