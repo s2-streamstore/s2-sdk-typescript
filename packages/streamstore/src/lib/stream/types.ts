@@ -207,6 +207,8 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 	lastObservedTail(): Types.StreamPosition | undefined;
 	/**
 	 * Reports whether the session has read through its latest reported tail.
+	 * Returns false while records remain before the reported tail, after a batch
+	 * without a tail, or after a reconnect.
 	 * Ignored command records count toward progress.
 	 * Use {@link S2Stream.checkTail} for the current stream tail.
 	 */
