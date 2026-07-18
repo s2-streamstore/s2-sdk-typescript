@@ -370,6 +370,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		const deliveries = new FifoQueue<ReadDelivery<Format>>();
 		let wakePull: (() => void) | undefined;
 		let resolvePendingDelivery: (() => void) | undefined;
+		let deferredCaughtUp:
+			| { tail: API.StreamPosition; onDelivered: () => void }
+			| undefined;
 		let pumpDone = false;
 		let pumpError: S2Error | undefined;
 
@@ -388,7 +391,14 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		) => {
 			await new Promise<void>((onDelivered) => {
 				resolvePendingDelivery = onDelivered;
-				enqueue({ record, caughtUpTail: tail, onDelivered });
+				if (record) {
+					enqueue({ record, caughtUpTail: tail, onDelivered });
+				} else if (deliveries.length === 0) {
+					this.markCaughtUp(tail);
+					onDelivered();
+				} else {
+					deferredCaughtUp = { tail, onDelivered };
+				}
 			});
 			resolvePendingDelivery = undefined;
 		};
@@ -636,6 +646,12 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							}
 							delivery.onDelivered?.();
 							if (delivery.record) {
+								if (deliveries.length === 0 && deferredCaughtUp) {
+									const caughtUp = deferredCaughtUp;
+									deferredCaughtUp = undefined;
+									this.markCaughtUp(caughtUp.tail);
+									caughtUp.onDelivered();
+								}
 								return;
 							}
 							continue;
@@ -654,6 +670,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					this.settleTerminal();
 					pumpDone = true;
 					deliveries.clear();
+					deferredCaughtUp = undefined;
 					resolvePendingDelivery?.();
 					resolvePendingDelivery = undefined;
 					wake();

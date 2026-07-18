@@ -234,11 +234,11 @@ class ManualReadSession
 describe("ReadSession caught-up signal (unit)", () => {
 	const record = (
 		seq_num: number,
-		caughtUp?: StreamPosition,
+		caughtUp?: StreamPosition | null,
 	): ReadResult<"string"> => ({
 		ok: true,
 		value: { seq_num, timestamp: 1000, body: "x" },
-		...(caughtUp ? { caughtUp } : {}),
+		...(caughtUp !== undefined ? { caughtUp } : {}),
 	});
 	const tailAt = (seq_num: number): StreamPosition => ({
 		seq_num,
@@ -281,6 +281,31 @@ describe("ReadSession caught-up signal (unit)", () => {
 		transport.push("close");
 		expect((await reader.read()).done).toBe(true);
 		reader.releaseLock();
+	});
+
+	it("marks caught up when the tail arrives after the last record", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+		const pending = session.caughtUp();
+		const reader = session.getReader();
+
+		transport.push(record(0));
+		transport.push(record(1, null));
+
+		expect((await reader.read()).value?.seqNum).toBe(0);
+		expect(session.isCaughtUp()).toBe(false);
+		expect((await reader.read()).value?.seqNum).toBe(1);
+		expect(session.isCaughtUp()).toBe(false);
+
+		transport.push({ ok: true, caughtUp: tailAt(2) });
+		await expect(pending).resolves.toMatchObject({ seqNum: 2 });
+		expect(session.isCaughtUp()).toBe(true);
+
+		await reader.cancel();
 	});
 
 	it("signals a heartbeat while a record read remains pending", async () => {
