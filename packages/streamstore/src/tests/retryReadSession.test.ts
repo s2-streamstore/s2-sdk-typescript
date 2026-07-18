@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
 import type { StreamPosition } from "../generated/index.js";
 import { RetryReadSession } from "../lib/retry.js";
@@ -96,8 +96,6 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 		return this.behavior.tail;
 	}
 
-	setCaughtUpListener(): void {}
-
 	// Implement AsyncIterable (for await...of support)
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
@@ -149,8 +147,6 @@ class ThrowingReadSession<Format extends "string" | "bytes" = "string">
 		return undefined;
 	}
 
-	setCaughtUpListener(): void {}
-
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
@@ -180,19 +176,12 @@ class ThrowingReadSession<Format extends "string" | "bytes" = "string">
 	}
 }
 
-/**
- * Manually-driven TransportReadSession: results are pushed and caught-up
- * reports fired from the test, so ordering relative to assertions is
- * deterministic.
- */
 class ManualReadSession
 	extends ReadableStream<ReadResult<"string">>
 	implements TransportReadSession<"string">
 {
 	private readonly queue: Array<ReadResult<"string"> | "close">;
 	private readonly notifyRef: { fn?: () => void };
-	private caughtUpListener?: (tail: StreamPosition | null) => void;
-	private lastCaughtUpReport?: StreamPosition | null;
 
 	constructor() {
 		const queue: Array<ReadResult<"string"> | "close"> = [];
@@ -223,24 +212,12 @@ class ManualReadSession
 		notify?.();
 	}
 
-	reportCaughtUp(tail: StreamPosition | null): void {
-		this.lastCaughtUpReport = tail;
-		this.caughtUpListener?.(tail);
-	}
-
 	nextReadPosition(): StreamPosition | undefined {
 		return undefined;
 	}
 
 	lastObservedTail(): StreamPosition | undefined {
 		return undefined;
-	}
-
-	setCaughtUpListener(listener: (tail: StreamPosition | null) => void): void {
-		this.caughtUpListener = listener;
-		if (this.lastCaughtUpReport !== undefined) {
-			listener(this.lastCaughtUpReport);
-		}
 	}
 
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<"string">> {
@@ -255,16 +232,20 @@ class ManualReadSession
 }
 
 describe("ReadSession caught-up signal (unit)", () => {
-	const record = (seq_num: number): ReadResult<"string"> => ({
+	const record = (
+		seq_num: number,
+		caughtUp?: StreamPosition,
+	): ReadResult<"string"> => ({
 		ok: true,
 		value: { seq_num, timestamp: 1000, body: "x" },
+		...(caughtUp ? { caughtUp } : {}),
 	});
 	const tailAt = (seq_num: number): StreamPosition => ({
 		seq_num,
 		timestamp: 1000,
 	});
 
-	it("resolves caughtUp() on a caught-up report and reports isCaughtUp", async () => {
+	it("signals caught up after the last record is read", async () => {
 		const transport = new ManualReadSession();
 		const session = await RetryReadSession.create(
 			async () => transport,
@@ -273,47 +254,91 @@ describe("ReadSession caught-up signal (unit)", () => {
 		);
 
 		expect(session.isCaughtUp()).toBe(false);
+		const pending = session.caughtUp();
+		const settled = vi.fn();
+		void pending.then(settled, settled);
+		const reader = session.getReader();
+
+		transport.push(record(0));
+		transport.push(record(1, tailAt(2)));
+		await vi.waitFor(() => {
+			expect(session.nextReadPosition()?.seqNum).toBe(2);
+		});
+		expect(session.isCaughtUp()).toBe(false);
+		expect(settled).not.toHaveBeenCalled();
+
+		const first = await reader.read();
+		expect(first.value?.seqNum).toBe(0);
+		expect(session.isCaughtUp()).toBe(false);
+		expect(settled).not.toHaveBeenCalled();
+
+		const second = await reader.read();
+		expect(second.value?.seqNum).toBe(1);
+		await expect(pending).resolves.toMatchObject({ seqNum: 2 });
+		expect(session.isCaughtUp()).toBe(true);
+		await expect(session.caughtUp()).resolves.toMatchObject({ seqNum: 2 });
+
+		transport.push("close");
+		expect((await reader.read()).done).toBe(true);
+		reader.releaseLock();
+	});
+
+	it("signals a heartbeat while a record read remains pending", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const reader = session.getReader();
+		const read = reader.read();
+		const readSettled = vi.fn();
+		void read.then(readSettled, readSettled);
+		const pending = session.caughtUp();
+
+		transport.push({ ok: true, caughtUp: tailAt(3) });
+
+		await expect(pending).resolves.toMatchObject({ seqNum: 3 });
+		expect(session.isCaughtUp()).toBe(true);
+		expect(readSettled).not.toHaveBeenCalled();
+
+		transport.push("close");
+		expect((await read).done).toBe(true);
+		reader.releaseLock();
+	});
+
+	it("signals caught up when the final record is filtered", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{ ignore_command_records: true },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const reader = session.getReader();
 		const pending = session.caughtUp();
 
 		transport.push(record(0));
-		transport.reportCaughtUp(tailAt(1));
+		transport.push({
+			ok: true,
+			value: {
+				seq_num: 1,
+				timestamp: 1000,
+				body: "fence-token",
+				headers: [["", "fence"]],
+			},
+			caughtUp: tailAt(2),
+		});
 
-		const tail = await pending;
-		expect(tail.seqNum).toBe(1);
-		expect(session.isCaughtUp()).toBe(true);
-
-		// Already caught up: resolves immediately.
-		await expect(session.caughtUp()).resolves.toMatchObject({ seqNum: 1 });
-
-		// Records still flow.
-		const reader = session.getReader();
-		const first = await reader.read();
-		expect(first.value?.seqNum).toBe(0);
-		await reader.cancel();
-	});
-
-	it("falls behind on a behind report", async () => {
-		const transport = new ManualReadSession();
-		const session = await RetryReadSession.create(
-			async () => transport,
-			{},
-			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
-		);
-
-		const pending = session.caughtUp();
-		transport.reportCaughtUp(tailAt(1));
-		await pending;
-		expect(session.isCaughtUp()).toBe(true);
-
-		transport.reportCaughtUp(null);
+		await vi.waitFor(() => {
+			expect(session.nextReadPosition()?.seqNum).toBe(2);
+		});
 		expect(session.isCaughtUp()).toBe(false);
-
-		// A new wait resolves on the next catch-up.
-		const pendingAgain = session.caughtUp();
-		transport.reportCaughtUp(tailAt(3));
-		await expect(pendingAgain).resolves.toMatchObject({ seqNum: 3 });
-
-		await session.cancel();
+		expect((await reader.read()).value?.seqNum).toBe(0);
+		await expect(pending).resolves.toMatchObject({ seqNum: 2 });
+		expect(session.isCaughtUp()).toBe(true);
+		await reader.cancel();
 	});
 
 	it("rejects a pending caughtUp() with SESSION_CLOSED when the session ends first", async () => {
@@ -335,7 +360,6 @@ describe("ReadSession caught-up signal (unit)", () => {
 		expect(results).toHaveLength(1);
 
 		await expect(pending).rejects.toMatchObject({ code: "SESSION_CLOSED" });
-		// Terminal now: new calls reject too.
 		await expect(session.caughtUp()).rejects.toMatchObject({
 			code: "SESSION_CLOSED",
 		});
@@ -355,17 +379,15 @@ describe("ReadSession caught-up signal (unit)", () => {
 			error: new S2Error({ message: "bad request", status: 400 }),
 		});
 
-		await expect(async () => {
-			for await (const _record of session) {
-				// Should fail before yielding anything
-			}
-		}).rejects.toMatchObject({ status: 400 });
+		const reader = session.getReader();
+		await expect(reader.read()).rejects.toMatchObject({ status: 400 });
+		reader.releaseLock();
 
 		await expect(pending).rejects.toMatchObject({ status: 400 });
 		expect(session.isCaughtUp()).toBe(false);
 	});
 
-	it("stays pending across an internal retry and resolves on the new connection", async () => {
+	it("keeps caughtUp pending across a retry", async () => {
 		const transports: ManualReadSession[] = [];
 		const session = await RetryReadSession.create(
 			async () => {
@@ -378,34 +400,31 @@ describe("ReadSession caught-up signal (unit)", () => {
 		);
 
 		const pending = session.caughtUp();
-		transports[0]!.reportCaughtUp(tailAt(5));
-		await pending;
-		expect(session.isCaughtUp()).toBe(true);
+		const settled = vi.fn();
+		void pending.then(settled, settled);
+		const reader = session.getReader();
+		const read = reader.read();
 
-		// Transient error forces a reconnect: behind until the new
-		// connection re-signals.
 		transports[0]!.push({
 			ok: false,
 			error: new S2Error({ message: "transient", status: 503 }),
 		});
 
-		// Wait for the second transport to be created by the retry loop.
 		await vi.waitFor(() => {
 			expect(transports.length).toBe(2);
 		});
 		expect(session.isCaughtUp()).toBe(false);
+		expect(settled).not.toHaveBeenCalled();
 
-		// A late report from the superseded transport is ignored.
-		transports[0]!.reportCaughtUp(tailAt(6));
-		expect(session.isCaughtUp()).toBe(false);
+		transports[1]!.push(record(0, tailAt(1)));
 
-		const pendingAfterRetry = session.caughtUp();
-		transports[1]!.reportCaughtUp(tailAt(7));
-
-		await expect(pendingAfterRetry).resolves.toMatchObject({ seqNum: 7 });
+		expect((await read).value?.seqNum).toBe(0);
+		await expect(pending).resolves.toMatchObject({ seqNum: 1 });
 		expect(session.isCaughtUp()).toBe(true);
 
 		transports[1]!.push("close");
+		expect((await reader.read()).done).toBe(true);
+		reader.releaseLock();
 	});
 });
 

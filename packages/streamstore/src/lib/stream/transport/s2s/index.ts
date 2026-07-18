@@ -196,23 +196,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	private _lastReadPosition?: API.StreamPosition;
 	private _nextReadPosition?: API.StreamPosition;
 	private _lastObservedTail?: API.StreamPosition;
-	private _caughtUpListener?: (tail: API.StreamPosition | null) => void;
-	private _lastCaughtUpReport?: API.StreamPosition | null;
 	private parser = new S2SFrameParser();
-
-	private reportCaughtUp(tail: API.StreamPosition | null): void {
-		this._lastCaughtUpReport = tail;
-		this._caughtUpListener?.(tail);
-	}
-
-	public setCaughtUpListener(
-		listener: (tail: API.StreamPosition | null) => void,
-	): void {
-		this._caughtUpListener = listener;
-		if (this._lastCaughtUpReport !== undefined) {
-			listener(this._lastCaughtUpReport);
-		}
-	}
 
 	static async create<Format extends "string" | "bytes" = "string">(
 		baseUrl: string,
@@ -504,7 +488,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									}
 									stream.close();
 								} else {
-									// Parse ReadBatch
 									try {
 										const batchBytes =
 											frame.compression === "none"
@@ -514,7 +497,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 										resetTimeoutTimer();
 
-										// Update tail from batch
 										let tail: API.StreamPosition | undefined;
 										if (protoBatch.tail) {
 											tail = convertStreamPosition(protoBatch.tail);
@@ -524,18 +506,16 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											debug("received tail");
 										}
 
-										// Enqueue each record and track next position
-										for (const record of protoBatch.records) {
+										let batchNextReadPosition: API.StreamPosition | undefined;
+										const records = protoBatch.records.map((record) => {
 											const converted = this.convertRecord(
 												record,
 												as ?? ("string" as Format),
 												textDecoder,
 											);
-											controller.enqueue({ ok: true, value: converted });
 
-											// Update next read position to after this record
 											if (record.seqNum !== undefined) {
-												this._nextReadPosition = {
+												batchNextReadPosition = {
 													seq_num:
 														bigintToSafeNumber(
 															record.seqNum,
@@ -546,19 +526,28 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 														"SequencedRecord.timestamp",
 													),
 												};
+												this._nextReadPosition = batchNextReadPosition;
+											}
+											return converted;
+										});
+
+										const caughtUp =
+											tail &&
+											(records.length === 0 ||
+												batchNextReadPosition?.seq_num === tail.seq_num)
+												? tail
+												: null;
+										if (records.length === 0) {
+											controller.enqueue({ ok: true, caughtUp });
+										} else {
+											for (const [index, record] of records.entries()) {
+												controller.enqueue({
+													ok: true,
+													value: record,
+													...(index === records.length - 1 ? { caughtUp } : {}),
+												});
 											}
 										}
-
-										// Caught up iff the batch reports a tail its last
-										// record abuts (an empty batch with a tail is the
-										// server heartbeat).
-										this.reportCaughtUp(
-											tail &&
-												(protoBatch.records.length === 0 ||
-													this._nextReadPosition?.seq_num === tail.seq_num)
-												? tail
-												: null,
-										);
 									} catch (err) {
 										safeError(
 											new S2Error({

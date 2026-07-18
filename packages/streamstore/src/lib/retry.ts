@@ -244,6 +244,12 @@ type CaughtUpWaiter = {
 	reject: (error: S2Error) => void;
 };
 
+type ReadDelivery<Format extends "string" | "bytes"> = {
+	record?: Types.ReadRecord<Format>;
+	caughtUpTail?: API.StreamPosition;
+	onDelivered?: () => void;
+};
+
 export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<Types.ReadRecord<Format>>
 	implements ReadSessionType<Format>
@@ -260,7 +266,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	private caughtUpWaiters: CaughtUpWaiter[] = [];
 	private terminal: { error?: S2Error } | undefined = undefined;
 
-	/** Transition to caught up, pinning the tail, and resolve pending waiters. */
+	/** Mark caught up and resolve pending waits with this tail. */
 	private markCaughtUp(tail: API.StreamPosition): void {
 		this._isCaughtUp = true;
 		this._caughtUpTail = tail;
@@ -277,11 +283,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		this._isCaughtUp = false;
 	}
 
-	/**
-	 * Settle the session terminally. Pending waiters reject with the fatal
-	 * error, or SESSION_CLOSED on a clean end. The caught-up state is
-	 * preserved on a clean end so late `caughtUp()` calls still resolve.
-	 */
+	/** End the session and reject pending waits. Clean ends preserve caught-up state. */
 	private settleTerminal(error?: S2Error): void {
 		if (this.terminal) {
 			return;
@@ -365,245 +367,312 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			| ReadableStreamDefaultReader<ReadResult<Format>>
 			| undefined;
 		let cancelled = false;
-		super({
-			start: async (controller) => {
-				let nextArgs = { ...args } as ReadArgs<Format>;
-				// Capture original request budget so retries compute from a stable baseline
-				const baselineCount = args?.count;
-				const baselineBytes = args?.bytes;
-				const baselineWait = args?.wait;
-				let attempt = 0;
+		const deliveries = new FifoQueue<ReadDelivery<Format>>();
+		let wakePull: (() => void) | undefined;
+		let resolvePendingDelivery: (() => void) | undefined;
+		let pumpDone = false;
+		let pumpError: S2Error | undefined;
+
+		const wake = () => {
+			const resolve = wakePull;
+			wakePull = undefined;
+			resolve?.();
+		};
+		const enqueue = (delivery: ReadDelivery<Format>) => {
+			deliveries.push(delivery);
+			wake();
+		};
+		const enqueueCaughtUp = async (
+			record: Types.ReadRecord<Format> | undefined,
+			tail: API.StreamPosition,
+		) => {
+			await new Promise<void>((onDelivered) => {
+				resolvePendingDelivery = onDelivered;
+				enqueue({ record, caughtUpTail: tail, onDelivered });
+			});
+			resolvePendingDelivery = undefined;
+		};
+		const failPump = (error: S2Error) => {
+			this.settleTerminal(error);
+			pumpError = error;
+			deliveries.clear();
+			wake();
+		};
+		const handlePumpError = (error: unknown) => {
+			if (!cancelled) {
+				failPump(s2Error(error));
+			}
+		};
+
+		const pump = async () => {
+			let nextArgs = { ...args } as ReadArgs<Format>;
+			const baselineCount = args?.count;
+			const baselineBytes = args?.bytes;
+			const baselineWait = args?.wait;
+			let attempt = 0;
+
+			while (true) {
+				if (cancelled) {
+					return;
+				}
+
+				if (!session) {
+					debugRead("starting read session with args: %o", nextArgs);
+
+					try {
+						session = await generator(nextArgs);
+						if (cancelled) {
+							try {
+								await session.cancel?.("cancelled");
+							} catch {}
+							return;
+						}
+					} catch (err) {
+						const error = s2Error(err);
+
+						const effectiveMax = Math.max(1, retryConfig.maxAttempts);
+						if (isRetryable(error) && attempt < effectiveMax - 1) {
+							const delay = calculateDelay(
+								attempt,
+								retryConfig.minBaseDelayMillis,
+								retryConfig.maxBaseDelayMillis,
+							);
+							debugRead(
+								"connection error, will retry after %dms, status=%s",
+								delay,
+								error.status,
+							);
+							await sleep(delay);
+							if (cancelled) {
+								return;
+							}
+							attempt++;
+							continue;
+						}
+
+						debugRead("connection error not retryable: %s", error);
+						failPump(error);
+						return;
+					}
+				}
+
+				const reader = session.getReader();
+				currentReader = reader;
+				let pendingRecord: Types.ReadRecord<Format> | undefined;
+				const flushPending = async (tail?: API.StreamPosition) => {
+					const record = pendingRecord;
+					pendingRecord = undefined;
+					if (tail) {
+						await enqueueCaughtUp(record, tail);
+					} else if (record) {
+						enqueue({ record });
+					}
+				};
 
 				while (true) {
-					// Check cancellation at the top of each iteration
 					if (cancelled) {
 						return;
 					}
-
-					// Use pre-established session on first iteration if provided
-					if (!session) {
-						debugRead("starting read session with args: %o", nextArgs);
-
-						// Try to create session - may throw on connection errors
-						try {
-							session = await generator(nextArgs);
-							if (cancelled) {
-								try {
-									await session.cancel?.("cancelled");
-								} catch {}
-								return;
-							}
-						} catch (err) {
-							// Convert to S2Error if needed
-							const error = s2Error(err);
-
-							// Check if we can retry connection errors
-							const effectiveMax = Math.max(1, retryConfig.maxAttempts);
-							if (isRetryable(error) && attempt < effectiveMax - 1) {
-								const delay = calculateDelay(
-									attempt,
-									retryConfig.minBaseDelayMillis,
-									retryConfig.maxBaseDelayMillis,
-								);
-								debugRead(
-									"connection error, will retry after %dms, status=%s",
-									delay,
-									error.status,
-								);
-								await sleep(delay);
-								if (cancelled) {
-									return;
-								}
-								attempt++;
-								continue; // Retry creating session
-							}
-
-							// Error is not retryable or attempts exhausted
-							debugRead("connection error not retryable: %s", error);
-							this.settleTerminal(error);
-							controller.error(error);
-							return;
+					let read: Awaited<ReturnType<typeof reader.read>>;
+					try {
+						read = await reader.read();
+					} catch (err) {
+						const error = s2Error(err);
+						debugRead(
+							"transport stream threw, normalized status=%d code=%s origin=%s message=%s",
+							error.status,
+							error.code,
+							error.origin,
+							error.message,
+						);
+						read = {
+							done: false,
+							value: { ok: false, error },
+						};
+					}
+					const { done, value: result } = read;
+					try {
+						const tail = session.lastObservedTail?.();
+						if (tail) {
+							this._lastObservedTail = tail;
+							this._lastTailAtMs = performance.now();
 						}
+					} catch {}
+					if (done || cancelled) {
+						if (!cancelled) {
+							await flushPending();
+						}
+						reader.releaseLock();
+						currentReader = undefined;
+						this.settleTerminal();
+						pumpDone = true;
+						wake();
+						return;
 					}
 
-					// Track caught-up state reported by the current transport
-					// session, ignoring late reports from a superseded one.
-					const transportSession = session;
-					transportSession.setCaughtUpListener((tail) => {
-						if (transportSession !== session || cancelled) {
-							return;
-						}
-						if (tail) {
-							this.markCaughtUp(tail);
-						} else {
+					if (!result.ok) {
+						await flushPending();
+						reader.releaseLock();
+						currentReader = undefined;
+						const error = result.error;
+
+						const effectiveMax = Math.max(1, retryConfig.maxAttempts);
+						if (isRetryable(error) && attempt < effectiveMax - 1) {
+							const retryFromSeqNum =
+								this._nextReadPosition?.seq_num ?? nextArgs.seq_num;
+							if (this._nextReadPosition) {
+								nextArgs.seq_num = this._nextReadPosition.seq_num;
+								// Only one start position may be set.
+								delete nextArgs.timestamp;
+								delete nextArgs.tail_offset;
+							}
+							const delay = calculateDelay(
+								attempt,
+								retryConfig.minBaseDelayMillis,
+								retryConfig.maxBaseDelayMillis,
+							);
+							if (baselineCount !== undefined) {
+								nextArgs.count = Math.max(0, baselineCount - this._recordsRead);
+							}
+							if (baselineBytes !== undefined) {
+								nextArgs.bytes = Math.max(0, baselineBytes - this._bytesRead);
+							}
+							// After observing a tail, subtract elapsed time and retry delay.
+							if (baselineWait !== undefined) {
+								if (this._lastTailAtMs !== undefined) {
+									const elapsedSeconds =
+										(performance.now() - this._lastTailAtMs) / 1000;
+									nextArgs.wait = Math.max(
+										0,
+										Math.floor(baselineWait - (elapsedSeconds + delay / 1000)),
+									);
+								} else {
+									nextArgs.wait = baselineWait;
+								}
+							}
 							this.markBehind();
-						}
-					});
 
-					const reader = session.getReader();
-					currentReader = reader;
+							try {
+								await session.cancel?.("retry");
+							} catch {}
 
-					while (true) {
-						let read: Awaited<ReturnType<typeof reader.read>>;
-						try {
-							read = await reader.read();
-						} catch (err) {
-							const error = s2Error(err);
+							session = undefined;
+
 							debugRead(
-								"transport stream threw, normalized status=%d code=%s origin=%s message=%s",
+								"will retry after %dms, status=%s code=%s attempt=%d/%d next_seq_num=%s records_read=%d",
+								delay,
 								error.status,
 								error.code,
-								error.origin,
-								error.message,
+								attempt + 1,
+								effectiveMax - 1,
+								retryFromSeqNum ?? "unknown",
+								this._recordsRead,
 							);
-							read = {
-								done: false,
-								value: { ok: false, error },
-							};
-						}
-						const { done, value: result } = read;
-						// Update last observed tail if transport exposes it
-						try {
-							const tail = session.lastObservedTail?.();
-							if (tail) {
-								this._lastObservedTail = tail;
-								this._lastTailAtMs = performance.now();
+							await sleep(delay);
+							if (cancelled) {
+								return;
 							}
-						} catch {}
-						if (done || cancelled) {
-							reader.releaseLock();
-							currentReader = undefined;
-							this.settleTerminal();
-							// After a cancel the stream no longer accepts close().
-							if (!cancelled) controller.close();
+							attempt++;
+							break;
+						}
+
+						debugRead("error in retry loop: %s", error);
+						failPump(error);
+						return;
+					}
+
+					if (!("value" in result)) {
+						if (result.caughtUp) {
+							await flushPending(result.caughtUp);
+						} else {
+							await flushPending();
+							this.markBehind();
+						}
+						continue;
+					}
+
+					// A received record remains behind until delivered.
+					const record = result.value;
+					this.markBehind();
+					this._nextReadPosition = {
+						seq_num: record.seq_num + 1,
+						timestamp: record.timestamp,
+					};
+					this._recordsRead++;
+					this._bytesRead += meteredBytes(record);
+					attempt = 0;
+
+					if (!(args?.ignore_command_records && isCommandRecord(record))) {
+						if (pendingRecord) {
+							enqueue({ record: pendingRecord });
+						}
+						pendingRecord = toSDKReadRecord(record, format);
+					}
+					if ("caughtUp" in result) {
+						await flushPending(result.caughtUp ?? undefined);
+					}
+				}
+			}
+		};
+
+		super(
+			{
+				start: () => {
+					queueMicrotask(() => void pump().catch(handlePumpError));
+				},
+				pull: async (controller) => {
+					while (!cancelled) {
+						if (pumpError) {
+							controller.error(pumpError);
 							return;
 						}
-
-						// Check if result is an error
-						if (!result.ok) {
-							reader.releaseLock();
-							currentReader = undefined;
-							const error = result.error;
-
-							// Check if we can retry (track session attempts, not record reads)
-							const effectiveMax = Math.max(1, retryConfig.maxAttempts);
-							if (isRetryable(error) && attempt < effectiveMax - 1) {
-								const retryFromSeqNum =
-									this._nextReadPosition?.seq_num ?? nextArgs.seq_num;
-								if (this._nextReadPosition) {
-									nextArgs.seq_num = this._nextReadPosition.seq_num;
-									// Clear alternative start position fields to avoid conflicting params
-									delete nextArgs.timestamp;
-									delete nextArgs.tail_offset;
-								}
-								// Compute planned backoff delay now so we can subtract it from wait budget
-								const delay = calculateDelay(
-									attempt,
-									retryConfig.minBaseDelayMillis,
-									retryConfig.maxBaseDelayMillis,
-								);
-								// Recompute remaining budget from original request each time to avoid double-subtraction
-								if (baselineCount !== undefined) {
-									nextArgs.count = Math.max(
-										0,
-										baselineCount - this._recordsRead,
-									);
-								}
-								if (baselineBytes !== undefined) {
-									nextArgs.bytes = Math.max(0, baselineBytes - this._bytesRead);
-								}
-								// Remaining wait budget for retry:
-								// During catchup (tail not yet observed), the full wait is sent.
-								// Once tailing, the wait budget is depleted based on time since
-								// the last batch with tail info, which approximates how long the
-								// server has been in its long polling state.
-								if (baselineWait !== undefined) {
-									if (this._lastTailAtMs !== undefined) {
-										const elapsedSeconds =
-											(performance.now() - this._lastTailAtMs) / 1000;
-										nextArgs.wait = Math.max(
-											0,
-											Math.floor(
-												baselineWait - (elapsedSeconds + delay / 1000),
-											),
-										);
-									} else {
-										nextArgs.wait = baselineWait;
-									}
-								}
-								// Behind until the new connection re-signals caught up
-								this.markBehind();
-
-								// Proactively cancel the current transport session before retrying
-								try {
-									await session.cancel?.("retry");
-								} catch {}
-
-								// Clear session so a new one gets created on retry
-								session = undefined;
-
-								debugRead(
-									"will retry after %dms, status=%s code=%s attempt=%d/%d next_seq_num=%s records_read=%d",
-									delay,
-									error.status,
-									error.code,
-									attempt + 1,
-									effectiveMax - 1,
-									retryFromSeqNum ?? "unknown",
-									this._recordsRead,
-								);
-								await sleep(delay);
-								if (cancelled) {
-									return;
-								}
-								attempt++;
-								break; // Break inner loop to retry
+						const delivery = deliveries.shift();
+						if (delivery) {
+							if (delivery.record) {
+								controller.enqueue(delivery.record);
 							}
-
-							// Error is not retryable or attempts exhausted
-							debugRead("error in retry loop: %s", error);
-							this.settleTerminal(error);
-							controller.error(error);
-							return;
-						}
-
-						// Success: enqueue the record and reset retry attempt counter
-						const record = result.value;
-						this._nextReadPosition = {
-							seq_num: record.seq_num + 1,
-							timestamp: record.timestamp,
-						};
-						this._recordsRead++;
-						this._bytesRead += meteredBytes(record);
-						attempt = 0;
-
-						if (args?.ignore_command_records && isCommandRecord(record)) {
+							if (delivery.caughtUpTail) {
+								this.markCaughtUp(delivery.caughtUpTail);
+							}
+							delivery.onDelivered?.();
+							if (delivery.record) {
+								return;
+							}
 							continue;
 						}
-						controller.enqueue(toSDKReadRecord(record, format));
+						if (pumpDone) {
+							controller.close();
+							return;
+						}
+						await new Promise<void>((resolve) => {
+							wakePull = resolve;
+						});
 					}
-				}
+				},
+				cancel: async (reason) => {
+					cancelled = true;
+					this.settleTerminal();
+					pumpDone = true;
+					deliveries.clear();
+					resolvePendingDelivery?.();
+					resolvePendingDelivery = undefined;
+					wake();
+					try {
+						// Cancel through the locked reader so the transport stream closes.
+						if (currentReader) {
+							await currentReader.cancel(reason);
+						} else {
+							await session?.cancel(reason);
+						}
+					} catch (err) {
+						if (!hasErrorCode(err, "ERR_INVALID_STATE")) {
+							throw err;
+						}
+					}
+				},
 			},
-			cancel: async (reason) => {
-				cancelled = true;
-				this.settleTerminal();
-				try {
-					// While the pump holds a reader lock, session.cancel() would
-					// reject with ERR_INVALID_STATE and the transport stream (and
-					// its HTTP/2 stream) would stay open; cancel via the reader.
-					if (currentReader) {
-						await currentReader.cancel(reason);
-					} else {
-						await session?.cancel(reason);
-					}
-				} catch (err) {
-					// Ignore ERR_INVALID_STATE - stream may already be closed/cancelled
-					if (!hasErrorCode(err, "ERR_INVALID_STATE")) {
-						throw err;
-					}
-				}
-			},
-		});
+			{ highWaterMark: 0 },
+		);
 	}
 
 	async [Symbol.asyncDispose]() {
@@ -684,8 +753,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		const promise = new Promise<Types.StreamPosition>((resolve, reject) => {
 			this.caughtUpWaiters.push({ resolve, reject });
 		});
-		// Mark handled so a dropped promise doesn't surface as an unhandled
-		// rejection; awaiting callers still observe the rejection.
+		// Prevent an unhandled rejection when the promise is ignored.
 		promise.catch(() => {});
 		return promise;
 	}

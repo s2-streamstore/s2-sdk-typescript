@@ -14,23 +14,17 @@ function sseBody(events: string[]): ReadableStream<Uint8Array> {
 }
 
 describe("FetchReadSession", () => {
-	it("reports caught-up state from batch tails and ping events", async () => {
+	it("reports caught-up state for batches and heartbeats", async () => {
 		const session = FetchReadSession._createForTesting(
 			sseBody([
-				// Batch abutting its tail: caught up.
-				'event: batch\ndata: {"records":[{"seq_num":0,"timestamp":1,"body":"a"}],"tail":{"seq_num":1,"timestamp":1}}\n\n',
-				// Heartbeat carrying the tail: caught up.
-				'event: ping\ndata: {"timestamp":123,"tail":{"seq_num":1,"timestamp":1}}\n\n',
-				// Batch lagging its tail: behind.
-				'event: batch\ndata: {"records":[{"seq_num":1,"timestamp":1,"body":"b"}],"tail":{"seq_num":5,"timestamp":1}}\n\n',
-				// Heartbeat without a tail (older server): falls back to the
-				// last batch-reported tail.
+				'event: batch\ndata: {"records":[{"seq_num":0,"timestamp":1,"body":"a"},{"seq_num":1,"timestamp":1,"body":"b"}],"tail":{"seq_num":2,"timestamp":1}}\n\n',
+				'event: ping\ndata: {"timestamp":123,"tail":{"seq_num":2,"timestamp":1}}\n\n',
+				'event: batch\ndata: {"records":[{"seq_num":2,"timestamp":1,"body":"c"}],"tail":{"seq_num":5,"timestamp":1}}\n\n',
+				'event: batch\ndata: {"records":[],"tail":{"seq_num":5,"timestamp":1}}\n\n',
 				'event: ping\ndata: {"timestamp":124}\n\n',
 			]),
 			"string",
 		);
-		const reports: Array<{ seq_num: number } | null> = [];
-		session.setCaughtUpListener((tail) => reports.push(tail));
 
 		const reader = session.getReader();
 		const results = [];
@@ -42,14 +36,14 @@ describe("FetchReadSession", () => {
 
 		expect(results).toMatchObject([
 			{ ok: true, value: { seq_num: 0 } },
-			{ ok: true, value: { seq_num: 1 } },
+			{ ok: true, value: { seq_num: 1 }, caughtUp: { seq_num: 2 } },
+			{ ok: true, caughtUp: { seq_num: 2 } },
+			{ ok: true, value: { seq_num: 2 }, caughtUp: null },
+			{ ok: true, caughtUp: { seq_num: 5 } },
+			{ ok: true, caughtUp: { seq_num: 5 } },
 		]);
-		expect(reports).toMatchObject([
-			{ seq_num: 1 },
-			{ seq_num: 1 },
-			null,
-			{ seq_num: 5 },
-		]);
+		expect(results[0]).not.toHaveProperty("caughtUp");
+		expect(session.nextReadPosition()).toMatchObject({ seq_num: 3 });
 		expect(session.lastObservedTail()).toMatchObject({ seq_num: 5 });
 	});
 

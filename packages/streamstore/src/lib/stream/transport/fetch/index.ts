@@ -131,46 +131,21 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 
 	private _nextReadPosition: API.StreamPosition | undefined = undefined;
 	private _lastObservedTail: API.StreamPosition | undefined = undefined;
-	private _caughtUpListener:
-		| ((tail: API.StreamPosition | null) => void)
-		| undefined = undefined;
-	private _lastCaughtUpReport: API.StreamPosition | null | undefined =
-		undefined;
-
-	private reportCaughtUp(tail: API.StreamPosition | null): void {
-		this._lastCaughtUpReport = tail;
-		this._caughtUpListener?.(tail);
-	}
-
-	public setCaughtUpListener(
-		listener: (tail: API.StreamPosition | null) => void,
-	): void {
-		this._caughtUpListener = listener;
-		if (this._lastCaughtUpReport !== undefined) {
-			listener(this._lastCaughtUpReport);
-		}
-	}
 
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
-		// Track error from parser
 		let parserError: S2Error | null = null;
 
-		// Track last SSE event time for timeout detection. Server heartbeats are
-		// randomized up to 15s apart; allow some scheduling and network slack
-		// before declaring the stream dead.
+		// Heartbeats can be 15 seconds apart. Allow 10 seconds for delays.
 		let lastPingTimeMs = performance.now();
-		const PING_TIMEOUT_MS = 25000; // 25 seconds
+		const PING_TIMEOUT_MS = 25000;
 
-		// Create EventStream that parses SSE and yields records
-		const eventStream = new EventStream<ReadRecord<Format>>(stream, (msg) => {
-			// Update ping time on ANY event from the server
+		const eventStream = new EventStream<ReadResult<Format>>(stream, (msg) => {
+			// Any event confirms the stream is active.
 			lastPingTimeMs = performance.now();
 
-			// Parse SSE events according to the S2 protocol
 			if (msg.event === "batch" && msg.data) {
 				const rawBatch: API.ReadBatch = JSON.parse(msg.data);
 				const batch = (() => {
-					// If format is bytes, decode base64 to Uint8Array
 					if (format === "bytes") {
 						return {
 							...rawBatch,
@@ -195,26 +170,33 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 				if (batch.tail) {
 					this._lastObservedTail = batch.tail;
 				}
-				let lastRecord = batch.records?.at(-1);
+				const lastRecord = batch.records?.at(-1);
 				if (lastRecord) {
 					this._nextReadPosition = {
 						seq_num: lastRecord.seq_num + 1,
 						timestamp: lastRecord.timestamp,
 					};
 				}
-				// Caught up iff the batch reports a tail its last record abuts
-				this.reportCaughtUp(
+				const caughtUp =
 					batch.tail &&
-						(lastRecord === undefined ||
-							lastRecord.seq_num + 1 === batch.tail.seq_num)
+					(lastRecord === undefined ||
+						lastRecord.seq_num + 1 === batch.tail.seq_num)
 						? batch.tail
-						: null,
+						: null;
+				const results: ReadResult<Format>[] = batch.records.map(
+					(record, index) => ({
+						ok: true,
+						value: record,
+						...(index === batch.records.length - 1 ? { caughtUp } : {}),
+					}),
 				);
-				return { done: false, batch: true, value: batch.records ?? [] };
+				if (results.length === 0) {
+					results.push({ ok: true, caughtUp });
+				}
+				return { done: false, batch: true, value: results };
 			}
 			if (msg.event === "error") {
-				// Store error and signal end of stream
-				// SSE error events are server errors - treat as 503 (Service Unavailable) for retry logic
+				// Treat server error events as retryable.
 				debug("parse event error");
 				parserError = new S2Error({
 					message: msg.data ?? "Unknown error",
@@ -224,9 +206,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			}
 			if (msg.event === "ping") {
 				debug("ping");
-				// A heartbeat means the reader is at the live tail. It carries the
-				// tail position; older servers omit it, so fall back to the last
-				// batch-reported one.
+				// Older servers omit the tail, so reuse the last reported one.
 				let tail: API.StreamPosition | undefined;
 				if (msg.data) {
 					try {
@@ -240,7 +220,11 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					tail = this._lastObservedTail;
 				}
 				if (tail) {
-					this.reportCaughtUp(tail);
+					return {
+						done: false,
+						batch: false,
+						value: { ok: true, caughtUp: tail },
+					};
 				}
 			}
 
@@ -344,8 +328,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 							}
 							controller.close();
 						} else {
-							// Emit successful result
-							controller.enqueue({ ok: true, value: result.value.value });
+							controller.enqueue(result.value.value);
 						}
 						return;
 					} catch (error) {
