@@ -21,7 +21,7 @@ describe("FetchReadSession", () => {
 				'event: ping\ndata: {"timestamp":123,"tail":{"seq_num":2,"timestamp":1}}\n\n',
 				'event: batch\ndata: {"records":[{"seq_num":2,"timestamp":1,"body":"c"}],"tail":{"seq_num":5,"timestamp":1}}\n\n',
 				'event: batch\ndata: {"records":[],"tail":{"seq_num":5,"timestamp":1}}\n\n',
-				'event: ping\ndata: {"timestamp":124}\n\n',
+				'event: ping\ndata: {"timestamp":124,"tail":{"seq_num":5,"timestamp":1}}\n\n',
 			]),
 			"string",
 		);

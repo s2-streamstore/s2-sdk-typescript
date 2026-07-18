@@ -206,25 +206,18 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			}
 			if (msg.event === "ping") {
 				debug("ping");
-				// Older servers omit the tail, so reuse the last reported one.
-				let tail: API.StreamPosition | undefined;
 				if (msg.data) {
 					try {
 						const ping: { tail?: API.StreamPosition } = JSON.parse(msg.data);
-						tail = ping.tail ?? undefined;
+						if (ping.tail) {
+							this._lastObservedTail = ping.tail;
+							return {
+								done: false,
+								batch: false,
+								value: { ok: true, caughtUp: ping.tail },
+							};
+						}
 					} catch {}
-				}
-				if (tail) {
-					this._lastObservedTail = tail;
-				} else {
-					tail = this._lastObservedTail;
-				}
-				if (tail) {
-					return {
-						done: false,
-						batch: false,
-						value: { ok: true, caughtUp: tail },
-					};
 				}
 			}
 
