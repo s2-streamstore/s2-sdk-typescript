@@ -206,19 +206,21 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 	 */
 	lastObservedTail(): Types.StreamPosition | undefined;
 	/**
-	 * True after all records through the last reported tail have been read.
-	 * New appends may advance the tail. Use {@link S2Stream.checkTail} to fetch
-	 * the current tail.
+	 * Reports whether the session has read through its latest reported tail.
+	 * Becomes false after a gap, a batch without a tail, or a reconnect.
+	 * Ignored command records count toward progress.
+	 * Use {@link S2Stream.checkTail} for the current stream tail.
 	 */
 	isCaughtUp(): boolean;
 	/**
-	 * Resolves with the last reported tail after all records through it are read.
-	 * Resolves immediately if already caught up and stays pending across retries.
-	 * Continue reading records while waiting. Call again after falling behind.
+	 * Returns a promise for the next caught-up state.
+	 * Resolves immediately if the session is already caught up.
+	 * Remains pending across reconnects.
+	 * Call again after the session falls behind.
+	 * Continue reading records while the promise is pending.
 	 *
-	 * Rejects with the fatal error, or `SESSION_CLOSED` if the session ends first.
-	 * New appends may advance the tail. Use {@link S2Stream.checkTail} to fetch
-	 * the current tail.
+	 * Resolves with the tail captured for that state.
+	 * Rejects with the read error or `SESSION_CLOSED` if the session ends first.
 	 */
 	caughtUp(): Promise<Types.StreamPosition>;
 }
