@@ -270,8 +270,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	private markCaughtUp(tail: API.StreamPosition): void {
 		this._isCaughtUp = true;
 		this._caughtUpTail = tail;
-		this._lastObservedTail = tail;
-		this._lastTailAtMs = performance.now();
 		const waiters = this.caughtUpWaiters.splice(0);
 		const position = toSDKStreamPosition(tail);
 		for (const waiter of waiters) {

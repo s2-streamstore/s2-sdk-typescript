@@ -182,6 +182,7 @@ class ManualReadSession
 {
 	private readonly queue: Array<ReadResult<"string"> | "close">;
 	private readonly notifyRef: { fn?: () => void };
+	private tail: StreamPosition | undefined;
 
 	constructor() {
 		const queue: Array<ReadResult<"string"> | "close"> = [];
@@ -217,7 +218,11 @@ class ManualReadSession
 	}
 
 	lastObservedTail(): StreamPosition | undefined {
-		return undefined;
+		return this.tail;
+	}
+
+	reportTail(tail: StreamPosition): void {
+		this.tail = tail;
 	}
 
 	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<"string">> {
@@ -304,6 +309,30 @@ describe("ReadSession caught-up signal (unit)", () => {
 		transport.push({ ok: true, caughtUp: tailAt(2) });
 		await expect(pending).resolves.toMatchObject({ seqNum: 2 });
 		expect(session.isCaughtUp()).toBe(true);
+
+		await reader.cancel();
+	});
+
+	it("does not replace a newer observed tail when catching up", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+		const caughtUp = session.caughtUp();
+		const reader = session.getReader();
+
+		transport.reportTail(tailAt(7));
+		transport.push(record(4, tailAt(5)));
+		await vi.waitFor(() => {
+			expect(session.lastObservedTail()?.seqNum).toBe(7);
+		});
+
+		expect((await reader.read()).value?.seqNum).toBe(4);
+		await expect(caughtUp).resolves.toMatchObject({ seqNum: 5 });
+		expect(session.isCaughtUp()).toBe(true);
+		expect(session.lastObservedTail()?.seqNum).toBe(7);
 
 		await reader.cancel();
 	});
