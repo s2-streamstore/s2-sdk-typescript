@@ -1,7 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type S2ClientOptions, S2Environment } from "../common.js";
 import { S2Endpoints } from "../endpoints.js";
-import { AppendRecord, BatchTransform, Producer, S2 } from "../index.js";
+import {
+	AppendInput,
+	AppendRecord,
+	BatchTransform,
+	Producer,
+	S2,
+} from "../index.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 
 const transports: SessionTransports[] = ["fetch", "s2s"];
@@ -191,6 +197,72 @@ describeIf("Correctness Integration Tests", () => {
 				abortController.abort();
 				await Promise.allSettled(concurrentTasks);
 				// Close first, then delete - racing these can cause errors
+				await stream.close();
+				await basin.streams.delete({ stream: streamName });
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it.each(transports)(
+		"signals caught up after the last record is read (%s)",
+		async (transport) => {
+			if (!basinName) {
+				throw new Error("Basin was not initialized");
+			}
+
+			const basin = s2.basin(basinName);
+			const streamName = generateStreamName(transport);
+			await basin.streams.create({ stream: streamName });
+			const stream = basin.stream(streamName, { forceTransport: transport });
+			const abortController = new AbortController();
+
+			try {
+				await stream.append(
+					AppendInput.create([
+						AppendRecord.string({ body: "first" }),
+						AppendRecord.string({ body: "second" }),
+					]),
+					{ signal: abortController.signal },
+				);
+
+				const session = await stream.readSession(
+					{ start: { from: { tailOffset: 2 } } },
+					{ signal: abortController.signal },
+				);
+				const reader = session.getReader();
+
+				try {
+					await expect
+						.poll(
+							() => {
+								const next = session.nextReadPosition()?.seqNum;
+								const tail = session.lastObservedTail()?.seqNum;
+								return tail !== undefined && next === tail;
+							},
+							{ timeout: TEST_TIMEOUT_MS / 2 },
+						)
+						.toBe(true);
+
+					const tailSeqNum = session.lastObservedTail()!.seqNum;
+					expect(session.isCaughtUp()).toBe(false);
+					const caughtUp = session.caughtUp();
+
+					const first = await reader.read();
+					expect(first.done).toBe(false);
+					expect(first.value?.seqNum).toBe(tailSeqNum - 2);
+					expect(session.isCaughtUp()).toBe(false);
+
+					const last = await reader.read();
+					expect(last.done).toBe(false);
+					expect(last.value?.seqNum).toBe(tailSeqNum - 1);
+					expect(session.isCaughtUp()).toBe(true);
+					await expect(caughtUp).resolves.toMatchObject({ seqNum: tailSeqNum });
+				} finally {
+					await reader.cancel().catch(() => {});
+				}
+			} finally {
+				abortController.abort();
 				await stream.close();
 				await basin.streams.delete({ stream: streamName });
 			}

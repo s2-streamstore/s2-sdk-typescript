@@ -146,25 +146,21 @@ export interface AppendSession extends AsyncDisposable {
 	failureCause(): S2Error | undefined;
 }
 
-/**
- * Result type for transport-level read operations.
- * Transport sessions yield ReadResult instead of throwing errors.
- */
-export type ReadResult<Format extends "string" | "bytes" = "string"> =
-	| { ok: true; value: ReadRecord<Format> }
+/** Result from a transport read session. */
+export type TransportReadEvent<Format extends "string" | "bytes" = "string"> =
+	| { ok: true; batch: ReadBatch<Format> }
 	| { ok: false; error: S2Error };
 
 /**
  * Transport-level read session interface.
- * Transport implementations yield ReadResult and never throw errors from the stream.
+ * Transport implementations yield batches and never throw errors from the stream.
  * ReadSession wraps these and converts them to the public ReadSession interface.
  */
 export interface TransportReadSession<
 	Format extends "string" | "bytes" = "string",
-> extends ReadableStream<ReadResult<Format>>,
-		AsyncIterable<ReadResult<Format>>,
+> extends ReadableStream<TransportReadEvent<Format>>,
+		AsyncIterable<TransportReadEvent<Format>>,
 		AsyncDisposable {
-	nextReadPosition(): API.StreamPosition | undefined;
 	lastObservedTail(): API.StreamPosition | undefined;
 }
 
@@ -195,9 +191,29 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 	 */
 	nextReadPosition(): Types.StreamPosition | undefined;
 	/**
-	 * Get the last observed tail position, if known.
+	 * Returns the latest tail reported for this session. This does not mean the
+	 * session has read through that tail.
 	 */
 	lastObservedTail(): Types.StreamPosition | undefined;
+	/**
+	 * Reports whether the session has read through its latest reported tail.
+	 * Returns false while records remain before the reported tail, after a batch
+	 * without a tail, or after a reconnect.
+	 * Ignored command records count toward progress.
+	 * Use {@link S2Stream.checkTail} for the current stream tail.
+	 */
+	isCaughtUp(): boolean;
+	/**
+	 * Returns a promise for the next caught-up state.
+	 * Resolves immediately if the session is already caught up.
+	 * Remains pending across reconnects.
+	 * Call again after the session falls behind.
+	 * Continue reading records while the promise is pending.
+	 *
+	 * Resolves with the tail captured for that state.
+	 * Rejects with the read error or `SESSION_CLOSED` if the session ends first.
+	 */
+	caughtUp(): Promise<Types.StreamPosition>;
 }
 
 /**

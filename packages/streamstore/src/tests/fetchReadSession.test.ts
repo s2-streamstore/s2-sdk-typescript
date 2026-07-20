@@ -1,7 +1,58 @@
 import { describe, expect, it } from "vitest";
 import { FetchReadSession } from "../lib/stream/transport/fetch/index.js";
 
+function sseBody(events: string[]): ReadableStream<Uint8Array> {
+	const encoder = new TextEncoder();
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const event of events) {
+				controller.enqueue(encoder.encode(event));
+			}
+			controller.close();
+		},
+	});
+}
+
 describe("FetchReadSession", () => {
+	it("normalizes batches and pings into read events", async () => {
+		const session = FetchReadSession._createForTesting(
+			sseBody([
+				'event: batch\ndata: {"records":[{"seq_num":0,"timestamp":1,"body":"a"},{"seq_num":1,"timestamp":1,"body":"b"}],"tail":{"seq_num":2,"timestamp":1}}\n\n',
+				'event: ping\ndata: {"timestamp":123,"tail":{"seq_num":2,"timestamp":1}}\n\n',
+				'event: batch\ndata: {"records":[{"seq_num":2,"timestamp":1,"body":"c"}],"tail":{"seq_num":5,"timestamp":1}}\n\n',
+				'event: batch\ndata: {"records":[],"tail":{"seq_num":5,"timestamp":1}}\n\n',
+				'event: ping\ndata: {"timestamp":124,"tail":{"seq_num":5,"timestamp":1}}\n\n',
+			]),
+			"string",
+		);
+
+		const reader = session.getReader();
+		const results = [];
+		while (true) {
+			const r = await reader.read();
+			if (r.done) break;
+			results.push(r.value);
+		}
+
+		expect(results).toMatchObject([
+			{
+				ok: true,
+				batch: {
+					records: [{ seq_num: 0 }, { seq_num: 1 }],
+					tail: { seq_num: 2 },
+				},
+			},
+			{ ok: true, batch: { records: [], tail: { seq_num: 2 } } },
+			{
+				ok: true,
+				batch: { records: [{ seq_num: 2 }], tail: { seq_num: 5 } },
+			},
+			{ ok: true, batch: { records: [], tail: { seq_num: 5 } } },
+			{ ok: true, batch: { records: [], tail: { seq_num: 5 } } },
+		]);
+		expect(session.lastObservedTail()).toMatchObject({ seq_num: 5 });
+	});
+
 	it("converts raw browser body stream errors into transport error results", async () => {
 		const body = new ReadableStream<Uint8Array>({
 			pull() {
