@@ -5,17 +5,26 @@ import { RetryReadSession } from "../lib/retry.js";
 import type {
 	ReadRecord as InternalReadRecord,
 	ReadArgs,
-	ReadResult,
+	TransportReadEvent,
 	TransportReadSession,
 } from "../lib/stream/types.js";
 import type { ReadRecord as SDKReadRecord } from "../types.js";
 
-/**
- * Fake TransportReadSession for testing ReadSession.
- * Implements the transport layer pattern: yields ReadResult and never throws.
- */
+function readBatch<Format extends "string" | "bytes">(
+	records: InternalReadRecord<Format>[],
+	tail?: StreamPosition,
+): TransportReadEvent<Format> {
+	return { ok: true, batch: { records, ...(tail ? { tail } : {}) } };
+}
+
+function readError<Format extends "string" | "bytes" = "string">(
+	error: S2Error,
+): TransportReadEvent<Format> {
+	return { ok: false, error };
+}
+
 class FakeReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadResult<Format>>
+	extends ReadableStream<TransportReadEvent<Format>>
 	implements TransportReadSession<Format>
 {
 	public recordsEmitted = 0;
@@ -41,11 +50,11 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 					emittedCount >= behavior.errorAfterRecords
 				) {
 					// Emit error result instead of throwing
-					controller.enqueue({
-						ok: false,
-						error:
+					controller.enqueue(
+						readError<Format>(
 							behavior.error ?? new S2Error({ message: "boom", status: 500 }),
-					});
+						),
+					);
 					controller.close();
 					return;
 				}
@@ -53,10 +62,9 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 				// Emit records one at a time as they're requested
 				if (emittedCount < behavior.records.length) {
 					// Emit success result
-					controller.enqueue({
-						ok: true,
-						value: behavior.records[emittedCount]!,
-					});
+					controller.enqueue(
+						readBatch([behavior.records[emittedCount]!], behavior.tail),
+					);
 					emittedCount++;
 
 					// Check if we should error after emitting this record
@@ -65,11 +73,11 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 						emittedCount >= behavior.errorAfterRecords
 					) {
 						// Emit error result instead of throwing
-						controller.enqueue({
-							ok: false,
-							error:
+						controller.enqueue(
+							readError<Format>(
 								behavior.error ?? new S2Error({ message: "boom", status: 500 }),
-						});
+							),
+						);
 						controller.close();
 						return;
 					}
@@ -97,7 +105,7 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 	}
 
 	// Implement AsyncIterable (for await...of support)
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
+	[Symbol.asyncIterator](): AsyncIterableIterator<TransportReadEvent<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
 		const reader = this.getReader();
@@ -128,7 +136,7 @@ class FakeReadSession<Format extends "string" | "bytes" = "string">
 }
 
 class ThrowingReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadResult<Format>>
+	extends ReadableStream<TransportReadEvent<Format>>
 	implements TransportReadSession<Format>
 {
 	constructor(private readonly error: Error) {
@@ -147,7 +155,7 @@ class ThrowingReadSession<Format extends "string" | "bytes" = "string">
 		return undefined;
 	}
 
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
+	[Symbol.asyncIterator](): AsyncIterableIterator<TransportReadEvent<Format>> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
 		const reader = this.getReader();
@@ -177,15 +185,15 @@ class ThrowingReadSession<Format extends "string" | "bytes" = "string">
 }
 
 class ManualReadSession
-	extends ReadableStream<ReadResult<"string">>
+	extends ReadableStream<TransportReadEvent<"string">>
 	implements TransportReadSession<"string">
 {
-	private readonly queue: Array<ReadResult<"string"> | "close">;
+	private readonly queue: Array<TransportReadEvent<"string"> | "close">;
 	private readonly notifyRef: { fn?: () => void };
 	private tail: StreamPosition | undefined;
 
 	constructor() {
-		const queue: Array<ReadResult<"string"> | "close"> = [];
+		const queue: Array<TransportReadEvent<"string"> | "close"> = [];
 		const notifyRef: { fn?: () => void } = {};
 		super({
 			pull: async (controller) => {
@@ -206,7 +214,7 @@ class ManualReadSession
 		this.notifyRef = notifyRef;
 	}
 
-	push(item: ReadResult<"string"> | "close"): void {
+	push(item: TransportReadEvent<"string"> | "close"): void {
 		this.queue.push(item);
 		const notify = this.notifyRef.fn;
 		this.notifyRef.fn = undefined;
@@ -225,7 +233,9 @@ class ManualReadSession
 		this.tail = tail;
 	}
 
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<"string">> {
+	[Symbol.asyncIterator](): AsyncIterableIterator<
+		TransportReadEvent<"string">
+	> {
 		const fn = (ReadableStream.prototype as any)[Symbol.asyncIterator];
 		if (typeof fn === "function") return fn.call(this);
 		throw new Error("not supported");
@@ -237,13 +247,10 @@ class ManualReadSession
 }
 
 describe("ReadSession caught-up signal (unit)", () => {
-	const record = (
-		seq_num: number,
-		caughtUp?: StreamPosition | null,
-	): ReadResult<"string"> => ({
-		ok: true,
-		value: { seq_num, timestamp: 1000, body: "x" },
-		...(caughtUp !== undefined ? { caughtUp } : {}),
+	const record = (seq_num: number): InternalReadRecord<"string"> => ({
+		seq_num,
+		timestamp: 1000,
+		body: "x",
 	});
 	const tailAt = (seq_num: number): StreamPosition => ({
 		seq_num,
@@ -264,10 +271,10 @@ describe("ReadSession caught-up signal (unit)", () => {
 		void pending.then(settled, settled);
 		const reader = session.getReader();
 
-		transport.push(record(0));
-		transport.push(record(1, tailAt(2)));
+		transport.push(readBatch([record(0)], tailAt(3)));
+		transport.push(readBatch([record(1), record(2)], tailAt(3)));
 		await vi.waitFor(() => {
-			expect(session.nextReadPosition()?.seqNum).toBe(2);
+			expect(session.nextReadPosition()?.seqNum).toBe(3);
 		});
 		expect(session.isCaughtUp()).toBe(false);
 		expect(settled).not.toHaveBeenCalled();
@@ -279,16 +286,20 @@ describe("ReadSession caught-up signal (unit)", () => {
 
 		const second = await reader.read();
 		expect(second.value?.seqNum).toBe(1);
-		await expect(pending).resolves.toMatchObject({ seqNum: 2 });
+		expect(session.isCaughtUp()).toBe(false);
+
+		const third = await reader.read();
+		expect(third.value?.seqNum).toBe(2);
+		await expect(pending).resolves.toMatchObject({ seqNum: 3 });
 		expect(session.isCaughtUp()).toBe(true);
-		await expect(session.caughtUp()).resolves.toMatchObject({ seqNum: 2 });
+		await expect(session.caughtUp()).resolves.toMatchObject({ seqNum: 3 });
 
 		transport.push("close");
 		expect((await reader.read()).done).toBe(true);
 		reader.releaseLock();
 	});
 
-	it("marks caught up when the tail arrives after the last record", async () => {
+	it("orders an empty caught-up batch after pending records", async () => {
 		const transport = new ManualReadSession();
 		const session = await RetryReadSession.create(
 			async () => transport,
@@ -298,15 +309,15 @@ describe("ReadSession caught-up signal (unit)", () => {
 		const pending = session.caughtUp();
 		const reader = session.getReader();
 
-		transport.push(record(0));
-		transport.push(record(1, null));
+		transport.push(readBatch([record(0), record(1)]));
+		transport.push(readBatch([], tailAt(2)));
+		await vi.waitFor(() => {
+			expect(session.nextReadPosition()?.seqNum).toBe(2);
+		});
 
 		expect((await reader.read()).value?.seqNum).toBe(0);
 		expect(session.isCaughtUp()).toBe(false);
 		expect((await reader.read()).value?.seqNum).toBe(1);
-		expect(session.isCaughtUp()).toBe(false);
-
-		transport.push({ ok: true, caughtUp: tailAt(2) });
 		await expect(pending).resolves.toMatchObject({ seqNum: 2 });
 		expect(session.isCaughtUp()).toBe(true);
 
@@ -324,7 +335,7 @@ describe("ReadSession caught-up signal (unit)", () => {
 		const reader = session.getReader();
 
 		transport.reportTail(tailAt(7));
-		transport.push(record(4, tailAt(5)));
+		transport.push(readBatch([record(4)], tailAt(5)));
 		await vi.waitFor(() => {
 			expect(session.lastObservedTail()?.seqNum).toBe(7);
 		});
@@ -351,7 +362,7 @@ describe("ReadSession caught-up signal (unit)", () => {
 		void read.then(readSettled, readSettled);
 		const pending = session.caughtUp();
 
-		transport.push({ ok: true, caughtUp: tailAt(3) });
+		transport.push(readBatch([], tailAt(3)));
 
 		await expect(pending).resolves.toMatchObject({ seqNum: 3 });
 		expect(session.isCaughtUp()).toBe(true);
@@ -373,17 +384,20 @@ describe("ReadSession caught-up signal (unit)", () => {
 		const reader = session.getReader();
 		const pending = session.caughtUp();
 
-		transport.push(record(0));
-		transport.push({
-			ok: true,
-			value: {
-				seq_num: 1,
-				timestamp: 1000,
-				body: "fence-token",
-				headers: [["", "fence"]],
-			},
-			caughtUp: tailAt(2),
-		});
+		transport.push(
+			readBatch(
+				[
+					record(0),
+					{
+						seq_num: 1,
+						timestamp: 1000,
+						body: "fence-token",
+						headers: [["", "fence"]],
+					},
+				],
+				tailAt(2),
+			),
+		);
 
 		await vi.waitFor(() => {
 			expect(session.nextReadPosition()?.seqNum).toBe(2);
@@ -404,7 +418,7 @@ describe("ReadSession caught-up signal (unit)", () => {
 		);
 
 		const pending = session.caughtUp();
-		transport.push(record(0));
+		transport.push(readBatch([record(0)]));
 		transport.push("close");
 
 		const results: SDKReadRecord<"string">[] = [];
@@ -428,10 +442,9 @@ describe("ReadSession caught-up signal (unit)", () => {
 		);
 
 		const pending = session.caughtUp();
-		transport.push({
-			ok: false,
-			error: new S2Error({ message: "bad request", status: 400 }),
-		});
+		transport.push(
+			readError(new S2Error({ message: "bad request", status: 400 })),
+		);
 
 		const reader = session.getReader();
 		await expect(reader.read()).rejects.toMatchObject({ status: 400 });
@@ -459,10 +472,9 @@ describe("ReadSession caught-up signal (unit)", () => {
 		const reader = session.getReader();
 		const read = reader.read();
 
-		transports[0]!.push({
-			ok: false,
-			error: new S2Error({ message: "transient", status: 503 }),
-		});
+		transports[0]!.push(
+			readError(new S2Error({ message: "transient", status: 503 })),
+		);
 
 		await vi.waitFor(() => {
 			expect(transports.length).toBe(2);
@@ -470,7 +482,7 @@ describe("ReadSession caught-up signal (unit)", () => {
 		expect(session.isCaughtUp()).toBe(false);
 		expect(settled).not.toHaveBeenCalled();
 
-		transports[1]!.push(record(0, tailAt(1)));
+		transports[1]!.push(readBatch([record(0)], tailAt(1)));
 
 		expect((await read).value?.seqNum).toBe(0);
 		await expect(pending).resolves.toMatchObject({ seqNum: 1 });

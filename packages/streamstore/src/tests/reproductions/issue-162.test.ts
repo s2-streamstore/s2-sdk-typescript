@@ -44,11 +44,15 @@ describe("Issue #162: retry sessions should stop on cancel/abort", () => {
 					const records = [
 						{
 							ok: true as const,
-							value: {
-								seq_num: 0,
-								timestamp: new Date().toISOString(),
-								body: "first",
-								headers: [],
+							batch: {
+								records: [
+									{
+										seq_num: 0,
+										timestamp: 0,
+										body: "first",
+										headers: [],
+									},
+								],
 							},
 						},
 						{

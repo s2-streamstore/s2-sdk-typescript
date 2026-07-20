@@ -146,31 +146,21 @@ export interface AppendSession extends AsyncDisposable {
 	failureCause(): S2Error | undefined;
 }
 
-/**
- * Result type for transport-level read operations.
- * Transport sessions yield ReadResult instead of throwing errors.
- */
-export type ReadResult<Format extends "string" | "bytes" = "string"> =
-	| {
-			ok: true;
-			value: ReadRecord<Format>;
-			// Omitted before the last batch result. Null means still behind.
-			caughtUp?: API.StreamPosition | null;
-	  }
-	| { ok: true; caughtUp: API.StreamPosition | null }
+/** Result from a transport read session. */
+export type TransportReadEvent<Format extends "string" | "bytes" = "string"> =
+	| { ok: true; batch: ReadBatch<Format> }
 	| { ok: false; error: S2Error };
 
 /**
  * Transport-level read session interface.
- * Transport implementations yield ReadResult and never throw errors from the stream.
+ * Transport implementations yield batches and never throw errors from the stream.
  * ReadSession wraps these and converts them to the public ReadSession interface.
  */
 export interface TransportReadSession<
 	Format extends "string" | "bytes" = "string",
-> extends ReadableStream<ReadResult<Format>>,
-		AsyncIterable<ReadResult<Format>>,
+> extends ReadableStream<TransportReadEvent<Format>>,
+		AsyncIterable<TransportReadEvent<Format>>,
 		AsyncDisposable {
-	nextReadPosition(): API.StreamPosition | undefined;
 	lastObservedTail(): API.StreamPosition | undefined;
 }
 

@@ -20,9 +20,9 @@ import type {
 	AppendSession as AppendSessionType,
 	ReadArgs,
 	ReadRecord,
-	ReadResult,
 	ReadSession as ReadSessionType,
 	TransportAppendSession,
+	TransportReadEvent,
 	TransportReadSession,
 } from "./stream/types.js";
 import { BatchSubmitTicket } from "./stream/types.js";
@@ -245,9 +245,10 @@ type CaughtUpWaiter = {
 };
 
 type ReadDelivery<Format extends "string" | "bytes"> = {
-	record?: Types.ReadRecord<Format>;
+	records: Types.ReadRecord<Format>[];
+	next: number;
 	caughtUpTail?: API.StreamPosition;
-	onDelivered?: () => void;
+	onDrained?: () => void;
 };
 
 export class RetryReadSession<Format extends "string" | "bytes" = "string">
@@ -362,15 +363,12 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		const format = (args?.as ?? "string") as Format;
 		let session: TransportReadSession<Format> | undefined = initialSession;
 		let currentReader:
-			| ReadableStreamDefaultReader<ReadResult<Format>>
+			| ReadableStreamDefaultReader<TransportReadEvent<Format>>
 			| undefined;
 		let cancelled = false;
 		const deliveries = new FifoQueue<ReadDelivery<Format>>();
 		let wakePull: (() => void) | undefined;
 		let resolvePendingDelivery: (() => void) | undefined;
-		let deferredCaughtUp:
-			| { tail: API.StreamPosition; onDelivered: () => void }
-			| undefined;
 		let pumpDone = false;
 		let pumpError: S2Error | undefined;
 
@@ -379,24 +377,31 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			wakePull = undefined;
 			resolve?.();
 		};
-		const enqueue = (delivery: ReadDelivery<Format>) => {
-			deliveries.push(delivery);
-			wake();
-		};
-		const enqueueCaughtUp = async (
-			record: Types.ReadRecord<Format> | undefined,
-			tail: API.StreamPosition,
+		const enqueueBatch = async (
+			records: Types.ReadRecord<Format>[],
+			caughtUpTail?: API.StreamPosition,
 		) => {
-			await new Promise<void>((onDelivered) => {
-				resolvePendingDelivery = onDelivered;
-				if (record) {
-					enqueue({ record, caughtUpTail: tail, onDelivered });
-				} else if (deliveries.length === 0) {
-					this.markCaughtUp(tail);
-					onDelivered();
-				} else {
-					deferredCaughtUp = { tail, onDelivered };
+			if (!caughtUpTail) {
+				if (records.length > 0) {
+					deliveries.push({ records, next: 0 });
+					wake();
 				}
+				return;
+			}
+			await new Promise<void>((onDrained) => {
+				resolvePendingDelivery = onDrained;
+				if (records.length === 0 && deliveries.length === 0) {
+					this.markCaughtUp(caughtUpTail);
+					onDrained();
+					return;
+				}
+				deliveries.push({
+					records,
+					next: 0,
+					caughtUpTail,
+					onDrained,
+				});
+				wake();
 			});
 			resolvePendingDelivery = undefined;
 		};
@@ -466,16 +471,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 				const reader = session.getReader();
 				currentReader = reader;
-				let pendingRecord: Types.ReadRecord<Format> | undefined;
-				const flushPending = async (tail?: API.StreamPosition) => {
-					const record = pendingRecord;
-					pendingRecord = undefined;
-					if (tail) {
-						await enqueueCaughtUp(record, tail);
-					} else if (record) {
-						enqueue({ record });
-					}
-				};
 
 				while (true) {
 					if (cancelled) {
@@ -507,9 +502,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						}
 					} catch {}
 					if (done || cancelled) {
-						if (!cancelled) {
-							await flushPending();
-						}
 						reader.releaseLock();
 						currentReader = undefined;
 						this.settleTerminal();
@@ -519,7 +511,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					}
 
 					if (!result.ok) {
-						await flushPending();
 						reader.releaseLock();
 						currentReader = undefined;
 						const error = result.error;
@@ -589,38 +580,37 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						return;
 					}
 
-					if (!("value" in result)) {
-						if (result.caughtUp) {
-							await flushPending(result.caughtUp);
-						} else {
-							await flushPending();
-							this.markBehind();
-						}
-						continue;
-					}
-
-					// A received record remains behind until delivered.
-					const record = result.value;
 					this.markBehind();
-					this._nextReadPosition = {
-						seq_num: record.seq_num + 1,
-						timestamp: record.timestamp,
-					};
-					this._recordsRead++;
-					this._bytesRead += meteredBytes(record);
-					attempt = 0;
-
-					if (!(args?.ignore_command_records && isCommandRecord(record))) {
-						if (pendingRecord) {
-							enqueue({ record: pendingRecord });
+					const { records, tail } = result.batch;
+					const lastRecord = records.at(-1);
+					const caughtUpTail =
+						tail &&
+						(lastRecord === undefined ||
+							lastRecord.seq_num + 1 === tail.seq_num)
+							? tail
+							: undefined;
+					const visibleRecords: Types.ReadRecord<Format>[] = [];
+					for (const record of records) {
+						this._nextReadPosition = {
+							seq_num: record.seq_num + 1,
+							timestamp: record.timestamp,
+						};
+						this._recordsRead++;
+						this._bytesRead += meteredBytes(record);
+						attempt = 0;
+						if (!(args?.ignore_command_records && isCommandRecord(record))) {
+							visibleRecords.push(toSDKReadRecord(record, format));
 						}
-						pendingRecord = toSDKReadRecord(record, format);
 					}
-					if ("caughtUp" in result) {
-						await flushPending(result.caughtUp ?? undefined);
-					}
+					await enqueueBatch(visibleRecords, caughtUpTail);
 				}
 			}
+		};
+		const finishDelivery = (delivery: ReadDelivery<Format>) => {
+			if (delivery.caughtUpTail) {
+				this.markCaughtUp(delivery.caughtUpTail);
+			}
+			delivery.onDrained?.();
 		};
 
 		super(
@@ -634,21 +624,20 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							controller.error(pumpError);
 							return;
 						}
-						const delivery = deliveries.shift();
+						const delivery = deliveries.peek();
 						if (delivery) {
-							if (delivery.record) {
-								controller.enqueue(delivery.record);
+							let delivered = false;
+							if (delivery.next < delivery.records.length) {
+								controller.enqueue(delivery.records[delivery.next++]!);
+								delivered = true;
 							}
-							if (delivery.caughtUpTail) {
-								this.markCaughtUp(delivery.caughtUpTail);
+							if (delivery.next === delivery.records.length) {
+								deliveries.shift();
+								finishDelivery(delivery);
 							}
-							delivery.onDelivered?.();
-							if (delivery.record) {
-								if (deliveries.length === 0 && deferredCaughtUp) {
-									const caughtUp = deferredCaughtUp;
-									deferredCaughtUp = undefined;
-									this.markCaughtUp(caughtUp.tail);
-									caughtUp.onDelivered();
+							if (delivered) {
+								while (deliveries.peek()?.records.length === 0) {
+									finishDelivery(deliveries.shift()!);
 								}
 								return;
 							}
@@ -668,7 +657,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					this.settleTerminal();
 					pumpDone = true;
 					deliveries.clear();
-					deferredCaughtUp = undefined;
 					resolvePendingDelivery?.();
 					resolvePendingDelivery = undefined;
 					wake();

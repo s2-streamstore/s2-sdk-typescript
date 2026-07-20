@@ -40,11 +40,11 @@ import type {
 	ReadArgs,
 	ReadBatch,
 	ReadRecord,
-	ReadResult,
 	ReadSession,
 	SessionTransport,
 	TransportAppendSession,
 	TransportConfig,
+	TransportReadEvent,
 	TransportReadSession,
 } from "../../types.js";
 import { streamAppend } from "./shared.js";
@@ -52,7 +52,7 @@ import { streamAppend } from "./shared.js";
 const debug = createDebug("s2:fetch");
 
 export class FetchReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadResult<Format>>
+	extends ReadableStream<TransportReadEvent<Format>>
 	implements TransportReadSession<Format>
 {
 	static async create<Format extends "string" | "bytes" = "string">(
@@ -129,7 +129,6 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		return new FetchReadSession(stream, format);
 	}
 
-	private _nextReadPosition: API.StreamPosition | undefined = undefined;
 	private _lastObservedTail: API.StreamPosition | undefined = undefined;
 
 	private constructor(stream: ReadableStream<Uint8Array>, format: Format) {
@@ -139,93 +138,75 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		let lastPingTimeMs = performance.now();
 		const PING_TIMEOUT_MS = 25000;
 
-		const eventStream = new EventStream<ReadResult<Format>>(stream, (msg) => {
-			// Any event confirms the stream is active.
-			lastPingTimeMs = performance.now();
+		const eventStream = new EventStream<TransportReadEvent<Format>>(
+			stream,
+			(msg) => {
+				// Any event confirms the stream is active.
+				lastPingTimeMs = performance.now();
 
-			if (msg.event === "batch" && msg.data) {
-				const rawBatch: API.ReadBatch = JSON.parse(msg.data);
-				const batch = (() => {
-					if (format === "bytes") {
-						return {
-							...rawBatch,
-							records: rawBatch.records.map((record) => ({
-								...record,
-								body: record.body ? decodeFromBase64(record.body) : undefined,
-								headers: record.headers?.map((header) =>
-									header.map((h) => decodeFromBase64(h)),
-								) as [Uint8Array, Uint8Array][],
-							})),
-						} satisfies ReadBatch<"bytes">;
-					} else {
-						return {
-							...rawBatch,
-							records: rawBatch.records.map((record) => ({
-								...record,
-								headers: record.headers || undefined,
-							})),
-						} satisfies ReadBatch<"string">;
-					}
-				})() as ReadBatch<Format>;
-				if (batch.tail) {
-					this._lastObservedTail = batch.tail;
-				}
-				const lastRecord = batch.records?.at(-1);
-				if (lastRecord) {
-					this._nextReadPosition = {
-						seq_num: lastRecord.seq_num + 1,
-						timestamp: lastRecord.timestamp,
-					};
-				}
-				const caughtUp =
-					batch.tail &&
-					(lastRecord === undefined ||
-						lastRecord.seq_num + 1 === batch.tail.seq_num)
-						? batch.tail
-						: null;
-				const results: ReadResult<Format>[] = batch.records.map(
-					(record, index) => ({
-						ok: true,
-						value: record,
-						...(index === batch.records.length - 1 ? { caughtUp } : {}),
-					}),
-				);
-				if (results.length === 0) {
-					results.push({ ok: true, caughtUp });
-				}
-				return { done: false, batch: true, value: results };
-			}
-			if (msg.event === "error") {
-				// Treat server error events as retryable.
-				debug("parse event error");
-				parserError = new S2Error({
-					message: msg.data ?? "Unknown error",
-					status: 503,
-				});
-				return { done: true };
-			}
-			if (msg.event === "ping") {
-				debug("ping");
-				if (msg.data) {
-					try {
-						const ping: { tail?: API.StreamPosition } = JSON.parse(msg.data);
-						if (ping.tail) {
-							this._lastObservedTail = ping.tail;
+				if (msg.event === "batch" && msg.data) {
+					const rawBatch: API.ReadBatch = JSON.parse(msg.data);
+					const batch = (() => {
+						if (format === "bytes") {
 							return {
-								done: false,
-								batch: false,
-								value: { ok: true, caughtUp: ping.tail },
-							};
+								...rawBatch,
+								records: rawBatch.records.map((record) => ({
+									...record,
+									body: record.body ? decodeFromBase64(record.body) : undefined,
+									headers: record.headers?.map((header) =>
+										header.map((h) => decodeFromBase64(h)),
+									) as [Uint8Array, Uint8Array][],
+								})),
+							} satisfies ReadBatch<"bytes">;
+						} else {
+							return {
+								...rawBatch,
+								records: rawBatch.records.map((record) => ({
+									...record,
+									headers: record.headers || undefined,
+								})),
+							} satisfies ReadBatch<"string">;
 						}
-					} catch {}
+					})() as ReadBatch<Format>;
+					if (batch.tail) {
+						this._lastObservedTail = batch.tail;
+					}
+					return { done: false, value: { ok: true, batch } };
 				}
-			}
+				if (msg.event === "error") {
+					// Treat server error events as retryable.
+					debug("parse event error");
+					parserError = new S2Error({
+						message: msg.data ?? "Unknown error",
+						status: 503,
+					});
+					return { done: true };
+				}
+				if (msg.event === "ping") {
+					debug("ping");
+					if (msg.data) {
+						try {
+							const ping: { tail?: API.StreamPosition } = JSON.parse(msg.data);
+							if (ping.tail) {
+								this._lastObservedTail = ping.tail;
+								return {
+									done: false,
+									value: {
+										ok: true,
+										batch: { records: [], tail: ping.tail },
+									},
+								};
+							}
+						} catch {}
+					}
+				}
 
-			// Skip ping events and other events
-			return { done: false };
-		});
+				// Skip ping events and other events
+				return { done: false };
+			},
+		);
 
-		// Wrap the EventStream to convert records to ReadResult and check for errors
+		// Normalize stream failures as transport events.
 		const reader = eventStream.getReader();
 		const cancelReader = async (reason?: unknown) => {
 			try {
@@ -350,18 +331,14 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		});
 	}
 
-	public nextReadPosition(): API.StreamPosition | undefined {
-		return this._nextReadPosition;
-	}
-
 	public lastObservedTail(): API.StreamPosition | undefined {
 		return this._lastObservedTail;
 	}
 
 	// Implement AsyncIterable (for await...of support)
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
+	[Symbol.asyncIterator](): AsyncIterableIterator<TransportReadEvent<Format>> {
 		const proto = ReadableStream.prototype as ReadableStreamWithAsyncIterator<
-			ReadResult<Format>
+			TransportReadEvent<Format>
 		>;
 		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") {

@@ -14,7 +14,7 @@ function sseBody(events: string[]): ReadableStream<Uint8Array> {
 }
 
 describe("FetchReadSession", () => {
-	it("reports caught-up state for batches and heartbeats", async () => {
+	it("normalizes batches and pings into read events", async () => {
 		const session = FetchReadSession._createForTesting(
 			sseBody([
 				'event: batch\ndata: {"records":[{"seq_num":0,"timestamp":1,"body":"a"},{"seq_num":1,"timestamp":1,"body":"b"}],"tail":{"seq_num":2,"timestamp":1}}\n\n',
@@ -35,15 +35,21 @@ describe("FetchReadSession", () => {
 		}
 
 		expect(results).toMatchObject([
-			{ ok: true, value: { seq_num: 0 } },
-			{ ok: true, value: { seq_num: 1 }, caughtUp: { seq_num: 2 } },
-			{ ok: true, caughtUp: { seq_num: 2 } },
-			{ ok: true, value: { seq_num: 2 }, caughtUp: null },
-			{ ok: true, caughtUp: { seq_num: 5 } },
-			{ ok: true, caughtUp: { seq_num: 5 } },
+			{
+				ok: true,
+				batch: {
+					records: [{ seq_num: 0 }, { seq_num: 1 }],
+					tail: { seq_num: 2 },
+				},
+			},
+			{ ok: true, batch: { records: [], tail: { seq_num: 2 } } },
+			{
+				ok: true,
+				batch: { records: [{ seq_num: 2 }], tail: { seq_num: 5 } },
+			},
+			{ ok: true, batch: { records: [], tail: { seq_num: 5 } } },
+			{ ok: true, batch: { records: [], tail: { seq_num: 5 } } },
 		]);
-		expect(results[0]).not.toHaveProperty("caughtUp");
-		expect(session.nextReadPosition()).toMatchObject({ seq_num: 3 });
 		expect(session.lastObservedTail()).toMatchObject({ seq_num: 5 });
 	});
 

@@ -42,11 +42,11 @@ import type {
 	AppendSessionOptions,
 	ReadArgs,
 	ReadRecord,
-	ReadResult,
 	ReadSession,
 	SessionTransport,
 	TransportAppendSession,
 	TransportConfig,
+	TransportReadEvent,
 	TransportReadSession,
 } from "../../types.js";
 import {
@@ -189,12 +189,10 @@ export class S2STransport implements SessionTransport {
 }
 
 class S2SReadSession<Format extends "string" | "bytes" = "string">
-	extends ReadableStream<ReadResult<Format>>
+	extends ReadableStream<TransportReadEvent<Format>>
 	implements TransportReadSession<Format>
 {
 	private http2Stream?: ClientHttp2Stream;
-	private _lastReadPosition?: API.StreamPosition;
-	private _nextReadPosition?: API.StreamPosition;
 	private _lastObservedTail?: API.StreamPosition;
 	private parser = new S2SFrameParser();
 
@@ -238,8 +236,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		const parser = new S2SFrameParser();
 		const textDecoder = new TextDecoder();
 		let http2Stream: ClientHttp2Stream | undefined;
-		let lastReadPosition: API.StreamPosition | undefined;
-
 		// Track timeout for detecting when server stops sending data
 		const TAIL_TIMEOUT_MS = 20000; // 20 seconds
 		let timeoutTimer: NodeJS.Timeout | undefined;
@@ -500,13 +496,10 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										let tail: API.StreamPosition | undefined;
 										if (protoBatch.tail) {
 											tail = convertStreamPosition(protoBatch.tail);
-											lastReadPosition = tail;
-											this._lastReadPosition = tail;
 											this._lastObservedTail = tail;
 											debug("received tail");
 										}
 
-										let batchNextReadPosition: API.StreamPosition | undefined;
 										const records = protoBatch.records.map((record) => {
 											const converted = this.convertRecord(
 												record,
@@ -514,40 +507,13 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 												textDecoder,
 											);
 
-											if (record.seqNum !== undefined) {
-												batchNextReadPosition = {
-													seq_num:
-														bigintToSafeNumber(
-															record.seqNum,
-															"SequencedRecord.seqNum",
-														) + 1,
-													timestamp: bigintToSafeNumber(
-														record.timestamp ?? 0n,
-														"SequencedRecord.timestamp",
-													),
-												};
-												this._nextReadPosition = batchNextReadPosition;
-											}
 											return converted;
 										});
 
-										const caughtUp =
-											tail &&
-											(records.length === 0 ||
-												batchNextReadPosition?.seq_num === tail.seq_num)
-												? tail
-												: null;
-										if (records.length === 0) {
-											controller.enqueue({ ok: true, caughtUp });
-										} else {
-											for (const [index, record] of records.entries()) {
-												controller.enqueue({
-													ok: true,
-													value: record,
-													...(index === records.length - 1 ? { caughtUp } : {}),
-												});
-											}
-										}
+										controller.enqueue({
+											ok: true,
+											batch: { records, ...(tail ? { tail } : {}) },
+										});
 									} catch (err) {
 										safeError(
 											new S2Error({
@@ -649,9 +615,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	}
 
 	// Polyfill for older browsers / Node.js environments
-	[Symbol.asyncIterator](): AsyncIterableIterator<ReadResult<Format>> {
+	[Symbol.asyncIterator](): AsyncIterableIterator<TransportReadEvent<Format>> {
 		const proto = ReadableStream.prototype as ReadableStreamWithAsyncIterator<
-			ReadResult<Format>
+			TransportReadEvent<Format>
 		>;
 		const fn = proto[Symbol.asyncIterator];
 		if (typeof fn === "function") {
@@ -694,10 +660,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				return this;
 			},
 		};
-	}
-
-	nextReadPosition(): API.StreamPosition | undefined {
-		return this._nextReadPosition;
 	}
 
 	lastObservedTail(): API.StreamPosition | undefined {
