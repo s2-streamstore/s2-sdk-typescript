@@ -182,6 +182,11 @@ export {
 export type { StreamOptions } from "./basin.js";
 export type { BatchOutput, BatchTransformOptions } from "./batch-transform.js";
 export type {
+	CaughtUpBatch,
+	CaughtUpBoundary,
+} from "./lib/stream/caught-up-tracker.js";
+export { CaughtUpTracker } from "./lib/stream/caught-up-tracker.js";
+export type {
 	AcksStream,
 	AppendHeaders,
 	AppendSession,
