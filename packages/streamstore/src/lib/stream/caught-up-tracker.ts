@@ -51,14 +51,18 @@ function sessionClosedError(): S2Error {
 }
 
 class Boundary implements CaughtUpBoundary {
-	readonly tail: StreamPosition;
+	private readonly caughtUpTail: StreamPosition;
 	private delivered = false;
 
 	constructor(
-		private readonly caughtUpTail: StreamPosition,
+		caughtUpTail: StreamPosition,
 		private readonly deliver: (tail: StreamPosition) => void,
 	) {
-		this.tail = copyPosition(caughtUpTail);
+		this.caughtUpTail = copyPosition(caughtUpTail);
+	}
+
+	get tail(): StreamPosition {
+		return copyPosition(this.caughtUpTail);
 	}
 
 	markDelivered(): void {
@@ -94,17 +98,19 @@ export class CaughtUpTracker {
 		this.caughtUpTail = undefined;
 
 		const tail = input.tail;
+		if (tail === undefined) {
+			return undefined;
+		}
 		const reachesTail =
-			tail !== undefined &&
-			(input.recordCount === 0 ||
-				(input.recordCount > 0 &&
-					input.lastSeqNum !== undefined &&
-					input.lastSeqNum + 1 === tail.seqNum));
-		if (!reachesTail || tail === undefined) {
+			input.recordCount === 0 ||
+			(input.recordCount > 0 &&
+				input.lastSeqNum !== undefined &&
+				input.lastSeqNum + 1 === tail.seqNum);
+		if (!reachesTail) {
 			return undefined;
 		}
 
-		return new Boundary(copyPosition(tail), (caughtUpTail) => {
+		return new Boundary(tail, (caughtUpTail) => {
 			this.markDelivered(revision, caughtUpTail);
 		});
 	}
@@ -167,7 +173,7 @@ export class CaughtUpTracker {
 			return;
 		}
 
-		this.caughtUpTail = copyPosition(tail);
+		this.caughtUpTail = tail;
 		const waiters = this.waiters.splice(0);
 		for (const waiter of waiters) {
 			waiter.resolve(copyPosition(tail));
