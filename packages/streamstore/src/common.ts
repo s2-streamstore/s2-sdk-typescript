@@ -17,8 +17,9 @@ export type S2Compression = CompressionType;
  * - `all`: Retry all append operations, including those that may have side effects.
  *   Use when duplicate records on the stream are acceptable.
  * - `noSideEffects`: Retry when it can be determined that the request had no side effects.
- *   Certain server errors (`rate_limited`, `hot_server`) and client errors (`ECONNREFUSED`)
- *   are safe to retry since they guarantee no mutation occurred.
+ *   Certain server errors (`rate_limited`, `hot_server`) and pre-connection client errors
+ *   (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`) are safe to retry since they guarantee no
+ *   mutation occurred.
  */
 export type AppendRetryPolicy = "all" | "noSideEffects";
 

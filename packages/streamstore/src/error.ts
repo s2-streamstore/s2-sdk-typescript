@@ -277,8 +277,9 @@ export class S2Error extends Error {
 	/**
 	 * Returns true if the error guarantees that no mutation occurred.
 	 *
-	 * Certain server errors (`rate_limited`, `hot_server`) and client errors
-	 * (`ECONNREFUSED`) are safe to retry since they guarantee no side effects.
+	 * Certain server errors (`rate_limited`, `hot_server`) and pre-connection
+	 * client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`) are safe to
+	 * retry since they guarantee no side effects.
 	 */
 	hasNoSideEffects(): boolean {
 		if (this.origin === "server") {
@@ -288,7 +289,11 @@ export class S2Error extends Error {
 			);
 		}
 		if (this.origin === "sdk") {
-			return this.code === "ECONNREFUSED";
+			// Pre-connection errors: the TCP handshake never completed, so no
+			// request bytes could have been written and no mutation occurred.
+			return ["ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(
+				this.code as string,
+			);
 		}
 		return false;
 	}
