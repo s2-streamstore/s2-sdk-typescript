@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.25.1
+
+### Patch Changes
+
+- 62f8761: Retry appends on undici connect timeouts (`UND_ERR_CONNECT_TIMEOUT`) under the `noSideEffects` retry policy. A connect timeout occurs before the TCP handshake completes, so no request bytes are sent and no mutation can occur — it is now classified as having no side effects, matching `ECONNREFUSED`.
+
 ## 0.25.0
 
 ### Minor Changes
