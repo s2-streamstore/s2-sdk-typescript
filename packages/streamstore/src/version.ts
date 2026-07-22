@@ -4,4 +4,4 @@
  * This file is auto-generated from package.json by scripts/generate-version.ts.
  * Do not edit manually.
  */
-export const VERSION = "0.24.3";
+export const VERSION = "0.25.0";

@@ -1,5 +1,18 @@
 # @s2-dev/streamstore
 
+## 0.25.0
+
+### Minor Changes
+
+- 5fb540d: Add `isCaughtUp()` and `caughtUp()` on read sessions to signal when reads reach the tail.
+
+### Patch Changes
+
+- 5fb540d: Extract caught-up tracking into a reusable transport-neutral component.
+- ef1f949: - Test suite: allow correctness test reads to outlive prolonged append outages and cleanly cancelling concurrent work on failure
+  - Normalize undici network failures so interrupted requests and response streams participate in SDK retry handling
+- 5fb540d: Update s2-specs and regenerate the generated types.
+
 ## 0.24.3
 
 ### Patch Changes
