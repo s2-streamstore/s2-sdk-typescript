@@ -192,9 +192,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<TransportReadEvent<Format>>
 	implements TransportReadSession<Format>
 {
-	private http2Stream?: ClientHttp2Stream;
 	private _lastObservedTail?: API.StreamPosition;
-	private parser = new S2SFrameParser();
 
 	static async create<Format extends "string" | "bytes" = "string">(
 		baseUrl: string,
@@ -232,17 +230,28 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private encryptionKey?: Redacted.Redacted<string>,
 		private compression: CompressionType = "none",
 	) {
-		// Initialize parser and textDecoder before super() call
 		const parser = new S2SFrameParser();
 		const textDecoder = new TextDecoder();
 		let http2Stream: ClientHttp2Stream | undefined;
+		let controllerClosed = false;
+		let cleanupListeners: (() => void) | undefined;
 		// Track timeout for detecting when server stops sending data
 		const TAIL_TIMEOUT_MS = 20000; // 20 seconds
 		let timeoutTimer: NodeJS.Timeout | undefined;
+		const markControllerClosed = () => {
+			if (controllerClosed) return false;
+			controllerClosed = true;
+			cleanupListeners?.();
+			cleanupListeners = undefined;
+			if (timeoutTimer) {
+				clearTimeout(timeoutTimer);
+				timeoutTimer = undefined;
+			}
+			return true;
+		};
 
 		super({
 			start: async (controller) => {
-				let controllerClosed = false;
 				let responseCode: number | undefined;
 				let pendingChunks: Buffer[] | undefined;
 
@@ -257,7 +266,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					| undefined;
 				let sessionConnection: Http2Session | undefined;
 
-				const cleanupListeners = () => {
+				cleanupListeners = () => {
 					if (abortHandler && options?.signal) {
 						options.signal.removeEventListener("abort", abortHandler);
 					}
@@ -270,13 +279,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					sessionConnection = undefined;
 				};
 				const safeClose = () => {
-					if (!controllerClosed) {
-						controllerClosed = true;
-						cleanupListeners();
-						if (timeoutTimer) {
-							clearTimeout(timeoutTimer);
-							timeoutTimer = undefined;
-						}
+					if (markControllerClosed()) {
 						try {
 							controller.close();
 						} catch {
@@ -285,13 +288,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					}
 				};
 				const safeError = (err: unknown) => {
-					if (!controllerClosed) {
-						controllerClosed = true;
-						cleanupListeners();
-						if (timeoutTimer) {
-							clearTimeout(timeoutTimer);
-							timeoutTimer = undefined;
-						}
+					if (markControllerClosed()) {
 						// Convert error to S2Error and enqueue as error result
 						controller.enqueue({ ok: false, error: s2Error(err) });
 						controller.close();
@@ -362,6 +359,10 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					});
 
 					http2Stream = stream;
+					if (controllerClosed) {
+						stream.close();
+						return;
+					}
 
 					abortHandler = () => {
 						if (!stream.closed) {
@@ -394,6 +395,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					});
 
 					const processChunk = (chunk: Buffer) => {
+						if (controllerClosed) return;
 						try {
 							const status = responseCode ?? 500;
 							if (status >= 400) {
@@ -583,15 +585,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				}
 			},
 			cancel: async () => {
+				markControllerClosed();
 				if (http2Stream && !http2Stream.closed) {
 					http2Stream.close();
 				}
 			},
 		});
-
-		// Assign parser to instance property after super() completes
-		this.parser = parser;
-		this.http2Stream = http2Stream;
 	}
 
 	/**
