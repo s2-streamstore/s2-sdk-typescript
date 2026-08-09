@@ -444,6 +444,39 @@ describe("S2STransport http2 settings", () => {
 	);
 });
 
+describe("S2STransport read cancellation", () => {
+	it(
+		"does not enqueue after cancellation closes a partial frame",
+		async () => {
+			let resolveStreamStarted: (() => void) | undefined;
+			const streamStarted = new Promise<void>((resolve) => {
+				resolveStreamStarted = resolve;
+			});
+			const server = await startServer((stream) => {
+				stream.write(Buffer.from([0, 0, 8, 0, 1]));
+				resolveStreamStarted?.();
+			});
+
+			try {
+				const transport = new S2STransport({
+					baseUrl: `${server.origin}/v1`,
+					accessToken: Redacted.make("test-token"),
+				});
+				const session = await transport.makeReadSession("test-stream");
+				await streamStarted;
+				await sleep(50);
+
+				await session.cancel();
+				await sleep(50);
+				await transport.close();
+			} finally {
+				await server.close().catch(() => {});
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
 describe("S2STransport connection sharing", () => {
 	it(
 		"shares one connection across transports and closes it on last close",
