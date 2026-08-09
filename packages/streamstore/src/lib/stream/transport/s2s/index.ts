@@ -192,9 +192,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 	extends ReadableStream<TransportReadEvent<Format>>
 	implements TransportReadSession<Format>
 {
-	private http2Stream?: ClientHttp2Stream;
 	private _lastObservedTail?: API.StreamPosition;
-	private parser = new S2SFrameParser();
 
 	static async create<Format extends "string" | "bytes" = "string">(
 		baseUrl: string,
@@ -232,7 +230,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private encryptionKey?: Redacted.Redacted<string>,
 		private compression: CompressionType = "none",
 	) {
-		// Initialize parser and textDecoder before super() call
 		const parser = new S2SFrameParser();
 		const textDecoder = new TextDecoder();
 		let http2Stream: ClientHttp2Stream | undefined;
@@ -398,6 +395,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					});
 
 					const processChunk = (chunk: Buffer) => {
+						if (controllerClosed) return;
 						try {
 							const status = responseCode ?? 500;
 							if (status >= 400) {
@@ -593,10 +591,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				}
 			},
 		});
-
-		// Assign parser to instance property after super() completes
-		this.parser = parser;
-		this.http2Stream = http2Stream;
 	}
 
 	/**
