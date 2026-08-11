@@ -168,7 +168,7 @@ type PendingSubmission = {
 	ack: Deferred<AppendAck>;
 };
 
-class ManualAppendSession implements AppendSession {
+class ControlledAppendSession implements AppendSession {
 	readonly readable = new ReadableStream<AppendAck>();
 	readonly writable = new WritableStream<AppendInput>();
 	private readonly acksStream = new ReadableStream<AppendAck>() as AcksStream;
@@ -301,7 +301,7 @@ describe("Producer", () => {
 	});
 
 	it("flush emits the current partial batch and waits for all prior acks", async () => {
-		const session = new ManualAppendSession();
+		const session = new ControlledAppendSession();
 		const producer = new Producer(
 			new BatchTransform({
 				lingerDurationMillis: 60_000,
@@ -341,7 +341,7 @@ describe("Producer", () => {
 	});
 
 	it("flush is reusable, does nothing when empty, and excludes later submissions", async () => {
-		const session = new ManualAppendSession();
+		const session = new ControlledAppendSession();
 		const producer = new Producer(
 			new BatchTransform({
 				lingerDurationMillis: 60_000,
@@ -385,7 +385,7 @@ describe("Producer", () => {
 				status: 412,
 				origin: "server",
 			});
-			const session = new ManualAppendSession(
+			const session = new ControlledAppendSession(
 				failurePhase === "submit" ? { submitNumber: 2, error } : undefined,
 			);
 			const producer = new Producer(
