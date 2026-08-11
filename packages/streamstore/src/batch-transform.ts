@@ -68,7 +68,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 				this.handleRecord(chunk);
 			},
 			flush: () => {
-				this.flush();
+				this.flushCurrentBatch();
 			},
 			cancel: () => {
 				this.cancelLingerTimer();
@@ -154,7 +154,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			this.currentBatchSize + recordSize > this.maxBatchBytes;
 
 		if (wouldExceedRecords || wouldExceedBytes) {
-			this.flush();
+			this.flushCurrentBatch();
 			// Restart linger timer for new batch
 			if (this.lingerDuration >= 0) {
 				this.startLingerTimer();
@@ -170,11 +170,30 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		const nowExceedsBytes = this.currentBatchSize >= this.maxBatchBytes;
 
 		if (nowExceedsRecords || nowExceedsBytes) {
-			this.flush();
+			this.flushCurrentBatch();
 		}
 	}
 
-	private flush(): void {
+	/**
+	 * Emit the current partial batch immediately.
+	 *
+	 * This does not wait for the batch to be appended or acknowledged. Use
+	 * `Producer.flush()` when a durable boundary is required.
+	 */
+	flush(): void {
+		try {
+			this.flushCurrentBatch();
+		} catch (err) {
+			try {
+				this.controller?.error(err);
+			} catch {
+				// Controller may already be closed or errored.
+			}
+			throw err;
+		}
+	}
+
+	private flushCurrentBatch(): void {
 		this.cancelLingerTimer();
 
 		if (this.currentBatch.length === 0) {
@@ -208,7 +227,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			this.lingerTimer = null;
 			if (this.currentBatch.length > 0) {
 				try {
-					this.flush();
+					this.flushCurrentBatch();
 				} catch (err) {
 					if (err instanceof TypeError) {
 						// Stream lifecycle issue (closed/errored controller) — safe to discard.

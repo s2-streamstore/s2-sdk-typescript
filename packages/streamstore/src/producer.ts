@@ -44,11 +44,9 @@ export class RecordSubmitTicket {
 	}
 }
 
-/**
- * Internal record tracking - only needs ack callbacks since submit() resolves
- * based on backpressure from the transform stream write.
- */
+/** Record state shared by FIFO batch association and acknowledgement tracking. */
 type InflightRecord = {
+	ackPromise: Promise<IndexedAppendAck>;
 	resolveAck: (ack: IndexedAppendAck) => void;
 	rejectAck: (err: S2Error) => void;
 };
@@ -60,6 +58,8 @@ type InflightRecord = {
  *   has been accepted (written to the batch transform). Backpressure is applied
  *   automatically via the transform stream when the AppendSession is at capacity.
  * - ticket.ack() returns a Promise<IndexedAppendAck> that resolves once the record is durable.
+ * - flush() emits the current partial batch and waits for all records submitted before it
+ *   to become durable, without closing the Producer.
  *
  * See the "Producer API" section of the root README for guidance on sizing batches,
  * wiring transforms, and handling application-level ids.
@@ -92,13 +92,15 @@ export class Producer implements AsyncDisposable {
 	readonly writable: WritableStream<AppendRecord>;
 
 	private readonly inflightRecords: InflightRecord[] = [];
+	private readonly pendingAckEntries = new Set<InflightRecord>();
 
-	private pumpError: S2Error | null = null;
+	private terminalError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
 		null;
 
 	private readonly debugName: string;
 	private submitCounter = 0;
+	private operationChain: Promise<void> = Promise.resolve();
 	private closePromise: Promise<void> | null = null;
 
 	constructor(
@@ -135,7 +137,7 @@ export class Producer implements AsyncDisposable {
 				await this.close();
 			},
 			abort: async (reason) => {
-				this.pumpError = toS2Error(reason);
+				this.fail(reason);
 				await this.close();
 			},
 		});
@@ -148,7 +150,7 @@ export class Producer implements AsyncDisposable {
 	 */
 	private async runPump(): Promise<void> {
 		debugProducer("[%s] pump started", this.debugName);
-		const pendingAcks = new Set<Promise<void>>();
+		const pendingAckHandlers = new Set<Promise<void>>();
 
 		try {
 			while (true) {
@@ -157,13 +159,13 @@ export class Producer implements AsyncDisposable {
 				if (done) {
 					debugProducer("[%s] pump done (transform closed)", this.debugName);
 					// Await all pending ack handlers before exiting
-					if (pendingAcks.size > 0) {
+					if (!this.terminalError && pendingAckHandlers.size > 0) {
 						debugProducer(
 							"[%s] pump awaiting %d pending acks",
 							this.debugName,
-							pendingAcks.size,
+							pendingAckHandlers.size,
 						);
-						await Promise.all(pendingAcks);
+						await Promise.all(pendingAckHandlers);
 					}
 					break;
 				}
@@ -206,30 +208,12 @@ export class Producer implements AsyncDisposable {
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
-					const error = toS2Error(err);
+					const error = this.fail(err);
 					debugProducer(
 						"[%s] pump submit error: %s",
 						this.debugName,
 						error.message,
 					);
-
-					if (!this.pumpError) {
-						this.pumpError = error;
-					}
-
-					// Reject acks for records in this batch
-					for (const record of associatedRecords) {
-						record.rejectAck(error);
-					}
-
-					try {
-						if (this.readableController) {
-							this.readableController.error(error);
-							this.readableController = null;
-						}
-					} catch {
-						// Controller may be closed/errored
-					}
 
 					break;
 				}
@@ -259,42 +243,25 @@ export class Producer implements AsyncDisposable {
 						}
 					})
 					.catch((err) => {
-						const error = toS2Error(err);
+						const error = this.fail(err);
 						debugProducer(
 							"[%s] pump ack error: %s",
 							this.debugName,
 							error.message,
 						);
-
-						if (!this.pumpError) {
-							this.pumpError = error;
-						}
-
-						for (const record of associatedRecords) {
-							record.rejectAck(error);
-						}
-
-						try {
-							if (this.readableController) {
-								this.readableController.error(error);
-								this.readableController = null;
-							}
-						} catch {
-							// Controller may be closed/errored
-						}
 					})
 					.finally(() => {
-						pendingAcks.delete(ackHandler);
+						pendingAckHandlers.delete(ackHandler);
 					});
-				pendingAcks.add(ackHandler);
+				pendingAckHandlers.add(ackHandler);
 			}
 
 			// After the loop exits with an error, cancel the transform reader
 			// so pending transformWriter.write() calls are unblocked (they will
 			// reject, causing submit() to throw). Then reject any remaining
 			// inflight records whose ack promises would otherwise hang.
-			if (this.pumpError) {
-				this.transformReader.cancel(this.pumpError).catch(() => {});
+			if (this.terminalError) {
+				this.transformReader.cancel(this.terminalError).catch(() => {});
 
 				if (this.inflightRecords.length > 0) {
 					debugProducer(
@@ -303,32 +270,19 @@ export class Producer implements AsyncDisposable {
 						this.inflightRecords.length,
 					);
 					for (const record of this.inflightRecords.splice(0)) {
-						record.rejectAck(this.pumpError);
+						record.rejectAck(this.terminalError);
 					}
 				}
 			}
 		} catch (err) {
-			const error = toS2Error(err);
+			const error = this.fail(err);
 			debugProducer(
 				"[%s] pump caught error: %s",
 				this.debugName,
 				error.message,
 			);
 
-			if (!this.pumpError) {
-				this.pumpError = error;
-			}
-
-			// Reject all remaining inflight records
-			for (const record of this.inflightRecords.splice(0)) {
-				record.rejectAck(error);
-			}
-
-			// Error the readable stream
-			if (this.readableController) {
-				this.readableController.error(error);
-				this.readableController = null;
-			}
+			this.inflightRecords.splice(0);
 		}
 	}
 
@@ -341,7 +295,13 @@ export class Producer implements AsyncDisposable {
 	 *
 	 * @throws S2Error if the Producer has failed
 	 */
-	async submit(record: AppendRecord): Promise<RecordSubmitTicket> {
+	submit(record: AppendRecord): Promise<RecordSubmitTicket> {
+		return this.enqueueOperation(() => this.submitInternal(record));
+	}
+
+	private async submitInternal(
+		record: AppendRecord,
+	): Promise<RecordSubmitTicket> {
 		const submitId = ++this.submitCounter;
 
 		debugProducer(
@@ -351,15 +311,15 @@ export class Producer implements AsyncDisposable {
 			this.inflightRecords.length,
 		);
 
-		// Pump already failed: rethrow the original error (as close() does)
+		// The Producer already failed: rethrow the original error (as close() does)
 		// so its type is preserved.
-		if (this.pumpError) {
+		if (this.terminalError) {
 			debugProducer(
-				"[%s] submit #%d: pump already failed",
+				"[%s] submit #%d: producer already failed",
 				this.debugName,
 				submitId,
 			);
-			throw this.pumpError;
+			throw this.terminalError;
 		}
 
 		// Create the ack promise (resolved later by pump)
@@ -371,9 +331,13 @@ export class Producer implements AsyncDisposable {
 		});
 		// Suppress unhandled rejection if write fails before we return the ticket
 		ackPromise.catch(() => {});
-
 		// Track this record
-		const entry: InflightRecord = { resolveAck, rejectAck };
+		const entry: InflightRecord = { ackPromise, resolveAck, rejectAck };
+		this.pendingAckEntries.add(entry);
+		void ackPromise.then(
+			() => this.pendingAckEntries.delete(entry),
+			() => this.pendingAckEntries.delete(entry),
+		);
 		this.inflightRecords.push(entry);
 
 		debugProducer(
@@ -406,13 +370,45 @@ export class Producer implements AsyncDisposable {
 				this.inflightRecords.splice(idx, 1);
 			}
 
-			const error = toS2Error(err);
-			rejectAck(error);
+			const error = this.fail(err);
 			throw error;
 		}
 
 		// Write succeeded - return ticket immediately
 		return new RecordSubmitTicket(ackPromise);
+	}
+
+	/**
+	 * Force the current partial batch to be emitted and wait for every record
+	 * submitted before this call to become durable.
+	 *
+	 * An empty flush does not append a batch. Submissions queued after this call
+	 * are excluded, and the Producer remains open for further submissions. If a
+	 * append included in this flush fails, this throws the same terminal error as
+	 * its record ticket.
+	 */
+	flush(): Promise<void> {
+		return this.enqueueOperation(async () => {
+			if (this.terminalError) {
+				throw this.terminalError;
+			}
+
+			const pendingAckPromises = [...this.pendingAckEntries].map(
+				(entry) => entry.ackPromise,
+			);
+			try {
+				this.batchTransform.flush();
+			} catch (err) {
+				const error = this.fail(err);
+				await Promise.allSettled(pendingAckPromises);
+				throw error;
+			}
+			await Promise.allSettled(pendingAckPromises);
+
+			if (this.terminalError) {
+				throw this.terminalError;
+			}
+		});
 	}
 
 	/**
@@ -425,11 +421,41 @@ export class Producer implements AsyncDisposable {
 		if (this.closePromise) {
 			return this.closePromise;
 		}
-		this.closePromise = this._doClose();
+		this.closePromise = this.enqueueOperation(() => this.closeInternal());
 		return this.closePromise;
 	}
 
-	private async _doClose(): Promise<void> {
+	private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
+		const operationPromise = this.operationChain.then(operation);
+		this.operationChain = operationPromise.then(
+			() => undefined,
+			() => undefined,
+		);
+		return operationPromise;
+	}
+
+	private fail(cause: unknown): S2Error {
+		if (!this.terminalError) {
+			this.terminalError = toS2Error(cause);
+		}
+		const error = this.terminalError;
+
+		for (const entry of this.pendingAckEntries) {
+			entry.rejectAck(error);
+		}
+		this.transformReader.cancel(error).catch(() => {});
+
+		try {
+			this.readableController?.error(error);
+		} catch {
+			// Controller may already be closed or errored.
+		}
+		this.readableController = null;
+
+		return error;
+	}
+
+	private async closeInternal(): Promise<void> {
 		debugProducer("[%s] close requested", this.debugName);
 
 		// Close the writer to signal no more records.
@@ -437,7 +463,7 @@ export class Producer implements AsyncDisposable {
 		try {
 			await this.transformWriter.close();
 		} catch {
-			// Writer already errored from pump failure — that's fine.
+			// Writer already errored from a terminal failure — that's fine.
 		}
 
 		// Wait for the pump to finish processing all batches
@@ -448,15 +474,14 @@ export class Producer implements AsyncDisposable {
 
 		// Reject any remaining inflight records (shouldn't happen in normal operation)
 		if (this.inflightRecords.length > 0) {
-			const closingError = new S2Error({
-				message: "Producer closed with pending records",
-				status: 499,
-				origin: "sdk",
-			});
-
-			for (const record of this.inflightRecords.splice(0)) {
-				record.rejectAck(closingError);
-			}
+			this.fail(
+				new S2Error({
+					message: "Producer closed with pending records",
+					status: 499,
+					origin: "sdk",
+				}),
+			);
+			this.inflightRecords.splice(0);
 		}
 
 		// Close the readable stream
@@ -472,8 +497,8 @@ export class Producer implements AsyncDisposable {
 		debugProducer("[%s] close complete", this.debugName);
 
 		// If an error occurred, throw it
-		if (this.pumpError) {
-			throw this.pumpError;
+		if (this.terminalError) {
+			throw this.terminalError;
 		}
 	}
 
