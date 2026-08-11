@@ -163,50 +163,55 @@ function deferred<T>(): Deferred<T> {
 	return { promise, resolve, reject };
 }
 
-type ControlledAppendCall = {
+type PendingSubmission = {
 	input: AppendInput;
 	ack: Deferred<AppendAck>;
 };
 
-class ControlledAppendSession implements AppendSession {
+class ManualAppendSession implements AppendSession {
 	readonly readable = new ReadableStream<AppendAck>();
 	readonly writable = new WritableStream<AppendInput>();
 	private readonly acksStream = new ReadableStream<AppendAck>() as AcksStream;
-	private readonly calls: ControlledAppendCall[] = [];
-	private readonly callWaiters: Array<(call: ControlledAppendCall) => void> =
-		[];
-	private readonly submitFailure?: { call: number; error: S2Error };
+	private readonly pendingSubmissions: PendingSubmission[] = [];
+	private readonly submissionWaiters: Array<
+		(submission: PendingSubmission) => void
+	> = [];
+	private readonly submitFailure?: { submitNumber: number; error: S2Error };
 
-	submitCount = 0;
+	submissionCount = 0;
 
-	constructor(submitFailure?: { call: number; error: S2Error }) {
+	constructor(submitFailure?: { submitNumber: number; error: S2Error }) {
 		this.submitFailure = submitFailure;
 	}
 
 	async submit(input: AppendInput): Promise<BatchSubmitTicket> {
-		const call = { input, ack: deferred<AppendAck>() };
-		this.submitCount += 1;
-		const waiter = this.callWaiters.shift();
+		const submission = { input, ack: deferred<AppendAck>() };
+		this.submissionCount += 1;
+		const waiter = this.submissionWaiters.shift();
 		if (waiter) {
-			waiter(call);
+			waiter(submission);
 		} else {
-			this.calls.push(call);
+			this.pendingSubmissions.push(submission);
 		}
 
-		if (this.submitFailure?.call === this.submitCount) {
+		if (this.submitFailure?.submitNumber === this.submissionCount) {
 			await new Promise<void>((resolve) => setTimeout(resolve, 0));
 			throw this.submitFailure.error;
 		}
 
-		return new BatchSubmitTicket(call.ack.promise, 0, input.records.length);
+		return new BatchSubmitTicket(
+			submission.ack.promise,
+			0,
+			input.records.length,
+		);
 	}
 
-	nextCall(): Promise<ControlledAppendCall> {
-		const call = this.calls.shift();
-		if (call) {
-			return Promise.resolve(call);
+	nextSubmission(): Promise<PendingSubmission> {
+		const submission = this.pendingSubmissions.shift();
+		if (submission) {
+			return Promise.resolve(submission);
 		}
-		return new Promise((resolve) => this.callWaiters.push(resolve));
+		return new Promise((resolve) => this.submissionWaiters.push(resolve));
 	}
 
 	async close(): Promise<void> {}
@@ -228,11 +233,11 @@ class ControlledAppendSession implements AppendSession {
 	}
 }
 
-function appendAck(start: number, records: number): AppendAck {
+function makeAck(startSeqNum: number, recordCount: number): AppendAck {
 	return {
-		start: { seqNum: start, timestamp: new Date(0) },
-		end: { seqNum: start + records, timestamp: new Date(0) },
-		tail: { seqNum: start + records, timestamp: new Date(0) },
+		start: { seqNum: startSeqNum, timestamp: new Date(0) },
+		end: { seqNum: startSeqNum + recordCount, timestamp: new Date(0) },
+		tail: { seqNum: startSeqNum + recordCount, timestamp: new Date(0) },
 	};
 }
 
@@ -295,8 +300,8 @@ describe("Producer", () => {
 		expect(session.getValues()).toEqual(["rec-0", "rec-1", "rec-2", "rec-3"]);
 	});
 
-	it("flush emits a partial batch and waits for every covered ack", async () => {
-		const session = new ControlledAppendSession();
+	it("flush emits the current partial batch and waits for all prior acks", async () => {
+		const session = new ManualAppendSession();
 		const producer = new Producer(
 			new BatchTransform({
 				lingerDurationMillis: 60_000,
@@ -310,21 +315,21 @@ describe("Producer", () => {
 			producer.submit(AppendRecord.string({ body: "b" })),
 			producer.submit(AppendRecord.string({ body: "c" })),
 		]);
-		const fullBatch = await session.nextCall();
-		const flush = producer.flush();
-		const partialBatch = await session.nextCall();
+		const fullBatchSubmission = await session.nextSubmission();
+		const flushPromise = producer.flush();
+		const partialBatchSubmission = await session.nextSubmission();
 
-		expect(fullBatch.input.records).toHaveLength(2);
-		expect(partialBatch.input.records).toHaveLength(1);
+		expect(fullBatchSubmission.input.records).toHaveLength(2);
+		expect(partialBatchSubmission.input.records).toHaveLength(1);
 
-		const fullBatchAck = appendAck(41, 2);
-		fullBatch.ack.resolve(fullBatchAck);
+		const fullBatchAck = makeAck(41, 2);
+		fullBatchSubmission.ack.resolve(fullBatchAck);
 		await Promise.all([tickets[0].ack(), tickets[1].ack()]);
-		await expectPending(flush);
+		await expectPending(flushPromise);
 
-		const partialBatchAck = appendAck(43, 1);
-		partialBatch.ack.resolve(partialBatchAck);
-		await flush;
+		const partialBatchAck = makeAck(43, 1);
+		partialBatchSubmission.ack.resolve(partialBatchAck);
+		await flushPromise;
 
 		const recordAcks = await Promise.all(tickets.map((ticket) => ticket.ack()));
 		expect(recordAcks.map((ack) => ack.seqNum())).toEqual([41, 42, 43]);
@@ -335,8 +340,8 @@ describe("Producer", () => {
 		await producer.close();
 	});
 
-	it("flush is an empty-safe, reusable prefix boundary", async () => {
-		const session = new ControlledAppendSession();
+	it("flush is reusable, does nothing when empty, and excludes later submissions", async () => {
+		const session = new ManualAppendSession();
 		const producer = new Producer(
 			new BatchTransform({
 				lingerDurationMillis: 60_000,
@@ -346,42 +351,42 @@ describe("Producer", () => {
 		);
 
 		await producer.flush();
-		expect(session.submitCount).toBe(0);
+		expect(session.submissionCount).toBe(0);
 
 		const firstTicket = await producer.submit(
 			AppendRecord.string({ body: "before" }),
 		);
-		const firstFlush = producer.flush();
-		const firstCall = await session.nextCall();
+		const firstFlushPromise = producer.flush();
+		const firstSubmission = await session.nextSubmission();
 		const laterTicketPromise = producer.submit(
 			AppendRecord.string({ body: "after" }),
 		);
 
-		firstCall.ack.resolve(appendAck(0, 1));
-		await firstFlush;
+		firstSubmission.ack.resolve(makeAck(0, 1));
+		await firstFlushPromise;
 		const laterTicket = await laterTicketPromise;
 		expect((await firstTicket.ack()).seqNum()).toBe(0);
-		expect(session.submitCount).toBe(1);
+		expect(session.submissionCount).toBe(1);
 
-		const secondFlush = producer.flush();
-		const secondCall = await session.nextCall();
-		secondCall.ack.resolve(appendAck(1, 1));
-		await secondFlush;
+		const secondFlushPromise = producer.flush();
+		const secondSubmission = await session.nextSubmission();
+		secondSubmission.ack.resolve(makeAck(1, 1));
+		await secondFlushPromise;
 		expect((await laterTicket.ack()).seqNum()).toBe(1);
 
 		await producer.close();
 	});
 
 	it.each(["submit", "ack"] as const)(
-		"flush propagates a covered %s failure",
+		"flush propagates %s failures from prior submissions",
 		async (failurePhase) => {
 			const error = new S2Error({
 				message: `${failurePhase} failed`,
 				status: 412,
 				origin: "server",
 			});
-			const session = new ControlledAppendSession(
-				failurePhase === "submit" ? { call: 2, error } : undefined,
+			const session = new ManualAppendSession(
+				failurePhase === "submit" ? { submitNumber: 2, error } : undefined,
 			);
 			const producer = new Producer(
 				new BatchTransform({
@@ -397,17 +402,17 @@ describe("Producer", () => {
 			const secondTicket = await producer.submit(
 				AppendRecord.string({ body: "second" }),
 			);
-			await session.nextCall();
-			const failingCall = await session.nextCall();
-			const flush = producer.flush();
+			await session.nextSubmission();
+			const failingSubmission = await session.nextSubmission();
+			const flushPromise = producer.flush();
 			if (failurePhase === "ack") {
-				failingCall.ack.reject(error);
+				failingSubmission.ack.reject(error);
 			}
 
 			await Promise.all([
 				expect(firstTicket.ack()).rejects.toBe(error),
 				expect(secondTicket.ack()).rejects.toBe(error),
-				expect(flush).rejects.toBe(error),
+				expect(flushPromise).rejects.toBe(error),
 			]);
 			await expect(producer.flush()).rejects.toBe(error);
 			await expect(producer.close()).rejects.toBe(error);
