@@ -33,6 +33,7 @@ jobs:
         with:
           version: bun run version-with-docs
           publish: bun run release
+          commitMode: github-api
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
