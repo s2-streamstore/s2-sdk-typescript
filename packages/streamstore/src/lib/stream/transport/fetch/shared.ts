@@ -21,12 +21,14 @@ import type {
 	ReadArgs,
 	ReadBatch,
 } from "../../types.js";
-import {
-	decodeProtoAppendAck,
-	decodeProtoReadBatch,
-	encodeProtoAppendInput,
-	protoAppendAckToJson,
-} from "../proto.js";
+
+const loadProtoCodec = async () => {
+	try {
+		return await import("../proto.js");
+	} catch (error) {
+		throw s2Error(error);
+	}
+};
 
 type RequestOptionsWithHeaders = S2RequestOptions & {
 	headers?: Record<string, string>;
@@ -92,6 +94,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	}
 
 	if (wantsBytes) {
+		const { decodeProtoReadBatch } = await loadProtoCodec();
 		const batch = decodeProtoReadBatch(response.data as ArrayBuffer);
 		return batch as ReadBatch<Format>;
 	}
@@ -131,6 +134,11 @@ export async function streamAppend(
 	let response: any;
 
 	if (useProtobuf) {
+		const {
+			decodeProtoAppendAck,
+			encodeProtoAppendInput,
+			protoAppendAckToJson,
+		} = await loadProtoCodec();
 		const protoBody = encodeProtoAppendInput(input);
 
 		const headers = mergeHeaders(customHeaders, {
