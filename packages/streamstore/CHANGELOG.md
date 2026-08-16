@@ -1,5 +1,15 @@
 # @s2-dev/streamstore
 
+## 0.26.0
+
+### Minor Changes
+
+- 1e5a6f5: Add a durable, non-terminal `Producer.flush()` boundary.
+
+### Patch Changes
+
+- 76ecd32: Defer loading the protobuf codec until a binary stream operation uses it.
+
 ## 0.25.1
 
 ### Patch Changes
