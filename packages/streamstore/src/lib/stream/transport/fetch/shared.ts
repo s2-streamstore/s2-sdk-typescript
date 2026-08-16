@@ -22,7 +22,13 @@ import type {
 	ReadBatch,
 } from "../../types.js";
 
-const loadProtoCodec = () => import("../proto.js");
+const loadProtoCodec = async () => {
+	try {
+		return await import("../proto.js");
+	} catch (error) {
+		throw s2Error(error);
+	}
+};
 
 type RequestOptionsWithHeaders = S2RequestOptions & {
 	headers?: Record<string, string>;
