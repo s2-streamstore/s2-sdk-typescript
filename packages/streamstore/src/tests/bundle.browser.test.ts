@@ -51,4 +51,68 @@ describe("browser bundling", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("keeps protobuf out of the initial chunk", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "streamstore-bundle-"));
+		try {
+			const entry = join(dir, "entry.ts");
+			writeFileSync(
+				entry,
+				[
+					`import { S2 } from ${JSON.stringify(join(pkgRoot, "src/index.ts"))};`,
+					`console.log(S2);`,
+				].join("\n"),
+			);
+
+			const result = await build({
+				entryPoints: [entry],
+				bundle: true,
+				platform: "browser",
+				target: "es2020",
+				external: ["node:http2"],
+				format: "esm",
+				splitting: true,
+				outdir: join(dir, "dist"),
+				metafile: true,
+				logLevel: "silent",
+				tsconfig: join(pkgRoot, "tsconfig.json"),
+			});
+
+			const outputs = result.metafile.outputs;
+			const entryOutput = Object.keys(outputs).find((path) =>
+				path.endsWith("/entry.js"),
+			);
+			expect(entryOutput).toBeDefined();
+
+			const initialOutputs = new Set<string>();
+			const visitInitialOutput = (path: string) => {
+				if (initialOutputs.has(path)) return;
+				initialOutputs.add(path);
+				for (const imported of outputs[path]?.imports ?? []) {
+					if (imported.kind === "import-statement" && outputs[imported.path]) {
+						visitInitialOutput(imported.path);
+					}
+				}
+			};
+			visitInitialOutput(entryOutput!);
+
+			const isProtoInput = (path: string) =>
+				path.includes("@protobuf-ts/runtime") ||
+				path.includes("generated/proto/s2.ts") ||
+				path.includes("stream/transport/proto.ts");
+			const initialProtoInputs = [...initialOutputs].flatMap((path) =>
+				Object.keys(outputs[path]?.inputs ?? {}).filter(isProtoInput),
+			);
+			const lazyProtoInputs = Object.entries(outputs)
+				.filter(([path]) => !initialOutputs.has(path))
+				.flatMap(([, output]) =>
+					Object.keys(output.inputs).filter(isProtoInput),
+				);
+
+			expect(initialProtoInputs).toEqual([]);
+			expect(lazyProtoInputs.length).toBeGreaterThan(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
