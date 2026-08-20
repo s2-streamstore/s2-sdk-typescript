@@ -261,21 +261,3 @@ export async function* subscribeSse<T>(
 		needsReconnect = true;
 	}
 }
-
-/**
- * AbortController whose signal aborts when `external` aborts, but which can
- * also be aborted independently. Lets a caller's signal propagate without
- * preventing the subscription itself from triggering cancellation.
- */
-export function linkedAbortController(external?: AbortSignal): AbortController {
-	const controller = new AbortController();
-	if (!external) return controller;
-	if (external.aborted) {
-		controller.abort(external.reason);
-		return controller;
-	}
-	external.addEventListener("abort", () => controller.abort(external.reason), {
-		once: true,
-	});
-	return controller;
-}
