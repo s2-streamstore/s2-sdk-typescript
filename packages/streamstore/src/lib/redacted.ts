@@ -35,6 +35,3 @@ export const value = <T>(self: Redacted<T>): T => {
 		throw new Error("Unable to get redacted value");
 	}
 };
-
-export const unsafeWipe = <T>(self: Redacted<T>): boolean =>
-	redactedRegistry.delete(self);
