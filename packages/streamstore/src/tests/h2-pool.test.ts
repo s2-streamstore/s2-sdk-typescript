@@ -142,7 +142,7 @@ describe("Http2ConnectionPool", () => {
 			});
 
 			pool.attach(server.origin);
-			const [s1, s2] = await Promise.all([
+			const [{ stream: s1 }, { stream: s2 }] = await Promise.all([
 				pool.request(server.origin, GET_HEADERS),
 				pool.request(server.origin, GET_HEADERS),
 			]);
@@ -170,11 +170,13 @@ describe("Http2ConnectionPool", () => {
 			});
 
 			pool.attach(server.origin);
-			const streams = await Promise.all([
-				pool.request(server.origin, GET_HEADERS),
-				pool.request(server.origin, GET_HEADERS),
-				pool.request(server.origin, GET_HEADERS),
-			]);
+			const streams = (
+				await Promise.all([
+					pool.request(server.origin, GET_HEADERS),
+					pool.request(server.origin, GET_HEADERS),
+					pool.request(server.origin, GET_HEADERS),
+				])
+			).map((pooled) => pooled.stream);
 
 			expect(pool.connectionCount(server.origin)).toBe(2);
 			await waitFor(() => server.sessionCount() === 2);
@@ -187,7 +189,7 @@ describe("Http2ConnectionPool", () => {
 			}
 			server.endAllStreams();
 			await waitFor(() => streams.every((s) => s.closed));
-			const reused = await pool.request(server.origin, GET_HEADERS);
+			const { stream: reused } = await pool.request(server.origin, GET_HEADERS);
 			await sleep(50);
 			expect(server.sessionCount()).toBe(2);
 
@@ -206,7 +208,7 @@ describe("Http2ConnectionPool", () => {
 
 			pool.attach(server.origin);
 			pool.attach(server.origin);
-			const stream = await pool.request(server.origin, GET_HEADERS);
+			const { stream } = await pool.request(server.origin, GET_HEADERS);
 			stream.close();
 			server.endAllStreams();
 
@@ -228,7 +230,7 @@ describe("Http2ConnectionPool", () => {
 			const pool = new Http2ConnectionPool();
 
 			pool.attach(server.origin);
-			const first = await pool.request(server.origin, GET_HEADERS);
+			const { stream: first } = await pool.request(server.origin, GET_HEADERS);
 			first.on("error", () => {});
 			await waitFor(() => server.sessionCount() === 1);
 
@@ -237,7 +239,7 @@ describe("Http2ConnectionPool", () => {
 			}
 			await waitFor(() => pool.connectionCount(server.origin) === 0);
 
-			const second = await pool.request(server.origin, GET_HEADERS);
+			const { stream: second } = await pool.request(server.origin, GET_HEADERS);
 			await waitFor(() => server.sessionCount() === 2);
 
 			first.close();
@@ -259,7 +261,9 @@ describe("Http2ConnectionPool", () => {
 			};
 
 			pool.attach(server.origin, http2);
-			const stream = await pool.request(server.origin, GET_HEADERS, { http2 });
+			const { stream } = await pool.request(server.origin, GET_HEADERS, {
+				http2,
+			});
 			await waitFor(() => server.sessionCount() === 1);
 			const [session] = [...server.openSessions()];
 			if (!session) throw new Error("no server session");
@@ -292,8 +296,12 @@ describe("Http2ConnectionPool", () => {
 
 			pool.attach(server.origin, a);
 			pool.attach(server.origin, b);
-			const s1 = await pool.request(server.origin, GET_HEADERS, { http2: a });
-			const s2 = await pool.request(server.origin, GET_HEADERS, { http2: b });
+			const { stream: s1 } = await pool.request(server.origin, GET_HEADERS, {
+				http2: a,
+			});
+			const { stream: s2 } = await pool.request(server.origin, GET_HEADERS, {
+				http2: b,
+			});
 
 			expect(pool.connectionCount(server.origin, a)).toBe(1);
 			expect(pool.connectionCount(server.origin, b)).toBe(1);
@@ -323,10 +331,10 @@ describe("Http2ConnectionPool", () => {
 
 			pool.attach(server.origin, settings());
 			pool.attach(server.origin, settings());
-			const s1 = await pool.request(server.origin, GET_HEADERS, {
+			const { stream: s1 } = await pool.request(server.origin, GET_HEADERS, {
 				http2: settings(),
 			});
-			const s2 = await pool.request(server.origin, GET_HEADERS, {
+			const { stream: s2 } = await pool.request(server.origin, GET_HEADERS, {
 				http2: settings(),
 			});
 
@@ -370,7 +378,7 @@ describe("Http2ConnectionPool", () => {
 			const pool = new Http2ConnectionPool();
 
 			pool.attach(server.origin);
-			const first = await pool.request(server.origin, GET_HEADERS);
+			const { stream: first } = await pool.request(server.origin, GET_HEADERS);
 			first.on("error", () => {});
 			await waitFor(() => server.sessionCount() === 1);
 
@@ -379,7 +387,7 @@ describe("Http2ConnectionPool", () => {
 			}
 			await waitFor(() => pool.connectionCount(server.origin) === 0);
 
-			const second = await pool.request(server.origin, GET_HEADERS);
+			const { stream: second } = await pool.request(server.origin, GET_HEADERS);
 			await waitFor(() => server.sessionCount() === 2);
 
 			second.close();

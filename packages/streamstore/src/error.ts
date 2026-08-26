@@ -285,7 +285,8 @@ export class S2Error extends Error {
 		if (this.origin === "server") {
 			return (
 				(this.status === 429 && this.code === "rate_limited") ||
-				(this.status === 502 && this.code === "hot_server")
+				(this.status === 502 && this.code === "hot_server") ||
+				(this.status === 503 && this.code === RECONNECT_ADVISED_CODE)
 			);
 		}
 		if (this.origin === "sdk") {
@@ -331,6 +332,25 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 		code: "ABORTED",
 		status: 499,
 		origin: "sdk",
+	});
+}
+
+/** Error code for a session interrupted by server reconnect advice. */
+export const RECONNECT_ADVISED_CODE = "reconnect_advised";
+
+/**
+ * Helper: construct a reconnect-advised error (503, retryable).
+ *
+ * Raised when a draining server flags session frames with reconnect advice.
+ * The session ended cleanly at a frame boundary, so retrying on a fresh
+ * connection cannot duplicate a mutation.
+ */
+export function reconnectAdvisedError(): S2Error {
+	return new S2Error({
+		message: "Server advised the session to reconnect",
+		code: RECONNECT_ADVISED_CODE,
+		status: 503,
+		origin: "server",
 	});
 }
 

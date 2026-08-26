@@ -3,6 +3,7 @@ import type { RetryConfig } from "../common.js";
 import {
 	abortedError,
 	invariantViolation,
+	RECONNECT_ADVISED_CODE,
 	S2Error,
 	s2Error,
 	withS2Error,
@@ -11,6 +12,7 @@ import type * as API from "../generated/index.js";
 import * as Types from "../types.js";
 import { isCommandRecord, meteredBytes } from "../utils.js";
 import { FifoQueue } from "./queue.js";
+import { AdvisedReconnects } from "./reconnect.js";
 import type { AppendResult, CloseResult } from "./result.js";
 import { err, errClose, ok, okClose } from "./result.js";
 import {
@@ -379,6 +381,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			const baselineBytes = args?.bytes;
 			const baselineWait = args?.wait;
 			let attempt = 0;
+			const advisedReconnects = new AdvisedReconnects();
 
 			while (true) {
 				if (cancelled) {
@@ -471,8 +474,12 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						currentReader = undefined;
 						const error = result.error;
 
+						// Reconnect advice is the server draining, not a failure: it
+						// does not consume retry attempts, so a session that keeps
+						// landing on draining servers is never aborted for it.
+						const advised = error.code === RECONNECT_ADVISED_CODE;
 						const effectiveMax = Math.max(1, retryConfig.maxAttempts);
-						if (isRetryable(error) && attempt < effectiveMax - 1) {
+						if (isRetryable(error) && (advised || attempt < effectiveMax - 1)) {
 							const retryFromSeqNum =
 								this._nextReadPosition?.seq_num ?? nextArgs.seq_num;
 							if (this._nextReadPosition) {
@@ -481,16 +488,33 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								delete nextArgs.timestamp;
 								delete nextArgs.tail_offset;
 							}
-							const delay = calculateDelay(
-								attempt,
-								retryConfig.minBaseDelayMillis,
-								retryConfig.maxBaseDelayMillis,
-							);
+							// A drain keeps serving batches, so advice is paced on how
+							// quickly it repeats rather than on progress.
+							const delay = advised
+								? advisedReconnects.record()
+								: calculateDelay(
+										attempt,
+										retryConfig.minBaseDelayMillis,
+										retryConfig.maxBaseDelayMillis,
+									);
 							if (baselineCount !== undefined) {
 								nextArgs.count = Math.max(0, baselineCount - this._recordsRead);
 							}
 							if (baselineBytes !== undefined) {
 								nextArgs.bytes = Math.max(0, baselineBytes - this._bytesRead);
+							}
+							// Avoid a useless reconnect for a read that was already
+							// satisfied when the advice arrived.
+							if (advised && (nextArgs.count === 0 || nextArgs.bytes === 0)) {
+								debugRead("read limits reached on server advice");
+								try {
+									await session.cancel?.("limits reached");
+								} catch {}
+								session = undefined;
+								caughtUpTracker.end();
+								pumpDone = true;
+								wake();
+								return;
 							}
 							// After observing a tail, subtract elapsed time and retry delay.
 							if (baselineWait !== undefined) {
@@ -527,7 +551,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							if (cancelled) {
 								return;
 							}
-							attempt++;
+							if (!advised) {
+								attempt++;
+							}
 							break;
 						}
 
@@ -776,6 +802,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private pendingBytes = 0;
 	private pendingBatches = 0;
 	private consecutiveFailures = 0;
+	private readonly advisedReconnects = new AdvisedReconnects();
 	private currentAttempt = 0;
 
 	private pumpPromise?: Promise<void>;
@@ -1442,10 +1469,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					}
 				}
 
+				// Reconnect advice is the server draining, not a failure: it does
+				// not consume retry attempts, so a session that keeps landing on
+				// draining servers is never aborted for it.
+				const advised = error.code === RECONNECT_ADVISED_CODE;
+
 				// Check max attempts (total attempts include initial; retries = max - 1)
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
 				const allowedRetries = effectiveMax - 1;
-				if (this.currentAttempt >= allowedRetries) {
+				if (!advised && this.currentAttempt >= allowedRetries) {
 					debugSession(
 						"[%s] max attempts reached (%d), aborting",
 						this.streamName,
@@ -1461,17 +1493,29 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				}
 
 				// Perform recovery
-				this.consecutiveFailures++;
-				this.currentAttempt++;
+				let advisedBackoffMillis: number | undefined;
+				if (advised) {
+					// A drain keeps acknowledging work, so pace on how quickly
+					// advice repeats rather than on progress.
+					advisedBackoffMillis = this.advisedReconnects.record();
+					debugSession(
+						"[%s] reconnecting append session on server advice, delay=%dms",
+						this.streamName,
+						advisedBackoffMillis,
+					);
+				} else {
+					this.consecutiveFailures++;
+					this.currentAttempt++;
 
-				debugSession(
-					"[%s] performing recovery (retry %d/%d)",
-					this.streamName,
-					this.currentAttempt,
-					allowedRetries,
-				);
+					debugSession(
+						"[%s] performing recovery (retry %d/%d)",
+						this.streamName,
+						this.currentAttempt,
+						allowedRetries,
+					);
+				}
 
-				await this.recover();
+				await this.recover(advisedBackoffMillis);
 			}
 		}
 	}
@@ -1515,15 +1559,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	/**
 	 * Recover from transient error: recreate session and resubmit all inflight entries.
 	 */
-	private async recover(): Promise<void> {
+	private async recover(backoffMillis?: number): Promise<void> {
 		debugSession("[%s] starting recovery", this.streamName);
 
-		// Calculate backoff delay
-		const delay = calculateDelay(
-			this.consecutiveFailures - 1,
-			this.retryConfig.minBaseDelayMillis,
-			this.retryConfig.maxBaseDelayMillis,
-		);
+		// Calculate backoff delay, unless the caller paced this reconnect.
+		const delay =
+			backoffMillis ??
+			calculateDelay(
+				this.consecutiveFailures - 1,
+				this.retryConfig.minBaseDelayMillis,
+				this.retryConfig.maxBaseDelayMillis,
+			);
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);
 

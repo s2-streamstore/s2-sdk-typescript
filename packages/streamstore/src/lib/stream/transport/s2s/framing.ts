@@ -3,10 +3,12 @@
  *
  * Message format:
  * - 3 bytes: Length prefix (total message length including flag byte, big-endian)
- * - 1 byte: Flag byte [T][CC][RRRRR]
+ * - 1 byte: Flag byte [T][CC][A][RRRR]
  *   - T (bit 7): Terminal flag (1 = stream ends after this message)
  *   - CC (bits 6-5): Compression (00=none, 01=zstd, 10=gzip)
- *   - RRRRR (bits 4-0): Reserved
+ *   - A (bit 4): Reconnect advised (regular frames only; the server is
+ *     draining and asks the session to move to a new connection)
+ *   - RRRR (bits 3-0): Reserved
  * - Variable: Body (protobuf message or JSON error for terminal frames)
  */
 
@@ -21,6 +23,8 @@ export const MAX_DECOMPRESSED_PAYLOAD_BYTES = MAX_FRAME_PAYLOAD_BYTES;
 export interface S2SFrame {
 	terminal: boolean;
 	compression: CompressionType;
+	/** Server is draining; the session should move to a new connection. */
+	reconnectAdvised: boolean;
 	body: Uint8Array;
 	statusCode?: number; // Only for terminal frames
 }
@@ -133,6 +137,7 @@ export class S2SFrameParser {
 		// Read flag byte
 		const flag = this.buffer[3]!;
 		const terminal = (flag & 0x80) !== 0;
+		const reconnectAdvised = !terminal && (flag & 0x10) !== 0;
 		const compressionBits = (flag & 0x60) >> 5;
 		let compression: CompressionType;
 		switch (compressionBits) {
@@ -168,6 +173,7 @@ export class S2SFrameParser {
 		return {
 			terminal,
 			compression,
+			reconnectAdvised,
 			body,
 			statusCode,
 		};

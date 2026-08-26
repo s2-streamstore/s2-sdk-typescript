@@ -95,6 +95,17 @@ interface RequestStreamOptions {
 	http2?: Http2Settings;
 }
 
+export interface PooledStream {
+	stream: ClientHttp2Stream;
+	/**
+	 * Poison the pooled connection the stream is served on, so no new stream
+	 * reuses a connection pinned to a draining server. Streams already on the
+	 * connection are left to finish. Poisoning the same connection again —
+	 * including from another stream sharing it — is a no-op.
+	 */
+	poison: () => void;
+}
+
 export class Http2ConnectionPool {
 	private readonly endpoints = new Map<string, Endpoint>();
 	private readonly maxStreamsPerConnection: number;
@@ -175,7 +186,7 @@ export class Http2ConnectionPool {
 		origin: string,
 		headers: OutgoingHttpHeaders,
 		options?: RequestStreamOptions,
-	): Promise<ClientHttp2Stream> {
+	): Promise<PooledStream> {
 		const key = endpointKey(origin, resolveHttp2Settings(options?.http2));
 		for (let attempt = 0; attempt < 3; attempt++) {
 			const endpoint = this.endpoints.get(key);
@@ -191,7 +202,7 @@ export class Http2ConnectionPool {
 				(c) => !c.dead && c.activeStreams < this.maxStreamsPerConnection,
 			);
 			if (usable) {
-				return this.openStream(usable, headers);
+				return this.pooledStream(key, usable, headers);
 			}
 
 			// Join an in-progress connect if it still has room for this stream.
@@ -207,13 +218,25 @@ export class Http2ConnectionPool {
 				continue;
 			}
 			// The reservation was already counted into activeStreams on connect.
-			return this.openStream(connection, headers, { reserved: true });
+			return this.pooledStream(key, connection, headers, { reserved: true });
 		}
 		throw new S2Error({
 			message: `HTTP/2 connections to ${origin} closed repeatedly before use`,
 			status: 500,
 			origin: "sdk",
 		});
+	}
+
+	private pooledStream(
+		key: string,
+		connection: PooledConnection,
+		headers: OutgoingHttpHeaders,
+		opts?: { reserved: boolean },
+	): PooledStream {
+		return {
+			stream: this.openStream(connection, headers, opts),
+			poison: () => this.evict(key, connection),
+		};
 	}
 
 	/** Number of live pooled connections to an endpoint. */

@@ -19,6 +19,7 @@ import {
 	makeAppendPreconditionError,
 	makeServerError,
 	RangeNotSatisfiableError,
+	reconnectAdvisedError,
 	S2Error,
 	s2Error,
 } from "../../../../error.js";
@@ -65,16 +66,14 @@ import {
 	frameMessage,
 	S2SFrameParser,
 } from "./framing.js";
-import { sharedConnectionPool } from "./pool.js";
+import { type PooledStream, sharedConnectionPool } from "./pool.js";
 
 const debug = createDebug("s2:s2s");
 
 const COMPRESSION_THRESHOLD_BYTES = 1024;
 
 /** Opens an HTTP/2 stream to the transport's endpoint. */
-type OpenH2Stream = (
-	headers: OutgoingHttpHeaders,
-) => Promise<ClientHttp2Stream>;
+type OpenH2Stream = (headers: OutgoingHttpHeaders) => Promise<PooledStream>;
 
 export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
@@ -340,7 +339,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
 					const acceptEncoding = await acceptEncodingHeader(compression);
-					const stream = await openH2Stream({
+					const { stream, poison } = await openH2Stream({
 						":method": "GET",
 						":path": path,
 						":scheme": url.protocol.slice(0, -1),
@@ -516,6 +515,18 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 											ok: true,
 											batch: { records, ...(tail ? { tail } : {}) },
 										});
+
+										// Checked after delivery so the resume position already
+										// accounts for this batch. Poisoning here rather than on
+										// reconnect keeps the pool clean whatever the retry layer
+										// goes on to do.
+										if (frame.reconnectAdvised) {
+											debug("reconnect advised, ending read session");
+											poison();
+											safeError(reconnectAdvisedError());
+											stream.close();
+											return;
+										}
 									} catch (err) {
 										safeError(
 											new S2Error({
@@ -687,6 +698,10 @@ class S2SAppendSession implements TransportAppendSession {
 	private initPromise?: Promise<void>;
 	private _effectSignalled = false;
 	private abortHandler?: () => void;
+	// Set once the server flags an ack frame as reconnect-advised; new batches
+	// are rejected with a retryable error so the retry layer recreates the
+	// session on a fresh connection once pipelined acks drain.
+	private reconnectAdvised = false;
 
 	static async create(
 		baseUrl: string,
@@ -733,7 +748,7 @@ class S2SAppendSession implements TransportAppendSession {
 		const path = `${url.pathname}/streams/${encodeURIComponent(this.streamName)}/records`;
 
 		const acceptEncoding = await acceptEncodingHeader(this.compression);
-		const stream = await this.openH2Stream({
+		const { stream, poison } = await this.openH2Stream({
 			":method": "POST",
 			":path": path,
 			":scheme": url.protocol.slice(0, -1),
@@ -846,6 +861,14 @@ class S2SAppendSession implements TransportAppendSession {
 						}
 						stream.close();
 					} else {
+						// The first advice poisons the pooled connection immediately,
+						// so no new stream reuses a connection pinned to the draining
+						// server, whatever this session goes on to do.
+						if (frame.reconnectAdvised && !this.reconnectAdvised) {
+							debug("reconnect advised, draining append session");
+							this.reconnectAdvised = true;
+							poison();
+						}
 						// Parse AppendAck
 						try {
 							const ackBytes =
@@ -863,6 +886,11 @@ class S2SAppendSession implements TransportAppendSession {
 							// Reset effect signal when dormant (no pending acks)
 							if (this.pendingAcks.length === 0) {
 								this._effectSignalled = false;
+								// Everything submitted was acknowledged; half-close so the
+								// draining server can end the response cleanly.
+								if (this.reconnectAdvised && !stream.writableEnded) {
+									stream.end();
+								}
 							}
 						} catch (parseErr) {
 							queueMicrotask(() =>
@@ -920,6 +948,11 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
 	private async sendBatch(input: Types.AppendInput): Promise<AppendResult> {
+		if (this.reconnectAdvised) {
+			// Refuse the advised stream without writing, so the retry layer can
+			// resubmit on a fresh session with no risk of duplication.
+			return Promise.resolve(err(reconnectAdvisedError()));
+		}
 		if (!this.http2Stream || this.http2Stream.closed) {
 			return Promise.resolve(
 				err(new S2Error({ message: "HTTP/2 stream is not open", status: 502 })),
