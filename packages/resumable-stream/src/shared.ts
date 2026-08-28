@@ -1,15 +1,12 @@
 import {
 	AppendInput,
-	AppendRecord,
 	RangeNotSatisfiableError,
-	randomToken,
 	S2Error,
 	type S2Stream,
 } from "@s2-dev/streamstore";
 import {
 	appendFenceCommand,
 	appendTrimCommand,
-	createTerminalRecords,
 	isFenceRecord,
 	isTerminalFence,
 	isTrimRecord,
@@ -335,32 +332,6 @@ export async function claimSessionGeneration({
 	};
 }
 
-export async function stopSharedGeneration({
-	stream,
-	body,
-}: {
-	stream: S2Stream;
-	body?: string;
-}): Promise<boolean> {
-	const state = await readSharedStreamState(stream);
-	if (!state.hasActiveGeneration || state.heldFenceToken === null) {
-		return false;
-	}
-
-	const records = [
-		...(body ? [AppendRecord.string({ body })] : []),
-		...createTerminalRecords({
-			terminalFenceToken: `end-${randomToken(4)}`,
-			trim: false,
-		}),
-	];
-
-	await stream.append(
-		AppendInput.create(records, { fencingToken: state.heldFenceToken }),
-	);
-	return true;
-}
-
 export async function* replayActiveGenerationStringRecords(
 	stream: S2Stream,
 	fromSeqNum = 0,
@@ -421,44 +392,4 @@ export async function* tailGenerationStringRecords(
 	fromSeqNum: number,
 ): AsyncIterable<TailedStringRecord> {
 	yield* tailDataRecords(stream, fromSeqNum, "stop");
-}
-
-export async function* tailCompactedStringRecords(
-	stream: S2Stream,
-	compact: (records: TailedStringRecord[]) => TailedStringRecord[],
-): AsyncIterable<TailedStringRecord> {
-	const session = await stream
-		.readSession(
-			{
-				start: { from: { seqNum: 0 }, clamp: true },
-				stop: { waitSecs: 0 },
-			},
-			{ as: "string" },
-		)
-		.catch((error: unknown) => {
-			if (isMissingStreamError(error)) return null;
-			throw error;
-		});
-
-	const records: TailedStringRecord[] = [];
-	let nextSeqNum = 0;
-	if (session) {
-		try {
-			for await (const record of session) {
-				nextSeqNum = Math.max(nextSeqNum, record.seqNum + 1);
-				if (isFenceRecord(record) || isTrimRecord(record)) continue;
-				if (record.body) {
-					records.push({ body: record.body, nextSeqNum: record.seqNum + 1 });
-				}
-			}
-		} finally {
-			await session[Symbol.asyncDispose]?.();
-		}
-	}
-
-	for (const record of compact(records)) {
-		yield record;
-	}
-
-	yield* tailStringRecords(stream, nextSeqNum);
 }
