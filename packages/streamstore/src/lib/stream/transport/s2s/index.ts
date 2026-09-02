@@ -71,10 +71,7 @@ const debug = createDebug("s2:s2s");
 
 const COMPRESSION_THRESHOLD_BYTES = 1024;
 
-/**
- * Query string for a read session request. Every server-side read parameter
- * is forwarded; `as` and `ignore_command_records` are client-side only.
- */
+/** Query string for a read session request. */
 export function readQueryString(args: ReadArgs<any> | undefined): string {
 	const queryParams = new URLSearchParams();
 	if (!args) return "";
