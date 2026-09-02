@@ -3,6 +3,8 @@ import type { RetryConfig } from "../common.js";
 import {
 	abortedError,
 	invariantViolation,
+	isServerDraining,
+	RECONNECT_ADVISED_CODE,
 	S2Error,
 	s2Error,
 	withS2Error,
@@ -279,21 +281,26 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			} catch (err) {
 				const error = s2Error(err);
 				lastError = error;
+				const draining = isServerDraining(error);
 
 				const effectiveMax = Math.max(1, retryConfig.maxAttempts);
-				if (isRetryable(error) && attempt < effectiveMax - 1) {
-					const delay = calculateDelay(
-						attempt,
-						retryConfig.minBaseDelayMillis,
-						retryConfig.maxBaseDelayMillis,
-					);
+				if (isRetryable(error) && (draining || attempt < effectiveMax - 1)) {
+					const delay = draining
+						? 0
+						: calculateDelay(
+								attempt,
+								retryConfig.minBaseDelayMillis,
+								retryConfig.maxBaseDelayMillis,
+							);
 					debugRead(
 						"connection error in create, will retry after %dms, status=%s",
 						delay,
 						error.status,
 					);
 					await sleep(delay);
-					attempt++;
+					if (!draining) {
+						attempt++;
+					}
 					continue;
 				}
 
@@ -398,14 +405,20 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						}
 					} catch (err) {
 						const error = s2Error(err);
+						const draining = isServerDraining(error);
 
 						const effectiveMax = Math.max(1, retryConfig.maxAttempts);
-						if (isRetryable(error) && attempt < effectiveMax - 1) {
-							const delay = calculateDelay(
-								attempt,
-								retryConfig.minBaseDelayMillis,
-								retryConfig.maxBaseDelayMillis,
-							);
+						if (
+							isRetryable(error) &&
+							(draining || attempt < effectiveMax - 1)
+						) {
+							const delay = draining
+								? 0
+								: calculateDelay(
+										attempt,
+										retryConfig.minBaseDelayMillis,
+										retryConfig.maxBaseDelayMillis,
+									);
 							debugRead(
 								"connection error, will retry after %dms, status=%s",
 								delay,
@@ -415,7 +428,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							if (cancelled) {
 								return;
 							}
-							attempt++;
+							if (!draining) {
+								attempt++;
+							}
 							continue;
 						}
 
@@ -471,8 +486,14 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						currentReader = undefined;
 						const error = result.error;
 
+						// Planned drain handoffs do not consume retry attempts.
+						const draining =
+							error.code === RECONNECT_ADVISED_CODE || isServerDraining(error);
 						const effectiveMax = Math.max(1, retryConfig.maxAttempts);
-						if (isRetryable(error) && attempt < effectiveMax - 1) {
+						if (
+							isRetryable(error) &&
+							(draining || attempt < effectiveMax - 1)
+						) {
 							const retryFromSeqNum =
 								this._nextReadPosition?.seq_num ?? nextArgs.seq_num;
 							if (this._nextReadPosition) {
@@ -481,16 +502,31 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								delete nextArgs.timestamp;
 								delete nextArgs.tail_offset;
 							}
-							const delay = calculateDelay(
-								attempt,
-								retryConfig.minBaseDelayMillis,
-								retryConfig.maxBaseDelayMillis,
-							);
+							const delay = draining
+								? 0
+								: calculateDelay(
+										attempt,
+										retryConfig.minBaseDelayMillis,
+										retryConfig.maxBaseDelayMillis,
+									);
 							if (baselineCount !== undefined) {
 								nextArgs.count = Math.max(0, baselineCount - this._recordsRead);
 							}
 							if (baselineBytes !== undefined) {
 								nextArgs.bytes = Math.max(0, baselineBytes - this._bytesRead);
+							}
+							// Avoid a useless reconnect for a read that was already
+							// satisfied when the advice arrived.
+							if (draining && (nextArgs.count === 0 || nextArgs.bytes === 0)) {
+								debugRead("read limits reached on server advice");
+								try {
+									await session.cancel?.("limits reached");
+								} catch {}
+								session = undefined;
+								caughtUpTracker.end();
+								pumpDone = true;
+								wake();
+								return;
 							}
 							// After observing a tail, subtract elapsed time and retry delay.
 							if (baselineWait !== undefined) {
@@ -513,21 +549,31 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 							session = undefined;
 
-							debugRead(
-								"will retry after %dms, status=%s code=%s attempt=%d/%d next_seq_num=%s records_read=%d",
-								delay,
-								error.status,
-								error.code,
-								attempt + 1,
-								effectiveMax - 1,
-								retryFromSeqNum ?? "unknown",
-								this._recordsRead,
-							);
+							if (draining) {
+								debugRead(
+									"reconnecting read session while server drains, next_seq_num=%s records_read=%d",
+									retryFromSeqNum ?? "unknown",
+									this._recordsRead,
+								);
+							} else {
+								debugRead(
+									"will retry after %dms, status=%s code=%s attempt=%d/%d next_seq_num=%s records_read=%d",
+									delay,
+									error.status,
+									error.code,
+									attempt + 1,
+									effectiveMax - 1,
+									retryFromSeqNum ?? "unknown",
+									this._recordsRead,
+								);
+							}
 							await sleep(delay);
 							if (cancelled) {
 								return;
 							}
-							attempt++;
+							if (!draining) {
+								attempt++;
+							}
 							break;
 						}
 
@@ -543,6 +589,16 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						lastSeqNum: lastRecord?.seq_num,
 						tail: tail ? toSDKStreamPosition(tail) : undefined,
 					});
+					// An empty batch with a tail still resolves a timestamp or
+					// tail-relative start. Anchoring here keeps a reconnect from
+					// evaluating the original start against a newer tail and
+					// skipping or re-reading records appended in between.
+					if (records.length === 0 && tail) {
+						this._nextReadPosition = {
+							seq_num: tail.seq_num,
+							timestamp: tail.timestamp,
+						};
+					}
 					const visibleRecords: Types.ReadRecord<Format>[] = [];
 					for (const record of records) {
 						this._nextReadPosition = {
@@ -1408,6 +1464,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// we can determine no mutation occurred. This is true if either:
 				// 1. The error itself guarantees no side effects (e.g. rate_limited, hot_server)
 				// 2. The transport reports no data was sent since the last dormant state
+				// Planned drain handoffs. Both errors guarantee no side effects: an
+				// advised session refuses new input without writing it, and a
+				// draining server acknowledges everything it accepted before ending
+				// the session, so anything still unacknowledged was never
+				// registered. If the server's drain window lapses instead, the
+				// connection drops without `server_draining` and the ordinary
+				// ambiguous-disconnect handling below applies.
+				const draining =
+					error.code === RECONNECT_ADVISED_CODE || isServerDraining(error);
+
 				if (
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!error.hasNoSideEffects() &&
@@ -1424,8 +1490,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// Under noSideEffects, also check that all inflight entries
 				// are idempotent. Non-idempotent entries that were already
 				// sent may have been processed, and resubmitting would cause
-				// duplicates.
-				if (this.retryConfig.appendRetryPolicy === "noSideEffects") {
+				// duplicates. A drain handoff is exempt: the server acknowledged
+				// every accepted input before ending the session, so the
+				// unacknowledged remainder was never processed.
+				if (
+					!draining &&
+					this.retryConfig.appendRetryPolicy === "noSideEffects"
+				) {
 					const hasNonIdempotentSent = this.inflight.some(
 						(entry, index) =>
 							index > 0 &&
@@ -1442,10 +1513,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					}
 				}
 
+				// Planned drain handoffs do not consume retry attempts. Repeated
+				// handoffs stay bounded because the draining connection has been
+				// dropped from the pool and the server refuses new connections once
+				// it drains, so a fresh dial either lands elsewhere or fails with an
+				// ordinary, budgeted error.
 				// Check max attempts (total attempts include initial; retries = max - 1)
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
 				const allowedRetries = effectiveMax - 1;
-				if (this.currentAttempt >= allowedRetries) {
+				if (!draining && this.currentAttempt >= allowedRetries) {
 					debugSession(
 						"[%s] max attempts reached (%d), aborting",
 						this.streamName,
@@ -1461,17 +1537,24 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				}
 
 				// Perform recovery
-				this.consecutiveFailures++;
-				this.currentAttempt++;
+				if (draining) {
+					debugSession(
+						"[%s] reconnecting append session while server drains",
+						this.streamName,
+					);
+				} else {
+					this.consecutiveFailures++;
+					this.currentAttempt++;
 
-				debugSession(
-					"[%s] performing recovery (retry %d/%d)",
-					this.streamName,
-					this.currentAttempt,
-					allowedRetries,
-				);
+					debugSession(
+						"[%s] performing recovery (retry %d/%d)",
+						this.streamName,
+						this.currentAttempt,
+						allowedRetries,
+					);
+				}
 
-				await this.recover();
+				await this.recover(draining ? 0 : undefined);
 			}
 		}
 	}
@@ -1515,15 +1598,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	/**
 	 * Recover from transient error: recreate session and resubmit all inflight entries.
 	 */
-	private async recover(): Promise<void> {
+	private async recover(backoffMillis?: number): Promise<void> {
 		debugSession("[%s] starting recovery", this.streamName);
 
-		// Calculate backoff delay
-		const delay = calculateDelay(
-			this.consecutiveFailures - 1,
-			this.retryConfig.minBaseDelayMillis,
-			this.retryConfig.maxBaseDelayMillis,
-		);
+		// Calculate backoff unless the caller supplied a delay.
+		const delay =
+			backoffMillis ??
+			calculateDelay(
+				this.consecutiveFailures - 1,
+				this.retryConfig.minBaseDelayMillis,
+				this.retryConfig.maxBaseDelayMillis,
+			);
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);
 

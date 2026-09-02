@@ -277,15 +277,21 @@ export class S2Error extends Error {
 	/**
 	 * Returns true if the error guarantees that no mutation occurred.
 	 *
-	 * Certain server errors (`rate_limited`, `hot_server`) and pre-connection
-	 * client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`) are safe to
-	 * retry since they guarantee no side effects.
+	 * Certain server errors (`rate_limited`, `hot_server`, `server_draining`)
+	 * and pre-connection client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`)
+	 * are safe to retry since they guarantee no side effects.
+	 *
+	 * A draining server acknowledges every input it accepted before ending the
+	 * session with `server_draining`, so anything still unacknowledged was never
+	 * registered and can be resubmitted.
 	 */
 	hasNoSideEffects(): boolean {
 		if (this.origin === "server") {
 			return (
 				(this.status === 429 && this.code === "rate_limited") ||
-				(this.status === 502 && this.code === "hot_server")
+				(this.status === 502 && this.code === "hot_server") ||
+				(this.status === 503 && this.code === RECONNECT_ADVISED_CODE) ||
+				isServerDraining(this)
 			);
 		}
 		if (this.origin === "sdk") {
@@ -320,6 +326,29 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 		code: "ABORTED",
 		status: 499,
 		origin: "sdk",
+	});
+}
+
+/** Error code for a session interrupted by server reconnect advice. */
+export const RECONNECT_ADVISED_CODE = "reconnect_advised";
+
+export function isServerDraining(error: S2Error): boolean {
+	return error.status === 503 && error.code === "server_draining";
+}
+
+/**
+ * Helper: construct a reconnect-advised error (503, retryable).
+ *
+ * Raised when a draining server flags session frames with reconnect advice.
+ * The session ended cleanly at a frame boundary, so retrying on a fresh
+ * connection cannot duplicate a mutation.
+ */
+export function reconnectAdvisedError(): S2Error {
+	return new S2Error({
+		message: "Server advised the session to reconnect",
+		code: RECONNECT_ADVISED_CODE,
+		status: 503,
+		origin: "server",
 	});
 }
 

@@ -424,6 +424,49 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(session.failureCause()).toMatchObject({ status: 502 });
 	});
 
+	it("reconnects on server_draining without spending the retry budget under noSideEffects", async () => {
+		const sessions: FakeTransportAppendSession[] = [];
+		const session = await AppendSessionImpl.create(
+			async () => {
+				const s =
+					sessions.length < 2
+						? new FakeTransportAppendSession({
+								submitError: new S2Error({
+									message: "server draining",
+									status: 503,
+									code: "server_draining",
+									origin: "server",
+								}),
+								// Data reached the wire; only the drain contract makes this safe.
+								effectSignalled: true,
+							})
+						: new FakeTransportAppendSession();
+				sessions.push(s);
+				return s;
+			},
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 1,
+				appendRetryPolicy: "noSideEffects",
+			},
+		);
+
+		const p = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+		const ticket = await p;
+		const ack = await ticket.ack();
+		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
+		expect(sessions).toHaveLength(3);
+		expect(sessions[2]!.writes).toHaveLength(1);
+		expect(session.failureCause()).toBeUndefined();
+	});
+
 	it("detects non-monotonic sequence numbers and aborts with fatal error", async () => {
 		// Create acks with non-monotonic sequence numbers
 		// Each ack must have correct count (end - start = 1 for single record batches)
