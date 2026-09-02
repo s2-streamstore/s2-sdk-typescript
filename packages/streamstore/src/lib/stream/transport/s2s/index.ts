@@ -71,6 +71,27 @@ const debug = createDebug("s2:s2s");
 
 const COMPRESSION_THRESHOLD_BYTES = 1024;
 
+/** Query string for a read session request. */
+export function readQueryString(args: ReadArgs<any> | undefined): string {
+	const queryParams = new URLSearchParams();
+	if (!args) return "";
+
+	if (args.seq_num !== undefined)
+		queryParams.set("seq_num", args.seq_num.toString());
+	if (args.timestamp !== undefined)
+		queryParams.set("timestamp", args.timestamp.toString());
+	if (args.tail_offset !== undefined)
+		queryParams.set("tail_offset", args.tail_offset.toString());
+	if (args.clamp !== undefined) queryParams.set("clamp", String(args.clamp));
+	if (args.count !== undefined) queryParams.set("count", args.count.toString());
+	if (args.bytes !== undefined) queryParams.set("bytes", args.bytes.toString());
+	if (args.wait !== undefined) queryParams.set("wait", args.wait.toString());
+	if (typeof args.until === "number") {
+		queryParams.set("until", args.until.toString());
+	}
+	return queryParams.toString();
+}
+
 /** Opens an HTTP/2 stream to the transport's endpoint. */
 type OpenH2Stream = (
 	headers: OutgoingHttpHeaders,
@@ -316,27 +337,8 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					// Start the timeout timer - will fire in 20s if no tail received
 					resetTimeoutTimer();
 
-					// Build query string
-					const queryParams = new URLSearchParams();
-					const { as, ...readParams } = args ?? {};
-
-					if (readParams.seq_num !== undefined)
-						queryParams.set("seq_num", readParams.seq_num.toString());
-					if (readParams.timestamp !== undefined)
-						queryParams.set("timestamp", readParams.timestamp.toString());
-					if (readParams.tail_offset !== undefined)
-						queryParams.set("tail_offset", readParams.tail_offset.toString());
-					if (readParams.count !== undefined)
-						queryParams.set("count", readParams.count.toString());
-					if (readParams.bytes !== undefined)
-						queryParams.set("bytes", readParams.bytes.toString());
-					if (readParams.wait !== undefined)
-						queryParams.set("wait", readParams.wait.toString());
-					if (typeof readParams.until === "number") {
-						queryParams.set("until", readParams.until.toString());
-					}
-
-					const queryString = queryParams.toString();
+					const { as } = args ?? {};
+					const queryString = readQueryString(args);
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
 					const acceptEncoding = await acceptEncodingHeader(compression);
