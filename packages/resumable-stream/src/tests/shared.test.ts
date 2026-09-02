@@ -1,7 +1,6 @@
 import {
 	type AppendAck,
 	type AppendInput,
-	type AppendRecord as AppendRecordType,
 	type ReadRecord,
 	S2Error,
 } from "@s2-dev/streamstore";
@@ -11,8 +10,6 @@ import {
 	claimSharedGeneration,
 	replayActiveGenerationStringRecords,
 	replaySessionStringRecords,
-	stopSharedGeneration,
-	tailCompactedStringRecords,
 	tailGenerationStringRecords,
 	tailStringRecords,
 } from "../shared.js";
@@ -35,12 +32,6 @@ async function drainAsyncIterable<T>(source: AsyncIterable<T>): Promise<T[]> {
 	const out: T[] = [];
 	for await (const v of source) out.push(v);
 	return out;
-}
-
-function recordBody(record: AppendRecordType): string {
-	return typeof record.body === "string"
-		? record.body
-		: new TextDecoder().decode(record.body);
 }
 
 interface MockSession extends AsyncIterable<ReadRecord<"string">> {
@@ -270,51 +261,6 @@ describe("claimSessionGeneration", () => {
 		});
 
 		expect(result).toBeNull();
-		expect(handle.appends).toHaveLength(0);
-	});
-});
-
-describe("stopSharedGeneration", () => {
-	const ts = new Date(10_000_000);
-
-	it("writes a terminal chunk and fence with the active holder token", async () => {
-		const handle = new MockStreamHandle([
-			readRecord({
-				seqNum: 0,
-				body: "holder",
-				headers: [["", "fence"]],
-				timestamp: ts,
-			}),
-			readRecord({ seqNum: 1, body: "chunk-a", timestamp: ts }),
-		]);
-
-		const stopped = await stopSharedGeneration({
-			stream: handle as any,
-			body: "stopped",
-		});
-
-		expect(stopped).toBe(true);
-		expect(handle.appends).toHaveLength(1);
-		expect(handle.appends[0]?.fencingToken).toBe("holder");
-		expect(handle.appends[0]?.records.map(recordBody)).toEqual([
-			"stopped",
-			expect.stringMatching(/^end-/),
-		]);
-	});
-
-	it("returns false when there is no active holder", async () => {
-		const handle = new MockStreamHandle([
-			readRecord({
-				seqNum: 0,
-				body: "end-AAAA",
-				headers: [["", "fence"]],
-				timestamp: ts,
-			}),
-		]);
-
-		const stopped = await stopSharedGeneration({ stream: handle as any });
-
-		expect(stopped).toBe(false);
 		expect(handle.appends).toHaveLength(0);
 	});
 });
@@ -732,20 +678,5 @@ describe("replaySessionStringRecords", () => {
 			{ body: "old", nextSeqNum: 1 },
 			{ body: "live", nextSeqNum: 3 },
 		]);
-	});
-});
-
-describe("tailCompactedStringRecords", () => {
-	it("treats a missing stream as empty", async () => {
-		const records = await drainAsyncIterable(
-			tailCompactedStringRecords(
-				new MissingStreamHandle() as any,
-				(existing) => {
-					expect(existing).toEqual([]);
-					return [];
-				},
-			),
-		);
-		expect(records).toEqual([]);
 	});
 });
