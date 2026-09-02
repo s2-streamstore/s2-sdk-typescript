@@ -16,6 +16,7 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 
 import type { S2RequestOptions } from "../../../../common.js";
 import {
+	isServerDraining,
 	makeAppendPreconditionError,
 	makeServerError,
 	RangeNotSatisfiableError,
@@ -29,6 +30,7 @@ import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import { FifoQueue } from "../../../queue.js";
+import { AdvisedReconnects } from "../../../reconnect.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
 import { err, errClose, ok, okClose } from "../../../result.js";
@@ -95,6 +97,7 @@ export class S2STransport implements SessionTransport {
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
 		await assertCompressionSupported(this.compression);
+		const advisedReconnects = new AdvisedReconnects();
 		return AppendSessionImpl.create(
 			(myOptions) => {
 				return S2SAppendSession.create(
@@ -105,6 +108,7 @@ export class S2STransport implements SessionTransport {
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
 					this.compression,
+					advisedReconnects,
 					myOptions,
 					requestOptions,
 				);
@@ -121,6 +125,7 @@ export class S2STransport implements SessionTransport {
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
 		await assertCompressionSupported(this.compression);
+		const advisedReconnects = new AdvisedReconnects();
 		return ReadSessionImpl.create(
 			(myArgs) => {
 				return S2SReadSession.create(
@@ -133,6 +138,7 @@ export class S2STransport implements SessionTransport {
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
 					this.compression,
+					advisedReconnects,
 				);
 			},
 			args,
@@ -203,6 +209,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		basinName?: string,
 		encryptionKey?: Redacted.Redacted<string>,
 		compression: CompressionType = "none",
+		advisedReconnects: AdvisedReconnects = new AdvisedReconnects(),
 	): Promise<S2SReadSession<Format>> {
 		const url = new URL(baseUrl);
 		return new S2SReadSession(
@@ -215,6 +222,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			basinName,
 			encryptionKey,
 			compression,
+			advisedReconnects,
 		);
 	}
 
@@ -228,6 +236,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private basinName?: string,
 		private encryptionKey?: Redacted.Redacted<string>,
 		private compression: CompressionType = "none",
+		private advisedReconnects: AdvisedReconnects = new AdvisedReconnects(),
 	) {
 		const parser = new S2SFrameParser();
 		const textDecoder = new TextDecoder();
@@ -358,6 +367,14 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					});
 
 					http2Stream = stream;
+					let declinedAdvice = false;
+					const handleServerError = (error: S2Error) => {
+						if (isServerDraining(error)) {
+							poison();
+							this.advisedReconnects.record();
+						}
+						safeError(error);
+					};
 					if (controllerClosed) {
 						stream.close();
 						return;
@@ -419,7 +436,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 								}
 								try {
 									const errorJson = JSON.parse(errorText);
-									safeError(
+									handleServerError(
 										new S2Error({
 											message: errorJson.message ?? "Unknown error",
 											code: errorJson.code,
@@ -428,7 +445,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										}),
 									);
 								} catch {
-									safeError(
+									handleServerError(
 										new S2Error({
 											message: errorText || "Unknown error",
 											status,
@@ -462,7 +479,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 													}),
 												);
 											} else {
-												safeError(
+												handleServerError(
 													makeServerError(
 														{ status, statusText: undefined },
 														errorJson,
@@ -470,7 +487,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 												);
 											}
 										} catch {
-											safeError(
+											handleServerError(
 												makeServerError(
 													{
 														status: frame.statusCode ?? 500,
@@ -520,12 +537,16 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 										// accounts for this batch. Poisoning here rather than on
 										// reconnect keeps the pool clean whatever the retry layer
 										// goes on to do.
-										if (frame.reconnectAdvised) {
-											debug("reconnect advised, ending read session");
+										if (frame.reconnectAdvised && !declinedAdvice) {
 											poison();
-											safeError(reconnectAdvisedError());
-											stream.close();
-											return;
+											if (this.advisedReconnects.shouldReconnect()) {
+												this.advisedReconnects.record();
+												debug("reconnect advised, ending read session");
+												safeError(reconnectAdvisedError());
+												stream.close();
+												return;
+											}
+											declinedAdvice = true;
 										}
 									} catch (err) {
 										safeError(
@@ -698,10 +719,9 @@ class S2SAppendSession implements TransportAppendSession {
 	private initPromise?: Promise<void>;
 	private _effectSignalled = false;
 	private abortHandler?: () => void;
-	// Set once the server flags an ack frame as reconnect-advised; new batches
-	// are rejected with a retryable error so the retry layer recreates the
-	// session on a fresh connection once pipelined acks drain.
 	private reconnectAdvised = false;
+	private reconnectDeclined = false;
+	private terminalError?: S2Error;
 
 	static async create(
 		baseUrl: string,
@@ -711,6 +731,7 @@ class S2SAppendSession implements TransportAppendSession {
 		basinName: string | undefined,
 		encryptionKey: Redacted.Redacted<string> | undefined,
 		compression: CompressionType,
+		advisedReconnects: AdvisedReconnects,
 		sessionOptions?: AppendSessionOptions,
 		requestOptions?: S2RequestOptions,
 	): Promise<S2SAppendSession> {
@@ -722,6 +743,7 @@ class S2SAppendSession implements TransportAppendSession {
 			basinName,
 			encryptionKey,
 			compression,
+			advisedReconnects,
 			sessionOptions,
 			requestOptions,
 		);
@@ -735,6 +757,7 @@ class S2SAppendSession implements TransportAppendSession {
 		private basinName: string | undefined,
 		private encryptionKey: Redacted.Redacted<string> | undefined,
 		private compression: CompressionType,
+		private advisedReconnects: AdvisedReconnects,
 		sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
 	) {
@@ -783,14 +806,25 @@ class S2SAppendSession implements TransportAppendSession {
 		let pendingChunks: Buffer[] | undefined;
 
 		const safeError = (error: unknown) => {
+			const normalized = s2Error(error);
+			this.terminalError = normalized;
 			// Resolve all pending acks with error result
 			for (const pending of this.pendingAcks) {
-				pending.resolve(err(s2Error(error)));
+				pending.resolve(err(normalized));
 			}
 			this.pendingAcks.clear();
 			// Note: do NOT reset _effectSignalled here. Data may have been
 			// written to the wire before the error occurred, so the flag
 			// must stay true until the session is recreated.
+		};
+		const handleServerError = (error: S2Error) => {
+			if (isServerDraining(error)) {
+				poison();
+				if (!this.reconnectAdvised || this.reconnectDeclined) {
+					this.advisedReconnects.record();
+				}
+			}
+			safeError(error);
 		};
 
 		// Capture HTTP response status
@@ -813,7 +847,7 @@ class S2SAppendSession implements TransportAppendSession {
 					const errorText = textDecoder.decode(chunk);
 					try {
 						const errorJson = JSON.parse(errorText);
-						safeError(
+						handleServerError(
 							new S2Error({
 								message: errorJson.message ?? "Unknown error",
 								code: errorJson.code,
@@ -822,7 +856,7 @@ class S2SAppendSession implements TransportAppendSession {
 							}),
 						);
 					} catch {
-						safeError(
+						handleServerError(
 							new S2Error({
 								message: errorText || "Unknown error",
 								status: responseCode,
@@ -850,13 +884,13 @@ class S2SAppendSession implements TransportAppendSession {
 												{ status, statusText: undefined },
 												errorJson,
 											);
-								queueMicrotask(() => safeError(err));
+								queueMicrotask(() => handleServerError(err));
 							} catch {
 								const err = makeServerError(
 									{ status, statusText: undefined },
 									errorText,
 								);
-								queueMicrotask(() => safeError(err));
+								queueMicrotask(() => handleServerError(err));
 							}
 						}
 						stream.close();
@@ -865,9 +899,14 @@ class S2SAppendSession implements TransportAppendSession {
 						// so no new stream reuses a connection pinned to the draining
 						// server, whatever this session goes on to do.
 						if (frame.reconnectAdvised && !this.reconnectAdvised) {
-							debug("reconnect advised, draining append session");
 							this.reconnectAdvised = true;
 							poison();
+							if (this.advisedReconnects.shouldReconnect()) {
+								this.advisedReconnects.record();
+								debug("reconnect advised, draining append session");
+							} else {
+								this.reconnectDeclined = true;
+							}
 						}
 						// Parse AppendAck
 						try {
@@ -888,7 +927,11 @@ class S2SAppendSession implements TransportAppendSession {
 								this._effectSignalled = false;
 								// Everything submitted was acknowledged; half-close so the
 								// draining server can end the response cleanly.
-								if (this.reconnectAdvised && !stream.writableEnded) {
+								if (
+									this.reconnectAdvised &&
+									!this.reconnectDeclined &&
+									!stream.writableEnded
+								) {
 									stream.end();
 								}
 							}
@@ -948,10 +991,13 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
 	private async sendBatch(input: Types.AppendInput): Promise<AppendResult> {
-		if (this.reconnectAdvised) {
+		if (this.reconnectAdvised && !this.reconnectDeclined) {
 			// Refuse the advised stream without writing, so the retry layer can
 			// resubmit on a fresh session with no risk of duplication.
 			return Promise.resolve(err(reconnectAdvisedError()));
+		}
+		if (this.terminalError) {
+			return Promise.resolve(err(this.terminalError));
 		}
 		if (!this.http2Stream || this.http2Stream.closed) {
 			return Promise.resolve(

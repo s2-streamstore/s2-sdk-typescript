@@ -63,21 +63,18 @@ describe("reconnect advice error", () => {
 	});
 });
 
-describe("advised reconnect pacing", () => {
-	it("allows three immediate reconnects before delaying", () => {
+describe("advised reconnects", () => {
+	it("acts on one advice before staying on", () => {
 		const advised = new AdvisedReconnects();
-		expect(advised.record(0)).toBe(0);
-		expect(advised.record(1)).toBe(0);
-		expect(advised.record(2)).toBe(0);
-		expect(advised.record(3)).toBeGreaterThan(0);
+		expect(advised.shouldReconnect(0)).toBe(true);
+		advised.record(0);
+		expect(advised.shouldReconnect(1)).toBe(false);
 	});
 
-	it("resets the count once advice stops arriving", () => {
+	it("allows another reconnect after the idle gap", () => {
 		const advised = new AdvisedReconnects();
 		advised.record(0);
-		advised.record(1);
-		advised.record(2);
-		advised.record(3);
-		expect(advised.record(30_000)).toBe(0);
+		expect(advised.shouldReconnect(60_000)).toBe(false);
+		expect(advised.shouldReconnect(60_001)).toBe(true);
 	});
 });

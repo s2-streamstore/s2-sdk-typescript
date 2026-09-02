@@ -338,6 +338,10 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 /** Error code for a session interrupted by server reconnect advice. */
 export const RECONNECT_ADVISED_CODE = "reconnect_advised";
 
+export function isServerDraining(error: S2Error): boolean {
+	return error.status === 503 && error.code === "server_draining";
+}
+
 /**
  * Helper: construct a reconnect-advised error (503, retryable).
  *

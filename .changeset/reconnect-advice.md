@@ -2,4 +2,4 @@
 "@s2-dev/streamstore": patch
 ---
 
-Act on s2s reconnect advice: sessions move to a fresh connection when a server starts draining, and the pooled connection the advice arrived on is dropped so no new stream reuses it.
+Act on s2s reconnect advice once per minute, keep terminal `server_draining` reconnects outside the ordinary retry budget, and drop draining connections from the pool.
