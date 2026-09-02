@@ -185,37 +185,3 @@ export async function persistToS2<T>({
 		await handle.close();
 	}
 }
-
-export interface StreamReadOptions {
-	s2: S2;
-	basin: string;
-	stream: string;
-}
-
-export async function* replayStringBodies({
-	s2,
-	basin,
-	stream,
-}: StreamReadOptions): AsyncIterable<string> {
-	const handle = s2.basin(basin).stream(stream);
-	try {
-		const session = await handle.readSession(
-			{
-				start: { from: { seqNum: 0 } },
-			},
-			{ as: "string" },
-		);
-		for await (const record of session) {
-			if (isFenceRecord(record)) {
-				if (isTerminalFence(record)) break;
-				continue;
-			}
-			if (isTrimRecord(record)) continue;
-			if (record.body) {
-				yield record.body;
-			}
-		}
-	} finally {
-		await handle.close();
-	}
-}
