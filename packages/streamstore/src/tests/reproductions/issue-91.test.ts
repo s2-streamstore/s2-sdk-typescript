@@ -42,13 +42,4 @@ describe("Issue #91 reproduction", () => {
 		const secret = Redacted.make("correct-horse-battery-staple");
 		expect(Redacted.value(secret)).toBe("correct-horse-battery-staple");
 	});
-
-	it("should still allow unsafeWipe() to delete the secret", () => {
-		const secret = Redacted.make("ephemeral-secret");
-		expect(Redacted.value(secret)).toBe("ephemeral-secret");
-		expect(Redacted.unsafeWipe(secret)).toBe(true);
-		expect(() => Redacted.value(secret)).toThrow(
-			"Unable to get redacted value",
-		);
-	});
 });

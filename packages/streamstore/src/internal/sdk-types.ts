@@ -170,34 +170,3 @@ export type TimestampingReconfiguration =
  */
 export type IssueAccessTokenResponse =
 	CamelCaseKeys<API.IssueAccessTokenResponse>;
-
-// =============================================================================
-// Re-export types that don't need transformation (already camelCase or simple)
-// =============================================================================
-
-export type {
-	AccessTokenIdStr,
-	AccountMetricSet,
-	BasinMetricSet,
-	BasinState,
-	CreateStreamRequest,
-	FencingToken,
-	GaugeMetric,
-	Header,
-	InfiniteRetention,
-	LabelMetric,
-	LocationName,
-	Metric,
-	MetricSetResponse,
-	MetricUnit,
-	Operation,
-	PermittedOperationGroups,
-	ReadWritePermissions,
-	ResourceSet,
-	RetentionPolicy,
-	ScalarMetric,
-	StorageClass,
-	StreamMetricSet,
-	TimeseriesInterval,
-	TimestampingMode,
-} from "../generated/types.gen.js";
