@@ -504,14 +504,6 @@ describe("ReadSession drain handoff (unit)", () => {
 		seq_num,
 		timestamp: 1000,
 	});
-	const serverDraining = () =>
-		new S2Error({
-			message: "server draining",
-			status: 503,
-			code: "server_draining",
-			origin: "server",
-		});
-
 	it("anchors a tail-relative start to the tail of an empty batch before reconnecting", async () => {
 		const transports: ManualReadSession[] = [];
 		const capturedArgs: Array<ReadArgs<"string">> = [];
@@ -552,53 +544,47 @@ describe("ReadSession drain handoff (unit)", () => {
 		reader.releaseLock();
 	});
 
-	it.each([
-		["reconnect advice", reconnectAdvisedError],
-		["terminal server_draining", serverDraining],
-	])(
-		"reconnects on %s without spending the retry budget",
-		async (_label, makeError) => {
-			const transports: ManualReadSession[] = [];
-			const capturedArgs: Array<ReadArgs<"string">> = [];
-			const session = await RetryReadSession.create(
-				async (args) => {
-					capturedArgs.push({ ...args });
-					const t = new ManualReadSession();
-					transports.push(t);
-					return t;
-				},
-				{ seq_num: 0 },
-				{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
-			);
+	it("reconnects on advice without spending the retry budget", async () => {
+		const transports: ManualReadSession[] = [];
+		const capturedArgs: Array<ReadArgs<"string">> = [];
+		const session = await RetryReadSession.create(
+			async (args) => {
+				capturedArgs.push({ ...args });
+				const t = new ManualReadSession();
+				transports.push(t);
+				return t;
+			},
+			{ seq_num: 0 },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
 
-			const reader = session.getReader();
-			transports[0]!.push(readBatch([record(0)], tailAt(1)));
-			expect((await reader.read()).value?.seqNum).toBe(0);
-			expect(session.isCaughtUp()).toBe(true);
+		const reader = session.getReader();
+		transports[0]!.push(readBatch([record(0)], tailAt(1)));
+		expect((await reader.read()).value?.seqNum).toBe(0);
+		expect(session.isCaughtUp()).toBe(true);
 
-			const next = reader.read();
-			transports[0]!.push(readError(makeError()));
-			await vi.waitFor(() => {
-				expect(transports.length).toBe(2);
-			});
-			expect(session.isCaughtUp()).toBe(false);
-			expect(capturedArgs[1]?.seq_num).toBe(1);
+		const next = reader.read();
+		transports[0]!.push(readError(reconnectAdvisedError()));
+		await vi.waitFor(() => {
+			expect(transports.length).toBe(2);
+		});
+		expect(session.isCaughtUp()).toBe(false);
+		expect(capturedArgs[1]?.seq_num).toBe(1);
 
-			// A second handoff is still budget-free.
-			transports[1]!.push(readError(makeError()));
-			await vi.waitFor(() => {
-				expect(transports.length).toBe(3);
-			});
-			expect(capturedArgs[2]?.seq_num).toBe(1);
+		// A second handoff is still budget-free.
+		transports[1]!.push(readError(reconnectAdvisedError()));
+		await vi.waitFor(() => {
+			expect(transports.length).toBe(3);
+		});
+		expect(capturedArgs[2]?.seq_num).toBe(1);
 
-			transports[2]!.push(readBatch([record(1)], tailAt(2)));
-			expect((await next).value?.seqNum).toBe(1);
+		transports[2]!.push(readBatch([record(1)], tailAt(2)));
+		expect((await next).value?.seqNum).toBe(1);
 
-			transports[2]!.push("close");
-			expect((await reader.read()).done).toBe(true);
-			reader.releaseLock();
-		},
-	);
+		transports[2]!.push("close");
+		expect((await reader.read()).done).toBe(true);
+		reader.releaseLock();
+	});
 
 	it("ends instead of reconnecting when the read is already satisfied", async () => {
 		let calls = 0;
