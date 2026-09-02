@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { S2Error } from "../error.js";
+import { reconnectAdvisedError, S2Error } from "../error.js";
 import type { StreamPosition } from "../generated/index.js";
 import { RetryReadSession } from "../lib/retry.js";
 import type {
@@ -491,6 +491,137 @@ describe("ReadSession caught-up signal (unit)", () => {
 		transports[1]!.push("close");
 		expect((await reader.read()).done).toBe(true);
 		reader.releaseLock();
+	});
+});
+
+describe("ReadSession drain handoff (unit)", () => {
+	const record = (seq_num: number): InternalReadRecord<"string"> => ({
+		seq_num,
+		timestamp: 1000,
+		body: "x",
+	});
+	const tailAt = (seq_num: number): StreamPosition => ({
+		seq_num,
+		timestamp: 1000,
+	});
+	const serverDraining = () =>
+		new S2Error({
+			message: "server draining",
+			status: 503,
+			code: "server_draining",
+			origin: "server",
+		});
+
+	it("anchors a tail-relative start to the tail of an empty batch before reconnecting", async () => {
+		const transports: ManualReadSession[] = [];
+		const capturedArgs: Array<ReadArgs<"string">> = [];
+		const session = await RetryReadSession.create(
+			async (args) => {
+				capturedArgs.push({ ...args });
+				const t = new ManualReadSession();
+				transports.push(t);
+				return t;
+			},
+			{ tail_offset: 0 },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const reader = session.getReader();
+		const read = reader.read();
+
+		// Heartbeat: caught up at 42 with nothing delivered yet.
+		transports[0]!.push(readBatch([], tailAt(42)));
+		await vi.waitFor(() => {
+			expect(session.nextReadPosition()).toMatchObject({ seqNum: 42 });
+		});
+		transports[0]!.push(readError(reconnectAdvisedError()));
+
+		await vi.waitFor(() => {
+			expect(transports.length).toBe(2);
+		});
+		expect(capturedArgs[0]).toMatchObject({ tail_offset: 0 });
+		expect(capturedArgs[1]?.seq_num).toBe(42);
+		expect(capturedArgs[1]?.tail_offset).toBeUndefined();
+
+		transports[1]!.push(readBatch([record(42)], tailAt(43)));
+		expect((await read).value?.seqNum).toBe(42);
+		expect(session.nextReadPosition()).toMatchObject({ seqNum: 43 });
+
+		transports[1]!.push("close");
+		expect((await reader.read()).done).toBe(true);
+		reader.releaseLock();
+	});
+
+	it.each([
+		["reconnect advice", reconnectAdvisedError],
+		["terminal server_draining", serverDraining],
+	])(
+		"reconnects on %s without spending the retry budget",
+		async (_label, makeError) => {
+			const transports: ManualReadSession[] = [];
+			const capturedArgs: Array<ReadArgs<"string">> = [];
+			const session = await RetryReadSession.create(
+				async (args) => {
+					capturedArgs.push({ ...args });
+					const t = new ManualReadSession();
+					transports.push(t);
+					return t;
+				},
+				{ seq_num: 0 },
+				{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+			);
+
+			const reader = session.getReader();
+			transports[0]!.push(readBatch([record(0)], tailAt(1)));
+			expect((await reader.read()).value?.seqNum).toBe(0);
+			expect(session.isCaughtUp()).toBe(true);
+
+			const next = reader.read();
+			transports[0]!.push(readError(makeError()));
+			await vi.waitFor(() => {
+				expect(transports.length).toBe(2);
+			});
+			expect(session.isCaughtUp()).toBe(false);
+			expect(capturedArgs[1]?.seq_num).toBe(1);
+
+			// A second handoff is still budget-free.
+			transports[1]!.push(readError(makeError()));
+			await vi.waitFor(() => {
+				expect(transports.length).toBe(3);
+			});
+			expect(capturedArgs[2]?.seq_num).toBe(1);
+
+			transports[2]!.push(readBatch([record(1)], tailAt(2)));
+			expect((await next).value?.seqNum).toBe(1);
+
+			transports[2]!.push("close");
+			expect((await reader.read()).done).toBe(true);
+			reader.releaseLock();
+		},
+	);
+
+	it("ends instead of reconnecting when the read is already satisfied", async () => {
+		let calls = 0;
+		const session = await RetryReadSession.create(
+			async () => {
+				calls++;
+				return new FakeReadSession({
+					records: [record(0), record(1)],
+					errorAfterRecords: 2,
+					error: reconnectAdvisedError(),
+				});
+			},
+			{ count: 2 },
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const results: SDKReadRecord<"string">[] = [];
+		for await (const r of session) {
+			results.push(r);
+		}
+
+		expect(results.map((r) => r.seqNum)).toEqual([0, 1]);
+		expect(calls).toBe(1);
 	});
 });
 

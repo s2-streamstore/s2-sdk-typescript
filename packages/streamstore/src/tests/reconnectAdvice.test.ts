@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { RECONNECT_ADVISED_CODE, reconnectAdvisedError } from "../error.js";
+import {
+	isServerDraining,
+	RECONNECT_ADVISED_CODE,
+	reconnectAdvisedError,
+	S2Error,
+} from "../error.js";
 import { AdvisedReconnects } from "../lib/reconnect.js";
 import { isRetryable } from "../lib/retry.js";
 import { S2SFrameParser } from "../lib/stream/transport/s2s/framing.js";
@@ -58,6 +63,18 @@ describe("reconnect advice error", () => {
 		const error = reconnectAdvisedError();
 		expect(error.code).toBe(RECONNECT_ADVISED_CODE);
 		expect(error.status).toBe(503);
+		expect(isRetryable(error)).toBe(true);
+		expect(error.hasNoSideEffects()).toBe(true);
+	});
+
+	it("classifies terminal server_draining as retryable and free of side effects", () => {
+		const error = new S2Error({
+			message: "server draining",
+			status: 503,
+			code: "server_draining",
+			origin: "server",
+		});
+		expect(isServerDraining(error)).toBe(true);
 		expect(isRetryable(error)).toBe(true);
 		expect(error.hasNoSideEffects()).toBe(true);
 	});

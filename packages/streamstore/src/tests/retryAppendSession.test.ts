@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { S2Error } from "../error.js";
+import { reconnectAdvisedError, S2Error } from "../error.js";
 import { AppendInput, AppendRecord } from "../index.js";
 import type { AppendResult, CloseResult } from "../lib/result.js";
 import { err, errClose, ok, okClose } from "../lib/result.js";
@@ -423,6 +423,59 @@ describe("AppendSessionImpl (unit)", () => {
 		await expect(ticket.ack()).rejects.toMatchObject({ status: 502 });
 		expect(session.failureCause()).toMatchObject({ status: 502 });
 	});
+
+	it.each([
+		[
+			"terminal server_draining",
+			() =>
+				new S2Error({
+					message: "server draining",
+					status: 503,
+					code: "server_draining",
+					origin: "server",
+				}),
+		],
+		["reconnect advice", reconnectAdvisedError],
+	])(
+		"reconnects on %s without spending the retry budget under noSideEffects",
+		async (_label, makeError) => {
+			const sessions: FakeTransportAppendSession[] = [];
+			const session = await AppendSessionImpl.create(
+				async () => {
+					const s =
+						sessions.length < 2
+							? new FakeTransportAppendSession({
+									submitError: makeError(),
+									// Data reached the wire; only the drain contract makes this safe.
+									effectSignalled: true,
+								})
+							: new FakeTransportAppendSession();
+					sessions.push(s);
+					return s;
+				},
+				undefined,
+				{
+					minBaseDelayMillis: 1,
+					maxBaseDelayMillis: 1,
+					maxAttempts: 1,
+					appendRetryPolicy: "noSideEffects",
+				},
+			);
+
+			const p = session.submit(
+				AppendInput.create([AppendRecord.string({ body: "x" })]),
+			);
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(10);
+			await Promise.resolve();
+			const ticket = await p;
+			const ack = await ticket.ack();
+			expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
+			expect(sessions).toHaveLength(3);
+			expect(sessions[2]!.writes).toHaveLength(1);
+			expect(session.failureCause()).toBeUndefined();
+		},
+	);
 
 	it("detects non-monotonic sequence numbers and aborts with fatal error", async () => {
 		// Create acks with non-monotonic sequence numbers

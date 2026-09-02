@@ -188,6 +188,10 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 		AsyncDisposable {
 	/**
 	 * Get the next read position, if known.
+	 *
+	 * This is the position of the next record the session expects: one past the
+	 * last record delivered, or the reported tail once an empty batch shows the
+	 * session is caught up. A reconnect resumes from here.
 	 */
 	nextReadPosition(): Types.StreamPosition | undefined;
 	/**

@@ -589,6 +589,16 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						lastSeqNum: lastRecord?.seq_num,
 						tail: tail ? toSDKStreamPosition(tail) : undefined,
 					});
+					// An empty batch with a tail still resolves a timestamp or
+					// tail-relative start. Anchoring here keeps a reconnect from
+					// evaluating the original start against a newer tail and
+					// skipping or re-reading records appended in between.
+					if (records.length === 0 && tail) {
+						this._nextReadPosition = {
+							seq_num: tail.seq_num,
+							timestamp: tail.timestamp,
+						};
+					}
 					const visibleRecords: Types.ReadRecord<Format>[] = [];
 					for (const record of records) {
 						this._nextReadPosition = {
@@ -1454,11 +1464,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// we can determine no mutation occurred. This is true if either:
 				// 1. The error itself guarantees no side effects (e.g. rate_limited, hot_server)
 				// 2. The transport reports no data was sent since the last dormant state
+				// Planned drain handoffs. Both errors guarantee no side effects: an
+				// advised session refuses new input without writing it, and a
+				// draining server acknowledges everything it accepted before ending
+				// the session, so anything still unacknowledged was never
+				// registered. If the server's drain window lapses instead, the
+				// connection drops without `server_draining` and the ordinary
+				// ambiguous-disconnect handling below applies.
 				const draining =
 					error.code === RECONNECT_ADVISED_CODE || isServerDraining(error);
 
 				if (
-					!draining &&
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!error.hasNoSideEffects() &&
 					(this.session?.effectSignalled() ?? true)
@@ -1474,7 +1490,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// Under noSideEffects, also check that all inflight entries
 				// are idempotent. Non-idempotent entries that were already
 				// sent may have been processed, and resubmitting would cause
-				// duplicates.
+				// duplicates. A drain handoff is exempt: the server acknowledged
+				// every accepted input before ending the session, so the
+				// unacknowledged remainder was never processed.
 				if (
 					!draining &&
 					this.retryConfig.appendRetryPolicy === "noSideEffects"
@@ -1495,7 +1513,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					}
 				}
 
-				// Planned drain handoffs do not consume retry attempts.
+				// Planned drain handoffs do not consume retry attempts. Repeated
+				// handoffs stay bounded because the draining connection has been
+				// dropped from the pool and the server refuses new connections once
+				// it drains, so a fresh dial either lands elsewhere or fails with an
+				// ordinary, budgeted error.
 				// Check max attempts (total attempts include initial; retries = max - 1)
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
 				const allowedRetries = effectiveMax - 1;

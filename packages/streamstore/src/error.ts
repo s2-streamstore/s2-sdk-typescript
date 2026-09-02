@@ -277,16 +277,21 @@ export class S2Error extends Error {
 	/**
 	 * Returns true if the error guarantees that no mutation occurred.
 	 *
-	 * Certain server errors (`rate_limited`, `hot_server`) and pre-connection
-	 * client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`) are safe to
-	 * retry since they guarantee no side effects.
+	 * Certain server errors (`rate_limited`, `hot_server`, `server_draining`)
+	 * and pre-connection client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`)
+	 * are safe to retry since they guarantee no side effects.
+	 *
+	 * A draining server acknowledges every input it accepted before ending the
+	 * session with `server_draining`, so anything still unacknowledged was never
+	 * registered and can be resubmitted.
 	 */
 	hasNoSideEffects(): boolean {
 		if (this.origin === "server") {
 			return (
 				(this.status === 429 && this.code === "rate_limited") ||
 				(this.status === 502 && this.code === "hot_server") ||
-				(this.status === 503 && this.code === RECONNECT_ADVISED_CODE)
+				(this.status === 503 && this.code === RECONNECT_ADVISED_CODE) ||
+				isServerDraining(this)
 			);
 		}
 		if (this.origin === "sdk") {
