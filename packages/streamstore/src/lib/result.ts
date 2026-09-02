@@ -46,13 +46,3 @@ export function okClose(): CloseResult {
 export function errClose(error: S2Error): CloseResult {
 	return { ok: false, error };
 }
-
-/**
- * Type guard to check if a result is successful.
- * Mainly for internal use; prefer `result.ok` for public API.
- */
-export function isOk<T>(
-	result: { ok: true; value: T } | { ok: false; error: S2Error },
-): result is { ok: true; value: T } {
-	return result.ok;
-}

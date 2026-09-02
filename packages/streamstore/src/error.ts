@@ -314,17 +314,6 @@ export function invariantViolation(
 	});
 }
 
-/** Helper: construct an internal SDK error (status 0, never retried). */
-export function internalSdkError(message: string, details?: unknown): S2Error {
-	return new S2Error({
-		message: `Internal SDK error: ${message}`,
-		code: "INTERNAL_SDK_ERROR",
-		status: 0,
-		origin: "sdk",
-		data: details,
-	});
-}
-
 /** Helper: construct an aborted/cancelled error (499). */
 export function abortedError(message: string = "Request cancelled"): S2Error {
 	return new S2Error({
