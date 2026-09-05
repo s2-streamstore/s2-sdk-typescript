@@ -20,14 +20,6 @@ import type { CamelCaseKeys } from "./case-transform.js";
  */
 export type AccessTokenInfo = CamelCaseKeys<API.AccessTokenInfo>;
 
-/**
- * Access token scope.
- *
- * Generated: `access_tokens`, `op_groups`
- * SDK: `accessTokens`, `opGroups`
- */
-export type AccessTokenScope = CamelCaseKeys<API.AccessTokenScope>;
-
 // =============================================================================
 // Basin Types
 // =============================================================================
@@ -40,30 +32,9 @@ export type AccessTokenScope = CamelCaseKeys<API.AccessTokenScope>;
  */
 export type BasinConfig = CamelCaseKeys<API.BasinConfig>;
 
-/**
- * Basin information.
- */
-export type BasinInfo = CamelCaseKeys<API.BasinInfo>;
-
-/**
- * Basin reconfiguration options.
- *
- * Generated: `create_stream_on_append`, `create_stream_on_read`, `default_stream_config`
- * SDK: `createStreamOnAppend`, `createStreamOnRead`, `defaultStreamConfig`
- */
-export type BasinReconfiguration = CamelCaseKeys<API.BasinReconfiguration>;
-
 // =============================================================================
 // Stream Types
 // =============================================================================
-
-/**
- * Stream configuration.
- *
- * Generated: `delete_on_empty`, `retention_policy`, `storage_class`
- * SDK: `deleteOnEmpty`, `retentionPolicy`, `storageClass`
- */
-export type StreamConfig = CamelCaseKeys<API.StreamConfig>;
 
 /**
  * Stream information.
@@ -73,43 +44,9 @@ export type StreamConfig = CamelCaseKeys<API.StreamConfig>;
  */
 export type StreamInfo = CamelCaseKeys<API.StreamInfo>;
 
-/**
- * Stream reconfiguration options.
- *
- * Generated: `delete_on_empty`, `retention_policy`, `storage_class`
- * SDK: `deleteOnEmpty`, `retentionPolicy`, `storageClass`
- */
-export type StreamReconfiguration = CamelCaseKeys<API.StreamReconfiguration>;
-
-/**
- * Delete-on-empty configuration.
- *
- * Generated: `min_age_secs`
- * SDK: `minAgeSecs`
- */
-export type DeleteOnEmptyConfig = CamelCaseKeys<API.DeleteOnEmptyConfig>;
-
-/**
- * Delete-on-empty reconfiguration.
- *
- * Generated: `min_age_secs`
- * SDK: `minAgeSecs`
- */
-export type DeleteOnEmptyReconfiguration =
-	CamelCaseKeys<API.DeleteOnEmptyReconfiguration>;
-
 // =============================================================================
 // List Response Types
 // =============================================================================
-
-/**
- * List access tokens response.
- *
- * Generated: `access_tokens`, `has_more`
- * SDK: `accessTokens`, `hasMore`
- */
-export type ListAccessTokensResponse =
-	CamelCaseKeys<API.ListAccessTokensResponse>;
 
 /**
  * List basins response.
@@ -118,26 +55,6 @@ export type ListAccessTokensResponse =
  * SDK: `hasMore`
  */
 export type ListBasinsResponse = CamelCaseKeys<API.ListBasinsResponse>;
-
-/**
- * List streams response.
- *
- * Generated: `has_more`
- * SDK: `hasMore`
- */
-export type ListStreamsResponse = CamelCaseKeys<API.ListStreamsResponse>;
-
-// =============================================================================
-// Metric Types
-// =============================================================================
-
-/**
- * Accumulation metric with interval.
- *
- * Generated: `interval`
- * SDK: `interval`
- */
-export type AccumulationMetric = CamelCaseKeys<API.AccumulationMetric>;
 
 // =============================================================================
 // Other Types
@@ -150,23 +67,3 @@ export type AccumulationMetric = CamelCaseKeys<API.AccumulationMetric>;
  * SDK: `seqNum`
  */
 export type SequencedRecord = CamelCaseKeys<API.SequencedRecord>;
-
-/**
- * Timestamping configuration.
- */
-export type TimestampingConfig = CamelCaseKeys<API.TimestampingConfig>;
-
-/**
- * Timestamping reconfiguration.
- */
-export type TimestampingReconfiguration =
-	CamelCaseKeys<API.TimestampingReconfiguration>;
-
-/**
- * Issue access token response.
- *
- * Generated: `access_token`
- * SDK: `accessToken`
- */
-export type IssueAccessTokenResponse =
-	CamelCaseKeys<API.IssueAccessTokenResponse>;
