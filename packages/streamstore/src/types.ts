@@ -76,6 +76,22 @@ export type AppendRecord = StringAppendRecord | BytesAppendRecord;
 const textEncoder = new TextEncoder();
 
 /**
+ * Validate that a timestamp is a finite number of milliseconds.
+ * Throws S2Error early if the value would crash BigInt() in the transport layer.
+ */
+function validateTimestamp(timestamp: number | Date | undefined): void {
+	if (timestamp === undefined) return;
+	const ms =
+		typeof timestamp === "number" ? timestamp : timestamp.getTime();
+	if (!Number.isFinite(ms)) {
+		throw new S2Error({
+			message: "timestamp must be a finite number (milliseconds since Unix epoch)",
+			origin: "sdk",
+		});
+	}
+}
+
+/**
  * Factory functions for creating AppendRecord instances.
  */
 export namespace AppendRecord {
@@ -87,6 +103,7 @@ export namespace AppendRecord {
 		readonly headers?: ReadonlyArray<readonly [string, string]>;
 		readonly timestamp?: number | Date;
 	}): StringAppendRecord {
+		validateTimestamp(params.timestamp);
 		// Create record with placeholder, then calculate actual size
 		const record: StringAppendRecord = {
 			body: params.body,
@@ -111,6 +128,7 @@ export namespace AppendRecord {
 		>;
 		readonly timestamp?: number | Date;
 	}): BytesAppendRecord {
+		validateTimestamp(params.timestamp);
 		const headers = params.headers?.map(
 			([name, value]) =>
 				[
@@ -293,6 +311,10 @@ export namespace AppendInput {
 				message: "matchSeqNum must be a non-negative safe integer",
 				origin: "sdk",
 			});
+		}
+
+		for (const record of records) {
+			validateTimestamp(record.timestamp);
 		}
 
 		return {
