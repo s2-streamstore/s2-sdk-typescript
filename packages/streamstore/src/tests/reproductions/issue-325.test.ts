@@ -13,7 +13,7 @@ import { AppendInput, AppendRecord } from "../../types.js";
  * rejected upfront with a descriptive S2Error.
  */
 
-describe("Issue #325: Non-finite timestamps should be rejected", () => {
+describe(" Non-finite timestamps should be rejected", () => {
 	describe("AppendRecord.string()", () => {
 		it("rejects NaN timestamp", () => {
 			expect(() =>
@@ -58,9 +58,7 @@ describe("Issue #325: Non-finite timestamps should be rejected", () => {
 		});
 
 		it("accepts undefined timestamp", () => {
-			expect(() =>
-				AppendRecord.string({ body: "hello" }),
-			).not.toThrow();
+			expect(() => AppendRecord.string({ body: "hello" })).not.toThrow();
 		});
 	});
 
@@ -121,15 +119,13 @@ describe("Issue #325: Non-finite timestamps should be rejected", () => {
 		});
 
 		it("rejects invalid Date object", () => {
-			expect(() =>
-				AppendRecord.fence("tok", new Date("invalid")),
-			).toThrow(S2Error);
+			expect(() => AppendRecord.fence("tok", new Date("invalid"))).toThrow(
+				S2Error,
+			);
 		});
 
 		it("accepts valid timestamp", () => {
-			expect(() =>
-				AppendRecord.fence("tok", 1234567890),
-			).not.toThrow();
+			expect(() => AppendRecord.fence("tok", 1234567890)).not.toThrow();
 		});
 	});
 
@@ -143,9 +139,7 @@ describe("Issue #325: Non-finite timestamps should be rejected", () => {
 		});
 
 		it("rejects invalid Date object", () => {
-			expect(() =>
-				AppendRecord.trim(0, new Date("invalid")),
-			).toThrow(S2Error);
+			expect(() => AppendRecord.trim(0, new Date("invalid"))).toThrow(S2Error);
 		});
 
 		it("accepts valid timestamp", () => {
