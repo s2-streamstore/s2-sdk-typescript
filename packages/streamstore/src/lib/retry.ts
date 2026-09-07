@@ -1825,6 +1825,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						this.streamName,
 						result.error.message,
 					);
+					// Surface transport close errors to the caller. Don't overwrite a
+					// fatalError already set by abort() — the submit/cancel error
+					// (which already failed inflight work) takes precedence over a
+					// post-ack cleanup error.
+					if (!this.fatalError) {
+						this.fatalError = result.error;
+					}
 				}
 			} catch (e) {
 				debugSession(
@@ -1832,6 +1839,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					this.streamName,
 					e,
 				);
+				if (!this.fatalError) {
+					this.fatalError = s2Error(e);
+				}
 			}
 			this.session = undefined;
 		}

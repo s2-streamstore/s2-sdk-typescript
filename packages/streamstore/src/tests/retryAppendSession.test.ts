@@ -127,6 +127,7 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		private readonly behavior: {
 			submitError?: S2Error; // if provided, submit() returns error result
 			closeError?: S2Error; // if provided, close() returns error result
+			closeThrows?: unknown; // if provided, close() throws this value
 			neverAck?: boolean; // if true, submit() hangs forever (for timeout tests)
 			customAcks?: AppendAck[]; // if provided, return these acks in sequence
 			effectSignalled?: boolean; // override effectSignalled() return value
@@ -194,6 +195,9 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	}
 
 	async close(): Promise<CloseResult> {
+		if (this.behavior.closeThrows !== undefined) {
+			throw this.behavior.closeThrows;
+		}
 		if (this.behavior.closeError) {
 			return errClose(this.behavior.closeError);
 		}
@@ -560,5 +564,122 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(error.message).toContain("previous=10");
 		expect(error.message).toContain("current=10");
 		expect(error.status).toBe(0);
+	});
+
+	it("throws from close() when transport returns errClose, after data is acked", async () => {
+		const closeError = new S2Error({
+			message: "network error during close",
+			status: 503,
+		});
+		const session = await AppendSessionImpl.create(
+			async () => new FakeTransportAppendSession({ closeError }),
+			undefined,
+			{ maxAttempts: 1, appendRetryPolicy: "all" },
+		);
+
+		// Submit and ack the record first — the close error must not affect data
+		// that has already been acknowledged.
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "hello" })]),
+		);
+		const ack = await ticket.ack();
+		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
+
+		// close() should surface the transport's CloseResult error rather than
+		// silently resolving (the bug this test guards against).
+		await expect(session.close()).rejects.toMatchObject({
+			message: "network error during close",
+			status: 503,
+		});
+
+		// failureCause() should also expose the close error so callers polling
+		// for session health can observe it.
+		expect(session.failureCause()).toMatchObject({
+			message: "network error during close",
+			status: 503,
+		});
+	});
+
+	it("throws from close() when transport close() throws, wrapping non-S2Error as S2Error", async () => {
+		const session = await AppendSessionImpl.create(
+			async () =>
+				new FakeTransportAppendSession({
+					closeThrows: new Error("kaboom during close"),
+				}),
+			undefined,
+			{ maxAttempts: 1, appendRetryPolicy: "all" },
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "hello" })]),
+		);
+		await ticket.ack();
+
+		await expect(session.close()).rejects.toMatchObject({
+			message: "kaboom during close",
+		});
+		expect(session.failureCause()).toBeInstanceOf(S2Error);
+	});
+
+	it("rethrows the existing fatalError (from abort) on close(), not a later close error", async () => {
+		// A transport whose submit always fails (exhausting retries and triggering
+		// abort()) AND whose close() returns errClose. The submit error set by
+		// abort() must take precedence: close() should report the submit failure,
+		// not the close cleanup error.
+		const session = await AppendSessionImpl.create(
+			async () =>
+				new FakeTransportAppendSession({
+					submitError: new S2Error({ message: "submit failed", status: 500 }),
+					closeError: new S2Error({
+						message: "close failed after abort",
+						status: 503,
+					}),
+				}),
+			undefined,
+			{ maxAttempts: 1, appendRetryPolicy: "all" },
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "hello" })]),
+		);
+		await expect(ticket.ack()).rejects.toMatchObject({
+			message: expect.stringContaining("submit failed"),
+		});
+
+		// CONTROL: close() throws the abort-set fatalError ("Max attempts
+		// exhausted"), not the transport's close error.
+		await expect(session.close()).rejects.toMatchObject({
+			message: expect.stringContaining("Max attempts (1) exhausted"),
+		});
+		expect(session.failureCause()?.message).not.toContain("close failed");
+	});
+
+	it("rethrows the same fatalError on repeated close() calls", async () => {
+		const closeError = new S2Error({
+			message: "network error during close",
+			status: 503,
+		});
+		const session = await AppendSessionImpl.create(
+			async () => new FakeTransportAppendSession({ closeError }),
+			undefined,
+			{ maxAttempts: 1, appendRetryPolicy: "all" },
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "hello" })]),
+		);
+		await ticket.ack();
+
+		await expect(session.close()).rejects.toMatchObject({
+			message: "network error during close",
+			status: 503,
+		});
+
+		// Idempotent: a second close() must throw the same fatalError rather
+		// than resolving (it shouldn't attempt to close the inner session again).
+		await expect(session.close()).rejects.toMatchObject({
+			message: "network error during close",
+			status: 503,
+		});
 	});
 });
