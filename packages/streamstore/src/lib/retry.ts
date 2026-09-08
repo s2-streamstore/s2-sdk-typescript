@@ -1513,11 +1513,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					}
 				}
 
-				// Planned drain handoffs do not consume retry attempts. Repeated
-				// handoffs stay bounded because the draining connection has been
-				// dropped from the pool and the server refuses new connections once
-				// it drains, so a fresh dial either lands elsewhere or fails with an
-				// ordinary, budgeted error.
+				// Planned drain handoffs do not consume retry attempts. The
+				// draining server keeps accepting connections while returning
+				// server_draining from submit(), so without a backoff the pump
+				// would busy-spin recover(0) for the whole drain window. The
+				// s2s pool-poisoning bound does not apply to every transport
+				// (e.g. fetch has no pool), so we apply a small bounded backoff
+				// between drain handoffs here. close() also needs to be able to
+				// interrupt a persistent drain window; see the closing check
+				// below.
 				// Check max attempts (total attempts include initial; retries = max - 1)
 				const effectiveMax = Math.max(1, this.retryConfig.maxAttempts);
 				const allowedRetries = effectiveMax - 1;
@@ -1533,6 +1537,21 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						code: error.code,
 					});
 					await this.abort(wrappedError);
+					return;
+				}
+
+				// If the user calls close() while the server is draining, the
+				// drain loop would otherwise keep the inflight entries pinned
+				// until the drain window ends (the pump's closing exit requires
+				// inflight.length === 0, which the drain branch never reaches).
+				// Abort promptly so close() and outstanding ticket.ack() settle
+				// with the drain error instead of hanging for the whole window.
+				if (this.closing && draining) {
+					debugSession(
+						"[%s] closing while server drains, aborting drain handoff",
+						this.streamName,
+					);
+					await this.abort(error);
 					return;
 				}
 
@@ -1554,7 +1573,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					);
 				}
 
-				await this.recover(draining ? 0 : undefined);
+				await this.recover(
+					draining ? this.retryConfig.minBaseDelayMillis : undefined,
+				);
 			}
 		}
 	}
