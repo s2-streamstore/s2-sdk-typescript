@@ -92,11 +92,6 @@ function toSDKStreamConfig(config: any): Types.StreamConfig {
 }
 
 /**
- * Basin-scoped helper for listing and configuring streams.
- *
- * Access via {@link S2Basin.streams}. Methods inherit the basin's retry configuration.
- */
-/**
  * Validate a stream name (1-512 bytes, no NUL bytes).
  *
  * @throws {S2Error} If the stream name is invalid.
@@ -111,6 +106,11 @@ export function validateStreamName(name: string): void {
 	}
 }
 
+/**
+ * Basin-scoped helper for listing and configuring streams.
+ *
+ * Access via {@link S2Basin.streams}. Methods inherit the basin's retry configuration.
+ */
 export class S2Streams {
 	private readonly client: Client;
 	private readonly retryConfig?: RetryConfig;

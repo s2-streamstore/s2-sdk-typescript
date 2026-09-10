@@ -8,9 +8,11 @@ vi.mock("../generated/index.js", async () => {
 		...actual,
 		ensureBasin: vi.fn(),
 		ensureStream: vi.fn(),
+		issueAccessToken: vi.fn(),
 	};
 });
 
+import { S2AccessTokens } from "../accessTokens.js";
 import { S2Basins } from "../basins.js";
 import * as Generated from "../generated/index.js";
 import { S2Streams } from "../streams.js";
@@ -153,5 +155,23 @@ describe("ensure provisioning", () => {
 		);
 
 		expect(Generated.ensureStream).not.toHaveBeenCalled();
+	});
+
+	it("rejects invalid access token IDs before sending a request", async () => {
+		const accessTokens = new S2AccessTokens({} as any, {} as any);
+		const scope = {};
+
+		// 49 chars but 98 bytes: the limit is in bytes.
+		await expect(
+			accessTokens.issue({ id: "\u00e9".repeat(49), scope }),
+		).rejects.toThrow(/Invalid access token ID/);
+		await expect(accessTokens.issue({ id: "a\0b", scope })).rejects.toThrow(
+			/Invalid access token ID/,
+		);
+		await expect(accessTokens.issue({ id: "", scope })).rejects.toThrow(
+			/Invalid access token ID/,
+		);
+
+		expect(Generated.issueAccessToken).not.toHaveBeenCalled();
 	});
 });

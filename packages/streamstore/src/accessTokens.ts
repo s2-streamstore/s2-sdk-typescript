@@ -39,11 +39,6 @@ function transformTokenInfo(token: any): Types.AccessTokenInfo {
 }
 
 /**
- * Account-scoped helper for listing, issuing, and revoking access tokens.
- *
- * Acquire via {@link S2.accessTokens}. Use {@link S2AccessTokens.listAll} for async iteration.
- */
-/**
  * Validate an access token ID (1-96 bytes, no NUL bytes).
  *
  * @throws {S2Error} If the access token ID is invalid.
@@ -58,6 +53,11 @@ function validateAccessTokenId(id: string): void {
 	}
 }
 
+/**
+ * Account-scoped helper for listing, issuing, and revoking access tokens.
+ *
+ * Acquire via {@link S2.accessTokens}. Use {@link S2AccessTokens.listAll} for async iteration.
+ */
 export class S2AccessTokens {
 	readonly client: Client;
 	private readonly retryConfig?: RetryConfig;
