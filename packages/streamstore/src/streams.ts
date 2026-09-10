@@ -1,5 +1,5 @@
 import type { RetryConfig, S2RequestOptions } from "./common.js";
-import { withS2Data } from "./error.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	createStream,
@@ -19,6 +19,7 @@ import { randomToken } from "./lib/base64.js";
 import { filterAsync, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
+import { utf8ByteLength } from "./utils.js";
 
 function toDate(value: string | null | undefined): Date | null | undefined {
 	if (value === null) return null;
@@ -95,6 +96,21 @@ function toSDKStreamConfig(config: any): Types.StreamConfig {
  *
  * Access via {@link S2Basin.streams}. Methods inherit the basin's retry configuration.
  */
+/**
+ * Validate a stream name (1-512 bytes, no NUL bytes).
+ *
+ * @throws {S2Error} If the stream name is invalid.
+ */
+export function validateStreamName(name: string): void {
+	const bytes = utf8ByteLength(name);
+	if (bytes < 1 || bytes > 512 || name.includes("\0")) {
+		throw new S2Error({
+			message: `Invalid stream name: ${JSON.stringify(name)}. Stream names must be 1-512 bytes and must not contain NUL bytes.`,
+			origin: "sdk",
+		});
+	}
+}
+
 export class S2Streams {
 	private readonly client: Client;
 	private readonly retryConfig?: RetryConfig;
@@ -174,6 +190,7 @@ export class S2Streams {
 		args: Types.CreateStreamInput,
 		options?: S2RequestOptions,
 	): Promise<Types.CreateStreamResponse> {
+		validateStreamName(args.stream);
 		const requestToken = randomToken();
 		// Convert SDK config to API format (ageSecs → age)
 		const apiArgs = {
@@ -249,6 +266,7 @@ export class S2Streams {
 		args: Types.EnsureStreamInput,
 		options?: S2RequestOptions,
 	): Promise<Types.EnsureStreamResponse> {
+		validateStreamName(args.stream);
 		const body =
 			args.config === undefined
 				? undefined

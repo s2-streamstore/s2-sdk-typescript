@@ -1,5 +1,5 @@
 import type { RetryConfig, S2RequestOptions } from "./common.js";
-import { withS2Data } from "./error.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	issueAccessToken,
@@ -10,6 +10,7 @@ import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
+import { utf8ByteLength } from "./utils.js";
 
 /** Convert expiresAt input (Date, milliseconds, or string) to RFC 3339 string for API. */
 function toISOString(
@@ -42,6 +43,21 @@ function transformTokenInfo(token: any): Types.AccessTokenInfo {
  *
  * Acquire via {@link S2.accessTokens}. Use {@link S2AccessTokens.listAll} for async iteration.
  */
+/**
+ * Validate an access token ID (1-96 bytes, no NUL bytes).
+ *
+ * @throws {S2Error} If the access token ID is invalid.
+ */
+function validateAccessTokenId(id: string): void {
+	const bytes = utf8ByteLength(id);
+	if (bytes < 1 || bytes > 96 || id.includes("\0")) {
+		throw new S2Error({
+			message: `Invalid access token ID: ${JSON.stringify(id)}. Access token IDs must be 1-96 bytes and must not contain NUL bytes.`,
+			origin: "sdk",
+		});
+	}
+}
+
 export class S2AccessTokens {
 	readonly client: Client;
 	private readonly retryConfig?: RetryConfig;
@@ -118,6 +134,7 @@ export class S2AccessTokens {
 		args: Types.IssueAccessTokenInput,
 		options?: S2RequestOptions,
 	): Promise<Types.IssueAccessTokenResponse> {
+		validateAccessTokenId(args.id);
 		// Convert Date to ISO string for API
 		const apiArgs = {
 			...args,

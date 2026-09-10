@@ -137,4 +137,21 @@ describe("ensure provisioning", () => {
 		expect(call.body.delete_on_empty).toEqual({ min_age_secs: 1 });
 		expect(call.body.retention_policy).toEqual({ age: 3600 });
 	});
+
+	it("rejects invalid stream names before sending a request", async () => {
+		const streams = new S2Streams({} as any, {} as any);
+
+		// 257 chars but 514 bytes: the limit is in bytes.
+		await expect(
+			streams.ensure({ stream: "\u00e9".repeat(257) }),
+		).rejects.toThrow(/Invalid stream name/);
+		await expect(streams.ensure({ stream: "a\0b" })).rejects.toThrow(
+			/Invalid stream name/,
+		);
+		await expect(streams.ensure({ stream: "" })).rejects.toThrow(
+			/Invalid stream name/,
+		);
+
+		expect(Generated.ensureStream).not.toHaveBeenCalled();
+	});
 });
