@@ -167,7 +167,7 @@ export class S2Streams {
 	/**
 	 * Create a stream.
 	 *
-	 * @param args.stream Stream name (1-512 bytes, unique within the basin)
+	 * @param args.stream Stream name (1-512 bytes, no NUL bytes, unique within the basin)
 	 * @param args.config Stream configuration (retentionPolicy, storageClass, timestamping, deleteOnEmpty)
 	 */
 	public async create(

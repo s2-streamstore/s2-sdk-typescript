@@ -109,7 +109,7 @@ export class S2AccessTokens {
 	/**
 	 * Issue a new access token.
 	 *
-	 * @param args.id Unique token ID (1-96 bytes)
+	 * @param args.id Unique token ID (1-96 bytes, no NUL bytes)
 	 * @param args.scope Token scope (operations and resource sets)
 	 * @param args.autoPrefixStreams Namespace stream names by configured prefix scope
 	 * @param args.expiresAt Expiration time (Date or RFC 3339 string); defaults to requestor's token expiry
