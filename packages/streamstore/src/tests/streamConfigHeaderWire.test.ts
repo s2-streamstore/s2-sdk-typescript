@@ -29,6 +29,18 @@ const expectedHeader = JSON.stringify({
 
 type Captured = { method: string; path: string; header: string | undefined };
 
+const failure = JSON.stringify({ message: "boom" });
+
+/** Fails the first request of each method with a retryable 500. */
+function firstAttemptFails() {
+	const seen = new Set<string>();
+	return (method: string) => {
+		if (seen.has(method)) return false;
+		seen.add(method);
+		return true;
+	};
+}
+
 interface TestServer {
 	origin: string;
 	requests: Captured[];
@@ -52,12 +64,16 @@ function listen(server: http.Server | http2.Http2Server): Promise<string> {
 	});
 }
 
-/** HTTP/2 server: holds GETs open, acks every POST frame with an s2s AppendAck. */
+/**
+ * HTTP/2 server: fails the first GET and POST with a 500, then holds GETs open
+ * and acks every POST frame with an s2s AppendAck.
+ */
 async function startH2Server(): Promise<TestServer> {
 	const server = http2.createServer();
 	const sessions = new Set<ServerHttp2Session>();
 	const streams = new Set<ServerHttp2Stream>();
 	const requests: Captured[] = [];
+	const shouldFail = firstAttemptFails();
 	const ackFrame = Buffer.from(
 		frameMessage({
 			terminal: false,
@@ -84,6 +100,11 @@ async function startH2Server(): Promise<TestServer> {
 		streams.add(stream);
 		stream.on("error", () => {});
 		stream.on("close", () => streams.delete(stream));
+		if (shouldFail(headers[":method"] ?? "")) {
+			stream.respond({ ":status": 500, "content-type": "application/json" });
+			stream.end(failure);
+			return;
+		}
 		stream.respond({ ":status": 200 });
 		if (headers[":method"] === "POST") {
 			stream.on("data", () => stream.write(ackFrame));
@@ -103,10 +124,14 @@ async function startH2Server(): Promise<TestServer> {
 	};
 }
 
-/** HTTP/1.1 server: holds GETs open as SSE, acks every POST with a JSON AppendAck. */
+/**
+ * HTTP/1.1 server: fails the first GET and POST with a 500, then holds GETs
+ * open as SSE and acks every POST with a JSON AppendAck.
+ */
 async function startH1Server(): Promise<TestServer> {
 	const requests: Captured[] = [];
 	const responses = new Set<ServerResponse>();
+	const shouldFail = firstAttemptFails();
 	const server = http.createServer(
 		(req: IncomingMessage, res: ServerResponse) => {
 			requests.push({
@@ -116,6 +141,14 @@ async function startH1Server(): Promise<TestServer> {
 			});
 			responses.add(res);
 			res.on("close", () => responses.delete(res));
+			if (shouldFail(req.method ?? "")) {
+				req.on("data", () => {});
+				req.on("end", () => {
+					res.writeHead(500, { "content-type": "application/json" });
+					res.end(failure);
+				});
+				return;
+			}
 			if (req.method === "POST") {
 				req.on("data", () => {});
 				req.on("end", () => {
@@ -160,24 +193,34 @@ async function exercise(transport: SessionTransport, server: TestServer) {
 	);
 	await ticket.ack();
 	await appendSession.close();
-	await waitFor(() => server.requests.some((r) => r.method === "GET"));
+	await waitFor(
+		() => server.requests.filter((r) => r.method === "GET").length >= 2,
+	);
 	await readSession.cancel();
 
-	const read = server.requests.find((r) => r.method === "GET");
-	const append = server.requests.find((r) => r.method === "POST");
-	expect(read?.path).toBe("/v1/streams/events/records?seq_num=0");
-	expect(read?.header).toBe(expectedHeader);
-	expect(append?.header).toBe(expectedHeader);
+	const reads = server.requests.filter((r) => r.method === "GET");
+	const appends = server.requests.filter((r) => r.method === "POST");
+	expect(reads.length).toBeGreaterThanOrEqual(2);
+	expect(appends.length).toBeGreaterThanOrEqual(2);
+	for (const r of reads) {
+		expect(r.path).toBe("/v1/streams/events/records?seq_num=0");
+	}
+	for (const r of [...reads, ...appends]) {
+		expect(r.header).toBe(expectedHeader);
+	}
 }
+
+const retry = { maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 5 };
 
 describe("s2-stream-config on the wire", () => {
 	it(
-		"is sent by s2s read and append sessions",
+		"is sent by s2s read and append sessions on connect and reconnect",
 		async () => {
 			const server = await startH2Server();
 			const transport = new S2STransport({
 				baseUrl: `${server.origin}/v1`,
 				accessToken: Redacted.make("token"),
+				retry,
 			});
 			try {
 				await exercise(transport, server);
@@ -190,12 +233,13 @@ describe("s2-stream-config on the wire", () => {
 	);
 
 	it(
-		"is sent by fetch read and append sessions",
+		"is sent by fetch read and append sessions on connect and reconnect",
 		async () => {
 			const server = await startH1Server();
 			const transport = new FetchTransport({
 				baseUrl: `${server.origin}/v1`,
 				accessToken: Redacted.make("token"),
+				retry,
 			});
 			try {
 				await exercise(transport, server);
