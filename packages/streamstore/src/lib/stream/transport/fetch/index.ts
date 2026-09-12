@@ -32,6 +32,7 @@ import {
 	RetryAppendSession as AppendSessionImpl,
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
+import { streamConfigHeaders } from "../../../stream-config.js";
 import { canSetUserAgentHeader, DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendRecord,
@@ -62,7 +63,8 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 		options?: S2RequestOptions,
 	) {
 		debug("FetchReadSession.create stream=%s args=%o", name, args);
-		const { as, ignore_command_records, ...queryParams } = args ?? {};
+		const { as, ignore_command_records, stream_config, ...queryParams } =
+			args ?? {};
 
 		const response = await read({
 			client,
@@ -72,6 +74,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			headers: {
 				accept: "text/event-stream",
 				...(as === "bytes" ? { "s2-format": "base64" } : {}),
+				...streamConfigHeaders(stream_config),
 			},
 			query: queryParams,
 			parseAs: "stream",
@@ -438,6 +441,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				transportConfig.encryptionKey,
 			);
 		}
+		Object.assign(headers, streamConfigHeaders(sessionOptions?.streamConfig));
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}

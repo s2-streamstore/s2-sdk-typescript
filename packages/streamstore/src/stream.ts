@@ -27,6 +27,7 @@ import type {
 	SessionTransport,
 	TransportConfig,
 } from "./lib/stream/types.js";
+import { streamConfigHeaders } from "./lib/stream-config.js";
 import type * as Types from "./types.js";
 import { isCommandRecord } from "./utils.js";
 
@@ -83,11 +84,12 @@ export class S2Stream {
 		}
 	}
 
-	private withEncryptionHeaders(
+	private withDataPlaneHeaders(
 		options?: S2RequestOptions,
+		streamConfig?: Types.StreamConfig,
 	): RequestOptionsWithHeaders | undefined {
 		const encryptionKey = this.transportConfig.encryptionKey;
-		if (!encryptionKey) {
+		if (!encryptionKey && !streamConfig) {
 			return options;
 		}
 
@@ -96,7 +98,10 @@ export class S2Stream {
 			...requestOptions,
 			headers: {
 				...(requestOptions.headers ?? {}),
-				[S2_ENCRYPTION_KEY_HEADER]: Redacted.value(encryptionKey),
+				...(encryptionKey
+					? { [S2_ENCRYPTION_KEY_HEADER]: Redacted.value(encryptionKey) }
+					: {}),
+				...streamConfigHeaders(streamConfig),
 			},
 		};
 	}
@@ -148,6 +153,7 @@ export class S2Stream {
 	 * - When `ignoreCommandRecords` is set, command records are filtered from the single
 	 *   returned batch, which may then be empty. Use `readSession` to keep reading until
 	 *   data records are found.
+	 * - `streamConfig` is applied only if the read auto-creates the stream.
 	 */
 	public async read<Format extends "string" | "bytes" = "string">(
 		input?: Types.ReadInput,
@@ -166,7 +172,7 @@ export class S2Stream {
 				this.name,
 				this.client,
 				readArgs,
-				this.withEncryptionHeaders(requestOptions),
+				this.withDataPlaneHeaders(requestOptions, input?.streamConfig),
 			);
 			// Convert from API to SDK ReadBatch
 			const batch = (
@@ -189,6 +195,7 @@ export class S2Stream {
 	 * - Supports conditional appends via `fencingToken` and `matchSeqNum` in the input.
 	 * - Returns the acknowledged range and the stream tail after the append.
 	 * - A batch may contain both string and bytes records.
+	 * - `streamConfig` in the input is applied only if the append auto-creates the stream.
 	 *
 	 * Use {@link AppendInput.create} to construct a validated AppendInput.
 	 * For high-throughput sequential appends, use `appendSession()` instead.
@@ -208,7 +215,7 @@ export class S2Stream {
 					this.name,
 					this.client,
 					input,
-					this.withEncryptionHeaders(options),
+					this.withDataPlaneHeaders(options, input.streamConfig),
 				);
 			},
 			(config, error) => {
@@ -224,6 +231,8 @@ export class S2Stream {
 	 *
 	 * Use the returned session as an async iterable or as a readable stream.
 	 * When `as: "bytes"` is provided, bodies and headers are decoded to `Uint8Array`.
+	 * `streamConfig` is sent whenever the session connects and is applied only if
+	 * the read auto-creates the stream.
 	 */
 	public async readSession<Format extends "string" | "bytes" = "string">(
 		input?: Types.ReadInput,
@@ -238,6 +247,7 @@ export class S2Stream {
 			...toAPIReadQuery(input),
 			as,
 			ignore_command_records: input?.ignoreCommandRecords,
+			stream_config: input?.streamConfig,
 		} as ReadArgs<Format>;
 		return await transport.makeReadSession(this.name, readArgs, requestOptions);
 	}
@@ -246,6 +256,8 @@ export class S2Stream {
 	 *
 	 * Use this to coordinate high-throughput, sequential appends with backpressure.
 	 * Records can be either string or bytes format - the format is specified in each record.
+	 * `sessionOptions.streamConfig` is sent whenever the session connects and is
+	 * applied only if the append auto-creates the stream.
 	 *
 	 * @param sessionOptions Options that control append session behavior
 	 * @param requestOptions Optional request options

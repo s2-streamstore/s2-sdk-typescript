@@ -16,6 +16,7 @@ import {
 } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat } from "../../../../utils.js";
+import { streamConfigHeaders } from "../../../stream-config.js";
 import type {
 	AppendRecordForFormat,
 	ReadArgs,
@@ -53,7 +54,8 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 	args?: ReadArgs<Format>,
 	options?: RequestOptionsWithHeaders,
 ) {
-	const { as, ignore_command_records, ...queryParams } = args ?? {};
+	const { as, ignore_command_records, stream_config, ...queryParams } =
+		args ?? {};
 	const { headers: customHeaders, ...requestOptions } = options ?? {};
 	const wantsBytes = (as ?? "string") === "bytes";
 	let response: any;
@@ -65,6 +67,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 			},
 			headers: mergeHeaders(
 				customHeaders,
+				streamConfigHeaders(stream_config),
 				wantsBytes ? { Accept: "application/protobuf" } : undefined,
 			),
 			query: queryParams,
