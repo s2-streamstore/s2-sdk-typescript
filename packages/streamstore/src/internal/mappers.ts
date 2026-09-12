@@ -1,8 +1,8 @@
 /**
  * Internal type mappers between SDK types and generated types.
  *
- * Only used for hot-path types (records, append/read responses).
- * Config, info, and metric types are used directly from generated types.
+ * Used for hot-path types (records, append/read responses) and stream config.
+ * Info and metric types are used directly from generated types.
  */
 
 import * as API from "../generated/types.gen.js";
