@@ -12,6 +12,12 @@ import {
 import type * as API from "./generated/types.gen.js";
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import {
+	toAPIDeleteOnEmpty,
+	toAPIRetentionPolicy,
+	toAPIStreamConfig,
+	toSDKStreamConfig,
+} from "./internal/mappers.js";
+import {
 	provisionResultFromResponse,
 	withS2DataAndResponse,
 } from "./internal/provisioning.js";
@@ -32,62 +38,6 @@ function transformStreamInfo(stream: any): Types.StreamInfo {
 		...stream,
 		createdAt: toDate(stream.createdAt) as Date,
 		deletedAt: toDate(stream.deletedAt),
-	};
-}
-
-/** Convert SDK RetentionPolicy (ageSecs) to API RetentionPolicy (age). */
-function toAPIRetentionPolicy(
-	policy: Types.RetentionPolicy | null | undefined,
-): API.RetentionPolicy | null | undefined {
-	if (policy === null) return null;
-	if (policy === undefined) return undefined;
-	if ("ageSecs" in policy) {
-		return { age: Math.floor(policy.ageSecs) };
-	}
-	return policy; // { infinite: ... } passes through
-}
-
-/** Convert API RetentionPolicy (age) to SDK RetentionPolicy (ageSecs). */
-function toSDKRetentionPolicy(
-	policy: API.RetentionPolicy | null | undefined,
-): Types.RetentionPolicy | null | undefined {
-	if (policy === null) return null;
-	if (policy === undefined) return undefined;
-	if ("age" in policy) {
-		return { ageSecs: policy.age };
-	}
-	return policy; // { infinite: ... } passes through
-}
-
-/** Normalize deleteOnEmpty.minAgeSecs (floor and clamp to >= 0). */
-function toAPIDeleteOnEmpty(
-	deleteOnEmpty: Types.DeleteOnEmptyConfig | null | undefined,
-): any {
-	if (!deleteOnEmpty) return deleteOnEmpty;
-	return {
-		...deleteOnEmpty,
-		minAgeSecs:
-			deleteOnEmpty.minAgeSecs === undefined
-				? undefined
-				: Math.max(0, Math.floor(deleteOnEmpty.minAgeSecs)),
-	};
-}
-
-/** Convert SDK StreamConfig to API format (handles retentionPolicy.ageSecs → age). */
-function toAPIStreamConfig(config: Types.StreamConfig | null | undefined): any {
-	if (config === null || config === undefined) return config;
-	return {
-		...config,
-		deleteOnEmpty: toAPIDeleteOnEmpty(config.deleteOnEmpty),
-		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
-	};
-}
-
-/** Convert API StreamConfig to SDK format (handles retentionPolicy.age → ageSecs). */
-function toSDKStreamConfig(config: any): Types.StreamConfig {
-	return {
-		...config,
-		retentionPolicy: toSDKRetentionPolicy(config?.retentionPolicy),
 	};
 }
 

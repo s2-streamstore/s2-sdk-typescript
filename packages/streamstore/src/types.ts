@@ -231,6 +231,15 @@ export interface AppendInput {
 	readonly records: ReadonlyArray<AppendRecord>;
 	readonly matchSeqNum?: number;
 	readonly fencingToken?: string;
+	/**
+	 * Stream configuration to apply if the stream is created on append.
+	 * Unset fields inherit the basin's default stream configuration.
+	 * Ignored if the stream already exists.
+	 *
+	 * Only used by {@link S2Stream.append}; append sessions send it once at
+	 * connect, see {@link AppendSessionOptions.streamConfig}.
+	 */
+	readonly streamConfig?: StreamConfig;
 	/** Pre-calculated total metered size in bytes. */
 	readonly meteredBytes: number;
 }
@@ -250,6 +259,7 @@ export namespace AppendInput {
 		options?: {
 			readonly matchSeqNum?: number;
 			readonly fencingToken?: string;
+			readonly streamConfig?: StreamConfig;
 		},
 	): AppendInput {
 		if (records.length === 0) {
@@ -299,6 +309,7 @@ export namespace AppendInput {
 			records,
 			matchSeqNum: options?.matchSeqNum,
 			fencingToken: options?.fencingToken,
+			streamConfig: options?.streamConfig,
 			meteredBytes: totalBytes,
 		};
 	}
@@ -357,6 +368,12 @@ export interface ReadInput {
 	readonly start?: ReadStart;
 	readonly stop?: ReadStop;
 	readonly ignoreCommandRecords?: boolean;
+	/**
+	 * Stream configuration to apply if the stream is created on read.
+	 * Unset fields inherit the basin's default stream configuration.
+	 * Ignored if the stream already exists.
+	 */
+	readonly streamConfig?: StreamConfig;
 }
 
 // =============================================================================
@@ -399,6 +416,13 @@ export interface AppendSessionOptions {
 	readonly maxInflightBytes?: number;
 	/** Max in-flight batches before backpressure. */
 	readonly maxInflightBatches?: number;
+	/**
+	 * Stream configuration to apply if the stream is created by the session.
+	 * Unset fields inherit the basin's default stream configuration.
+	 * Ignored if the stream already exists.
+	 * Sent when the session connects and reconnects.
+	 */
+	readonly streamConfig?: StreamConfig;
 }
 
 // =============================================================================

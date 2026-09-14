@@ -179,10 +179,32 @@ async function checkTailExample() {
 	// ANCHOR_END: check-tail
 }
 
+async function autoCreateWithConfigExample() {
+	// ANCHOR: auto-create-config
+	// Applied only if the stream is created by this call; ignored if it exists.
+	// Unset fields inherit the basin's default stream configuration.
+	const streamConfig = { retentionPolicy: { ageSecs: 3600 } };
+
+	await stream.append(
+		AppendInput.create([AppendRecord.string({ body: "hello" })], {
+			streamConfig,
+		}),
+	);
+	await stream.read({ streamConfig });
+
+	// Sessions send the config each time they connect.
+	const appendSession = await stream.appendSession({ streamConfig });
+	await appendSession.close();
+	const readSession = await stream.readSession({ streamConfig });
+	await readSession.cancel();
+	// ANCHOR_END: auto-create-config
+}
+
 // Run examples
 await appendSessionExample();
 await producerExample();
 await checkTailExample();
+await autoCreateWithConfigExample();
 
 // Cleanup
 await basin.streams.delete({ stream: streamName });

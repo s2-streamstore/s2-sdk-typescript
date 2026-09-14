@@ -38,6 +38,7 @@ import {
 	RetryAppendSession as AppendSessionImpl,
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
+import { streamConfigHeaders } from "../../../stream-config.js";
 import { DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendRecord,
@@ -366,6 +367,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									[S2_ENCRYPTION_KEY_HEADER]: Redacted.value(encryptionKey),
 								}
 							: {}),
+						...streamConfigHeaders(args?.stream_config),
 					});
 
 					http2Stream = stream;
@@ -760,7 +762,7 @@ class S2SAppendSession implements TransportAppendSession {
 		private encryptionKey: Redacted.Redacted<string> | undefined,
 		private compression: CompressionType,
 		private advisedReconnects: AdvisedReconnects,
-		sessionOptions?: AppendSessionOptions,
+		private sessionOptions?: AppendSessionOptions,
 		private options?: S2RequestOptions,
 	) {
 		// No stream setup
@@ -789,6 +791,7 @@ class S2SAppendSession implements TransportAppendSession {
 						[S2_ENCRYPTION_KEY_HEADER]: Redacted.value(this.encryptionKey),
 					}
 				: {}),
+			...streamConfigHeaders(this.sessionOptions?.streamConfig),
 		});
 
 		this.http2Stream = stream;

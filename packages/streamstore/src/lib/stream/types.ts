@@ -35,6 +35,8 @@ export type ReadArgs<Format extends "string" | "bytes" = "string"> =
 	API.ReadData["query"] & {
 		as?: Format;
 		ignore_command_records?: boolean;
+		/** Sent as the `s2-stream-config` header, not as a query parameter. */
+		stream_config?: Types.StreamConfig;
 	};
 
 export type AppendHeaders<Format extends "string" | "bytes" = "string"> =
@@ -223,7 +225,8 @@ export interface ReadSession<Format extends "string" | "bytes" = "string">
 /**
  * Options that control client-side append backpressure and concurrency.
  *
- * These are applied by {@link AppendSession}; transports ignore them.
+ * Backpressure limits are applied by {@link AppendSession}; transports only
+ * consume `streamConfig`.
  */
 export interface AppendSessionOptions {
 	/**
@@ -235,6 +238,11 @@ export interface AppendSessionOptions {
 	 * applying backpressure.
 	 */
 	maxInflightBatches?: number;
+	/**
+	 * Stream configuration sent as the `s2-stream-config` header when the
+	 * transport session connects.
+	 */
+	streamConfig?: Types.StreamConfig;
 }
 
 export interface SessionTransport {
