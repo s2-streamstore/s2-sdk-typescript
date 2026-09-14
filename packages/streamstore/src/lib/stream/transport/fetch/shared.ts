@@ -23,11 +23,38 @@ import type {
 	ReadBatch,
 } from "../../types.js";
 
-const loadProtoCodec = async () => {
+type ProtoCodecModule = typeof import("../proto.js");
+
+/**
+ * Lazily import the protobuf codec used by bytes-mode append/read.
+ *
+ * A dynamic `import()` of the proto chunk fails with a `TypeError` whose message
+ * varies by environment (Safari: "Load failed", Chrome: "Failed to fetch
+ * dynamically imported module: ...", Firefox: "Importing a module script
+ * failed.", Node/Bun: ERR_MODULE_NOT_FOUND). Safari reuses "Load failed" for
+ * `fetch()` network failures, so routing the load error through `s2Error`
+ * misclassifies it as a retryable 502 connection error. Instead emit a
+ * dedicated, non-retryable error so callers surface the module-load failure
+ * immediately without burning retry attempts.
+ *
+ * The `loader` parameter exists for tests; production callers use the default.
+ *
+ * @internal
+ */
+export const loadProtoCodec = async (
+	loader: () => Promise<ProtoCodecModule> = () => import("../proto.js"),
+): Promise<ProtoCodecModule> => {
 	try {
-		return await import("../proto.js");
+		return await loader();
 	} catch (error) {
-		throw s2Error(error);
+		throw new S2Error({
+			message: `Failed to load protobuf codec: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+			code: "PROTO_CODEC_LOAD_FAILED",
+			status: 0,
+			origin: "sdk",
+		});
 	}
 };
 
