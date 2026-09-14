@@ -1,8 +1,8 @@
 /**
  * Internal type mappers between SDK types and generated types.
  *
- * Only used for hot-path types (records, append/read responses).
- * Config, info, and metric types are used directly from generated types.
+ * Used for hot-path types (records, append/read responses) and stream config.
+ * Info and metric types are used directly from generated types.
  */
 
 import * as API from "../generated/types.gen.js";
@@ -276,4 +276,66 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 	}
 
 	return query;
+}
+
+// =============================================================================
+// Stream config
+// =============================================================================
+
+/** Convert SDK RetentionPolicy (ageSecs) to API RetentionPolicy (age). */
+export function toAPIRetentionPolicy(
+	policy: Types.RetentionPolicy | null | undefined,
+): API.RetentionPolicy | null | undefined {
+	if (policy === null) return null;
+	if (policy === undefined) return undefined;
+	if ("ageSecs" in policy) {
+		return { age: Math.floor(policy.ageSecs) };
+	}
+	return policy; // { infinite: ... } passes through
+}
+
+/** Convert API RetentionPolicy (age) to SDK RetentionPolicy (ageSecs). */
+function toSDKRetentionPolicy(
+	policy: API.RetentionPolicy | null | undefined,
+): Types.RetentionPolicy | null | undefined {
+	if (policy === null) return null;
+	if (policy === undefined) return undefined;
+	if ("age" in policy) {
+		return { ageSecs: policy.age };
+	}
+	return policy; // { infinite: ... } passes through
+}
+
+/** Normalize deleteOnEmpty.minAgeSecs (floor and clamp to >= 0). */
+export function toAPIDeleteOnEmpty(
+	deleteOnEmpty: Types.DeleteOnEmptyConfig | null | undefined,
+): any {
+	if (!deleteOnEmpty) return deleteOnEmpty;
+	return {
+		...deleteOnEmpty,
+		minAgeSecs:
+			deleteOnEmpty.minAgeSecs === undefined
+				? undefined
+				: Math.max(0, Math.floor(deleteOnEmpty.minAgeSecs)),
+	};
+}
+
+/** Convert SDK StreamConfig to API format (handles retentionPolicy.ageSecs → age). */
+export function toAPIStreamConfig(
+	config: Types.StreamConfig | null | undefined,
+): any {
+	if (config === null || config === undefined) return config;
+	return {
+		...config,
+		deleteOnEmpty: toAPIDeleteOnEmpty(config.deleteOnEmpty),
+		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
+	};
+}
+
+/** Convert API StreamConfig to SDK format (handles retentionPolicy.age → ageSecs). */
+export function toSDKStreamConfig(config: any): Types.StreamConfig {
+	return {
+		...config,
+		retentionPolicy: toSDKRetentionPolicy(config?.retentionPolicy),
+	};
 }

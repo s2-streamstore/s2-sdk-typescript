@@ -191,7 +191,7 @@ export type CreateStreamRequest = {
     config?: null | StreamConfig;
     /**
      * Stream name that is unique to the basin.
-     * It can be between 1 and 512 bytes in length.
+     * It can be between 1 and 512 bytes in length, and must not contain NUL bytes.
      */
     stream: StreamNameStr;
 };
@@ -270,7 +270,8 @@ export type IssueAccessTokenRequest = {
     expires_at?: string | null;
     /**
      * Access token ID.
-     * It must be unique to the account and between 1 and 96 bytes in length.
+     * It must be unique to the account and between 1 and 96 bytes in length, and must not
+     * contain NUL bytes.
      */
     id: AccessTokenIdStr;
     /**
@@ -578,10 +579,12 @@ export type ListAccessTokensData = {
     query?: {
         /**
          * Filter to access tokens whose IDs begin with this prefix.
+         * It must not contain NUL bytes.
          */
         prefix?: string;
         /**
          * Filter to access tokens whose IDs lexicographically start after this string.
+         * It must not contain NUL bytes.
          */
         start_after?: string;
         /**
@@ -1021,10 +1024,12 @@ export type ListStreamsData = {
     query?: {
         /**
          * Filter to streams whose names begin with this prefix.
+         * It must not contain NUL bytes.
          */
         prefix?: string;
         /**
          * Filter to streams whose names lexicographically start after this string.
+         * It must not contain NUL bytes.
          */
         start_after?: string;
         /**
@@ -1204,6 +1209,13 @@ export type ReadData = {
          * Provide base64-encoded key when stream encryption is enabled.
          */
         's2-encryption-key'?: string;
+        /**
+         * JSON-encoded `StreamConfig` to apply if the stream is created on append or read.
+         * Unset fields inherit the basin's default stream configuration.
+         * Ignored if the stream already exists.
+         * Compact JSON is preferred.
+         */
+        's2-stream-config'?: StreamConfig;
     };
     path: {
         /**
@@ -1285,6 +1297,13 @@ export type AppendData = {
          * Provide base64-encoded key when stream encryption is enabled.
          */
         's2-encryption-key'?: string;
+        /**
+         * JSON-encoded `StreamConfig` to apply if the stream is created on append or read.
+         * Unset fields inherit the basin's default stream configuration.
+         * Ignored if the stream already exists.
+         * Compact JSON is preferred.
+         */
+        's2-stream-config'?: StreamConfig;
     };
     path: {
         /**

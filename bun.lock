@@ -35,7 +35,7 @@
     },
     "packages/patterns": {
       "name": "@s2-dev/streamstore-patterns",
-      "version": "2.1.2",
+      "version": "2.1.4",
       "dependencies": {
         "nanoid": "^3.3.11",
       },
@@ -52,7 +52,7 @@
     },
     "packages/resumable-stream": {
       "name": "@s2-dev/resumable-stream",
-      "version": "2.1.0",
+      "version": "3.0.2",
       "dependencies": {
         "eventsource-parser": "^3.0.8",
       },
@@ -76,7 +76,7 @@
     },
     "packages/streamstore": {
       "name": "@s2-dev/streamstore",
-      "version": "0.23.0",
+      "version": "0.26.1",
       "dependencies": {
         "@protobuf-ts/runtime": "^2.11.1",
         "debug": "^4.4.3",

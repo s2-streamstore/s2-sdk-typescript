@@ -8,9 +8,11 @@ vi.mock("../generated/index.js", async () => {
 		...actual,
 		ensureBasin: vi.fn(),
 		ensureStream: vi.fn(),
+		issueAccessToken: vi.fn(),
 	};
 });
 
+import { S2AccessTokens } from "../accessTokens.js";
 import { S2Basins } from "../basins.js";
 import * as Generated from "../generated/index.js";
 import { S2Streams } from "../streams.js";
@@ -136,5 +138,40 @@ describe("ensure provisioning", () => {
 		const call = vi.mocked(Generated.ensureStream).mock.calls[0]?.[0] as any;
 		expect(call.body.delete_on_empty).toEqual({ min_age_secs: 1 });
 		expect(call.body.retention_policy).toEqual({ age: 3600 });
+	});
+
+	it("rejects invalid stream names before sending a request", async () => {
+		const streams = new S2Streams({} as any, {} as any);
+
+		// 257 chars but 514 bytes: the limit is in bytes.
+		await expect(
+			streams.ensure({ stream: "\u00e9".repeat(257) }),
+		).rejects.toThrow(/Invalid stream name/);
+		await expect(streams.ensure({ stream: "a\0b" })).rejects.toThrow(
+			/Invalid stream name/,
+		);
+		await expect(streams.ensure({ stream: "" })).rejects.toThrow(
+			/Invalid stream name/,
+		);
+
+		expect(Generated.ensureStream).not.toHaveBeenCalled();
+	});
+
+	it("rejects invalid access token IDs before sending a request", async () => {
+		const accessTokens = new S2AccessTokens({} as any, {} as any);
+		const scope = {};
+
+		// 49 chars but 98 bytes: the limit is in bytes.
+		await expect(
+			accessTokens.issue({ id: "\u00e9".repeat(49), scope }),
+		).rejects.toThrow(/Invalid access token ID/);
+		await expect(accessTokens.issue({ id: "a\0b", scope })).rejects.toThrow(
+			/Invalid access token ID/,
+		);
+		await expect(accessTokens.issue({ id: "", scope })).rejects.toThrow(
+			/Invalid access token ID/,
+		);
+
+		expect(Generated.issueAccessToken).not.toHaveBeenCalled();
 	});
 });

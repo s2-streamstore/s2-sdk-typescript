@@ -14,7 +14,7 @@ import type {
 	TransportConfig,
 } from "./lib/stream/types.js";
 import { S2Stream } from "./stream.js";
-import { S2Streams } from "./streams.js";
+import { S2Streams, validateStreamName } from "./streams.js";
 
 export class S2Basin {
 	private readonly client: Client;
@@ -73,9 +73,11 @@ export class S2Basin {
 
 	/**
 	 * Create a stream-scoped helper bound to `this` basin.
-	 * @param name Stream name
+	 * @param name Stream name (1-512 bytes, no NUL bytes)
+	 * @throws {S2Error} If the stream name is invalid.
 	 */
 	public stream(name: string, options?: StreamOptions) {
+		validateStreamName(name);
 		return new S2Stream(
 			name,
 			this.client,

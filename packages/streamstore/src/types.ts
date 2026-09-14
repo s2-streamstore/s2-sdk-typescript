@@ -231,6 +231,15 @@ export interface AppendInput {
 	readonly records: ReadonlyArray<AppendRecord>;
 	readonly matchSeqNum?: number;
 	readonly fencingToken?: string;
+	/**
+	 * Stream configuration to apply if the stream is created on append.
+	 * Unset fields inherit the basin's default stream configuration.
+	 * Ignored if the stream already exists.
+	 *
+	 * Only used by {@link S2Stream.append}; append sessions send it once at
+	 * connect, see {@link AppendSessionOptions.streamConfig}.
+	 */
+	readonly streamConfig?: StreamConfig;
 	/** Pre-calculated total metered size in bytes. */
 	readonly meteredBytes: number;
 }
@@ -250,6 +259,7 @@ export namespace AppendInput {
 		options?: {
 			readonly matchSeqNum?: number;
 			readonly fencingToken?: string;
+			readonly streamConfig?: StreamConfig;
 		},
 	): AppendInput {
 		if (records.length === 0) {
@@ -299,6 +309,7 @@ export namespace AppendInput {
 			records,
 			matchSeqNum: options?.matchSeqNum,
 			fencingToken: options?.fencingToken,
+			streamConfig: options?.streamConfig,
 			meteredBytes: totalBytes,
 		};
 	}
@@ -357,6 +368,12 @@ export interface ReadInput {
 	readonly start?: ReadStart;
 	readonly stop?: ReadStop;
 	readonly ignoreCommandRecords?: boolean;
+	/**
+	 * Stream configuration to apply if the stream is created on read.
+	 * Unset fields inherit the basin's default stream configuration.
+	 * Ignored if the stream already exists.
+	 */
+	readonly streamConfig?: StreamConfig;
 }
 
 // =============================================================================
@@ -399,6 +416,13 @@ export interface AppendSessionOptions {
 	readonly maxInflightBytes?: number;
 	/** Max in-flight batches before backpressure. */
 	readonly maxInflightBatches?: number;
+	/**
+	 * Stream configuration to apply if the stream is created by the session.
+	 * Unset fields inherit the basin's default stream configuration.
+	 * Ignored if the stream already exists.
+	 * Sent when the session connects and reconnects.
+	 */
+	readonly streamConfig?: StreamConfig;
 }
 
 // =============================================================================
@@ -411,9 +435,15 @@ export interface AppendSessionOptions {
  * Input for listing streams.
  */
 export interface ListStreamsInput {
-	/** Filter to streams whose name begins with this prefix. */
+	/**
+	 * Filter to streams whose name begins with this prefix.
+	 * It must not contain NUL bytes.
+	 */
 	prefix?: string;
-	/** Filter to streams whose name lexicographically starts after this string. */
+	/**
+	 * Filter to streams whose name lexicographically starts after this string.
+	 * It must not contain NUL bytes.
+	 */
 	startAfter?: string;
 	/** Number of results, up to a maximum of 1000. */
 	limit?: number;
@@ -432,7 +462,7 @@ export type ProvisionResult = "created" | "updated" | "noop";
 export interface CreateStreamInput {
 	/**
 	 * Stream name that is unique to the basin.
-	 * It can be between 1 and 512 bytes in length.
+	 * It can be between 1 and 512 bytes in length, and must not contain NUL bytes.
 	 */
 	stream: string;
 	/** Stream configuration. */
@@ -779,9 +809,15 @@ export type ReconfigureBasinResponse = BasinConfig;
  * Input for listing access tokens.
  */
 export interface ListAccessTokensInput {
-	/** Filter to access tokens whose ID begins with this prefix. */
+	/**
+	 * Filter to access tokens whose ID begins with this prefix.
+	 * It must not contain NUL bytes.
+	 */
 	prefix?: string;
-	/** Filter to access tokens whose ID lexicographically starts after this string. */
+	/**
+	 * Filter to access tokens whose ID lexicographically starts after this string.
+	 * It must not contain NUL bytes.
+	 */
 	startAfter?: string;
 	/** Number of results, up to a maximum of 1000. */
 	limit?: number;
@@ -811,7 +847,7 @@ export interface AccessTokenScope {
 export interface IssueAccessTokenInput {
 	/**
 	 * Access token ID.
-	 * It must be unique to the account and between 1 and 96 bytes in length.
+	 * It must be unique to the account and between 1 and 96 bytes in length, and must not contain NUL bytes.
 	 */
 	id: string;
 	/** Access token scope. */

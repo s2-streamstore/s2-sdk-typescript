@@ -1,5 +1,5 @@
 import type { RetryConfig, S2RequestOptions } from "./common.js";
-import { withS2Data } from "./error.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	createStream,
@@ -12,6 +12,12 @@ import {
 import type * as API from "./generated/types.gen.js";
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import {
+	toAPIDeleteOnEmpty,
+	toAPIRetentionPolicy,
+	toAPIStreamConfig,
+	toSDKStreamConfig,
+} from "./internal/mappers.js";
+import {
 	provisionResultFromResponse,
 	withS2DataAndResponse,
 } from "./internal/provisioning.js";
@@ -19,6 +25,7 @@ import { randomToken } from "./lib/base64.js";
 import { filterAsync, paginate } from "./lib/paginate.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
+import { utf8ByteLength } from "./utils.js";
 
 function toDate(value: string | null | undefined): Date | null | undefined {
 	if (value === null) return null;
@@ -34,60 +41,19 @@ function transformStreamInfo(stream: any): Types.StreamInfo {
 	};
 }
 
-/** Convert SDK RetentionPolicy (ageSecs) to API RetentionPolicy (age). */
-function toAPIRetentionPolicy(
-	policy: Types.RetentionPolicy | null | undefined,
-): API.RetentionPolicy | null | undefined {
-	if (policy === null) return null;
-	if (policy === undefined) return undefined;
-	if ("ageSecs" in policy) {
-		return { age: Math.floor(policy.ageSecs) };
+/**
+ * Validate a stream name (1-512 bytes, no NUL bytes).
+ *
+ * @throws {S2Error} If the stream name is invalid.
+ */
+export function validateStreamName(name: string): void {
+	const bytes = utf8ByteLength(name);
+	if (bytes < 1 || bytes > 512 || name.includes("\0")) {
+		throw new S2Error({
+			message: `Invalid stream name: ${JSON.stringify(name)}. Stream names must be 1-512 bytes and must not contain NUL bytes.`,
+			origin: "sdk",
+		});
 	}
-	return policy; // { infinite: ... } passes through
-}
-
-/** Convert API RetentionPolicy (age) to SDK RetentionPolicy (ageSecs). */
-function toSDKRetentionPolicy(
-	policy: API.RetentionPolicy | null | undefined,
-): Types.RetentionPolicy | null | undefined {
-	if (policy === null) return null;
-	if (policy === undefined) return undefined;
-	if ("age" in policy) {
-		return { ageSecs: policy.age };
-	}
-	return policy; // { infinite: ... } passes through
-}
-
-/** Normalize deleteOnEmpty.minAgeSecs (floor and clamp to >= 0). */
-function toAPIDeleteOnEmpty(
-	deleteOnEmpty: Types.DeleteOnEmptyConfig | null | undefined,
-): any {
-	if (!deleteOnEmpty) return deleteOnEmpty;
-	return {
-		...deleteOnEmpty,
-		minAgeSecs:
-			deleteOnEmpty.minAgeSecs === undefined
-				? undefined
-				: Math.max(0, Math.floor(deleteOnEmpty.minAgeSecs)),
-	};
-}
-
-/** Convert SDK StreamConfig to API format (handles retentionPolicy.ageSecs → age). */
-function toAPIStreamConfig(config: Types.StreamConfig | null | undefined): any {
-	if (config === null || config === undefined) return config;
-	return {
-		...config,
-		deleteOnEmpty: toAPIDeleteOnEmpty(config.deleteOnEmpty),
-		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
-	};
-}
-
-/** Convert API StreamConfig to SDK format (handles retentionPolicy.age → ageSecs). */
-function toSDKStreamConfig(config: any): Types.StreamConfig {
-	return {
-		...config,
-		retentionPolicy: toSDKRetentionPolicy(config?.retentionPolicy),
-	};
 }
 
 /**
@@ -167,13 +133,14 @@ export class S2Streams {
 	/**
 	 * Create a stream.
 	 *
-	 * @param args.stream Stream name (1-512 bytes, unique within the basin)
+	 * @param args.stream Stream name (1-512 bytes, no NUL bytes, unique within the basin)
 	 * @param args.config Stream configuration (retentionPolicy, storageClass, timestamping, deleteOnEmpty)
 	 */
 	public async create(
 		args: Types.CreateStreamInput,
 		options?: S2RequestOptions,
 	): Promise<Types.CreateStreamResponse> {
+		validateStreamName(args.stream);
 		const requestToken = randomToken();
 		// Convert SDK config to API format (ageSecs → age)
 		const apiArgs = {
@@ -249,6 +216,7 @@ export class S2Streams {
 		args: Types.EnsureStreamInput,
 		options?: S2RequestOptions,
 	): Promise<Types.EnsureStreamResponse> {
+		validateStreamName(args.stream);
 		const body =
 			args.config === undefined
 				? undefined

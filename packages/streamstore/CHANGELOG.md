@@ -1,5 +1,12 @@
 # @s2-dev/streamstore
 
+## 0.26.1
+
+### Patch Changes
+
+- 1f40121: Act on s2s reconnect advice once per minute, keep terminal `server_draining` reconnects outside the ordinary retry budget, and drop draining connections from the pool. Read sessions now anchor a timestamp or tail-relative start to the tail of an empty batch, so a reconnect resumes from the caught-up position instead of re-evaluating the original start against a newer tail.
+- c9d10b9: Forward `clamp` on s2s read sessions. The HTTP/2 transport built its read query by hand and dropped the flag, so `readSession({ start: { clamp: true } })` returned 416 for a start beyond the tail under s2s while clamping under fetch.
+
 ## 0.26.0
 
 ### Minor Changes
