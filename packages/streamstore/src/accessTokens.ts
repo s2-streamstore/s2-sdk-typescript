@@ -111,13 +111,14 @@ export class S2AccessTokens {
 		args?: Types.ListAllAccessTokensInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.AccessTokenInfo> {
+		const { includeDeleted: _includeDeleted, ...listArgs } = args ?? {};
 		return paginate(
 			(a) =>
 				this.list(a, options).then((r) => ({
 					items: r.accessTokens,
 					hasMore: r.hasMore,
 				})),
-			args ?? {},
+			listArgs,
 			(token) => token.id,
 		);
 	}
