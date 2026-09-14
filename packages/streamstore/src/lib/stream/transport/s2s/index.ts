@@ -1010,22 +1010,29 @@ class S2SAppendSession implements TransportAppendSession {
 			);
 		}
 
-		const protoBytes = encodeProtoAppendInput(input);
-		const shouldCompress =
-			this.compression !== "none" &&
-			protoBytes.byteLength >= COMPRESSION_THRESHOLD_BYTES;
-		const frameCompression: CompressionType = shouldCompress
-			? this.compression
-			: "none";
-		const bodyBytes = shouldCompress
-			? await compressFrameBody(protoBytes, this.compression)
-			: protoBytes;
-
-		const frame = frameMessage({
-			terminal: false,
-			compression: frameCompression,
-			body: bodyBytes,
-		});
+		// Encoding happens before anything is written; keep the never-throws
+		// contract so a bad input fails its own ticket instead of crashing the
+		// retry pump and hanging every ack.
+		let frame: Uint8Array;
+		try {
+			const protoBytes = encodeProtoAppendInput(input);
+			const shouldCompress =
+				this.compression !== "none" &&
+				protoBytes.byteLength >= COMPRESSION_THRESHOLD_BYTES;
+			const frameCompression: CompressionType = shouldCompress
+				? this.compression
+				: "none";
+			const bodyBytes = shouldCompress
+				? await compressFrameBody(protoBytes, this.compression)
+				: protoBytes;
+			frame = frameMessage({
+				terminal: false,
+				compression: frameCompression,
+				body: bodyBytes,
+			});
+		} catch (encodeErr) {
+			return err(s2Error(encodeErr));
+		}
 
 		// Track pending ack - this promise resolves when the ack is received (FIFO)
 		return new Promise((resolve) => {
