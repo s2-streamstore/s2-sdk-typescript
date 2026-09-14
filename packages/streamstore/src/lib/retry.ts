@@ -1609,35 +1609,54 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.retryConfig.minBaseDelayMillis,
 				this.retryConfig.maxBaseDelayMillis,
 			);
+		// Start closing the old session BEFORE the backoff sleep. close()
+		// sets this.closed = true synchronously on its first line, so the
+		// flag is set throughout the backoff window and sendBatch()'s
+		// this.closed guard suppresses any orphaned submit() continuation
+		// whose parked initPromise resolves during the sleep — otherwise
+		// that continuation would write a batch recovery has decided to
+		// abandon, and the resubmit below would append it a second time (S2
+		// has no dedup for non-idempotent appends). Starting close() here
+		// also releases the old session's HTTP/2 stream (and its reserved
+		// activeStreams slot) at the START of the backoff window rather
+		// than its end, so pool-slot pressure under bursty outages is no
+		// worse than before.
+		const closeP: Promise<CloseResult> = this.session
+			? this.session.close()
+			: Promise.resolve(okClose());
+
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
 		await sleep(delay);
 
-		// Check if aborted during backoff sleep
+		// Check if aborted during backoff sleep. Still await closeP so the
+		// old session's pool slot is released even on the abort path.
 		if (this.pumpStopped) {
 			debugSession("[%s] stopped during recovery backoff", this.streamName);
+			await closeP.catch(() => {});
 			return;
 		}
 
-		// Teardown old session
-		if (this.session) {
-			try {
-				const closeResult = await this.session.close();
-				if (!closeResult.ok) {
-					debugSession(
-						"[%s] error closing old session during recovery: %s",
-						this.streamName,
-						closeResult.error.message,
-					);
-				}
-			} catch (e) {
-				debugSession(
-					"[%s] exception closing old session: %s",
-					this.streamName,
-					e,
-				);
-			}
-			this.session = undefined;
+		// Await the close started before backoff and surface any failure.
+		// close() never throws (it catches internally and returns
+		// errClose); the try/catch is defensive against transport bugs.
+		let closeResult: CloseResult = okClose();
+		try {
+			closeResult = await closeP;
+		} catch (e) {
+			debugSession(
+				"[%s] exception closing old session: %s",
+				this.streamName,
+				e,
+			);
 		}
+		if (!closeResult.ok) {
+			debugSession(
+				"[%s] error closing old session during recovery: %s",
+				this.streamName,
+				closeResult.error.message,
+			);
+		}
+		this.session = undefined;
 
 		// Create new session
 		await this.ensureSession();
