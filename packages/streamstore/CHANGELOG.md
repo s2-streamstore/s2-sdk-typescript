@@ -1,5 +1,15 @@
 # @s2-dev/streamstore
 
+## 0.27.0
+
+### Minor Changes
+
+- c330568: Add `streamConfig` to `AppendInput`, `ReadInput`, and `AppendSessionOptions`. It is sent as the `s2-stream-config` header and applied, over the basin's default stream configuration, only when the append or read auto-creates the stream; it is ignored if the stream already exists. Sessions resend it on every connect.
+
+### Patch Changes
+
+- 5a05d56: Validate stream names (1-512 bytes) and access token IDs (1-96 bytes) client-side in `streams.create`, `streams.ensure`, `basin.stream()` and `accessTokens.issue`, rejecting NUL bytes with an `S2Error` before any request is sent. Documents that stream names, access token IDs, and the `prefix` / `startAfter` list filters must not contain NUL bytes.
+
 ## 0.26.1
 
 ### Patch Changes
