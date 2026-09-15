@@ -7,7 +7,8 @@
   "homepage": "https://s2.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/s2-streamstore/s2-sdk-typescript"
+    "url": "git+https://github.com/s2-streamstore/s2-sdk-typescript.git",
+    "directory": "packages/resumable-stream"
   },
   "publishConfig": {
     "access": "public"

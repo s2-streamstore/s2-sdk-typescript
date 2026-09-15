@@ -5,6 +5,11 @@
   "license": "MIT",
   "type": "module",
   "homepage": "https://s2.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/s2-streamstore/s2-sdk-typescript.git",
+    "directory": "packages/patterns"
+  },
   "publishConfig": {
     "access": "public"
   },
