@@ -169,6 +169,7 @@ export type { S2EndpointsInit } from "./endpoints.js";
 // =============================================================================
 
 export {
+	AppendIndefiniteFailureError,
 	FencingTokenMismatchError,
 	RangeNotSatisfiableError,
 	S2Error,

@@ -7,6 +7,7 @@ import {
 	RECONNECT_ADVISED_CODE,
 	S2Error,
 	s2Error,
+	withPriorUncertainty,
 	withS2Error,
 } from "../error.js";
 import type * as API from "../generated/index.js";
@@ -170,6 +171,9 @@ export function sleep(ms: number): Promise<void> {
  *
  * @param retryConfig Retry configuration (max attempts, backoff duration)
  * @param fn The async function to execute
+ * @param isPolicyCompliant Additional per-error retry gate (append retry policy)
+ * @param trackAppendUncertainty When set, remember that a retried attempt may
+ *   have taken effect so a later definite error is not reported as side-effect free
  * @returns The result of the function
  * @throws The last error if all retry attempts are exhausted
  */
@@ -178,6 +182,7 @@ export async function withRetries<T>(
 	fn: () => Promise<T>,
 	isPolicyCompliant: (config: RetryConfig, error: S2Error) => boolean = () =>
 		true,
+	trackAppendUncertainty: boolean = false,
 ): Promise<T> {
 	const config = {
 		...DEFAULT_RETRY_CONFIG,
@@ -188,6 +193,7 @@ export async function withRetries<T>(
 	if (config.maxAttempts < 1) config.maxAttempts = 1;
 
 	let lastError: S2Error | undefined = undefined;
+	let priorUncertainty = false;
 
 	// attemptNo is 1-based: 1..maxAttempts
 	for (let attemptNo = 1; attemptNo <= config.maxAttempts; attemptNo++) {
@@ -215,7 +221,11 @@ export async function withRetries<T>(
 			// Check if error is retryable
 			if (!isPolicyCompliant(config, lastError) || !isRetryable(lastError)) {
 				debugWith("error not retryable, throwing immediately");
-				throw error;
+				throw withPriorUncertainty(error, priorUncertainty);
+			}
+
+			if (trackAppendUncertainty && !error.hasNoSideEffects()) {
+				priorUncertainty = true;
 			}
 
 			// Calculate delay and wait before retrying
@@ -233,6 +243,9 @@ export async function withRetries<T>(
 		}
 	}
 
+	if (lastError !== undefined) {
+		throw withPriorUncertainty(lastError, priorUncertainty);
+	}
 	throw lastError;
 }
 type ReadDelivery<Format extends "string" | "bytes"> = {
@@ -802,6 +815,7 @@ type InflightEntry = {
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
 	needsSubmit?: boolean;
+	priorUncertainty?: boolean; // An earlier attempt may have taken effect
 };
 
 const MIN_MAX_INFLIGHT_BYTES = 1 * 1024 * 1024; // 1 MiB minimum
@@ -1545,6 +1559,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				} else {
 					this.consecutiveFailures++;
 					this.currentAttempt++;
+					if (
+						!error.hasNoSideEffects() &&
+						(this.session?.effectSignalled() ?? true)
+					) {
+						for (const entry of this.inflight) {
+							if (!entry.needsSubmit) {
+								entry.priorUncertainty = true;
+							}
+						}
+					}
 
 					debugSession(
 						"[%s] performing recovery (retry %d/%d)",
@@ -1720,7 +1744,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		debugSession("[%s] aborting session: %s", this.streamName, error.message);
 
-		this.fatalError = error;
+		const anyUncertain = this.inflight.some(
+			(entry) => entry.priorUncertainty === true,
+		);
+		const sessionError = withPriorUncertainty(error, anyUncertain);
+		this.fatalError = sessionError;
 		this.pumpStopped = true;
 
 		// Wake pump if it's sleeping so it can check the pumpStopped flag
@@ -1736,7 +1764,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		);
 		for (const entry of this.inflight) {
 			if (entry.maybeResolve) {
-				entry.maybeResolve(err(error));
+				entry.maybeResolve(
+					err(withPriorUncertainty(error, entry.priorUncertainty ?? false)),
+				);
 			}
 		}
 		this.inflight.clear();
@@ -1747,7 +1777,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Error the readable stream
 		try {
-			this.acksController?.error(error);
+			this.acksController?.error(sessionError);
 		} catch (e) {
 			debugSession(
 				"[%s] failed to error acks controller: %s",
