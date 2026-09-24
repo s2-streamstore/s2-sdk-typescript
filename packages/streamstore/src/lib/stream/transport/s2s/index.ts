@@ -712,7 +712,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
  * Pipelined: multiple requests can be in-flight simultaneously.
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
-class S2SAppendSession implements TransportAppendSession {
+export class S2SAppendSession implements TransportAppendSession {
 	private http2Stream?: ClientHttp2Stream;
 	private parser = new S2SFrameParser();
 	private closed = false;
@@ -996,6 +996,21 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
 	private async sendBatch(input: Types.AppendInput): Promise<AppendResult> {
+		// Guard against writes after close(). submit() parks on
+		// `await this.initPromise`; if the retry layer times out and closes
+		// (or starts closing) this session while submit() is parked, the
+		// orphaned continuation would otherwise reach sendBatch() and write
+		// the batch to a session recovery has already decided to abandon —
+		// the retry layer would then resubmit the same input on a fresh
+		// session and the server would append the batch twice (S2 has no
+		// dedup for non-idempotent appends). close() sets this.closed before
+		// awaiting initPromise, so this guard fires for any submit() that
+		// resumes after close() has begun.
+		if (this.closed) {
+			return Promise.resolve(
+				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
+			);
+		}
 		if (this.reconnectAdvised && !this.reconnectDeclined) {
 			// Refuse the advised stream without writing, so the retry layer can
 			// resubmit on a fresh session with no risk of duplication.
