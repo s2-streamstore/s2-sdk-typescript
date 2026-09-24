@@ -21,6 +21,8 @@ class MockAppendSession implements AppendSession {
 	private seq = 0;
 	private closed = false;
 
+	constructor(private readonly closeError?: S2Error) {}
+
 	async submit(input: AppendInput): Promise<BatchSubmitTicket> {
 		if (this.closed) {
 			throw new Error("session closed");
@@ -49,6 +51,9 @@ class MockAppendSession implements AppendSession {
 
 	async close(): Promise<void> {
 		this.closed = true;
+		if (this.closeError) {
+			throw this.closeError;
+		}
 	}
 
 	acks(): AcksStream {
@@ -418,4 +423,44 @@ describe("Producer", () => {
 			await expect(producer.close()).rejects.toBe(error);
 		},
 	);
+
+	it("close() propagates a close error from the underlying AppendSession (G6.1)", async () => {
+		const closeError = new S2Error({
+			message: "transport close failed",
+			status: 503,
+		});
+		const session = new MockAppendSession(closeError);
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 5 }),
+			session,
+		);
+
+		// Produce and ack data first — the close error must not affect already
+		// acknowledged records (G2.2).
+		const total = 5;
+		for (let i = 0; i < total; i++) {
+			await producer.submit(AppendRecord.string({ body: `rec-${i}` }));
+		}
+
+		// close() must reject with the session's close error rather than
+		// resolving silently. (Note: close() is async, so each call returns a
+		// fresh promise wrapping the shared `closePromise` — assert idempotent
+		// rejection settlement, not reference equality.)
+		await expect(producer.close()).rejects.toMatchObject({
+			message: "transport close failed",
+			status: 503,
+		});
+
+		// Idempotent: a second close() re-rejects the same underlying error
+		// rather than re-attempting the close or resolving.
+		await expect(producer.close()).rejects.toMatchObject({
+			message: "transport close failed",
+			status: 503,
+		});
+
+		// Records were still produced before the close error.
+		expect(session.getValues()).toEqual(
+			Array.from({ length: total }, (_v, i) => `rec-${i}`),
+		);
+	});
 });
