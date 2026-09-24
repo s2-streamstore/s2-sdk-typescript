@@ -48,7 +48,9 @@ const toProtoAppendRecord = (record: AppendRecord): Proto.AppendRecord => {
 			typeof record.timestamp === "number"
 				? record.timestamp
 				: record.timestamp.getTime();
-		timestamp = BigInt(ms);
+		// Floor like the JSON path (mappers.toEpochMs): BigInt() throws on a
+		// fractional millisecond value.
+		timestamp = BigInt(Math.floor(ms));
 	}
 	return {
 		timestamp,
