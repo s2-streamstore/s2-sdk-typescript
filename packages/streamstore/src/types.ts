@@ -511,8 +511,8 @@ export interface ReconfigureStreamInput {
 	deleteOnEmpty?: DeleteOnEmptyConfig | null;
 	/** Retention policy. */
 	retentionPolicy?: RetentionPolicy | null;
-	/** Storage class. */
-	storageClass?: API.StorageClass | null;
+	/** Storage class. Null restores the basin default. */
+	storageClass?: string | null;
 	/** Timestamping configuration. */
 	timestamping?: TimestampingConfig | null;
 }
@@ -580,8 +580,8 @@ export interface StreamConfig {
 	deleteOnEmpty?: DeleteOnEmptyConfig | null;
 	/** Retention policy. */
 	retentionPolicy?: RetentionPolicy | null;
-	/** Storage class. */
-	storageClass?: API.StorageClass | null;
+	/** Storage class for recent writes. See {@link S2Locations.list}. */
+	storageClass?: string | null;
 	/** Timestamping configuration. */
 	timestamping?: TimestampingConfig | null;
 }
@@ -627,6 +627,10 @@ export interface LocationInfo {
 	name: API.LocationName;
 	/** Whether the location represents a private placement limited by account. */
 	isPrivate: boolean;
+	/** Storage classes available to the account in this location. */
+	storageClasses?: string[] | null;
+	/** Default storage class for this location. */
+	defaultStorageClass?: string | null;
 }
 
 /**
