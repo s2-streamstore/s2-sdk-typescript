@@ -1,5 +1,17 @@
 # @s2-dev/streamstore
 
+## 0.28.0
+
+### Minor Changes
+
+- 570302c: Expose `storageClasses` and `defaultStorageClass` on location responses.
+
+  **Breaking:** Remove the `StorageClass` type export and use `string` for storage-class names. Replace imports of `StorageClass` with `string`, and discover available values with `s2.locations.list()`. Omission and null reset behavior are unchanged.
+
+### Patch Changes
+
+- 4661d78: Preserve uncertainty across append retries. If an earlier attempt may have taken effect and the final attempt fails with an error that would otherwise report `hasNoSideEffects() === true`, unary appends and append sessions now fail with `AppendIndefiniteFailureError`, which exposes the final attempt's error as `finalAttemptError` (and `cause`) while reporting `hasNoSideEffects() === false` for the whole append.
+
 ## 0.27.0
 
 ### Minor Changes
