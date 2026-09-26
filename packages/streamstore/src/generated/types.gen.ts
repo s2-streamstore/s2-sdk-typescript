@@ -333,6 +333,10 @@ export type ListStreamsResponse = {
 
 export type LocationInfo = {
     /**
+     * Default [storage class](https://s2.dev/docs/storage-classes) for this location.
+     */
+    default_storage_class?: string | null;
+    /**
      * Location represents a private placement, limited by account.
      */
     is_private: boolean;
@@ -340,6 +344,10 @@ export type LocationInfo = {
      * Location name.
      */
     name: LocationName;
+    /**
+     * [Storage classes](https://s2.dev/docs/storage-classes) available to the account in this location.
+     */
+    storage_classes?: Array<string> | null;
 };
 
 export type LocationName = string;
@@ -492,12 +500,13 @@ export type SequencedRecord = {
     timestamp: U64;
 };
 
-export type StorageClass = 'standard' | 'express';
-
 export type StreamConfig = {
     delete_on_empty?: null | DeleteOnEmptyConfig;
     retention_policy?: null | RetentionPolicy;
-    storage_class?: null | StorageClass;
+    /**
+     * [Storage class](https://s2.dev/docs/storage-classes) for recent writes.
+     */
+    storage_class?: string | null;
     timestamping?: null | TimestampingConfig;
 };
 
@@ -539,7 +548,10 @@ export type StreamPosition = {
 export type StreamReconfiguration = {
     delete_on_empty?: null | DeleteOnEmptyReconfiguration;
     retention_policy?: null | RetentionPolicy;
-    storage_class?: null | StorageClass;
+    /**
+     * [Storage class](https://s2.dev/docs/storage-classes) for recent writes.
+     */
+    storage_class?: string | null;
     timestamping?: null | TimestampingReconfiguration;
 };
 
