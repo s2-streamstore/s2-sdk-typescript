@@ -288,8 +288,10 @@ export class S2Stream {
 			this.closed = true;
 			if (this._transportPromise) {
 				try {
-					const transport = await this._transportPromise;
-					await transport.close();
+					const transport = await this._transportPromise.catch(() => undefined);
+					if (transport) {
+						await transport.close();
+					}
 				} finally {
 					this._transportPromise = undefined;
 				}
