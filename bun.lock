@@ -76,7 +76,7 @@
     },
     "packages/streamstore": {
       "name": "@s2-dev/streamstore",
-      "version": "0.26.1",
+      "version": "0.27.0",
       "dependencies": {
         "@protobuf-ts/runtime": "^2.11.1",
         "debug": "^4.4.3",
