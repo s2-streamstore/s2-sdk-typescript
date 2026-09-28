@@ -140,7 +140,6 @@ export type {
 	PermittedOperationGroups,
 	ResourceSet,
 	// RetentionPolicy - exported from types.ts with ageSecs field
-	StorageClass,
 	StreamMetricSet,
 	TimeseriesInterval,
 	TimestampingMode,
