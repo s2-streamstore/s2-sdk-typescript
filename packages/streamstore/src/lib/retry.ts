@@ -854,6 +854,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private pumpWakeup?: () => void;
 	private closed = false;
 	private fatalError?: S2Error;
+	// Raw final error passed to abort(), without the session-level uncertainty
+	// wrapping applied to {@link fatalError}. Late submitters (batches that
+	// reach the fast-fail paths after the pump has exited) were never
+	// transmitted on any attempt, so they cannot have "taken effect in an
+	// earlier attempt" and must receive this plain error — matching the
+	// per-batch behavior {@link abort} uses for un-marked inflight entries.
+	private finalAttemptError?: S2Error;
 
 	private _lastAckedPosition?: Types.AppendAck;
 	private acksController?: ReadableStreamDefaultController<Types.AppendAck>;
@@ -979,14 +986,18 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Check if we have capacity
 		while (true) {
-			// Check for fatal error before adding to pendingBytes
+			// Check for fatal error before adding to pendingBytes. Surface the
+			// raw final attempt error (not the session-level uncertainty-wrapped
+			// {@link fatalError}) so a batch that was never transmitted is not
+			// misreported as AppendIndefiniteFailureError.
 			if (this.fatalError) {
+				const fatal = this.finalAttemptError ?? this.fatalError;
 				debugSession(
 					"[%s] [CAPACITY] fatal error detected, rejecting: %s",
 					this.streamName,
-					this.fatalError.message,
+					fatal.message,
 				);
-				throw this.fatalError;
+				throw fatal;
 			}
 
 			// Reject if session is closing/closed so blocked submits fail fast
@@ -1087,14 +1098,19 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		input: Types.AppendInput,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
-		// Check for fatal error (e.g., from abort())
+		// Check for fatal error (e.g., from abort()). Return the raw final
+		// attempt error (not the session-level uncertainty-wrapped
+		// {@link fatalError}) so a batch that was never transmitted — it never
+		// entered the inflight queue — is not misreported as
+		// AppendIndefiniteFailureError.
 		if (this.fatalError) {
+			const fatal = this.finalAttemptError ?? this.fatalError;
 			debugSession(
 				"[%s] [SUBMIT] rejecting due to fatal error: %s",
 				this.streamName,
-				this.fatalError.message,
+				fatal.message,
 			);
-			return Promise.resolve(err(this.fatalError));
+			return Promise.resolve(err(fatal));
 		}
 
 		// Create promise for submit() callers
@@ -1749,6 +1765,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		);
 		const sessionError = withPriorUncertainty(error, anyUncertain);
 		this.fatalError = sessionError;
+		this.finalAttemptError = error;
 		this.pumpStopped = true;
 
 		// Wake pump if it's sleeping so it can check the pumpStopped flag

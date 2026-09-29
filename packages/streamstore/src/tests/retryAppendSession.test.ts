@@ -623,3 +623,184 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(error.status).toBe(0);
 	});
 });
+
+describe("RetryAppendSession late-batch abort classification", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** Drive fake timers + microtasks until `p` settles (or steps run out). */
+	async function settle<T>(p: Promise<T>, steps = 40): Promise<void> {
+		let settled = false;
+		p.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		for (let i = 0; i < steps && !settled; i++) {
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(5);
+			await Promise.resolve();
+		}
+	}
+
+	/**
+	 * Build a session that, under the default "all" policy, drives the
+	 * max-attempts abort path with a prior indefinite (uncertain) attempt
+	 * followed by a final `hasNoSideEffects()` error. Attempt 1 is a 503
+	 * `unavailable` (server-origin, side-effecting, retryable) which marks the
+	 * inflight batch as `priorUncertainty=true`; intermediate attempts are
+	 * `429 rate_limited` (server-origin, `hasNoSideEffects()===true`, retryable)
+	 * which do not mark; the final attempt is `ECONNREFUSED` (sdk-origin,
+	 * `hasNoSideEffects()===true`), which exhausts the budget and triggers
+	 * `abort(wrappedError)`.
+	 */
+	async function buildUncertainAbortSession(maxAttempts: number) {
+		let call = 0;
+		const session = await AppendSessionImpl.create(
+			async () => {
+				call++;
+				if (call === 1) {
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "unavailable",
+							status: 503,
+							code: "unavailable",
+							origin: "server",
+						}),
+					});
+				}
+				if (call < maxAttempts) {
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "rate limited",
+							status: 429,
+							code: "rate_limited",
+							origin: "server",
+						}),
+					});
+				}
+				return new FakeTransportAppendSession({
+					submitError: new S2Error({
+						message: "connect refused",
+						status: 502,
+						code: "ECONNREFUSED",
+						origin: "sdk",
+					}),
+				});
+			},
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts,
+				appendRetryPolicy: "all",
+			},
+		);
+		return { session };
+	}
+
+	it("returns the plain final error to a never-sent late batch (maxAttempts: 2, default policy)", async () => {
+		const { session } = await buildUncertainAbortSession(2);
+
+		const ticketA = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const ackP = ticketA.ack();
+		await settle(ackP);
+
+		// Batch A was transmitted and its earlier attempt was indefinite, so it
+		// keeps the per-batch AppendIndefiniteFailureError classification.
+		const errorA = (await ackP.catch((e) => e)) as AppendIndefiniteFailureError;
+		expect(errorA).toBeInstanceOf(AppendIndefiniteFailureError);
+		expect(errorA.hasNoSideEffects()).toBe(false);
+		expect(errorA.finalAttemptError.code).toBe("ECONNREFUSED");
+		expect(errorA.finalAttemptError.status).toBe(502);
+		expect(errorA.finalAttemptError.message).toContain(
+			"Max attempts (2) exhausted",
+		);
+		expect(errorA.finalAttemptError.message).toContain("connect refused");
+
+		// Batch B is submitted after the fatal abort — it was never sent on the
+		// wire, so it must receive the plain final error, not the wrapped one.
+		const errorB = await session
+			.submit(AppendInput.create([AppendRecord.string({ body: "b" })]))
+			.catch((e) => e);
+
+		expect(errorB).not.toBeInstanceOf(AppendIndefiniteFailureError);
+		expect(errorB).toBeInstanceOf(S2Error);
+		expect((errorB as S2Error).hasNoSideEffects()).toBe(true);
+		expect((errorB as S2Error).code).toBe("ECONNREFUSED");
+		expect((errorB as S2Error).status).toBe(502);
+		expect((errorB as S2Error).message).toContain("Max attempts (2) exhausted");
+		// The late batch receives exactly the final-attempt error the wrapper
+		// carries — not a fresh copy, not the wrapped class.
+		expect(errorB).toBe(errorA.finalAttemptError);
+
+		// Session-level reporting keeps the wrapped error.
+		const cause = session.failureCause() as AppendIndefiniteFailureError;
+		expect(cause).toBeInstanceOf(AppendIndefiniteFailureError);
+		expect(cause.hasNoSideEffects()).toBe(false);
+		expect(cause.finalAttemptError).toBe(errorB);
+	});
+
+	it("submitInternal fast-fail returns the plain final error for a never-sent batch", async () => {
+		const { session } = await buildUncertainAbortSession(2);
+		const ticketA = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const ackP = ticketA.ack();
+		await settle(ackP);
+		await ackP.catch(() => {});
+
+		// Directly exercise the submitInternal fast-fail path (bypassing
+		// waitForCapacity), as would be hit in the narrow race where capacity
+		// was reserved before abort set fatalError — the batch is never sent.
+		const input = AppendInput.create([AppendRecord.string({ body: "z" })]);
+		const result: AppendResult = await (
+			session as unknown as {
+				submitInternal: (
+					input: AppendInput,
+					size: number,
+				) => Promise<AppendResult>;
+			}
+		).submitInternal(input, input.meteredBytes);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).not.toBeInstanceOf(AppendIndefiniteFailureError);
+			expect(result.error.hasNoSideEffects()).toBe(true);
+			expect(result.error.code).toBe("ECONNREFUSED");
+			expect(result.error.message).toContain("Max attempts (2) exhausted");
+		}
+	});
+
+	it("errors the acks stream with the session-level AppendIndefiniteFailureError", async () => {
+		const { session } = await buildUncertainAbortSession(2);
+		const ticketA = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const ackP = ticketA.ack();
+		await settle(ackP);
+		await ackP.catch(() => {});
+
+		const reader = session.acks().getReader();
+		try {
+			const acksErr = await reader.read().catch((e) => e);
+			expect(acksErr).toBeInstanceOf(AppendIndefiniteFailureError);
+			expect((acksErr as AppendIndefiniteFailureError).hasNoSideEffects()).toBe(
+				false,
+			);
+		} finally {
+			try {
+				reader.releaseLock();
+			} catch {}
+		}
+	});
+});
