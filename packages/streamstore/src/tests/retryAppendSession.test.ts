@@ -382,6 +382,122 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(session.failureCause()).toBeInstanceOf(AppendIndefiniteFailureError);
 	});
 
+	it("wraps maxAttempts-exhausted definite retryable 429 into AppendIndefiniteFailureError after indefinite attempts", async () => {
+		// Indefinite server error (hasNoSideEffects() === false) sets
+		// priorUncertainty on inflight entries; the final, budget-exhausting
+		// attempt is a definite server error (429 rate_limited,
+		// hasNoSideEffects() === true). Per the contract shipped in 4661d78,
+		// the session must surface AppendIndefiniteFailureError (not a plain
+		// S2Error) on both per-batch acks and failureCause().
+		let call = 0;
+		const session = await AppendSessionImpl.create(
+			async () => {
+				call++;
+				if (call <= 2) {
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "unavailable",
+							status: 503,
+							code: "unavailable",
+							origin: "server",
+						}),
+					});
+				}
+				return new FakeTransportAppendSession({
+					submitError: new S2Error({
+						message: "rate limited",
+						status: 429,
+						code: "rate_limited",
+						origin: "server",
+					}),
+				});
+			},
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 3,
+				appendRetryPolicy: "all",
+			},
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		const ackP = ticket.ack();
+		ackP.catch(() => {});
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+
+		const error: unknown = await ackP.catch((e) => e);
+		expect(error).toBeInstanceOf(AppendIndefiniteFailureError);
+		const indefinite = error as AppendIndefiniteFailureError;
+		expect(indefinite.name).toBe("AppendIndefiniteFailureError");
+		expect(indefinite.hasNoSideEffects()).toBe(false);
+		expect(indefinite.finalAttemptError).toBeInstanceOf(S2Error);
+		expect(indefinite.finalAttemptError.status).toBe(429);
+		expect(indefinite.finalAttemptError.code).toBe("rate_limited");
+		expect(indefinite.finalAttemptError.origin).toBe("server");
+		expect(indefinite.cause).toBe(indefinite.finalAttemptError);
+		expect(session.failureCause()).toBeInstanceOf(AppendIndefiniteFailureError);
+		// abort() builds separate AppendIndefiniteFailureError instances for the
+		// per-batch ack and the session fatalError, but both wrap the same final
+		// attempt error.
+		const cause = session.failureCause() as AppendIndefiniteFailureError;
+		expect(cause.finalAttemptError).toBe(indefinite.finalAttemptError);
+		expect(cause.hasNoSideEffects()).toBe(false);
+	});
+
+	it("does not wrap maxAttempts-exhausted definite retryable 429 when no prior attempt was uncertain", async () => {
+		// All attempts are definite (429 rate_limited, hasNoSideEffects() === true)
+		// so priorUncertainty is never asserted. The session must surface the plain
+		// definite S2Error (NOT AppendIndefiniteFailureError), with hasNoSideEffects()
+		// === true to signal the append was safely a no-op. This guards against the
+		// fix over-wrapping when there was never any uncertainty.
+		const session = await AppendSessionImpl.create(
+			async () =>
+				new FakeTransportAppendSession({
+					submitError: new S2Error({
+						message: "rate limited",
+						status: 429,
+						code: "rate_limited",
+						origin: "server",
+					}),
+				}),
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 2,
+				appendRetryPolicy: "all",
+			},
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		const ackP = ticket.ack();
+		ackP.catch(() => {});
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+
+		const error: unknown = await ackP.catch((e) => e);
+		expect(error).not.toBeInstanceOf(AppendIndefiniteFailureError);
+		expect(error).toBeInstanceOf(S2Error);
+		const s2err = error as S2Error;
+		expect(s2err.name).toBe("S2Error");
+		expect(s2err.status).toBe(429);
+		expect(s2err.code).toBe("rate_limited");
+		expect(s2err.origin).toBe("server");
+		expect(s2err.hasNoSideEffects()).toBe(true);
+		expect(session.failureCause()).toBe(s2err);
+		expect(session.failureCause()).not.toBeInstanceOf(
+			AppendIndefiniteFailureError,
+		);
+	});
+
 	it("retries under noSideEffects policy when error guarantees no mutation (rate_limited)", async () => {
 		let call = 0;
 		const session = await AppendSessionImpl.create(
