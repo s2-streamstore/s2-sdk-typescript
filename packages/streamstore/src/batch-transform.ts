@@ -1,6 +1,6 @@
 import { S2Error } from "./error.js";
 import { AppendInput, type AppendRecord } from "./types.js";
-import { meteredBytes } from "./utils.js";
+import { meteredBytes, utf8ByteLength } from "./utils.js";
 
 export interface BatchTransformOptions {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
@@ -117,6 +117,29 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 					origin: "sdk",
 				});
 			}
+		}
+
+		// Validate the per-batch append options up front too, rather than
+		// letting AppendInput.create() reject them on the first flush.
+		if (
+			args?.fencingToken !== undefined &&
+			utf8ByteLength(args.fencingToken) > 36
+		) {
+			throw new S2Error({
+				message: "fencingToken must not exceed 36 bytes in length",
+				status: 400,
+				origin: "sdk",
+			});
+		}
+		if (
+			args?.matchSeqNum !== undefined &&
+			(!Number.isSafeInteger(args.matchSeqNum) || args.matchSeqNum < 0)
+		) {
+			throw new S2Error({
+				message: `matchSeqNum must be a non-negative safe integer; got ${args.matchSeqNum}`,
+				status: 400,
+				origin: "sdk",
+			});
 		}
 
 		// Apply defaults

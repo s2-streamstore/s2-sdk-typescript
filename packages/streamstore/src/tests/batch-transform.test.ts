@@ -218,6 +218,22 @@ describe("BatchTransform", () => {
 		).toThrow();
 	});
 
+	it("rejects an invalid fencingToken or matchSeqNum at construction", () => {
+		expect(() => new BatchTransform({ fencingToken: "x".repeat(37) })).toThrow(
+			S2Error,
+		);
+		expect(() => new BatchTransform({ matchSeqNum: -1 })).toThrow(S2Error);
+		expect(() => new BatchTransform({ matchSeqNum: 1.5 })).toThrow(S2Error);
+		expect(() => new BatchTransform({ matchSeqNum: Number.NaN })).toThrow(
+			S2Error,
+		);
+		// Limits are inclusive: a 36-byte token and seq num 0 are fine.
+		expect(
+			() =>
+				new BatchTransform({ fencingToken: "x".repeat(36), matchSeqNum: 0 }),
+		).not.toThrow();
+	});
+
 	it("handles empty batches gracefully", async () => {
 		const batcher = new BatchTransform({
 			lingerDurationMillis: 10,
