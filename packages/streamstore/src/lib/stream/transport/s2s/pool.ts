@@ -11,6 +11,7 @@ import type { OutgoingHttpHeaders } from "node:http";
 import type { ClientHttp2Session, ClientHttp2Stream } from "node:http2";
 import createDebug from "debug";
 import { S2Error } from "../../../../error.js";
+import { detectRuntime } from "../../runtime.js";
 import type { Http2Settings } from "../../types.js";
 
 const debug = createDebug("s2:s2s:pool");
@@ -405,10 +406,11 @@ export class Http2ConnectionPool {
 
 /**
  * Idle pooled sessions are unref'd so they don't keep the process alive once
- * all streams finish; sessions with open streams stay ref'd.
+ * all streams finish; sessions with open streams stay ref'd. Node only: Deno's
+ * http2 does not reliably re-ref a session.
  */
 function setKeepsProcessAlive(session: ClientHttp2Session, alive: boolean) {
-	if (session.closed || session.destroyed) {
+	if (detectRuntime() !== "node" || session.closed || session.destroyed) {
 		return;
 	}
 	try {
