@@ -6,7 +6,11 @@
  */
 
 import type { OutgoingHttpHeaders } from "node:http";
-import type { ClientHttp2Stream, Http2Session } from "node:http2";
+import {
+	type ClientHttp2Stream,
+	type Http2Session,
+	constants as http2Constants,
+} from "node:http2";
 import createDebug from "debug";
 
 /** Type for ReadableStream with optional async iterator support. */
@@ -1090,12 +1094,22 @@ class S2SAppendSession implements TransportAppendSession {
 			// handler is registered if it ever will be).
 			this.removeAbortListener();
 
-			// Wait for all pending acks to complete
+			// Force the stream to CLOSED via RST so the "close" event fires and
+			// the existing stream.on("close") -> safeError path drains pendingAcks.
+			// A half-close end() only transitions to HALF-CLOSED (local) and never
+			// fires "close" on a silent peer, leaving the busy-wait below hanging
+			// forever on outstanding acks.
+			if (this.http2Stream && !this.http2Stream.closed) {
+				this.http2Stream.close(http2Constants.NGHTTP2_CANCEL);
+			}
+
+			// Wait for all pending acks to complete (now bounded: safeError drains
+			// them when the stream's "close" event fires from the RST above).
 			while (this.pendingAcks.length > 0) {
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
 
-			// Close the HTTP/2 stream (client doesn't send terminal frame for clean close)
+			// Half-close for the clean path (no-op if already closed by the RST above).
 			if (this.http2Stream && !this.http2Stream.closed) {
 				this.http2Stream.end();
 			}
