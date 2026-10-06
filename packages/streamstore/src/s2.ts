@@ -1,7 +1,12 @@
 import { S2AccessTokens } from "./accessTokens.js";
 import { S2Basin } from "./basin.js";
 import { S2Basins } from "./basins.js";
-import type { RetryConfig, S2ClientOptions, S2Compression } from "./common.js";
+import {
+	type RetryConfig,
+	type S2ClientOptions,
+	type S2Compression,
+	S2Environment,
+} from "./common.js";
 import { S2Endpoints } from "./endpoints.js";
 import { makeServerError, S2Error } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
@@ -64,10 +69,9 @@ export class S2 {
 				connectionTimeoutMillis: options.connectionTimeoutMillis,
 			}),
 		};
+		const endpoints = options.endpoints ?? S2Environment.parse().endpoints;
 		this.endpoints =
-			options.endpoints instanceof S2Endpoints
-				? options.endpoints
-				: new S2Endpoints(options.endpoints);
+			endpoints instanceof S2Endpoints ? endpoints : new S2Endpoints(endpoints);
 		this.compression = options.compression;
 		// Copy so later mutation of the caller's object cannot skew pool keying.
 		this.http2 = options.http2 ? { ...options.http2 } : undefined;

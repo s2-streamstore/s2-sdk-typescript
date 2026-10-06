@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EndpointTemplate, S2Endpoints } from "../endpoints.js";
+import { S2 } from "../s2.js";
 
 describe("S2Endpoints", () => {
 	it("defaults to a.s2.dev + b.s2.dev endpoints with inferred /v1", () => {
@@ -61,5 +62,32 @@ describe("EndpointTemplate", () => {
 
 		const b = new EndpointTemplate({ endpoint: "example.com/" });
 		expect(b.baseUrl()).toBe("https://example.com/");
+	});
+});
+
+describe("S2 client endpoints", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("reads S2_ACCOUNT_ENDPOINT / S2_BASIN_ENDPOINT when endpoints are not given", () => {
+		vi.stubEnv("S2_ACCOUNT_ENDPOINT", "http://localhost:8080");
+		vi.stubEnv("S2_BASIN_ENDPOINT", "http://localhost:8080");
+		const s2 = new S2({ accessToken: "token" });
+		expect(s2.basin("my-basin").stream("s")).toBeDefined();
+		expect((s2 as any).endpoints.accountBaseUrl()).toBe(
+			"http://localhost:8080/v1",
+		);
+	});
+
+	it("prefers explicit endpoints over the environment", () => {
+		vi.stubEnv("S2_ACCOUNT_ENDPOINT", "http://localhost:8080");
+		const s2 = new S2({
+			accessToken: "token",
+			endpoints: { account: "https://example.com" },
+		});
+		expect((s2 as any).endpoints.accountBaseUrl()).toBe(
+			"https://example.com/v1",
+		);
 	});
 });

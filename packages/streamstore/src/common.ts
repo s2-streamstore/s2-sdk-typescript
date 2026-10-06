@@ -84,6 +84,9 @@ export type S2EnvironmentConfig = Partial<S2ClientOptions>;
 export class S2Environment {
 	public static parse(): S2EnvironmentConfig {
 		const config: S2EnvironmentConfig = {};
+		if (typeof process === "undefined" || !process.env) {
+			return config;
+		}
 
 		const token = process.env.S2_ACCESS_TOKEN;
 		if (token) {
@@ -118,7 +121,8 @@ export type S2ClientOptions = {
 	/**
 	 * Endpoint configuration for the S2 environment.
 	 *
-	 * Defaults to AWS (`a.s2.dev` and `{basin}.b.s2.dev`) with the API base path inferred as `/v1`.
+	 * Defaults to `S2_ACCOUNT_ENDPOINT` / `S2_BASIN_ENDPOINT` when either is set,
+	 * otherwise to AWS (`a.s2.dev` and `{basin}.b.s2.dev`) with the API base path inferred as `/v1`.
 	 */
 	endpoints?: S2Endpoints | S2EndpointsInit;
 	/**
