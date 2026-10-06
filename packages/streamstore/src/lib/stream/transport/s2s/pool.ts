@@ -262,8 +262,12 @@ export class Http2ConnectionPool {
 		if (!opts?.reserved) {
 			connection.activeStreams += 1;
 		}
+		setKeepsProcessAlive(connection.session, true);
 		stream.once("close", () => {
 			connection.activeStreams -= 1;
+			if (connection.activeStreams === 0) {
+				setKeepsProcessAlive(connection.session, false);
+			}
 		});
 		return stream;
 	}
@@ -396,6 +400,25 @@ export class Http2ConnectionPool {
 		if (!session.closed && !session.destroyed) {
 			session.close();
 		}
+	}
+}
+
+/**
+ * Idle pooled sessions are unref'd so they don't keep the process alive once
+ * all streams finish; sessions with open streams stay ref'd.
+ */
+function setKeepsProcessAlive(session: ClientHttp2Session, alive: boolean) {
+	if (session.closed || session.destroyed) {
+		return;
+	}
+	try {
+		if (alive) {
+			session.ref();
+		} else {
+			session.unref();
+		}
+	} catch {
+		// Not available in every runtime.
 	}
 }
 
