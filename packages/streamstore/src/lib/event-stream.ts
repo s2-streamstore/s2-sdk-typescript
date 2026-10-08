@@ -29,11 +29,6 @@ type ParseResult<T> =
 			done: false;
 			batch?: false;
 			value?: T;
-	  }
-	| {
-			done: false;
-			batch: true;
-			value: T[];
 	  };
 
 export class EventStream<T>
@@ -73,11 +68,7 @@ export class EventStream<T>
 						buffer = buffer.slice(match.index + match.length);
 						const item = parseMessage(message, parse);
 						if (item) {
-							if (item.batch) {
-								for (const chunk of item.value) {
-									downstream.enqueue(chunk);
-								}
-							} else if (item.value !== undefined) {
+							if (item.value !== undefined) {
 								downstream.enqueue(item.value);
 							} else if (item.done) {
 								await upstream.cancel("done");

@@ -99,39 +99,4 @@ describe("Issue #161: EventStream must respect backpressure", () => {
 			expect(received[i]).toBe(`message ${i + 1}`);
 		}
 	});
-
-	it("handles batch messages with backpressure", async () => {
-		const encoder = new TextEncoder();
-		let pulled = false;
-
-		// Upstream sends a single batch message
-		const upstream = new ReadableStream<Uint8Array>({
-			pull(controller) {
-				if (!pulled) {
-					pulled = true;
-					const message = `data: [1,2,3]\n\n`;
-					controller.enqueue(encoder.encode(message));
-				} else {
-					controller.close();
-				}
-			},
-		});
-
-		const eventStream = new EventStream<number>(upstream, (msg) => {
-			if (msg.data === undefined) return { done: false };
-			const arr = JSON.parse(msg.data) as number[];
-			return { done: false, batch: true, value: arr };
-		});
-
-		const reader = eventStream.getReader();
-		const results: number[] = [];
-
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			results.push(value);
-		}
-
-		expect(results).toEqual([1, 2, 3]);
-	});
 });
