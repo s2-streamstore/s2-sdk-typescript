@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.29.0
+
+### Minor Changes
+
+- 57b6941: Support the `estimated-billable-usage` account metric set and the `usd` metric unit.
+
 ## 0.28.0
 
 ### Minor Changes
