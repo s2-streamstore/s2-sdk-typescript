@@ -37,7 +37,12 @@ export type AccessTokenScope = {
     streams?: null | ResourceSet;
 };
 
-export type AccountMetricSet = 'active-basins' | 'account-ops';
+/**
+ * Account-level metric sets.
+ * `estimated-billable-usage` returns estimated USD by billing dimension and as a `total` series.
+ * Supports hour (default) and day intervals, aggregating finalized hours. Daily points may be partial.
+ */
+export type AccountMetricSet = 'active-basins' | 'account-ops' | 'estimated-billable-usage';
 
 export type AccumulationMetric = {
     /**
@@ -381,7 +386,7 @@ export type MetricSetResponse = {
     values: Array<Metric>;
 };
 
-export type MetricUnit = 'bytes' | 'operations';
+export type MetricUnit = 'bytes' | 'operations' | 'usd';
 
 export type Operation = 'list-basins' | 'create-basin' | 'delete-basin' | 'reconfigure-basin' | 'get-basin-config' | 'issue-access-token' | 'revoke-access-token' | 'list-access-tokens' | 'list-streams' | 'create-stream' | 'delete-stream' | 'get-stream-config' | 'reconfigure-stream' | 'check-tail' | 'append' | 'read' | 'trim' | 'fence' | 'account-metrics' | 'basin-metrics' | 'stream-metrics' | 'list-locations' | 'get-default-location' | 'set-default-location';
 
@@ -911,7 +916,7 @@ export type AccountMetricsData = {
          */
         set: AccountMetricSet;
         /**
-         * Start timestamp as Unix epoch seconds, if applicable for the metric set.
+         * Start timestamp as Unix epoch seconds, if applicable for the metric set. Time ranges may span at most 90 days.
          */
         start?: number;
         /**
@@ -954,7 +959,7 @@ export type BasinMetricsData = {
          */
         set: BasinMetricSet;
         /**
-         * Start timestamp as Unix epoch seconds, if applicable for the metric set.
+         * Start timestamp as Unix epoch seconds, if applicable for the metric set. Time ranges may span at most 90 days.
          */
         start?: number;
         /**
@@ -1001,7 +1006,7 @@ export type StreamMetricsData = {
          */
         set: StreamMetricSet;
         /**
-         * Start timestamp as Unix epoch seconds, if applicable for the metric set.
+         * Start timestamp as Unix epoch seconds, if applicable for the metric set. Time ranges may span at most 90 days.
          */
         start?: number;
         /**
