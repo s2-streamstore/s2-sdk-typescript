@@ -920,7 +920,11 @@ export interface IssueAccessTokenResponse {
  * Input for account-level metrics.
  */
 export interface AccountMetricsInput {
-	/** Metric set to return. */
+	/**
+	 * Metric set to return.
+	 * `estimated-billable-usage` returns estimated USD by billing dimension and as a `total` series.
+	 * Supports hour (default) and day intervals, aggregating finalized hours. Daily points may be partial.
+	 */
 	set: API.AccountMetricSet;
 	/** Start timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
 	start?: number | Date;
