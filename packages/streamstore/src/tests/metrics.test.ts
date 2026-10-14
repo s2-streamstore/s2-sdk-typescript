@@ -27,7 +27,9 @@ describe("estimated billable usage metrics", () => {
 				Response.json(response),
 			);
 			const s2 = new S2({ accessToken: "test-token" });
-			s2.metrics.client.setConfig({ fetch: fetchMock as typeof fetch });
+			s2.metrics.client.setConfig({
+				fetch: fetchMock as unknown as typeof fetch,
+			});
 
 			const result = await s2.metrics.account({
 				set: "estimated-billable-usage",
