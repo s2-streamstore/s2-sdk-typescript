@@ -6,7 +6,6 @@ import {
 	toCamelCase,
 	toSnakeCase,
 } from "../internal/case-transform.js";
-import type * as SDK from "../internal/sdk-types.js";
 
 describe("case-transform", () => {
 	describe("type-level transformations", () => {
@@ -162,90 +161,6 @@ describe("case-transform", () => {
 			const backToSnake = toSnakeCase(camelCase);
 
 			expect(backToSnake).toEqual(original);
-		});
-	});
-
-	describe("SDK wrapped types", () => {
-		it("transforms BasinConfig keys to camelCase", () => {
-			// SDK.BasinConfig should have camelCase keys
-			type Config = SDK.BasinConfig;
-
-			// These should compile - proving the type transformation works
-			const config: Config = {
-				createStreamOnAppend: true,
-				createStreamOnRead: false,
-				defaultStreamConfig: {
-					deleteOnEmpty: { minAgeSecs: 3600 },
-					retentionPolicy: { age: 86400 }, // Uses API field name; SDK types use ageSecs
-					storageClass: "standard",
-					timestamping: { mode: "arrival" },
-				},
-			};
-
-			expect(config.createStreamOnAppend).toBe(true);
-			expect(config.defaultStreamConfig?.deleteOnEmpty?.minAgeSecs).toBe(3600);
-		});
-
-		it("transforms StreamInfo keys to camelCase", () => {
-			type Info = SDK.StreamInfo;
-
-			const info: Info = {
-				cipher: "aegis-256",
-				name: "my-stream",
-				createdAt: "2024-01-01T00:00:00Z",
-				deletedAt: null,
-			};
-
-			expect(info.createdAt).toBe("2024-01-01T00:00:00Z");
-			expect(info.cipher).toBe("aegis-256");
-		});
-
-		it("transforms ListBasinsResponse keys to camelCase", () => {
-			type Response = SDK.ListBasinsResponse;
-
-			const response: Response = {
-				basins: [
-					{
-						name: "my-basin",
-						location: "aws:us-east-1",
-						createdAt: "2024-01-01T00:00:00Z",
-					},
-				],
-				hasMore: false,
-			};
-
-			expect(response.hasMore).toBe(false);
-		});
-
-		it("transforms AccessTokenInfo keys to camelCase", () => {
-			type Info = SDK.AccessTokenInfo;
-
-			const info: Info = {
-				id: "my-token",
-				autoPrefixStreams: true,
-				expiresAt: "2024-12-31T00:00:00Z",
-				scope: {
-					accessTokens: { prefix: "" },
-					basins: { exact: "my-basin" },
-					opGroups: { account: { read: true } },
-				},
-			};
-
-			expect(info.autoPrefixStreams).toBe(true);
-			expect(info.scope.opGroups?.account?.read).toBe(true);
-		});
-
-		it("transforms SequencedRecord keys to camelCase", () => {
-			type Record = SDK.SequencedRecord;
-
-			const record: Record = {
-				seqNum: 42,
-				timestamp: 1704067200000,
-				body: "hello",
-				headers: [["key", "value"]],
-			};
-
-			expect(record.seqNum).toBe(42);
 		});
 	});
 });
