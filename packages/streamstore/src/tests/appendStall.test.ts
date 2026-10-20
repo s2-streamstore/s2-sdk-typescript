@@ -88,23 +88,33 @@ async function startH1StallServer(): Promise<StallServer> {
 	};
 }
 
+// Each attempt is bounded by the request timeout, not by the stalled request.
+const DEADLINE_MS = MAX_ATTEMPTS * REQUEST_TIMEOUT_MS + 2_000;
+
+/** Fails instead of hanging if `promise` doesn't settle by the deadline. */
+function withinDeadline<T>(promise: Promise<T>): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() => reject(new Error(`did not settle within ${DEADLINE_MS}ms`)),
+			DEADLINE_MS,
+		);
+	});
+	return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 async function exercise(transport: SessionTransport, server: StallServer) {
 	const session = await transport.makeAppendSession("events");
 	const ticket = await session.submit(
 		AppendInput.create([AppendRecord.string({ body: "a" })]),
 	);
 
-	const started = performance.now();
-	await expect(ticket.ack()).rejects.toThrow(
+	await expect(withinDeadline(ticket.ack())).rejects.toThrow(
 		`Max attempts (${MAX_ATTEMPTS}) exhausted`,
-	);
-	// Each attempt is bounded by the request timeout, not by the stalled request.
-	expect(performance.now() - started).toBeLessThan(
-		MAX_ATTEMPTS * REQUEST_TIMEOUT_MS + 2_000,
 	);
 	expect(server.appends()).toBe(MAX_ATTEMPTS);
 
-	await expect(session.close()).rejects.toThrow(
+	await expect(withinDeadline(session.close())).rejects.toThrow(
 		`Max attempts (${MAX_ATTEMPTS}) exhausted`,
 	);
 }
