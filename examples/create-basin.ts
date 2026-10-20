@@ -25,7 +25,7 @@ console.log(`Creating basin ${basinName}...`);
 const config: BasinConfig = {
 	createStreamOnAppend: true,
 	defaultStreamConfig: {
-		storageClass: "express",
+		storageClass: process.env.S2_STORAGE_CLASS,
 		// Retain only the last week of records.
 		retentionPolicy: { ageSecs: 7 * 24 * 60 * 60 },
 		// If the stream ever becomes empty for an hour, garbage collect the entire stream.

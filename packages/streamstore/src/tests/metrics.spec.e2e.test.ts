@@ -135,7 +135,7 @@ describeIf("Metrics spec parity", () => {
 			{
 				name: "range-too-large",
 				build: () => ({
-					start: Date.now() - 40 * 24 * 3600_000,
+					start: Date.now() - 91 * 24 * 3600_000,
 					end: Date.now(),
 				}),
 			},

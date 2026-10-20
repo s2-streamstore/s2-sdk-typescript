@@ -37,7 +37,12 @@ export type AccessTokenScope = {
     streams?: null | ResourceSet;
 };
 
-export type AccountMetricSet = 'active-basins' | 'account-ops';
+/**
+ * Account-level metric sets.
+ * `estimated-billable-usage` returns estimated USD by billing dimension and as a `total` series.
+ * Supports hour (default) and day intervals, aggregating finalized hours. Daily points may be partial.
+ */
+export type AccountMetricSet = 'active-basins' | 'account-ops' | 'estimated-billable-usage';
 
 export type AccumulationMetric = {
     /**
@@ -333,6 +338,10 @@ export type ListStreamsResponse = {
 
 export type LocationInfo = {
     /**
+     * Default [storage class](https://s2.dev/docs/storage-classes) for this location.
+     */
+    default_storage_class?: string | null;
+    /**
      * Location represents a private placement, limited by account.
      */
     is_private: boolean;
@@ -340,6 +349,10 @@ export type LocationInfo = {
      * Location name.
      */
     name: LocationName;
+    /**
+     * [Storage classes](https://s2.dev/docs/storage-classes) available to the account in this location.
+     */
+    storage_classes?: Array<string> | null;
 };
 
 export type LocationName = string;
@@ -373,7 +386,7 @@ export type MetricSetResponse = {
     values: Array<Metric>;
 };
 
-export type MetricUnit = 'bytes' | 'operations';
+export type MetricUnit = 'bytes' | 'operations' | 'usd';
 
 export type Operation = 'list-basins' | 'create-basin' | 'delete-basin' | 'reconfigure-basin' | 'get-basin-config' | 'issue-access-token' | 'revoke-access-token' | 'list-access-tokens' | 'list-streams' | 'create-stream' | 'delete-stream' | 'get-stream-config' | 'reconfigure-stream' | 'check-tail' | 'append' | 'read' | 'trim' | 'fence' | 'account-metrics' | 'basin-metrics' | 'stream-metrics' | 'list-locations' | 'get-default-location' | 'set-default-location';
 
@@ -492,12 +505,13 @@ export type SequencedRecord = {
     timestamp: U64;
 };
 
-export type StorageClass = 'standard' | 'express';
-
 export type StreamConfig = {
     delete_on_empty?: null | DeleteOnEmptyConfig;
     retention_policy?: null | RetentionPolicy;
-    storage_class?: null | StorageClass;
+    /**
+     * [Storage class](https://s2.dev/docs/storage-classes) for recent writes.
+     */
+    storage_class?: string | null;
     timestamping?: null | TimestampingConfig;
 };
 
@@ -539,7 +553,10 @@ export type StreamPosition = {
 export type StreamReconfiguration = {
     delete_on_empty?: null | DeleteOnEmptyReconfiguration;
     retention_policy?: null | RetentionPolicy;
-    storage_class?: null | StorageClass;
+    /**
+     * [Storage class](https://s2.dev/docs/storage-classes) for recent writes.
+     */
+    storage_class?: string | null;
     timestamping?: null | TimestampingReconfiguration;
 };
 
@@ -899,7 +916,7 @@ export type AccountMetricsData = {
          */
         set: AccountMetricSet;
         /**
-         * Start timestamp as Unix epoch seconds, if applicable for the metric set.
+         * Start timestamp as Unix epoch seconds, if applicable for the metric set. Time ranges may span at most 90 days.
          */
         start?: number;
         /**
@@ -942,7 +959,7 @@ export type BasinMetricsData = {
          */
         set: BasinMetricSet;
         /**
-         * Start timestamp as Unix epoch seconds, if applicable for the metric set.
+         * Start timestamp as Unix epoch seconds, if applicable for the metric set. Time ranges may span at most 90 days.
          */
         start?: number;
         /**
@@ -989,7 +1006,7 @@ export type StreamMetricsData = {
          */
         set: StreamMetricSet;
         /**
-         * Start timestamp as Unix epoch seconds, if applicable for the metric set.
+         * Start timestamp as Unix epoch seconds, if applicable for the metric set. Time ranges may span at most 90 days.
          */
         start?: number;
         /**

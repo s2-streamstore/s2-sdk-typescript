@@ -305,6 +305,49 @@ export class S2Error extends Error {
 	}
 }
 
+/**
+ * The final append attempt failed definitively, but an earlier attempt may have
+ * taken effect, so the entire append operation is indefinite.
+ *
+ * `status` and `code` mirror `finalAttemptError` so retryability checks reflect
+ * why retries stopped, while {@link hasNoSideEffects} is always `false`.
+ */
+export class AppendIndefiniteFailureError extends S2Error {
+	/** The definite error returned by the final attempt. */
+	public readonly finalAttemptError: S2Error;
+
+	constructor(finalAttemptError: S2Error) {
+		super({
+			message: `append may have taken effect in an earlier attempt; final attempt failed: ${finalAttemptError.message}`,
+			code: finalAttemptError.code,
+			status: finalAttemptError.status,
+			data: finalAttemptError.data,
+			origin: finalAttemptError.origin,
+		});
+		this.name = "AppendIndefiniteFailureError";
+		this.finalAttemptError = finalAttemptError;
+		this.cause = finalAttemptError;
+	}
+
+	override hasNoSideEffects(): boolean {
+		return false;
+	}
+}
+
+/**
+ * Wrap a definite final error if an earlier attempt may have taken effect.
+ * Already indefinite errors are returned unchanged.
+ */
+export function withPriorUncertainty(
+	error: S2Error,
+	priorUncertainty: boolean,
+): S2Error {
+	if (priorUncertainty && error.hasNoSideEffects()) {
+		return new AppendIndefiniteFailureError(error);
+	}
+	return error;
+}
+
 /** Helper: construct a non-retryable invariant violation error (status 0). */
 export function invariantViolation(
 	message: string,

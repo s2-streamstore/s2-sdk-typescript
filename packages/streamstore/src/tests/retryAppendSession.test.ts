@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { S2Error } from "../error.js";
+import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import { AppendInput, AppendRecord } from "../index.js";
 import type { AppendResult, CloseResult } from "../lib/result.js";
 import { err, errClose, ok, okClose } from "../lib/result.js";
@@ -202,6 +202,22 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	}
 }
 
+/** A non-retryable error that the SDK regards as definite. */
+class DefiniteTerminalError extends S2Error {
+	constructor() {
+		super({
+			message: "permission denied",
+			status: 403,
+			code: "permission_denied",
+			origin: "server",
+		});
+	}
+
+	override hasNoSideEffects(): boolean {
+		return true;
+	}
+}
+
 describe("AppendSessionImpl (unit)", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -319,6 +335,51 @@ describe("AppendSessionImpl (unit)", () => {
 		);
 		await expect(ticket1.ack()).rejects.toMatchObject({ status: 500 });
 		expect(session.failureCause()).toMatchObject({ status: 500 });
+	});
+
+	it("preserves uncertainty for a batch whose earlier attempt may have taken effect", async () => {
+		let call = 0;
+		const session = await AppendSessionImpl.create(
+			async () => {
+				call++;
+				if (call === 1) {
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "unavailable",
+							status: 503,
+							code: "unavailable",
+							origin: "server",
+						}),
+					});
+				}
+				return new FakeTransportAppendSession({
+					submitError: new DefiniteTerminalError(),
+				});
+			},
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 3,
+				appendRetryPolicy: "all",
+			},
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		const ackP = ticket.ack();
+		ackP.catch(() => {});
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+
+		const error: unknown = await ackP.catch((e) => e);
+		expect(error).toBeInstanceOf(AppendIndefiniteFailureError);
+		const indefinite = error as AppendIndefiniteFailureError;
+		expect(indefinite.hasNoSideEffects()).toBe(false);
+		expect(indefinite.finalAttemptError.status).toBe(403);
+		expect(session.failureCause()).toBeInstanceOf(AppendIndefiniteFailureError);
 	});
 
 	it("retries under noSideEffects policy when error guarantees no mutation (rate_limited)", async () => {

@@ -224,6 +224,7 @@ export class S2Stream {
 				}
 				return true;
 			},
+			true,
 		);
 	}
 	/**

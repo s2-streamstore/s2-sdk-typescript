@@ -140,7 +140,6 @@ export type {
 	PermittedOperationGroups,
 	ResourceSet,
 	// RetentionPolicy - exported from types.ts with ageSecs field
-	StorageClass,
 	StreamMetricSet,
 	TimeseriesInterval,
 	TimestampingMode,
@@ -169,6 +168,7 @@ export type { S2EndpointsInit } from "./endpoints.js";
 // =============================================================================
 
 export {
+	AppendIndefiniteFailureError,
 	FencingTokenMismatchError,
 	RangeNotSatisfiableError,
 	S2Error,

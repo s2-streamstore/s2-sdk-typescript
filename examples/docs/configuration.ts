@@ -6,7 +6,7 @@
  * Requires: S2_ACCESS_TOKEN environment variable
  */
 
-import { S2 } from "@s2-dev/streamstore";
+import { S2, S2Environment } from "@s2-dev/streamstore";
 
 // Each snippet is wrapped in a block scope to allow independent `client` declarations
 {
@@ -19,6 +19,17 @@ import { S2 } from "@s2-dev/streamstore";
 		},
 	});
 	// ANCHOR_END: custom-endpoints
+	void client;
+}
+
+{
+	// ANCHOR: env-endpoints
+	// Reads S2_ACCESS_TOKEN, S2_ACCOUNT_ENDPOINT, and S2_BASIN_ENDPOINT.
+	const client = new S2({
+		...S2Environment.parse(),
+		accessToken: process.env.S2_ACCESS_TOKEN ?? "local-token",
+	});
+	// ANCHOR_END: env-endpoints
 	void client;
 }
 

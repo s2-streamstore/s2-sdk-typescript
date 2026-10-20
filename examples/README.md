@@ -29,6 +29,17 @@ npx tsx producer.ts
 
 Some examples require additional variables
 
+### Storage classes
+
+List locations, their available storage classes, and their defaults:
+
+```bash
+bun run list-locations.ts
+```
+
+Set `S2_STORAGE_CLASS` to a class available in your location when running
+`create-basin.ts`. Leave it unset to use the location's default.
+
 ### TanStack AI
 
 A TanStack Start chat app with one S2 transcript stream per chat and a resumable live stream per active turn. Uses a local fallback stream by default. Set `OPENAI_API_KEY` to use a real model.
