@@ -827,7 +827,14 @@ export interface ListAccessTokensInput {
 	limit?: number;
 }
 
-export type ListAllAccessTokensInput = ListAllArgs<ListAccessTokensInput>;
+/**
+ * Input for listing all access tokens with automatic pagination.
+ * Unlike basins and streams, access tokens are never pending deletion, so there is no `includeDeleted` option.
+ */
+export type ListAllAccessTokensInput = Omit<
+	ListAccessTokensInput,
+	"startAfter"
+>;
 
 /**
  * Scope for an access token.
