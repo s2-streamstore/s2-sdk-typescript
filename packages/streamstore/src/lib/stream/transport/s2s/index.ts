@@ -16,6 +16,7 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 
 import type { S2RequestOptions } from "../../../../common.js";
 import {
+	abortedError,
 	isServerDraining,
 	makeAppendPreconditionError,
 	makeServerError,
@@ -74,6 +75,9 @@ import { type PooledStream, sharedConnectionPool } from "./pool.js";
 const debug = createDebug("s2:s2s");
 
 const COMPRESSION_THRESHOLD_BYTES = 1024;
+
+// `http2.constants.NGHTTP2_CANCEL`; node:http2 is only imported for types here.
+const NGHTTP2_CANCEL = 0x8;
 
 /** Query string for a read session request. */
 export function readQueryString(args: ReadArgs<any> | undefined): string {
@@ -1069,7 +1073,9 @@ class S2SAppendSession implements TransportAppendSession {
 
 	/**
 	 * Close the append session.
-	 * Waits for all pending appends to complete before resolving.
+	 * Fails pending appends and cancels the stream, rather than waiting for
+	 * acks: the retry layer closes a session either once every append is
+	 * acknowledged, or to abandon a stalled attempt.
 	 * Never throws - returns CloseResult.
 	 */
 	async close(): Promise<CloseResult> {
@@ -1090,14 +1096,23 @@ class S2SAppendSession implements TransportAppendSession {
 			// handler is registered if it ever will be).
 			this.removeAbortListener();
 
-			// Wait for all pending acks to complete
-			while (this.pendingAcks.length > 0) {
-				await new Promise((resolve) => setTimeout(resolve, 10));
+			const cancel = this.pendingAcks.length > 0;
+			if (cancel) {
+				const error = abortedError("Append session closed with pending acks");
+				for (const pending of this.pendingAcks) {
+					pending.resolve(err(error));
+				}
+				this.pendingAcks.clear();
 			}
 
-			// Close the HTTP/2 stream (client doesn't send terminal frame for clean close)
+			// Client doesn't send a terminal frame for a clean close; reset the
+			// stream instead if acks were abandoned.
 			if (this.http2Stream && !this.http2Stream.closed) {
-				this.http2Stream.end();
+				if (cancel) {
+					this.http2Stream.close(NGHTTP2_CANCEL);
+				} else {
+					this.http2Stream.end();
+				}
 			}
 
 			return okClose();
