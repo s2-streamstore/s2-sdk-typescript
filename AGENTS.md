@@ -10,4 +10,4 @@
   - Don't test a lone guard, branch, or one-line rule. A comment explaining why is better.
   - A test must fail when what it guards breaks. Verify against the base branch, and fail fast instead of hanging.
   - Prefer one test of an invariant over several that restate its steps.
-  - Real bugs get regression tests. Put them with the related tests, name them after the behavior, and reference the issue in a comment. No `issue-NNN.test.ts` files.
+  - Real bugs get regression tests that reference the issue.
