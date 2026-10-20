@@ -18,6 +18,9 @@ const debug = createDebug("s2:s2s:pool");
 // S2 advertises SETTINGS_MAX_CONCURRENT_STREAMS = 100; not a user knob.
 const MAX_CONCURRENT_STREAMS_PER_CONNECTION = 100;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 3000;
+// Matches the Rust SDK's `http2_keep_alive_interval` / `_timeout`.
+const DEFAULT_KEEP_ALIVE_INTERVAL_MS = 20_000;
+const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 10_000;
 const DEFAULT_WINDOW_SIZE = 10 * 1024 * 1024; // 10 MiB
 const MIN_WINDOW_SIZE = 65_535; // HTTP/2 default window
 const MAX_WINDOW_SIZE = 2 ** 31 - 1; // RFC 9113 (https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5.2-2.8.3)
@@ -109,11 +112,21 @@ export interface PooledStream {
 export class Http2ConnectionPool {
 	private readonly endpoints = new Map<string, Endpoint>();
 	private readonly maxStreamsPerConnection: number;
+	private readonly keepAliveIntervalMillis: number;
+	private readonly keepAliveTimeoutMillis: number;
 
-	constructor(options?: { maxConcurrentStreamsPerConnection?: number }) {
+	constructor(options?: {
+		maxConcurrentStreamsPerConnection?: number;
+		keepAliveIntervalMillis?: number;
+		keepAliveTimeoutMillis?: number;
+	}) {
 		this.maxStreamsPerConnection =
 			options?.maxConcurrentStreamsPerConnection ??
 			MAX_CONCURRENT_STREAMS_PER_CONNECTION;
+		this.keepAliveIntervalMillis =
+			options?.keepAliveIntervalMillis ?? DEFAULT_KEEP_ALIVE_INTERVAL_MS;
+		this.keepAliveTimeoutMillis =
+			options?.keepAliveTimeoutMillis ?? DEFAULT_KEEP_ALIVE_TIMEOUT_MS;
 	}
 
 	/**
@@ -342,6 +355,7 @@ export class Http2ConnectionPool {
 				} catch {
 					// Not available in every runtime; performance-only.
 				}
+				this.startKeepAlive(connection);
 				resolve(connection);
 			});
 			session.once("error", (err) => {
@@ -382,6 +396,46 @@ export class Http2ConnectionPool {
 				clearTimeout(timeoutId);
 			}
 		}
+	}
+
+	/**
+	 * Ping the connection while it has open streams, and destroy it if a ping
+	 * goes unanswered, so streams on a dead connection fail instead of
+	 * stalling until TCP gives up and the pool stops handing it out.
+	 */
+	private startKeepAlive(connection: PooledConnection): void {
+		const { session } = connection;
+		let awaitingPong = false;
+		const interval = setInterval(() => {
+			if (awaitingPong || connection.activeStreams === 0) {
+				return;
+			}
+			awaitingPong = true;
+			const timeout = setTimeout(() => {
+				debug("keep-alive ping timed out, destroying connection");
+				session.destroy(
+					new S2Error({
+						message: `HTTP/2 keep-alive ping timed out after ${this.keepAliveTimeoutMillis}ms`,
+						status: 502,
+						code: "KEEP_ALIVE_TIMEOUT",
+						origin: "sdk",
+					}),
+				);
+			}, this.keepAliveTimeoutMillis);
+			timeout.unref?.();
+			const settle = () => {
+				clearTimeout(timeout);
+				awaitingPong = false;
+			};
+			try {
+				session.ping(settle);
+			} catch {
+				// Not available in every runtime, or the session is closing.
+				settle();
+			}
+		}, this.keepAliveIntervalMillis);
+		interval.unref?.();
+		session.once("close", () => clearInterval(interval));
 	}
 
 	private evict(key: string, connection: PooledConnection): void {

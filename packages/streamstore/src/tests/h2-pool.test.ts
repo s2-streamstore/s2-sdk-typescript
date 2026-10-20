@@ -2,7 +2,7 @@ import http2, {
 	type ServerHttp2Session,
 	type ServerHttp2Stream,
 } from "node:http2";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Redacted from "../lib/redacted.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
@@ -91,6 +91,50 @@ async function waitFor(
 }
 
 const GET_HEADERS = { ":method": "GET", ":path": "/" };
+
+interface BlackholeProxy {
+	origin: string;
+	/** Silently drop all traffic from now on, in both directions. */
+	blackhole: () => void;
+	close: () => Promise<void>;
+}
+
+/** TCP proxy in front of `target` that can stop forwarding without closing. */
+async function startProxy(target: string): Promise<BlackholeProxy> {
+	const { hostname, port } = new URL(target);
+	const sockets = new Set<net.Socket>();
+	let dropping = false;
+	const pipe = (from: net.Socket, to: net.Socket) => {
+		from.on("data", (chunk) => {
+			if (!dropping) to.write(chunk);
+		});
+	};
+	const server = net.createServer((client) => {
+		const upstream = net.connect(Number(port), hostname);
+		for (const socket of [client, upstream]) {
+			sockets.add(socket);
+			socket.on("error", () => {});
+			socket.on("close", () => sockets.delete(socket));
+		}
+		pipe(client, upstream);
+		pipe(upstream, client);
+	});
+	await new Promise<void>((resolve) => {
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const proxyPort = (server.address() as AddressInfo).port;
+	return {
+		origin: `http://127.0.0.1:${proxyPort}`,
+		blackhole: () => {
+			dropping = true;
+		},
+		close: () =>
+			new Promise<void>((resolve) => {
+				for (const socket of sockets) socket.destroy();
+				server.close(() => resolve());
+			}),
+	};
+}
 
 describe("Http2ConnectionPool", () => {
 	const servers: TestServer[] = [];
@@ -393,6 +437,61 @@ describe("Http2ConnectionPool", () => {
 			second.close();
 			server.endAllStreams();
 			await pool.detach(server.origin);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"keeps a connection with open streams while pings are answered",
+		async () => {
+			const server = await newServer();
+			const pool = new Http2ConnectionPool({
+				keepAliveIntervalMillis: 20,
+				keepAliveTimeoutMillis: 50,
+			});
+
+			pool.attach(server.origin);
+			const { stream } = await pool.request(server.origin, GET_HEADERS);
+			await sleep(300);
+
+			expect(stream.closed).toBe(false);
+			expect(pool.connectionCount(server.origin)).toBe(1);
+
+			stream.close();
+			server.endAllStreams();
+			await pool.detach(server.origin);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"destroys a connection whose keep-alive pings go unanswered",
+		async () => {
+			const server = await newServer();
+			const proxy = await startProxy(server.origin);
+			const pool = new Http2ConnectionPool({
+				keepAliveIntervalMillis: 20,
+				keepAliveTimeoutMillis: 50,
+			});
+
+			try {
+				pool.attach(proxy.origin);
+				const { stream } = await pool.request(proxy.origin, GET_HEADERS);
+				const failed = new Promise<Error>((resolve) => {
+					stream.on("error", resolve);
+				});
+				await waitFor(() => server.sessionCount() === 1);
+
+				proxy.blackhole();
+
+				await expect(failed).resolves.toMatchObject({
+					code: "KEEP_ALIVE_TIMEOUT",
+				});
+				await waitFor(() => pool.connectionCount(proxy.origin) === 0);
+				await pool.detach(proxy.origin);
+			} finally {
+				await proxy.close();
+			}
 		},
 		TEST_TIMEOUT_MS,
 	);
