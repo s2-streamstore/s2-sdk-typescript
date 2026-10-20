@@ -11,4 +11,4 @@
   - Don't test a lone guard, branch, ordering, or one-line rule; a comment explaining why guards it better.
   - A test must fail when what it guards breaks. Check by breaking the code or running against the base branch, and make it fail fast rather than hang.
   - Prefer one test that pins an invariant over several that restate its steps.
-  - Don't add per-issue reproduction tests (`issue-NNN.test.ts`); fold the case into the test for the behavior it breaks, or skip it if it only pins a guard.
+  - A bug that broke real behavior should get a regression test, written like any other test: in the file for that behavior, named for the behavior rather than the issue (mention the issue number in a comment). Don't add per-issue `issue-NNN.test.ts` files.
