@@ -827,7 +827,10 @@ export interface ListAccessTokensInput {
 	limit?: number;
 }
 
-export type ListAllAccessTokensInput = ListAllArgs<ListAccessTokensInput>;
+export type ListAllAccessTokensInput = Omit<
+	ListAccessTokensInput,
+	"startAfter"
+>;
 
 /**
  * Scope for an access token.
