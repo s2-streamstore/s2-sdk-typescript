@@ -1,14 +1,13 @@
 # Agent Instructions
 
-- Package manager is `bun`. Don't add, remove, or upgrade dependencies, or edit `bun.lock`, unless asked.
-- Before committing, run `bun run check` (biome + tsc for every package) and `bun run test`.
-  `*.e2e.test.ts` files need `S2_ACCESS_TOKEN` and are skipped without it.
-- Never edit `packages/streamstore/src/generated/` by hand; regenerate it from `s2-specs` with `bun run gen:openapi` / `bun run gen:proto`.
-- Every user-facing change needs a changeset in `.changeset/` (`patch`, or `minor` for breaking changes while pre-1.0, with a **Breaking:** note).
-- PR title + description become the squashed commit message; use conventional commit format.
+- Use `bun`. Don't change dependencies or `bun.lock` unless asked.
+- Run `bun run check` and `bun run test` before committing. E2E tests (`*.e2e.test.ts`) need `S2_ACCESS_TOKEN`.
+- Don't edit `packages/streamstore/src/generated/` by hand. Regenerate with `bun run gen:openapi` or `bun run gen:proto`.
+- Add a changeset for user-facing changes: `patch`, or `minor` with a **Breaking:** note for breaking changes.
+- Use conventional commit PR titles. The PR title and description become the squash commit.
 - Keep tests few and load-bearing:
-  - Test behavior that no single piece of code shows, such as invariants across components, concurrency, or I/O.
-  - Don't test a lone guard, branch, ordering, or one-line rule; a comment explaining why guards it better.
-  - A test must fail when what it guards breaks. Check by breaking the code or running against the base branch, and make it fail fast rather than hang.
-  - Prefer one test that pins an invariant over several that restate its steps.
-  - A bug that broke real behavior should get a regression test, written like any other test: in the file for that behavior, named for the behavior rather than the issue (mention the issue number in a comment). Don't add per-issue `issue-NNN.test.ts` files.
+  - Test behavior no single piece of code shows: invariants across components, concurrency, I/O.
+  - Don't test a lone guard, branch, or one-line rule. A comment explaining why is better.
+  - A test must fail when what it guards breaks. Verify against the base branch, and fail fast instead of hanging.
+  - Prefer one test of an invariant over several that restate its steps.
+  - Real bugs get regression tests. Put them with the related tests, name them after the behavior, and reference the issue in a comment. No `issue-NNN.test.ts` files.
