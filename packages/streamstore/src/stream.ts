@@ -288,8 +288,10 @@ export class S2Stream {
 			this.closed = true;
 			if (this._transportPromise) {
 				try {
-					const transport = await this._transportPromise;
-					await transport.close();
+					// A failed creation was already surfaced to the session caller,
+					// and there is no transport to close.
+					const transport = await this._transportPromise.catch(() => undefined);
+					await transport?.close();
 				} finally {
 					this._transportPromise = undefined;
 				}
