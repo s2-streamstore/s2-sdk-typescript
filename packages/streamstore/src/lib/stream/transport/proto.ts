@@ -48,7 +48,8 @@ const toProtoAppendRecord = (record: AppendRecord): Proto.AppendRecord => {
 			typeof record.timestamp === "number"
 				? record.timestamp
 				: record.timestamp.getTime();
-		timestamp = BigInt(ms);
+		// Floor like the JSON path; BigInt() throws on fractional numbers.
+		timestamp = BigInt(Math.floor(ms));
 	}
 	return {
 		timestamp,
