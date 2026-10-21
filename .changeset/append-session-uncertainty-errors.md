@@ -2,4 +2,4 @@
 "@s2-dev/streamstore": patch
 ---
 
-Fix append session error classification after retries run out. Batches still in flight now fail with `AppendIndefiniteFailureError` when an earlier attempt may have taken effect, as documented, and batches submitted after the session failed get the plain final error, since they were never sent.
+Append sessions now fail with `AppendIndefiniteFailureError` when retries run out on a server error like `rate_limited` after an earlier attempt may have taken effect, as documented. Previously the "Max attempts exhausted" error dropped the server origin, so it was never wrapped.

@@ -854,9 +854,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private pumpWakeup?: () => void;
 	private closed = false;
 	private fatalError?: S2Error;
-	// The final attempt's error, without session-wide uncertainty: batches
-	// submitted after the abort were never sent, so it is the accurate one.
-	private unsentError?: S2Error;
 
 	private _lastAckedPosition?: Types.AppendAck;
 	private acksController?: ReadableStreamDefaultController<Types.AppendAck>;
@@ -989,7 +986,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					this.streamName,
 					this.fatalError.message,
 				);
-				throw this.unsentError ?? this.fatalError;
+				throw this.fatalError;
 			}
 
 			// Reject if session is closing/closed so blocked submits fail fast
@@ -1097,7 +1094,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.streamName,
 				this.fatalError.message,
 			);
-			return Promise.resolve(err(this.unsentError ?? this.fatalError));
+			return Promise.resolve(err(this.fatalError));
 		}
 
 		// Create promise for submit() callers
@@ -1755,7 +1752,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		);
 		const sessionError = withPriorUncertainty(error, anyUncertain);
 		this.fatalError = sessionError;
-		this.unsentError = error;
 		this.pumpStopped = true;
 
 		// Wake pump if it's sleeping so it can check the pumpStopped flag
