@@ -1,5 +1,21 @@
 # @s2-dev/streamstore
 
+## 0.30.0
+
+### Minor Changes
+
+- e206abf: `accessTokens.listAll()` no longer accepts `includeDeleted`. Access tokens are never pending deletion, so the option had no effect, and it was being forwarded to the API as an undocumented `include_deleted` query parameter.
+
+  **Breaking:** Remove `includeDeleted` from `ListAllAccessTokensInput`. Drop the option from any `accessTokens.listAll()` calls.
+
+### Patch Changes
+
+- f046126: Bound append retries by `requestTimeoutMillis` when a request stalls. Previously, after an ack timeout, the retry layer waited for the stalled request to settle before reconnecting, so `ticket.ack()` and `close()` could hang for minutes (or indefinitely) on a black-holed connection. Transport append sessions now cancel in-flight requests on close instead of waiting for them.
+- a1949f1: Append sessions now fail with `AppendIndefiniteFailureError` when retries run out on a server error like `rate_limited` after an earlier attempt may have taken effect, as documented. Previously the "Max attempts exhausted" error dropped the server origin, so it was never wrapped.
+- a8391af: Detect dead HTTP/2 connections in the s2s transport. Pooled connections with open streams are now pinged every 20s and destroyed if a ping goes unanswered for 10s, so sessions on a black-holed connection fail and reconnect instead of stalling until TCP gives up, and the pool stops reusing the dead connection.
+- 25b01cb: `S2Stream.close()` no longer rejects when called while session transport creation is in flight and that creation fails. The error is still surfaced by the `readSession()` or `appendSession()` call that started it.
+- 5e0ee53: `AppendRecord` factories now reject `NaN`, infinite, negative, or invalid-`Date` timestamps with a clear `S2Error`, instead of failing later during s2s serialization. Fractional millisecond timestamps are floored on the s2s transport, as they already were over fetch.
+
 ## 0.29.0
 
 ### Minor Changes
