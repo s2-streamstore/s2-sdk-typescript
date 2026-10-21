@@ -408,6 +408,9 @@ export class FetchAppendSession implements TransportAppendSession {
 	private closed = false;
 	private processingPromise: Promise<void> | null = null;
 	private readonly client: Client;
+	// Cancels in-flight appends on close(), and follows the caller's signal.
+	private readonly abortController = new AbortController();
+	private abortHandler?: () => void;
 
 	static async create(
 		stream: string,
@@ -452,6 +455,16 @@ export class FetchAppendSession implements TransportAppendSession {
 				headers: headers,
 			}),
 		);
+
+		const signal = requestOptions?.signal;
+		if (signal?.aborted) {
+			this.abortController.abort(signal.reason);
+		} else if (signal) {
+			// Removed on close: the retry layer reuses the caller's signal
+			// across many sessions, so an unremovable listener leaks.
+			this.abortHandler = () => this.abortController.abort(signal.reason);
+			signal.addEventListener("abort", this.abortHandler);
+		}
 	}
 
 	/**
@@ -465,13 +478,20 @@ export class FetchAppendSession implements TransportAppendSession {
 
 	/**
 	 * Close the append session.
-	 * Waits for all pending appends to complete before resolving.
+	 * Cancels any in-flight append and fails queued ones, rather than waiting
+	 * for them: the retry layer closes a session either once every append is
+	 * acknowledged, or to abandon a stalled attempt.
 	 * Never throws - returns CloseResult.
 	 */
 	async close(): Promise<CloseResult> {
 		debug("[%s] FetchAppendSession close requested", this.stream);
 		try {
 			this.closed = true;
+			if (this.abortHandler) {
+				this.options?.signal?.removeEventListener("abort", this.abortHandler);
+				this.abortHandler = undefined;
+			}
+			this.abortController.abort();
 			await this.waitForDrain();
 			debug("[%s] FetchAppendSession close complete", this.stream);
 			return okClose();
@@ -592,9 +612,11 @@ export class FetchAppendSession implements TransportAppendSession {
 				const preferProtobuf = input.records.some(
 					(record) => computeAppendRecordFormat(record) === "bytes",
 				);
-				const appendOptions = this.options
-					? { ...this.options, preferProtobuf }
-					: { preferProtobuf };
+				const appendOptions = {
+					...this.options,
+					signal: this.abortController.signal,
+					preferProtobuf,
+				};
 
 				const ack = await streamAppend(
 					this.stream,
