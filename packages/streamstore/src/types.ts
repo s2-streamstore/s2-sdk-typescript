@@ -79,6 +79,20 @@ const textEncoder = new TextEncoder();
  * Factory functions for creating AppendRecord instances.
  */
 export namespace AppendRecord {
+	function validateTimestamp(timestamp: number | Date | undefined): void {
+		if (timestamp === undefined) {
+			return;
+		}
+		const ms = typeof timestamp === "number" ? timestamp : timestamp.getTime();
+		if (!Number.isFinite(ms) || ms < 0) {
+			throw new S2Error({
+				message:
+					"timestamp must be a valid Date or a finite, non-negative number of milliseconds",
+				origin: "sdk",
+			});
+		}
+	}
+
 	/**
 	 * Create a string-format append record with pre-calculated metered size.
 	 */
@@ -87,6 +101,7 @@ export namespace AppendRecord {
 		readonly headers?: ReadonlyArray<readonly [string, string]>;
 		readonly timestamp?: number | Date;
 	}): StringAppendRecord {
+		validateTimestamp(params.timestamp);
 		// Create record with placeholder, then calculate actual size
 		const record: StringAppendRecord = {
 			body: params.body,
@@ -111,6 +126,7 @@ export namespace AppendRecord {
 		>;
 		readonly timestamp?: number | Date;
 	}): BytesAppendRecord {
+		validateTimestamp(params.timestamp);
 		const headers = params.headers?.map(
 			([name, value]) =>
 				[
