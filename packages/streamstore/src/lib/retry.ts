@@ -1545,6 +1545,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						message: `Max attempts (${effectiveMax}) exhausted: ${error.message}`,
 						status: error.status,
 						code: error.code,
+						// Keep the origin so hasNoSideEffects() matches the final error.
+						origin: error.origin,
+						data: error.data,
 					});
 					await this.abort(wrappedError);
 					return;
