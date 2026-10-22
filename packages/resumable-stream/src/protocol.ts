@@ -141,6 +141,8 @@ export interface PersistToS2Options<T> {
 	finalRecords: (sourceError: unknown) => ReadonlyArray<AppendRecord>;
 	matchSeqNumStart?: number;
 	onSeqNumMismatch?: (error: SeqNumMismatchError) => void;
+	/** Called when an append fails while the source is still running. */
+	abortSource?: () => void;
 }
 
 function combineErrors(errors: ReadonlyArray<unknown>): unknown | undefined {
@@ -182,6 +184,7 @@ export async function persistToS2<T>({
 	finalRecords,
 	matchSeqNumStart,
 	onSeqNumMismatch,
+	abortSource,
 }: PersistToS2Options<T>): Promise<void> {
 	const handle = s2.basin(basin).stream(stream);
 	try {
@@ -198,7 +201,11 @@ export async function persistToS2<T>({
 		try {
 			for await (const value of source) {
 				for (const record of toRecords(value)) {
-					await producer.submit(record);
+					const ticket = await producer.submit(record);
+					// Appends are acknowledged asynchronously, so a failure can land
+					// while the source is idle; abort it rather than wait for a next
+					// chunk that may never come.
+					ticket.ack().catch(() => abortSource?.());
 				}
 			}
 		} catch (err) {
@@ -231,10 +238,14 @@ export async function persistToS2<T>({
 				return;
 			}
 			if (finalizationError !== undefined || closeError !== undefined) {
-				await handle
-					.append(
-						AppendInput.create([...finalRecords(failure)], { fencingToken }),
-					)
+				const records = finalRecords(failure);
+				const appendDirect = async (batch: AppendRecord[]) => {
+					await handle.append(AppendInput.create(batch, { fencingToken }));
+				};
+				// A large error chunk may not fit in one append; the terminal fence
+				// alone still lets readers finish.
+				await appendDirect([...records])
+					.catch(() => appendDirect(records.slice(-1)))
 					.catch(() => {});
 			}
 			throw failure;

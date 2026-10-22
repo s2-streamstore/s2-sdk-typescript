@@ -56,6 +56,10 @@ class MockStreamHandle {
 		};
 	}
 
+	async checkTail() {
+		return { tail: { seqNum: (this.records.at(-1)?.seqNum ?? -1) + 1 } };
+	}
+
 	async read(input?: {
 		start?: { from?: { seqNum?: number; tailOffset?: number } };
 		stop?: { limits?: { count?: number } };

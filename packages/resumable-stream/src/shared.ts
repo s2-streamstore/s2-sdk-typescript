@@ -395,24 +395,47 @@ export async function readActiveFenceToken(
 export async function* replayActiveGenerationStringRecords(
 	stream: S2Stream,
 	fromSeqNum = 0,
-	fenceToken?: string,
+	fenceTokenPrefix?: string,
 ): AsyncIterable<TailedStringRecord> {
-	const { fence } = await readLastFence(stream);
+	const { fence, nextSeqNum } = await readLastFence(stream);
 	if (!fence?.active) return;
-	if (fenceToken !== undefined && fence.body !== fenceToken) return;
+	if (
+		fenceTokenPrefix !== undefined &&
+		!fence.body.startsWith(fenceTokenPrefix)
+	) {
+		return;
+	}
 
 	yield* tailDataRecords(
 		stream,
-		Math.max(fence.seqNum, fromSeqNum),
+		Math.max(fence.seqNum, cursorWithin(fromSeqNum, nextSeqNum)),
 		"stop-terminal",
 	);
+}
+
+/**
+ * A cursor past the tail came from an earlier stream with the same name
+ * (deleted and recreated), so read the current one from the start.
+ */
+function cursorWithin(fromSeqNum: number, nextSeqNum: number): number {
+	return fromSeqNum > nextSeqNum ? 0 : fromSeqNum;
 }
 
 export async function* tailStringRecords(
 	stream: S2Stream,
 	fromSeqNum = 0,
 ): AsyncIterable<TailedStringRecord> {
-	yield* tailDataRecords(stream, fromSeqNum, "skip");
+	const nextSeqNum =
+		fromSeqNum > 0
+			? await stream.checkTail().then(
+					({ tail }) => tail.seqNum,
+					(error: unknown) => {
+						if (isMissingStreamError(error)) return 0;
+						throw error;
+					},
+				)
+			: 0;
+	yield* tailDataRecords(stream, cursorWithin(fromSeqNum, nextSeqNum), "skip");
 }
 
 export async function readSessionReplayState(
@@ -432,6 +455,7 @@ export async function* replaySessionStringRecords(
 	state?: SessionReplayState,
 ): AsyncIterable<TailedStringRecord> {
 	const replayState = state ?? (await readSessionReplayState(stream));
+	fromSeqNum = cursorWithin(fromSeqNum, replayState.nextSeqNum);
 	if (!replayState.hasActiveGeneration) {
 		if (fromSeqNum >= replayState.nextSeqNum) return;
 		yield* readAvailableDataRecords(stream, fromSeqNum);

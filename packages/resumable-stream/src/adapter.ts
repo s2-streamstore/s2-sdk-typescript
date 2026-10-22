@@ -166,12 +166,17 @@ async function* resolveSource<T>(
 	yield* typeof source === "function" ? await source(signal) : source;
 }
 
-async function requestFencingToken(requestId: string): Promise<string> {
+/**
+ * Every writer gets a unique token so a stale writer can never append into a
+ * generation that replaced it; retries of one request share the prefix, which
+ * is what rejoin matches.
+ */
+async function requestFencingTokenPrefix(requestId: string): Promise<string> {
 	const digest = await crypto.subtle.digest(
 		"SHA-256",
 		new TextEncoder().encode(requestId),
 	);
-	return `req-${btoa(String.fromCharCode(...new Uint8Array(digest))).slice(0, 24)}`;
+	return `req-${btoa(String.fromCharCode(...new Uint8Array(digest))).slice(0, 24)}-`;
 }
 
 function streamInUseResponse(): Response {
@@ -264,8 +269,12 @@ export function createChat<T>(
 			source: ResumableSource<T>,
 			options?: MakeResumableOptions,
 		): Promise<Response> {
-			const fencingToken = options?.requestId
-				? await requestFencingToken(options.requestId)
+			const requestPrefix = options?.requestId
+				? await requestFencingTokenPrefix(options.requestId)
+				: undefined;
+			// Fencing tokens are limited to 36 bytes: the prefix is 29.
+			const fencingToken = requestPrefix
+				? `${requestPrefix}${randomToken(3)}`
 				: `session-${randomToken(8)}`;
 			const handle = s2.basin(basin).stream(streamName);
 			const delivery = options?.delivery ?? "response";
@@ -309,12 +318,12 @@ export function createChat<T>(
 			});
 			if (matchSeqNumStart === null) {
 				await handle.close();
-				if (!options?.requestId) return streamInUseResponse();
+				if (!requestPrefix) return streamInUseResponse();
 				const rejoinHandle = s2.basin(basin).stream(streamName);
 				const rejoined = await replayResponse(
 					closeHandleWhenDone(
 						rejoinHandle,
-						replayActiveGenerationStringRecords(rejoinHandle, 0, fencingToken),
+						replayActiveGenerationStringRecords(rejoinHandle, 0, requestPrefix),
 					),
 					adapter.responseHeaders,
 					adapter.formatSseFrame,
@@ -327,10 +336,19 @@ export function createChat<T>(
 			let finishing = false;
 			const watchForStop = async () => {
 				const watchHandle = s2.basin(basin).stream(streamName);
+				let checkedTail: number | undefined;
 				try {
 					while (!finishing && !abort.signal.aborted) {
 						await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
 						if (finishing || Date.now() - lastWrite < STOP_POLL_MS) continue;
+						// Re-read the generation only when something was appended since
+						// the last check; it can be large.
+						const tail = await watchHandle.checkTail().then(
+							({ tail }) => tail.seqNum,
+							() => undefined,
+						);
+						if (tail !== undefined && tail === checkedTail) continue;
+						checkedTail = tail;
 						const token = await readActiveFenceToken(watchHandle).catch(
 							() => fencingToken,
 						);
@@ -347,6 +365,7 @@ export function createChat<T>(
 				basin,
 				stream: streamName,
 				source: resolveSource(source, abort.signal),
+				abortSource: () => abort.abort(),
 				fencingToken,
 				batchSize,
 				lingerDuration,
