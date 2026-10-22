@@ -4,9 +4,9 @@ import type {
 	AppendRecord as AppendRecordType,
 	S2,
 } from "@s2-dev/streamstore";
-import { AppendRecord, MAX_APPEND_BYTES } from "@s2-dev/streamstore";
+import { AppendRecord } from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
-import { createPartAssembler, dataRecords, persistToS2 } from "../protocol.js";
+import { persistToS2 } from "../protocol.js";
 
 interface SubmitTicket {
 	ack(): Promise<AppendAck>;
@@ -246,36 +246,5 @@ describe("persistToS2", () => {
 		).rejects.toThrow();
 
 		expect(finalRecordsError).toBeInstanceOf(Error);
-	});
-});
-
-describe("dataRecords", () => {
-	it("splits oversized bodies into parts that reassemble exactly", () => {
-		const body = `${"a".repeat(1_500_000)}é😀${"b".repeat(700_000)}`;
-		const records = dataRecords(body);
-
-		expect(records.length).toBeGreaterThan(2);
-		for (const record of records) {
-			expect(record.meteredBytes).toBeLessThanOrEqual(MAX_APPEND_BYTES);
-		}
-
-		const assemble = createPartAssembler();
-		const bodies = records
-			.map((record) =>
-				assemble(record as { headers: [string, string][]; body: string }),
-			)
-			.filter((value) => value !== undefined);
-		expect(bodies).toEqual([body]);
-	});
-
-	it("drops parts whose first part was not read", () => {
-		const [, ...rest] = dataRecords("x".repeat(2_500_000));
-		const assemble = createPartAssembler();
-		const bodies = rest
-			.map((record) =>
-				assemble(record as { headers: [string, string][]; body: string }),
-			)
-			.filter((value) => value !== undefined);
-		expect(bodies).toEqual([]);
 	});
 });

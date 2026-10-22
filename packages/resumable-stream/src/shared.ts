@@ -337,24 +337,73 @@ export async function claimSessionGeneration({
 	};
 }
 
+export interface LastFence {
+	seqNum: number;
+	body: string;
+	active: boolean;
+}
+
+export async function readLastFence(
+	stream: S2Stream,
+): Promise<{ fence: LastFence | null; nextSeqNum: number }> {
+	for (let window = 64; ; window *= 4) {
+		const session = await stream
+			.readSession(
+				{ start: { from: { tailOffset: window } }, stop: { waitSecs: 0 } },
+				{ as: "string" },
+			)
+			.catch((error: unknown) => {
+				if (
+					isMissingStreamError(error) ||
+					error instanceof RangeNotSatisfiableError
+				) {
+					return null;
+				}
+				throw error;
+			});
+		if (!session) return { fence: null, nextSeqNum: 0 };
+
+		let fence: LastFence | null = null;
+		let count = 0;
+		let nextSeqNum = 0;
+		try {
+			for await (const record of session) {
+				count += 1;
+				nextSeqNum = record.seqNum + 1;
+				if (isFenceRecord(record)) {
+					fence = {
+						seqNum: record.seqNum,
+						body: record.body,
+						active: !isTerminalFence(record),
+					};
+				}
+			}
+		} finally {
+			await session[Symbol.asyncDispose]?.();
+		}
+		if (fence || count < window) return { fence, nextSeqNum };
+	}
+}
+
 export async function readActiveFenceToken(
 	stream: S2Stream,
 ): Promise<string | null> {
-	const state = await readSharedStreamState(stream);
-	return state.hasActiveGeneration ? state.heldFenceToken : null;
+	const { fence } = await readLastFence(stream);
+	return fence?.active ? fence.body : null;
 }
 
 export async function* replayActiveGenerationStringRecords(
 	stream: S2Stream,
 	fromSeqNum = 0,
+	fenceToken?: string,
 ): AsyncIterable<TailedStringRecord> {
-	const state = await readSharedStreamState(stream);
-	if (state.activeGenerationStartSeqNum === null) return;
-	if (!state.hasActiveGeneration) return;
+	const { fence } = await readLastFence(stream);
+	if (!fence?.active) return;
+	if (fenceToken !== undefined && fence.body !== fenceToken) return;
 
 	yield* tailDataRecords(
 		stream,
-		Math.max(state.activeGenerationStartSeqNum, fromSeqNum),
+		Math.max(fence.seqNum, fromSeqNum),
 		"stop-terminal",
 	);
 }
@@ -369,11 +418,11 @@ export async function* tailStringRecords(
 export async function readSessionReplayState(
 	stream: S2Stream,
 ): Promise<SessionReplayState> {
-	const state = await readSharedStreamState(stream);
+	const { fence, nextSeqNum } = await readLastFence(stream);
 	return {
-		hasActiveGeneration: state.hasActiveGeneration,
-		activeGenerationStartSeqNum: state.activeGenerationStartSeqNum,
-		nextSeqNum: state.nextSeqNum,
+		hasActiveGeneration: fence?.active ?? false,
+		activeGenerationStartSeqNum: fence?.active ? fence.seqNum : null,
+		nextSeqNum,
 	};
 }
 

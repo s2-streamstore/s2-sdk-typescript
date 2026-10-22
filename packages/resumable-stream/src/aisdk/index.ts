@@ -12,6 +12,7 @@ export type {
 	ReplayOptions,
 	ResumableChatConfig,
 	ResumableChatMode,
+	ResumableSource,
 } from "../adapter.js";
 
 export type Chunk = UIMessageChunk;

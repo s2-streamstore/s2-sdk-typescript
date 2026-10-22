@@ -91,6 +91,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
    - Data records are enqueued to the output stream controller for consumption.
    - If a sentinel fence command is encountered, the stream is closed.
 
+## Production notes
+
+These apply to the chat adapters (`aisdk`, `anthropic`, `tanstack-ai`):
+
+- **Retention.** `single-use` streams keep their records after the generation completes, `shared` streams keep the latest two generations, and `session` streams keep everything. Configure the basin's default stream retention (and delete-on-empty for `single-use`) to bound storage.
+- **Authorization.** `replay` and `stop` take a stream name derived from the request; check that the caller owns the chat before calling them.
+- **Cloudflare Workers.** Every S2 append and read during a generation counts toward the invocation's subrequest limit. Raise `limits.subrequests` in `wrangler.jsonc` for long generations.
+- **Failures.** Readers always end with the adapter's error or stop chunk. Persistence errors are reported to `onPersistError` (default `console.error`), so the promise passed to `waitUntil` does not reject.
+
 ## AI SDK
 
 The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResumable` writes `UIMessageChunk`s to S2 and streams the response by reading those records. The wire format matches the AI SDK's `createUIMessageStreamResponse`, so the stock `DefaultChatTransport` works out of the box.
@@ -119,20 +128,28 @@ import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
   const { id, messages } = (await req.json()) as { id: string; messages: UIMessage[] };
-  const result = streamText({
-    model: openai("gpt-4o-mini"),
-    messages: await convertToModelMessages(messages),
-  });
 
-  return chat.makeResumable(`chat-${id}`, result.toUIMessageStream(), {
-    waitUntil: (promise) => {
-      after(async () => {
-        await promise;
-      });
+  return chat.makeResumable(
+    `chat-${id}`,
+    async (abortSignal) =>
+      streamText({
+        model: openai("gpt-4o-mini"),
+        messages: await convertToModelMessages(messages),
+        abortSignal,
+      }).toUIMessageStream(),
+    {
+      requestId: messages.at(-1)?.id,
+      waitUntil: (promise) => {
+        after(async () => {
+          await promise;
+        });
+      },
     },
-  });
+  );
 }
 ```
+
+Passing the source as a function starts the model call only once the stream is claimed, and gives it a signal that aborts when the generation is stopped. `requestId` lets a retried request rejoin the running generation instead of getting 409.
 
 ```ts
 // app/api/chat/[id]/stream/route.ts
@@ -147,7 +164,7 @@ export async function GET(
 }
 ```
 
-With `resume: true`, `useChat`'s `stop()` only disconnects, so generation keeps running. To stop it, call `chat.stop`: readers receive an `abort` chunk and finish, and the writer stops at its next append.
+With `resume: true`, `useChat`'s `stop()` only disconnects, so generation keeps running. To stop it, call `chat.stop`: readers receive an `abort` chunk and finish, and the source's abort signal fires.
 
 ```ts
 // app/api/chat/[id]/stop/route.ts

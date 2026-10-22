@@ -29,6 +29,7 @@ export type { SseFrame } from "./shared.js";
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
 const DEFAULT_LEASE_DURATION_MS = 5 * 1000;
+const STOP_POLL_MS = 1000;
 
 export const DEFAULT_ERROR_TEXT = "An error occurred.";
 const STREAM_IN_USE_TEXT = "Stream already in use";
@@ -66,7 +67,18 @@ export interface ResumableChatConfig {
 	 * Defaults to returning "An error occurred.".
 	 */
 	onError?: (error: unknown) => string;
+	/** Called when persisting a generation fails. Defaults to `console.error`. */
+	onPersistError?: (error: unknown) => void;
 }
+
+/**
+ * Chunks to persist. A function is called once the stream is claimed, with a
+ * signal that aborts when the generation is stopped or taken over; pass it to
+ * the model call (e.g. `streamText({ abortSignal })`).
+ */
+export type ResumableSource<T> =
+	| AsyncIterable<T>
+	| ((signal: AbortSignal) => AsyncIterable<T> | Promise<AsyncIterable<T>>);
 
 /** Options for `makeResumable`. */
 export interface MakeResumableOptions {
@@ -85,6 +97,12 @@ export interface MakeResumableOptions {
 	 * @default "response"
 	 */
 	delivery?: "response" | "replay";
+	/**
+	 * Identifies the request starting the generation, such as the last user
+	 * message id. A retry with the same id while that generation is active
+	 * streams it instead of returning 409.
+	 */
+	requestId?: string;
 }
 
 /** Options for `replay`. */
@@ -109,7 +127,7 @@ export interface Chat<T> {
 	 */
 	makeResumable(
 		streamName: string,
-		source: AsyncIterable<T>,
+		source: ResumableSource<T>,
 		options?: MakeResumableOptions,
 	): Promise<Response>;
 	/**
@@ -139,6 +157,21 @@ export interface ChatAdapter<T> {
 	 * Adds an `event:` line to SSE frames when the format needs one.
 	 */
 	formatSseFrame?: (storedBody: string) => SseFrame;
+}
+
+async function* resolveSource<T>(
+	source: ResumableSource<T>,
+	signal: AbortSignal,
+): AsyncIterable<T> {
+	yield* typeof source === "function" ? await source(signal) : source;
+}
+
+async function requestFencingToken(requestId: string): Promise<string> {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(requestId),
+	);
+	return `req-${btoa(String.fromCharCode(...new Uint8Array(digest))).slice(0, 24)}`;
 }
 
 function streamInUseResponse(): Response {
@@ -208,6 +241,10 @@ export function createChat<T>(
 	const leaseDurationMs = config.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
 	const errorChunk = (err: unknown): T =>
 		adapter.makeErrorChunk(err, config.onError);
+	const onPersistError =
+		config.onPersistError ??
+		((err: unknown) =>
+			console.error("[resumable-stream] Persist failed:", err));
 
 	const isShared = mode === "shared" || mode === "session";
 	const isSession = mode === "session";
@@ -224,88 +261,125 @@ export function createChat<T>(
 	return {
 		async makeResumable(
 			streamName: string,
-			source: AsyncIterable<T>,
+			source: ResumableSource<T>,
 			options?: MakeResumableOptions,
 		): Promise<Response> {
-			const fencingToken = `session-${randomToken(8)}`;
-			let matchSeqNumStart = 1;
+			const fencingToken = options?.requestId
+				? await requestFencingToken(options.requestId)
+				: `session-${randomToken(8)}`;
 			const handle = s2.basin(basin).stream(streamName);
 			const delivery = options?.delivery ?? "response";
 
-			let claimed = false;
-			try {
-				if (isSession) {
-					const claim = await claimSessionGeneration({
-						stream: handle,
-						fencingToken,
-					});
-					if (!claim) {
-						return streamInUseResponse();
+			const claim = async (): Promise<number | null> => {
+				try {
+					if (isSession) {
+						const claimed = await claimSessionGeneration({
+							stream: handle,
+							fencingToken,
+						});
+						return claimed?.matchSeqNumStart ?? null;
 					}
-					matchSeqNumStart = claim.matchSeqNumStart;
-				} else if (isShared) {
-					const claim = await claimSharedGeneration({
-						stream: handle,
-						fencingToken,
-						leaseDurationMs,
-					});
-					if (!claim) {
-						return streamInUseResponse();
+					if (isShared) {
+						const claimed = await claimSharedGeneration({
+							stream: handle,
+							fencingToken,
+							leaseDurationMs,
+						});
+						return claimed?.matchSeqNumStart ?? null;
 					}
-					matchSeqNumStart = claim.matchSeqNumStart;
-				} else {
 					// Single-use: matchSeqNum=0 only succeeds against an empty stream.
 					const ack = await appendFenceCommand(handle, "", fencingToken, {
 						matchSeqNum: 0,
 					});
-					matchSeqNumStart = ack.end.seqNum;
+					return ack.end.seqNum;
+				} catch (err) {
+					if (
+						err instanceof FencingTokenMismatchError ||
+						err instanceof SeqNumMismatchError
+					) {
+						return null;
+					}
+					throw err;
 				}
-				claimed = true;
-			} catch (err) {
-				if (
-					err instanceof FencingTokenMismatchError ||
-					err instanceof SeqNumMismatchError
-				) {
-					return streamInUseResponse();
-				}
+			};
+
+			const matchSeqNumStart = await claim().catch(async (err) => {
+				await handle.close();
 				throw err;
-			} finally {
-				if (!claimed) await handle.close();
+			});
+			if (matchSeqNumStart === null) {
+				await handle.close();
+				if (!options?.requestId) return streamInUseResponse();
+				const rejoinHandle = s2.basin(basin).stream(streamName);
+				const rejoined = await replayResponse(
+					closeHandleWhenDone(
+						rejoinHandle,
+						replayActiveGenerationStringRecords(rejoinHandle, 0, fencingToken),
+					),
+					adapter.responseHeaders,
+					adapter.formatSseFrame,
+				);
+				return rejoined.status === 204 ? streamInUseResponse() : rejoined;
 			}
 
-			const persistPromise = persistToS2({
+			const abort = new AbortController();
+			let lastWrite = Date.now();
+			let finishing = false;
+			const watchForStop = async () => {
+				const watchHandle = s2.basin(basin).stream(streamName);
+				try {
+					while (!finishing && !abort.signal.aborted) {
+						await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
+						if (finishing || Date.now() - lastWrite < STOP_POLL_MS) continue;
+						const token = await readActiveFenceToken(watchHandle).catch(
+							() => fencingToken,
+						);
+						if (token !== fencingToken && !finishing) abort.abort();
+					}
+				} finally {
+					await watchHandle.close();
+				}
+			};
+			if (typeof source === "function") void watchForStop();
+
+			const persisted = persistToS2({
 				s2,
 				basin,
 				stream: streamName,
-				source,
+				source: resolveSource(source, abort.signal),
 				fencingToken,
 				batchSize,
 				lingerDuration,
 				matchSeqNumStart,
-				toRecords: (chunk) => dataRecords(toBody(chunk)),
-				finalRecords: (sourceError) =>
-					sourceError === undefined
+				toRecords: (chunk) => {
+					lastWrite = Date.now();
+					return dataRecords(toBody(chunk));
+				},
+				finalRecords: (sourceError) => {
+					finishing = true;
+					return sourceError === undefined
 						? [AppendRecord.fence(`end-${randomToken(4)}`)]
 						: [
 								...dataRecords(JSON.stringify(errorChunk(sourceError))),
 								AppendRecord.fence(`error-${randomToken(4)}`),
-							],
-			});
-			const handledPersistPromise = persistPromise.catch((err) => {
-				if (isExpectedTakeover(err)) return;
-				throw err;
-			});
+							];
+				},
+			})
+				.catch((err) => {
+					if (isExpectedTakeover(err)) {
+						abort.abort();
+						return;
+					}
+					onPersistError(err);
+				})
+				.finally(() => {
+					finishing = true;
+				});
 
 			if (options?.waitUntil) {
-				options.waitUntil(handledPersistPromise);
+				options.waitUntil(persisted);
 			} else if (delivery === "replay") {
-				await handledPersistPromise.catch((err) => {
-					console.error("[resumable-stream] Persist failed:", err);
-				});
-			} else {
-				handledPersistPromise.catch((err) => {
-					console.error("[resumable-stream] Background persist failed:", err);
-				});
+				await persisted;
 			}
 
 			if (delivery === "replay") {
