@@ -7,6 +7,7 @@ import {
 import {
 	appendFenceCommand,
 	appendTrimCommand,
+	createPartAssembler,
 	isFenceRecord,
 	isTerminalFence,
 	isTrimRecord,
@@ -86,6 +87,7 @@ async function* tailDataRecords(
 	const session = await openStringReadSession(stream, fromSeqNum);
 	if (!session) return;
 
+	const assemble = createPartAssembler();
 	try {
 		for await (const record of session) {
 			if (isFenceRecord(record)) {
@@ -98,7 +100,8 @@ async function* tailDataRecords(
 				continue;
 			}
 			if (isTrimRecord(record) || !record.body) continue;
-			yield { body: record.body, nextSeqNum: record.seqNum + 1 };
+			const body = assemble(record);
+			if (body !== undefined) yield { body, nextSeqNum: record.seqNum + 1 };
 		}
 	} finally {
 		await session[Symbol.asyncDispose]?.();
@@ -124,13 +127,15 @@ async function* readAvailableDataRecords(
 		});
 	if (!session) return;
 
+	const assemble = createPartAssembler();
 	try {
 		for await (const record of session) {
 			if (record.seqNum >= untilSeqNum) break;
 			if (isFenceRecord(record) || isTrimRecord(record) || !record.body) {
 				continue;
 			}
-			yield { body: record.body, nextSeqNum: record.seqNum + 1 };
+			const body = assemble(record);
+			if (body !== undefined) yield { body, nextSeqNum: record.seqNum + 1 };
 		}
 	} finally {
 		await session[Symbol.asyncDispose]?.();
@@ -235,9 +240,9 @@ export async function claimSharedGeneration({
 	/** Time source override for tests. */
 	now?: () => number;
 	/**
-	 * Trim records before the new fence after claiming. `true` for one-shot
-	 * generations (`createResumableGeneration` `shared` mode). `false` for
-	 * session logs that need to preserve history across generations.
+	 * Trim generations older than the previous one after claiming, so slow
+	 * readers of the previous generation are not cut off. `false` for session
+	 * logs that need to preserve history across generations.
 	 *
 	 * @default true
 	 */
@@ -267,11 +272,11 @@ export async function claimSharedGeneration({
 	const fenceAck = await appendFenceCommand(stream, currentToken, fencingToken);
 	let matchSeqNumStart = fenceAck.end.seqNum;
 
-	if (trim && state.nextSeqNum > 0) {
+	if (trim && state.activeGenerationStartSeqNum) {
 		const trimAck = await appendTrimCommand(
 			stream,
 			fencingToken,
-			fenceAck.start.seqNum,
+			state.activeGenerationStartSeqNum,
 		);
 		matchSeqNumStart = trimAck.end.seqNum;
 	}
@@ -330,6 +335,13 @@ export async function claimSessionGeneration({
 		fromSeqNum: fenceAck.start.seqNum,
 		matchSeqNumStart: fenceAck.end.seqNum,
 	};
+}
+
+export async function readActiveFenceToken(
+	stream: S2Stream,
+): Promise<string | null> {
+	const state = await readSharedStreamState(stream);
+	return state.hasActiveGeneration ? state.heldFenceToken : null;
 }
 
 export async function* replayActiveGenerationStringRecords(

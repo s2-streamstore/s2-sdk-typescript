@@ -1,6 +1,7 @@
 import {
 	type AppendAck,
 	type AppendInput,
+	AppendRecord,
 	type ReadRecord,
 	S2Error,
 } from "@s2-dev/streamstore";
@@ -128,33 +129,47 @@ describe("claimSharedGeneration lease takeover", () => {
 		expect(handle.appends).toHaveLength(0);
 	});
 
-	it("takes over when the last record is older than the lease", async () => {
+	it("takes over a stale generation and trims only what precedes it", async () => {
 		const now = 10_000_000;
+		const old = new Date(now - 300_000);
 		const handle = new MockStreamHandle([
 			readRecord({
 				seqNum: 0,
 				body: "holder-1",
 				headers: [["", "fence"]],
-				timestamp: new Date(now - 300_000),
+				timestamp: old,
+			}),
+			readRecord({ seqNum: 1, body: "data-0", timestamp: old }),
+			readRecord({
+				seqNum: 2,
+				body: "end-a",
+				headers: [["", "fence"]],
+				timestamp: old,
 			}),
 			readRecord({
-				seqNum: 1,
-				body: "data-0",
-				timestamp: new Date(now - 120_000), // last write 2 min ago
+				seqNum: 3,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: old,
+			}),
+			readRecord({
+				seqNum: 4,
+				body: "data-1",
+				timestamp: new Date(now - 120_000),
 			}),
 		]);
 
 		const result = await claimSharedGeneration({
 			stream: handle as any,
 			fencingToken: "session-new",
-			leaseDurationMs: 60_000, // lease = 60s, last record 2 min ago → stale
+			leaseDurationMs: 60_000,
 			now: () => now,
 		});
 
 		expect(result).not.toBeNull();
-		// First append = new fence, second = trim (since nextSeqNum > 0).
 		expect(handle.appends).toHaveLength(2);
-		expect(handle.appends[0]?.fencingToken).toBe("holder-1");
+		expect(handle.appends[0]?.fencingToken).toBe("holder-2");
+		expect(handle.appends[1]?.records[0]).toEqual(AppendRecord.trim(3));
 	});
 
 	it("takes over a fence-only stream (no data records) once its fence is stale", async () => {

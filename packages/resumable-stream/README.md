@@ -97,6 +97,8 @@ The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResu
 
 Demo (Bun server + vanilla-JS client): [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
 
+Use `mode: "shared"` so a chat reuses one stream across turns. `single-use` (the default) needs a fresh stream name for every generation.
+
 ```ts
 // lib/s2.ts
 import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
@@ -104,25 +106,25 @@ import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 export const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
+  mode: "shared",
 });
 ```
 
 ```ts
 // app/api/chat/route.ts
 import { after } from "next/server";
-import { convertToModelMessages, streamText, type UISnapshotMessage } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
-  const { id, messages } = (await req.json()) as { id: string; messages: UISnapshotMessage[] };
-  const streamName = `chat-${id}`;
+  const { id, messages } = (await req.json()) as { id: string; messages: UIMessage[] };
   const result = streamText({
     model: openai("gpt-4o-mini"),
     messages: await convertToModelMessages(messages),
   });
 
-  return chat.makeResumable(streamName, result.toUIMessageStream(), {
+  return chat.makeResumable(`chat-${id}`, result.toUIMessageStream(), {
     waitUntil: (promise) => {
       after(async () => {
         await promise;
@@ -145,6 +147,22 @@ export async function GET(
 }
 ```
 
+With `resume: true`, `useChat`'s `stop()` only disconnects, so generation keeps running. To stop it, call `chat.stop`: readers receive an `abort` chunk and finish, and the writer stops at its next append.
+
+```ts
+// app/api/chat/[id]/stop/route.ts
+import { chat } from "@/lib/s2";
+
+export async function POST(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  await chat.stop(`chat-${id}`);
+  return new Response(null, { status: 204 });
+}
+```
+
 ```tsx
 // app/page.tsx
 "use client";
@@ -159,6 +177,12 @@ const transport = new DefaultChatTransport({
 
 export default function Chat() {
   const chat = useChat({ transport, resume: true });
+
+  async function stop() {
+    await fetch(`/api/chat/${chat.id}/stop`, { method: "POST" });
+    chat.stop();
+  }
+
   return null;
 }
 ```

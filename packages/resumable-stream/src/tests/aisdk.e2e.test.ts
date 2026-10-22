@@ -213,7 +213,7 @@ describeIf("resumable-stream/aisdk", () => {
 		);
 
 		it(
-			"appends a trim after a single-use generation for self-cleanup",
+			"keeps a completed single-use generation readable",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -237,14 +237,11 @@ describeIf("resumable-stream/aisdk", () => {
 				await res.text();
 				await bgPromise;
 
-				// Opening fence + N data chunks + terminal fence + trim.
-				// The trim itself may already be trimmed by the time we read,
-				// but the stream's tail seqnum is preserved even after records
-				// are trimmed, so we assert on that rather than on record
-				// presence.
-				const expectedAppendCount = 1 + chunks.length + 1 + 1;
-				const tail = await s2.basin(basinName).stream(streamName).checkTail();
-				expect(tail.tail.seqNum).toBe(expectedAppendCount);
+				const raw = await s2
+					.basin(basinName)
+					.stream(streamName)
+					.read({ start: { from: { seqNum: 0 } } }, { as: "string" });
+				expect(raw.records).toHaveLength(1 + chunks.length + 1);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -318,6 +315,80 @@ describeIf("resumable-stream/aisdk", () => {
 		);
 	});
 
+	describe("large chunks", () => {
+		it(
+			"round-trips a chunk larger than the S2 record limit",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					...s2EndpointsFromEnv(),
+				});
+				const chunks: UIMessageChunk[] = [
+					{ type: "start" },
+					{
+						type: "file",
+						url: `data:image/png;base64,${"A".repeat(1_500_000)}`,
+						mediaType: "image/png",
+					},
+					{ type: "finish" },
+				];
+
+				let bg: Promise<unknown> | undefined;
+				const res = await chat.makeResumable(
+					makeStreamName("large-chunk"),
+					arrayToAsyncIterable(chunks),
+					{ waitUntil: (promise) => (bg = promise) },
+				);
+				expect(await readSseResponse(res)).toEqual(chunks);
+				await bg;
+			},
+			TEST_TIMEOUT_MS,
+		);
+	});
+
+	describe("stop", () => {
+		it(
+			"ends the active generation for readers and the writer",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("stop");
+				let pulled = 0;
+				async function* endless(): AsyncIterable<UIMessageChunk> {
+					yield { type: "start" };
+					yield { type: "text-start", id: "t" };
+					while (true) {
+						pulled += 1;
+						yield { type: "text-delta", id: "t", delta: "x" };
+						await sleep(20);
+					}
+				}
+
+				let bg: Promise<unknown> | undefined;
+				const res = await chat.makeResumable(streamName, endless(), {
+					waitUntil: (promise) => (bg = promise),
+				});
+				await sleep(300);
+				expect(await chat.stop(streamName)).toBe(true);
+
+				const chunks = await readSseResponse(res);
+				expect(chunks.at(-1)).toEqual({ type: "abort" });
+				await bg;
+				const pulledAfterStop = pulled;
+				await sleep(200);
+				expect(pulled).toBe(pulledAfterStop);
+
+				expect(await chat.stop(streamName)).toBe(false);
+				expect((await chat.replay(streamName)).status).toBe(204);
+			},
+			TEST_TIMEOUT_MS,
+		);
+	});
+
 	describe("shared streams", () => {
 		it(
 			"reuses a completed stream and replays the active generation",
@@ -377,14 +448,9 @@ describeIf("resumable-stream/aisdk", () => {
 						},
 						{ as: "string" },
 					);
-				expect(
-					raw.records.some(
-						(record) =>
-							record.headers.length === 1 &&
-							record.headers[0]?.[0] === "" &&
-							record.headers[0]?.[1] === "trim",
-					),
-				).toBe(true);
+				expect(raw.records.map((record) => record.body)).toContain(
+					JSON.stringify(firstChunks[2]),
+				);
 			},
 			TEST_TIMEOUT_MS,
 		);

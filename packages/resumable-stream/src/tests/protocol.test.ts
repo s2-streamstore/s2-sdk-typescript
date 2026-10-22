@@ -4,9 +4,9 @@ import type {
 	AppendRecord as AppendRecordType,
 	S2,
 } from "@s2-dev/streamstore";
-import { AppendRecord } from "@s2-dev/streamstore";
+import { AppendRecord, MAX_APPEND_BYTES } from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
-import { createTerminalRecords, persistToS2 } from "../protocol.js";
+import { createPartAssembler, dataRecords, persistToS2 } from "../protocol.js";
 
 interface SubmitTicket {
 	ack(): Promise<AppendAck>;
@@ -151,7 +151,7 @@ describe("persistToS2", () => {
 			fencingToken: "session-1",
 			batchSize: 1,
 			lingerDuration: 0,
-			toRecord: (value) => AppendRecord.string({ body: value }),
+			toRecords: (value) => [AppendRecord.string({ body: value })],
 			finalRecords: () => [AppendRecord.fence("end-token")],
 		});
 
@@ -178,7 +178,7 @@ describe("persistToS2", () => {
 				fencingToken: "session-1",
 				batchSize: 1,
 				lingerDuration: 0,
-				toRecord: (value) => AppendRecord.string({ body: value }),
+				toRecords: (value) => [AppendRecord.string({ body: value })],
 				finalRecords: (failed) =>
 					failed
 						? [
@@ -197,7 +197,7 @@ describe("persistToS2", () => {
 		expect(handle.directAppends).toHaveLength(0);
 	});
 
-	it("throws when final producer submission fails", async () => {
+	it("appends final records directly and throws when final producer submission fails", async () => {
 		const handle = new RecordingStreamHandle(2);
 
 		await expect(
@@ -209,7 +209,7 @@ describe("persistToS2", () => {
 				fencingToken: "session-1",
 				batchSize: 1,
 				lingerDuration: 0,
-				toRecord: (value) => AppendRecord.string({ body: value }),
+				toRecords: (value) => [AppendRecord.string({ body: value })],
 				finalRecords: () => [AppendRecord.fence("end-token")],
 			}),
 		).rejects.toThrow("submit #2 failed");
@@ -217,7 +217,11 @@ describe("persistToS2", () => {
 		expect(summarizeRecords(handle.session.records)).toEqual([
 			{ body: "alpha", headers: [] },
 		]);
-		expect(handle.directAppends).toHaveLength(0);
+		expect(handle.directAppends).toHaveLength(1);
+		expect(handle.directAppends[0]?.fencingToken).toBe("session-1");
+		expect(summarizeRecords(handle.directAppends[0]!.records)).toEqual([
+			{ body: "end-token", headers: [["", "fence"]] },
+		]);
 	});
 
 	it("passes producer submit failures to finalRecords", async () => {
@@ -233,7 +237,7 @@ describe("persistToS2", () => {
 				fencingToken: "session-1",
 				batchSize: 1,
 				lingerDuration: 0,
-				toRecord: (value) => AppendRecord.string({ body: value }),
+				toRecords: (value) => [AppendRecord.string({ body: value })],
 				finalRecords: (sourceError) => {
 					finalRecordsError = sourceError;
 					return [AppendRecord.fence("end-token")];
@@ -245,35 +249,33 @@ describe("persistToS2", () => {
 	});
 });
 
-describe("createTerminalRecords", () => {
-	it("places single-use cleanup before the terminal fence token rotates", () => {
-		const records = createTerminalRecords({
-			terminalFenceToken: "end-token",
-			trim: true,
-		});
+describe("dataRecords", () => {
+	it("splits oversized bodies into parts that reassemble exactly", () => {
+		const body = `${"a".repeat(1_500_000)}é😀${"b".repeat(700_000)}`;
+		const records = dataRecords(body);
 
-		const summary = summarizeRecords(records);
-		expect(summary[0]?.headers).toEqual([["", "trim"]]);
-		expect(summary[1]).toEqual({
-			body: "end-token",
-			headers: [["", "fence"]],
-		});
+		expect(records.length).toBeGreaterThan(2);
+		for (const record of records) {
+			expect(record.meteredBytes).toBeLessThanOrEqual(MAX_APPEND_BYTES);
+		}
+
+		const assemble = createPartAssembler();
+		const bodies = records
+			.map((record) =>
+				assemble(record as { headers: [string, string][]; body: string }),
+			)
+			.filter((value) => value !== undefined);
+		expect(bodies).toEqual([body]);
 	});
 
-	it("keeps error chunks before cleanup and terminal fence", () => {
-		const errorRecord = AppendRecord.string({ body: "stream-error" });
-		const records = createTerminalRecords({
-			errorRecord,
-			terminalFenceToken: "error-token",
-			trim: true,
-		});
-
-		const summary = summarizeRecords(records);
-		expect(summary[0]).toEqual({ body: "stream-error", headers: [] });
-		expect(summary[1]?.headers).toEqual([["", "trim"]]);
-		expect(summary[2]).toEqual({
-			body: "error-token",
-			headers: [["", "fence"]],
-		});
+	it("drops parts whose first part was not read", () => {
+		const [, ...rest] = dataRecords("x".repeat(2_500_000));
+		const assemble = createPartAssembler();
+		const bodies = rest
+			.map((record) =>
+				assemble(record as { headers: [string, string][]; body: string }),
+			)
+			.filter((value) => value !== undefined);
+		expect(bodies).toEqual([]);
 	});
 });

@@ -24,6 +24,7 @@ const adapter: ChatAdapter<Chunk> = {
 			errorText: onError ? onError(err) : DEFAULT_ERROR_TEXT,
 		} satisfies UIMessageChunk;
 	},
+	makeStopChunk: () => ({ type: "abort" }),
 	responseHeaders: UI_MESSAGE_STREAM_HEADERS,
 };
 

@@ -8,7 +8,10 @@ import {
 	S2,
 	type S2Stream,
 	SeqNumMismatchError,
+	utf8ByteLength,
 } from "@s2-dev/streamstore";
+
+const PART_HEADER = "part";
 
 export function isFenceRecord(
 	record: Pick<ReadRecord<"string">, "headers">,
@@ -64,20 +67,66 @@ export async function appendTrimCommand(
 	);
 }
 
-export function createTerminalRecords({
-	errorRecord,
-	terminalFenceToken,
-	trim,
-}: {
-	errorRecord?: AppendRecord;
-	terminalFenceToken: string;
-	trim: boolean;
-}): AppendRecord[] {
-	const records: AppendRecord[] = [];
-	if (errorRecord) records.push(errorRecord);
-	if (trim) records.push(AppendRecord.trim(Number.MAX_SAFE_INTEGER));
-	records.push(AppendRecord.fence(terminalFenceToken));
-	return records;
+function splitUtf8(text: string, maxBytes: number): string[] {
+	const parts: string[] = [];
+	let start = 0;
+	let bytes = 0;
+	for (let i = 0; i < text.length; ) {
+		const code = text.codePointAt(i)!;
+		const size = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+		if (bytes + size > maxBytes) {
+			parts.push(text.slice(start, i));
+			start = i;
+			bytes = 0;
+		}
+		bytes += size;
+		i += code > 0xffff ? 2 : 1;
+	}
+	parts.push(text.slice(start));
+	return parts;
+}
+
+export function dataRecords(body: string): AppendRecord[] {
+	if (utf8ByteLength(body) <= AppendRecord.maxBodyBytes()) {
+		return [AppendRecord.string({ body })];
+	}
+	const parts = splitUtf8(
+		body,
+		AppendRecord.maxBodyBytes([[PART_HEADER, "first"]]),
+	);
+	return parts.map((part, i) =>
+		AppendRecord.string({
+			body: part,
+			headers: [
+				[
+					PART_HEADER,
+					i === 0 ? "first" : i === parts.length - 1 ? "last" : "more",
+				],
+			],
+		}),
+	);
+}
+
+export function createPartAssembler(): (
+	record: Pick<ReadRecord<"string">, "headers" | "body">,
+) => string | undefined {
+	let pending: string | null = null;
+	return (record) => {
+		const header = record.headers?.[0];
+		if (record.headers?.length !== 1 || header?.[0] !== PART_HEADER) {
+			return record.body;
+		}
+		if (header[1] === "first") {
+			pending = record.body;
+			return undefined;
+		}
+		if (pending === null) return undefined;
+		pending += record.body;
+		if (header[1] !== "last") return undefined;
+		const body = pending;
+		pending = null;
+		return body;
+	};
 }
 
 export interface PersistToS2Options<T> {
@@ -88,7 +137,7 @@ export interface PersistToS2Options<T> {
 	fencingToken: string;
 	batchSize: number;
 	lingerDuration: number;
-	toRecord: (value: T) => AppendRecord;
+	toRecords: (value: T) => ReadonlyArray<AppendRecord>;
 	finalRecords: (sourceError: unknown) => ReadonlyArray<AppendRecord>;
 	matchSeqNumStart?: number;
 	onSeqNumMismatch?: (error: SeqNumMismatchError) => void;
@@ -129,7 +178,7 @@ export async function persistToS2<T>({
 	fencingToken,
 	batchSize,
 	lingerDuration,
-	toRecord,
+	toRecords,
 	finalRecords,
 	matchSeqNumStart,
 	onSeqNumMismatch,
@@ -148,7 +197,9 @@ export async function persistToS2<T>({
 		let sourceError: unknown | undefined;
 		try {
 			for await (const value of source) {
-				await producer.submit(toRecord(value));
+				for (const record of toRecords(value)) {
+					await producer.submit(record);
+				}
 			}
 		} catch (err) {
 			sourceError = err;
@@ -178,6 +229,13 @@ export async function persistToS2<T>({
 			if (mismatch && onSeqNumMismatch) {
 				onSeqNumMismatch(mismatch);
 				return;
+			}
+			if (finalizationError !== undefined || closeError !== undefined) {
+				await handle
+					.append(
+						AppendInput.create([...finalRecords(failure)], { fencingToken }),
+					)
+					.catch(() => {});
 			}
 			throw failure;
 		}

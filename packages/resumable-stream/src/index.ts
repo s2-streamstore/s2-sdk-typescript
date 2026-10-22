@@ -190,7 +190,7 @@ export async function createResumableStream(
 				fencingToken: sessionFencingToken,
 				batchSize,
 				lingerDuration,
-				toRecord: (value) => AppendRecord.string({ body: value }),
+				toRecords: (value) => [AppendRecord.string({ body: value })],
 				finalRecords: (sourceError) => [
 					AppendRecord.fence(
 						`${sourceError !== undefined ? "error" : "end"}-${generateFencingToken()}`,

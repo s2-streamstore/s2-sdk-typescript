@@ -1,4 +1,5 @@
 import {
+	AppendInput,
 	AppendRecord,
 	FencingTokenMismatchError,
 	randomToken,
@@ -8,14 +9,11 @@ import {
 	type S2Stream,
 	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
-import {
-	appendFenceCommand,
-	createTerminalRecords,
-	persistToS2,
-} from "./protocol.js";
+import { appendFenceCommand, dataRecords, persistToS2 } from "./protocol.js";
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
+	readActiveFenceToken,
 	readSessionReplayState,
 	replayActiveGenerationStringRecords,
 	replaySessionStringRecords,
@@ -53,7 +51,7 @@ export interface ResumableChatConfig {
 	 * How to map generations to S2 streams. Defaults to `single-use`.
 	 * - `single-use`: each generation gets a dedicated stream.
 	 * - `shared`: generations reuse one stream; later writers take over via lease-based fencing.
-	 *   The stream is trimmed on each claim, so replay yields only the active generation.
+	 *   Older generations are trimmed on each claim, and replay yields only the active generation.
 	 * - `session`: generations append to one durable session log. Replay tails the stream,
 	 *   surfacing chunks from every generation as they land.
 	 */
@@ -119,12 +117,20 @@ export interface Chat<T> {
 	 * unless session replay is called with `{ live: true }`.
 	 */
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
+	/**
+	 * Ends the active generation: readers receive the adapter's stop chunk and
+	 * finish, and the writer stops at its next append. Returns false if no
+	 * generation is active.
+	 */
+	stop(streamName: string): Promise<boolean>;
 }
 
 /** Adapter contract for plugging a chunk shape into the shared chat implementation. */
 export interface ChatAdapter<T> {
 	/** Synthesize an error chunk to surface upstream failures to the client. */
 	makeErrorChunk(err: unknown, onError?: (err: unknown) => string): T;
+	/** Chunk appended when a generation is stopped. */
+	makeStopChunk?: () => T;
 	/** Prepare a chunk before storage. */
 	prepareForStorage?: (chunk: T) => T;
 	/** SSE response headers. */
@@ -205,15 +211,15 @@ export function createChat<T>(
 
 	const isShared = mode === "shared" || mode === "session";
 	const isSession = mode === "session";
-	const trimOnTerminalFence = mode === "single-use";
 	const isExpectedTakeover = (err: unknown): boolean =>
-		isShared &&
-		(err instanceof FencingTokenMismatchError ||
-			(err instanceof AggregateError &&
-				err.errors.length > 0 &&
-				err.errors.every(
-					(error) => error instanceof FencingTokenMismatchError,
-				)));
+		err instanceof FencingTokenMismatchError ||
+		(err instanceof AggregateError &&
+			err.errors.length > 0 &&
+			err.errors.every((error) => error instanceof FencingTokenMismatchError));
+	const toBody = (chunk: T): string =>
+		JSON.stringify(
+			adapter.prepareForStorage ? adapter.prepareForStorage(chunk) : chunk,
+		);
 
 	return {
 		async makeResumable(
@@ -276,29 +282,14 @@ export function createChat<T>(
 				batchSize,
 				lingerDuration,
 				matchSeqNumStart,
-				toRecord: (chunk) =>
-					AppendRecord.string({
-						body: JSON.stringify(
-							adapter.prepareForStorage
-								? adapter.prepareForStorage(chunk)
-								: chunk,
-						),
-					}),
-				finalRecords: (sourceError) => {
-					if (sourceError === undefined) {
-						return createTerminalRecords({
-							terminalFenceToken: `end-${randomToken(4)}`,
-							trim: trimOnTerminalFence,
-						});
-					}
-					return createTerminalRecords({
-						errorRecord: AppendRecord.string({
-							body: JSON.stringify(errorChunk(sourceError)),
-						}),
-						terminalFenceToken: `error-${randomToken(4)}`,
-						trim: trimOnTerminalFence,
-					});
-				},
+				toRecords: (chunk) => dataRecords(toBody(chunk)),
+				finalRecords: (sourceError) =>
+					sourceError === undefined
+						? [AppendRecord.fence(`end-${randomToken(4)}`)]
+						: [
+								...dataRecords(JSON.stringify(errorChunk(sourceError))),
+								AppendRecord.fence(`error-${randomToken(4)}`),
+							],
 			});
 			const handledPersistPromise = persistPromise.catch((err) => {
 				if (isExpectedTakeover(err)) return;
@@ -384,6 +375,32 @@ export function createChat<T>(
 				adapter.responseHeaders,
 				adapter.formatSseFrame,
 			);
+		},
+
+		async stop(streamName: string): Promise<boolean> {
+			const handle = s2.basin(basin).stream(streamName);
+			try {
+				const token = await readActiveFenceToken(handle);
+				if (token === null) return false;
+				const stopChunk = adapter.makeStopChunk?.();
+				await handle.append(
+					AppendInput.create(
+						[
+							...(stopChunk === undefined
+								? []
+								: dataRecords(toBody(stopChunk))),
+							AppendRecord.fence(`end-${randomToken(4)}`),
+						],
+						{ fencingToken: token },
+					),
+				);
+				return true;
+			} catch (err) {
+				if (err instanceof FencingTokenMismatchError) return false;
+				throw err;
+			} finally {
+				await handle.close();
+			}
 		},
 	};
 }

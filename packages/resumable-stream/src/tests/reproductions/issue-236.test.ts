@@ -25,6 +25,7 @@ function makeFencedS2(error: FencingTokenMismatchError): S2 {
 	};
 	const handle = {
 		appendSession: () => Promise.resolve(session),
+		append: () => Promise.reject(error),
 		close: () => Promise.resolve(),
 	};
 	return {
@@ -55,7 +56,7 @@ describe("Issue #236: persist failure during takeover stays classifiable", () =>
 			fencingToken: "session-original",
 			batchSize: 1,
 			lingerDuration: 0,
-			toRecord: (value) => AppendRecord.string({ body: value }),
+			toRecords: (value) => [AppendRecord.string({ body: value })],
 			finalRecords: () => [AppendRecord.fence("end-test")],
 		}).then(
 			() => undefined,
