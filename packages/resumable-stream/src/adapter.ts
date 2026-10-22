@@ -348,10 +348,12 @@ export function createChat<T>(
 							() => undefined,
 						);
 						if (tail !== undefined && tail === checkedTail) continue;
-						checkedTail = tail;
 						const token = await readActiveFenceToken(watchHandle).catch(
-							() => fencingToken,
+							() => undefined,
 						);
+						// Retry a failed read on the next poll.
+						if (token === undefined) continue;
+						checkedTail = tail;
 						if (token !== fencingToken && !finishing) abort.abort();
 					}
 				} finally {
