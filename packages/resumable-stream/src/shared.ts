@@ -337,7 +337,7 @@ export async function claimSessionGeneration({
 	};
 }
 
-export interface LastFence {
+interface LastFence {
 	seqNum: number;
 	body: string;
 	active: boolean;
@@ -383,13 +383,6 @@ export async function readLastFence(
 		}
 		if (fence || count < window) return { fence, nextSeqNum };
 	}
-}
-
-export async function readActiveFenceToken(
-	stream: S2Stream,
-): Promise<string | null> {
-	const { fence } = await readLastFence(stream);
-	return fence?.active ? fence.body : null;
 }
 
 export async function* replayActiveGenerationStringRecords(

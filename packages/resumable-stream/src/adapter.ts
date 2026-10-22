@@ -9,11 +9,16 @@ import {
 	type S2Stream,
 	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
-import { appendFenceCommand, dataRecords, persistToS2 } from "./protocol.js";
+import {
+	appendFenceCommand,
+	dataRecords,
+	isFenceRecord,
+	persistToS2,
+} from "./protocol.js";
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
-	readActiveFenceToken,
+	readLastFence,
 	readSessionReplayState,
 	replayActiveGenerationStringRecords,
 	replaySessionStringRecords,
@@ -253,11 +258,12 @@ export function createChat<T>(
 
 	const isShared = mode === "shared" || mode === "session";
 	const isSession = mode === "session";
+	// Once a stop or another writer fences the stream, other failures (such as
+	// the source throwing on abort) are consequences of it.
 	const isExpectedTakeover = (err: unknown): boolean =>
 		err instanceof FencingTokenMismatchError ||
 		(err instanceof AggregateError &&
-			err.errors.length > 0 &&
-			err.errors.every((error) => error instanceof FencingTokenMismatchError));
+			err.errors.some((error) => error instanceof FencingTokenMismatchError));
 	const toBody = (chunk: T): string =>
 		JSON.stringify(
 			adapter.prepareForStorage ? adapter.prepareForStorage(chunk) : chunk,
@@ -276,48 +282,11 @@ export function createChat<T>(
 			const fencingToken = requestPrefix
 				? `${requestPrefix}${randomToken(3)}`
 				: `session-${randomToken(8)}`;
+			let matchSeqNumStart = 1;
 			const handle = s2.basin(basin).stream(streamName);
 			const delivery = options?.delivery ?? "response";
 
-			const claim = async (): Promise<number | null> => {
-				try {
-					if (isSession) {
-						const claimed = await claimSessionGeneration({
-							stream: handle,
-							fencingToken,
-						});
-						return claimed?.matchSeqNumStart ?? null;
-					}
-					if (isShared) {
-						const claimed = await claimSharedGeneration({
-							stream: handle,
-							fencingToken,
-							leaseDurationMs,
-						});
-						return claimed?.matchSeqNumStart ?? null;
-					}
-					// Single-use: matchSeqNum=0 only succeeds against an empty stream.
-					const ack = await appendFenceCommand(handle, "", fencingToken, {
-						matchSeqNum: 0,
-					});
-					return ack.end.seqNum;
-				} catch (err) {
-					if (
-						err instanceof FencingTokenMismatchError ||
-						err instanceof SeqNumMismatchError
-					) {
-						return null;
-					}
-					throw err;
-				}
-			};
-
-			const matchSeqNumStart = await claim().catch(async (err) => {
-				await handle.close();
-				throw err;
-			});
-			if (matchSeqNumStart === null) {
-				await handle.close();
+			const inUse = async (): Promise<Response> => {
 				if (!requestPrefix) return streamInUseResponse();
 				const rejoinHandle = s2.basin(basin).stream(streamName);
 				const rejoined = await replayResponse(
@@ -329,6 +298,47 @@ export function createChat<T>(
 					adapter.formatSseFrame,
 				);
 				return rejoined.status === 204 ? streamInUseResponse() : rejoined;
+			};
+
+			let claimed = false;
+			try {
+				if (isSession) {
+					const claim = await claimSessionGeneration({
+						stream: handle,
+						fencingToken,
+					});
+					if (!claim) {
+						return inUse();
+					}
+					matchSeqNumStart = claim.matchSeqNumStart;
+				} else if (isShared) {
+					const claim = await claimSharedGeneration({
+						stream: handle,
+						fencingToken,
+						leaseDurationMs,
+					});
+					if (!claim) {
+						return inUse();
+					}
+					matchSeqNumStart = claim.matchSeqNumStart;
+				} else {
+					// Single-use: matchSeqNum=0 only succeeds against an empty stream.
+					const ack = await appendFenceCommand(handle, "", fencingToken, {
+						matchSeqNum: 0,
+					});
+					matchSeqNumStart = ack.end.seqNum;
+				}
+				claimed = true;
+			} catch (err) {
+				if (
+					err instanceof FencingTokenMismatchError ||
+					err instanceof SeqNumMismatchError
+				) {
+					return inUse();
+				}
+				throw err;
+			} finally {
+				if (!claimed) await handle.close();
 			}
 
 			const abort = new AbortController();
@@ -336,25 +346,23 @@ export function createChat<T>(
 			let finishing = false;
 			const watchForStop = async () => {
 				const watchHandle = s2.basin(basin).stream(streamName);
-				let checkedTail: number | undefined;
+				let from = matchSeqNumStart;
 				try {
 					while (!finishing && !abort.signal.aborted) {
 						await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
 						if (finishing || Date.now() - lastWrite < STOP_POLL_MS) continue;
-						// Re-read the generation only when something was appended since
-						// the last check; it can be large.
-						const tail = await watchHandle.checkTail().then(
-							({ tail }) => tail.seqNum,
-							() => undefined,
-						);
-						if (tail !== undefined && tail === checkedTail) continue;
-						const token = await readActiveFenceToken(watchHandle).catch(
-							() => undefined,
-						);
-						// Retry a failed read on the next poll.
-						if (token === undefined) continue;
-						checkedTail = tail;
-						if (token !== fencingToken && !finishing) abort.abort();
+						// A stop or a takeover appends a fence; only records since the
+						// last check need reading.
+						const batch = await watchHandle
+							.read(
+								{ start: { from: { seqNum: from } }, stop: { waitSecs: 0 } },
+								{ as: "string" },
+							)
+							.catch(() => undefined);
+						const records = batch?.records ?? [];
+						if (records.length === 0) continue;
+						from = records.at(-1)!.seqNum + 1;
+						if (records.some(isFenceRecord) && !finishing) abort.abort();
 					}
 				} finally {
 					await watchHandle.close();
@@ -475,8 +483,8 @@ export function createChat<T>(
 		async stop(streamName: string): Promise<boolean> {
 			const handle = s2.basin(basin).stream(streamName);
 			try {
-				const token = await readActiveFenceToken(handle);
-				if (token === null) return false;
+				const { fence } = await readLastFence(handle);
+				if (!fence?.active) return false;
 				const stopChunk = adapter.makeStopChunk?.();
 				await handle.append(
 					AppendInput.create(
@@ -486,7 +494,7 @@ export function createChat<T>(
 								: dataRecords(toBody(stopChunk))),
 							AppendRecord.fence(`end-${randomToken(4)}`),
 						],
-						{ fencingToken: token },
+						{ fencingToken: fence.body },
 					),
 				);
 				return true;
