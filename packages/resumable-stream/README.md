@@ -287,7 +287,7 @@ Server fields:
 | `mode` | Storage layout: `single-use`, `shared`, or `session`. Use `session` for multi-turn chats and multi-tab replay. |
 | `batchSize` | Maximum number of chunks to append to S2 at once. Defaults to `10`. |
 | `lingerDuration` | Maximum batching delay in milliseconds. Defaults to `50`. |
-| `leaseDurationMs` | `shared` mode takeover window for stale active generations. Defaults to `5000`. |
+| `leaseDurationMs` | `shared` and `session` mode takeover window for stale active generations. Defaults to `5000`. |
 | `onError` | Maps upstream errors to the stored/rendered error message. |
 
 `makeResumable` fields:

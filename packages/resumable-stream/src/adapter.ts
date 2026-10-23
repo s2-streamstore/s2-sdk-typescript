@@ -63,8 +63,9 @@ export interface ResumableChatConfig {
 	 */
 	mode?: ResumableChatMode;
 	/**
-	 * Only applies to `shared`. If an active generation hasn't written a record
-	 * for this many milliseconds, the next claim takes it over. Defaults to 5000.
+	 * Applies to `shared` and `session`. If an active generation hasn't written
+	 * a record for this many milliseconds, the next claim takes it over.
+	 * Defaults to 5000.
 	 */
 	leaseDurationMs?: number;
 	/**
@@ -306,6 +307,7 @@ export function createChat<T>(
 					const claim = await claimSessionGeneration({
 						stream: handle,
 						fencingToken,
+						leaseDurationMs,
 					});
 					if (!claim) {
 						return inUse();

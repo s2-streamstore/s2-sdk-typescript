@@ -1,6 +1,8 @@
 import {
 	AppendInput,
+	AppendRecord,
 	RangeNotSatisfiableError,
+	randomToken,
 	S2Error,
 	type S2Stream,
 } from "@s2-dev/streamstore";
@@ -290,9 +292,15 @@ export async function claimSharedGeneration({
 export async function claimSessionGeneration({
 	stream,
 	fencingToken,
+	leaseDurationMs,
+	now = () => Date.now(),
 }: {
 	stream: S2Stream;
 	fencingToken: string;
+	/** Take over an active generation that hasn't written for this long. */
+	leaseDurationMs?: number;
+	/** Time source override for tests. */
+	now?: () => number;
 }): Promise<{
 	fromSeqNum: number;
 	matchSeqNumStart: number;
@@ -323,7 +331,29 @@ export async function claimSessionGeneration({
 	}
 
 	if (!isFenceRecord(lastRecord) || !isTerminalFence(lastRecord)) {
-		return null;
+		if (
+			leaseDurationMs === undefined ||
+			now() - lastRecord.timestamp.getTime() < leaseDurationMs
+		) {
+			return null;
+		}
+		// The writer is gone without ending its generation: end it, so its
+		// readers finish, and claim in the same append.
+		const { fence } = await readLastFence(stream);
+		if (!fence?.active) return null;
+		const ack = await stream.append(
+			AppendInput.create(
+				[
+					AppendRecord.fence(`error-${randomToken(4)}`),
+					AppendRecord.fence(fencingToken),
+				],
+				{ fencingToken: fence.body },
+			),
+		);
+		return {
+			fromSeqNum: ack.start.seqNum + 1,
+			matchSeqNumStart: ack.end.seqNum,
+		};
 	}
 
 	const fenceAck = await appendFenceCommand(

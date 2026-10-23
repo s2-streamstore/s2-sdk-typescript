@@ -13,5 +13,6 @@ Chat adapters: add `stop`, abortable sources, and request rejoin; fix generation
 - `single-use` generations are no longer trimmed when they complete, and `shared` claims keep the previous generation. Both trims could delete records a lagging reader had not read yet, truncating its response.
 - Replay and `stop` locate the active generation from the tail of the stream instead of scanning it from the start, so `session` logs no longer get slower as they grow.
 - `replay` with a `fromSeqNum` past the end of the stream (a cursor from a stream that was deleted and recreated) replays from the start. Previously it failed mid-response, so `subscribe` clients reconnected forever or ended without the new records.
+- `session` mode honors `leaseDurationMs`: a generation whose writer stopped without ending it (crash, timeout) is ended and taken over by the next claim, instead of returning 409 forever.
 - **Breaking:** the promise passed to `waitUntil` no longer rejects when persistence fails; failures go to `onPersistError` instead.
 - **Breaking:** requires `@s2-dev/streamstore` 0.24.3 or later.
