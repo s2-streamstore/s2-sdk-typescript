@@ -108,8 +108,6 @@ export default function Chat() {
 }
 ```
 
-`mode: "shared"` lets each chat reuse one stream across turns; with `single-use`, every generation needs a fresh stream name.
-
 `resume: true` makes `useChat` call `reconnectToStream` on mount. `DefaultChatTransport`'s default reconnect URL is `${api}/${chatId}/stream`, which matches the GET route above. If your URL shape differs, pass `prepareReconnectToStreamRequest`.
 
-With `resume: true`, `useChat`'s `stop()` only disconnects. Call `chat.stop(streamName)` from a server route first to end the generation; see the [package README](../../packages/resumable-stream/README.md#ai-sdk).
+`useChat`'s `stop()` only disconnects; call `chat.stop()` from a route to end the generation ([package README](../../packages/resumable-stream/README.md#ai-sdk)).

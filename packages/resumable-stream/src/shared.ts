@@ -293,14 +293,11 @@ export async function claimSessionGeneration({
 	stream,
 	fencingToken,
 	leaseDurationMs,
-	now = () => Date.now(),
 }: {
 	stream: S2Stream;
 	fencingToken: string;
 	/** Take over an active generation that hasn't written for this long. */
 	leaseDurationMs?: number;
-	/** Time source override for tests. */
-	now?: () => number;
 }): Promise<{
 	fromSeqNum: number;
 	matchSeqNumStart: number;
@@ -333,12 +330,11 @@ export async function claimSessionGeneration({
 	if (!isFenceRecord(lastRecord) || !isTerminalFence(lastRecord)) {
 		if (
 			leaseDurationMs === undefined ||
-			now() - lastRecord.timestamp.getTime() < leaseDurationMs
+			Date.now() - lastRecord.timestamp.getTime() < leaseDurationMs
 		) {
 			return null;
 		}
-		// The writer is gone without ending its generation: end it, so its
-		// readers finish, and claim in the same append.
+		// End the abandoned generation so its readers finish, and claim atomically.
 		const { fence } = await readLastFence(stream);
 		if (!fence?.active) return null;
 		const ack = await stream.append(
@@ -436,10 +432,7 @@ export async function* replayActiveGenerationStringRecords(
 	);
 }
 
-/**
- * A cursor past the tail came from an earlier stream with the same name
- * (deleted and recreated), so read the current one from the start.
- */
+/** A cursor past the tail is from a deleted and recreated stream: start over. */
 function cursorWithin(fromSeqNum: number, nextSeqNum: number): number {
 	return fromSeqNum > nextSeqNum ? 0 : fromSeqNum;
 }

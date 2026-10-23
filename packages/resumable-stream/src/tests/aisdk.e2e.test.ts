@@ -488,17 +488,6 @@ describeIf("resumable-stream/aisdk", () => {
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("session-long");
-				for (let i = 0; i < 2; i += 1) {
-					let bg: Promise<unknown> | undefined;
-					const res = await chat.makeResumable(
-						streamName,
-						arrayToAsyncIterable(sampleChunks()),
-						{ waitUntil: (promise) => (bg = promise) },
-					);
-					await res.text();
-					await bg;
-				}
-
 				const active: UIMessageChunk[] = [
 					{ type: "start" },
 					...Array.from({ length: 300 }, (_, i) => ({
@@ -522,10 +511,7 @@ describeIf("resumable-stream/aisdk", () => {
 				const replay = await chat.replay(streamName);
 				expect(await chat.stop(streamName)).toBe(true);
 				const replayed = await within(readSseResponse(replay));
-				expect(replayed.slice(-active.length - 1)).toEqual([
-					...active,
-					{ type: "abort" },
-				]);
+				expect(replayed).toEqual([...active, { type: "abort" }]);
 				release.resolve();
 				await bg;
 			},

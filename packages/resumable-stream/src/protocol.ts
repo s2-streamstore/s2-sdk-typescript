@@ -205,9 +205,7 @@ export async function persistToS2<T>({
 			for await (const value of source) {
 				for (const record of toRecords(value)) {
 					const ticket = await producer.submit(record);
-					// Appends are acknowledged asynchronously, so a failure can land
-					// while the source is idle; abort it rather than wait for a next
-					// chunk that may never come.
+					// A failed append must stop an idle source, not wait for its next chunk.
 					ticket.ack().then(
 						(ack) => onAppended?.(ack.seqNum()),
 						() => abortSource?.(),
@@ -248,8 +246,7 @@ export async function persistToS2<T>({
 				const appendDirect = async (batch: AppendRecord[]) => {
 					await handle.append(AppendInput.create(batch, { fencingToken }));
 				};
-				// A large error chunk may not fit in one append; the terminal fence
-				// alone still lets readers finish.
+				// If the error chunk doesn't fit, the fence alone still ends readers.
 				await appendDirect([...records])
 					.catch(() => appendDirect(records.slice(-1)))
 					.catch(() => {});

@@ -93,12 +93,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
 
 ## Production notes
 
-These apply to the chat adapters (`aisdk`, `anthropic`, `tanstack-ai`):
+For the chat adapters:
 
-- **Retention.** `single-use` streams keep their records after the generation completes, `shared` streams keep the latest two generations, and `session` streams keep everything. Configure the basin's default stream retention (and delete-on-empty for `single-use`) to bound storage.
-- **Authorization.** `replay` and `stop` take a stream name derived from the request; check that the caller owns the chat before calling them.
-- **Cloudflare Workers.** Every S2 append and read during a generation counts toward the invocation's subrequest limit. Raise `limits.subrequests` in `wrangler.jsonc` for long generations.
-- **Failures.** Readers always end with the adapter's error or stop chunk. Persistence errors are reported to `onPersistError` (default `console.error`), so the promise passed to `waitUntil` does not reject.
+- **Retention:** `single-use` keeps each stream, `shared` the last two generations, `session` everything. Set basin retention to bound storage.
+- **Auth:** check that the caller owns the chat before `replay` or `stop`.
+- **Leases:** a generation idle longer than `leaseDurationMs` can be taken over. Raise it for long tool calls.
+- **Failures:** readers always finish. Persistence errors go to `onPersistError`.
+- **Cloudflare Workers:** S2 calls count as subrequests. Raise `limits.subrequests` for long generations.
+- **Next.js:** use the Node runtime.
 
 ## AI SDK
 
@@ -106,7 +108,7 @@ The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResu
 
 Demo (Bun server + vanilla-JS client): [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
 
-Use `mode: "shared"` so a chat reuses one stream across turns. `single-use` (the default) needs a fresh stream name for every generation.
+Use `mode: "shared"` to reuse one stream per chat across turns.
 
 ```ts
 // lib/s2.ts
@@ -149,7 +151,8 @@ export async function POST(req: Request) {
 }
 ```
 
-Passing the source as a function starts the model call only once the stream is claimed, and gives it a signal that aborts when the generation is stopped. `requestId` lets a retried request rejoin the running generation instead of getting 409.
+- A function source starts the model only after the claim; `abortSignal` fires on stop or takeover.
+- `requestId` lets a retry rejoin the running generation instead of getting 409.
 
 ```ts
 // app/api/chat/[id]/stream/route.ts
@@ -164,7 +167,7 @@ export async function GET(
 }
 ```
 
-With `resume: true`, `useChat`'s `stop()` only disconnects, so generation keeps running. To stop it, call `chat.stop`: readers receive an `abort` chunk and finish, and the source's abort signal fires.
+With `resume: true`, `useChat`'s `stop()` only disconnects. To end the generation, call `chat.stop` from a route:
 
 ```ts
 // app/api/chat/[id]/stop/route.ts

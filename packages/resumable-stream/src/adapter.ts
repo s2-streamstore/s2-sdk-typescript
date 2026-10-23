@@ -77,11 +77,7 @@ export interface ResumableChatConfig {
 	onPersistError?: (error: unknown) => void;
 }
 
-/**
- * Chunks to persist. A function is called once the stream is claimed, with a
- * signal that aborts when the generation is stopped or taken over; pass it to
- * the model call (e.g. `streamText({ abortSignal })`).
- */
+/** Chunks to persist, or a function called after the claim with a signal that aborts on stop or takeover. */
 export type ResumableSource<T> =
 	| AsyncIterable<T>
 	| ((signal: AbortSignal) => AsyncIterable<T> | Promise<AsyncIterable<T>>);
@@ -103,11 +99,7 @@ export interface MakeResumableOptions {
 	 * @default "response"
 	 */
 	delivery?: "response" | "replay";
-	/**
-	 * Identifies the request starting the generation, such as the last user
-	 * message id. A retry with the same id while that generation is active
-	 * streams it instead of returning 409.
-	 */
+	/** Id of the request, such as the last user message id. A retry with the same id rejoins the active generation instead of getting 409. */
 	requestId?: string;
 }
 
@@ -141,11 +133,7 @@ export interface Chat<T> {
 	 * unless session replay is called with `{ live: true }`.
 	 */
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
-	/**
-	 * Ends the active generation: readers receive the adapter's stop chunk and
-	 * finish, and the writer stops at its next append. Returns false if no
-	 * generation is active.
-	 */
+	/** Ends the active generation with the adapter's stop chunk. Returns false if none is active. */
 	stop(streamName: string): Promise<boolean>;
 }
 
@@ -172,11 +160,7 @@ async function* resolveSource<T>(
 	yield* typeof source === "function" ? await source(signal) : source;
 }
 
-/**
- * Every writer gets a unique token so a stale writer can never append into a
- * generation that replaced it; retries of one request share the prefix, which
- * is what rejoin matches.
- */
+/** Retries of one request share this prefix; each writer adds a unique suffix. */
 async function requestFencingTokenPrefix(requestId: string): Promise<string> {
 	const digest = await crypto.subtle.digest(
 		"SHA-256",
@@ -259,8 +243,7 @@ export function createChat<T>(
 
 	const isShared = mode === "shared" || mode === "session";
 	const isSession = mode === "session";
-	// Once a stop or another writer fences the stream, other failures (such as
-	// the source throwing on abort) are consequences of it.
+	// Once fenced by a stop or takeover, other failures are consequences of it.
 	const isExpectedTakeover = (err: unknown): boolean =>
 		err instanceof FencingTokenMismatchError ||
 		(err instanceof AggregateError &&
@@ -279,7 +262,7 @@ export function createChat<T>(
 			const requestPrefix = options?.requestId
 				? await requestFencingTokenPrefix(options.requestId)
 				: undefined;
-			// Fencing tokens are limited to 36 bytes: the prefix is 29.
+			// Fencing tokens are at most 36 bytes; the prefix is 29.
 			const fencingToken = requestPrefix
 				? `${requestPrefix}${randomToken(3)}`
 				: `session-${randomToken(8)}`;
@@ -346,8 +329,7 @@ export function createChat<T>(
 			const abort = new AbortController();
 			let lastWrite = Date.now();
 			let finishing = false;
-			// Records past our own durable appends were written by a stop or a
-			// takeover, which appends a fence; the watcher reads only those.
+			// Records after our own durable appends can only be a stop or takeover.
 			let from = matchSeqNumStart;
 			const watchForStop = async () => {
 				const watchHandle = s2.basin(basin).stream(streamName);

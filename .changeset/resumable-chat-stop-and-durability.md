@@ -2,17 +2,17 @@
 "@s2-dev/resumable-stream": minor
 ---
 
-Chat adapters: add `stop`, abortable sources, and request rejoin; fix generations that could hang or lose their tail.
+Chat adapters: stop, abortable sources, request rejoin, and durability fixes.
 
-- `chat.stop(streamName)` ends the active generation. Readers receive the adapter's stop chunk (`{ type: "abort" }` for the AI SDK, `message_stop` for Anthropic, `RUN_FINISHED` for TanStack AI) and finish. With `resume: true`, `useChat`'s `stop()` only disconnects, so call this from a stop route.
-- `makeResumable` accepts a function source, called once the stream is claimed with an `AbortSignal` that fires when the generation is stopped or taken over, even while it is idle. Pass it to the model call (`streamText({ abortSignal })`).
-- `requestId` option: a retried request with the same id rejoins the active generation instead of getting 409.
-- `onPersistError` config option for persistence failures (default `console.error`).
-- Chunks larger than S2's 1 MiB record limit (for example `file` parts with data URLs) are split across records and reassembled on read. Previously the response and every replay hung.
-- When persisting fails, the error chunk and terminal fence are appended directly, so readers finish instead of waiting forever.
-- `single-use` generations are no longer trimmed when they complete, and `shared` claims keep the previous generation. Both trims could delete records a lagging reader had not read yet, truncating its response.
-- Replay and `stop` locate the active generation from the tail of the stream instead of scanning it from the start, so `session` logs no longer get slower as they grow.
-- `replay` with a `fromSeqNum` past the end of the stream (a cursor from a stream that was deleted and recreated) replays from the start. Previously it failed mid-response, so `subscribe` clients reconnected forever or ended without the new records.
-- `session` mode honors `leaseDurationMs`: a generation whose writer stopped without ending it (crash, timeout) is ended and taken over by the next claim, instead of returning 409 forever.
-- **Breaking:** the promise passed to `waitUntil` no longer rejects when persistence fails; failures go to `onPersistError` instead.
-- **Breaking:** requires `@s2-dev/streamstore` 0.24.3 or later.
+- `chat.stop(streamName)` ends the active generation; readers get the adapter's stop chunk.
+- `makeResumable` accepts `(signal) => source`, called after the claim; `signal` aborts on stop or takeover.
+- `requestId`: a retry rejoins the active generation instead of getting 409.
+- `onPersistError` receives persistence failures (default `console.error`).
+- `session` mode honors `leaseDurationMs`, so a crashed writer no longer locks the stream.
+- Fix: chunks over 1 MiB hung the response and replays.
+- Fix: readers hung when persistence failed.
+- Fix: trims could truncate a lagging reader.
+- Fix: replay of long `session` streams slowed down as they grew.
+- Fix: a `fromSeqNum` past the tail failed instead of replaying from the start.
+- **Breaking:** the `waitUntil` promise no longer rejects; use `onPersistError`.
+- **Breaking:** requires `@s2-dev/streamstore` >= 0.24.3.
