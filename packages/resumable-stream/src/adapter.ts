@@ -344,15 +344,15 @@ export function createChat<T>(
 			const abort = new AbortController();
 			let lastWrite = Date.now();
 			let finishing = false;
+			// Records past our own durable appends were written by a stop or a
+			// takeover, which appends a fence; the watcher reads only those.
+			let from = matchSeqNumStart;
 			const watchForStop = async () => {
 				const watchHandle = s2.basin(basin).stream(streamName);
-				let from = matchSeqNumStart;
 				try {
 					while (!finishing && !abort.signal.aborted) {
 						await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
 						if (finishing || Date.now() - lastWrite < STOP_POLL_MS) continue;
-						// A stop or a takeover appends a fence; only records since the
-						// last check need reading.
 						const batch = await watchHandle
 							.read(
 								{ start: { from: { seqNum: from } }, stop: { waitSecs: 0 } },
@@ -376,6 +376,9 @@ export function createChat<T>(
 				stream: streamName,
 				source: resolveSource(source, abort.signal),
 				abortSource: () => abort.abort(),
+				onAppended: (seqNum) => {
+					from = Math.max(from, seqNum + 1);
+				},
 				fencingToken,
 				batchSize,
 				lingerDuration,

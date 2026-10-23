@@ -143,6 +143,8 @@ export interface PersistToS2Options<T> {
 	onSeqNumMismatch?: (error: SeqNumMismatchError) => void;
 	/** Called when an append fails while the source is still running. */
 	abortSource?: () => void;
+	/** Called with a source record's sequence number once it is durable. */
+	onAppended?: (seqNum: number) => void;
 }
 
 function combineErrors(errors: ReadonlyArray<unknown>): unknown | undefined {
@@ -185,6 +187,7 @@ export async function persistToS2<T>({
 	matchSeqNumStart,
 	onSeqNumMismatch,
 	abortSource,
+	onAppended,
 }: PersistToS2Options<T>): Promise<void> {
 	const handle = s2.basin(basin).stream(stream);
 	try {
@@ -205,7 +208,10 @@ export async function persistToS2<T>({
 					// Appends are acknowledged asynchronously, so a failure can land
 					// while the source is idle; abort it rather than wait for a next
 					// chunk that may never come.
-					ticket.ack().catch(() => abortSource?.());
+					ticket.ack().then(
+						(ack) => onAppended?.(ack.seqNum()),
+						() => abortSource?.(),
+					);
 				}
 			}
 		} catch (err) {
