@@ -91,11 +91,24 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
    - Data records are enqueued to the output stream controller for consumption.
    - If a sentinel fence command is encountered, the stream is closed.
 
+## Production notes
+
+For the chat adapters:
+
+- **Retention:** `single-use` keeps each stream, `shared` the last two generations, `session` everything. Set basin retention to bound storage.
+- **Auth:** check that the caller owns the chat before `replay` or `stop`.
+- **Leases:** a generation idle longer than `leaseDurationMs` can be taken over. Raise it for long tool calls.
+- **Failures:** readers always finish. Persistence errors go to `onPersistError`.
+- **Cloudflare Workers:** S2 calls count as subrequests. Raise `limits.subrequests` for long generations.
+- **Next.js:** use the Node runtime.
+
 ## AI SDK
 
 The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResumable` writes `UIMessageChunk`s to S2 and streams the response by reading those records. The wire format matches the AI SDK's `createUIMessageStreamResponse`, so the stock `DefaultChatTransport` works out of the box.
 
 Demo (Bun server + vanilla-JS client): [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
+
+Use `mode: "shared"` to reuse one stream per chat across turns.
 
 ```ts
 // lib/s2.ts
@@ -104,33 +117,42 @@ import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 export const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
+  mode: "shared",
 });
 ```
 
 ```ts
 // app/api/chat/route.ts
 import { after } from "next/server";
-import { convertToModelMessages, streamText, type UISnapshotMessage } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
-  const { id, messages } = (await req.json()) as { id: string; messages: UISnapshotMessage[] };
-  const streamName = `chat-${id}`;
-  const result = streamText({
-    model: openai("gpt-4o-mini"),
-    messages: await convertToModelMessages(messages),
-  });
+  const { id, messages } = (await req.json()) as { id: string; messages: UIMessage[] };
 
-  return chat.makeResumable(streamName, result.toUIMessageStream(), {
-    waitUntil: (promise) => {
-      after(async () => {
-        await promise;
-      });
+  return chat.makeResumable(
+    `chat-${id}`,
+    async (abortSignal) =>
+      streamText({
+        model: openai("gpt-4o-mini"),
+        messages: await convertToModelMessages(messages),
+        abortSignal,
+      }).toUIMessageStream(),
+    {
+      requestId: messages.at(-1)?.id,
+      waitUntil: (promise) => {
+        after(async () => {
+          await promise;
+        });
+      },
     },
-  });
+  );
 }
 ```
+
+- A function source starts the model only after the claim; `abortSignal` fires on stop or takeover.
+- `requestId` lets a retry rejoin the running generation instead of getting 409.
 
 ```ts
 // app/api/chat/[id]/stream/route.ts
@@ -142,6 +164,22 @@ export async function GET(
 ) {
   const { id } = await params;
   return chat.replay(`chat-${id}`);
+}
+```
+
+With `resume: true`, `useChat`'s `stop()` only disconnects. To end the generation, call `chat.stop` from a route:
+
+```ts
+// app/api/chat/[id]/stop/route.ts
+import { chat } from "@/lib/s2";
+
+export async function POST(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  await chat.stop(`chat-${id}`);
+  return new Response(null, { status: 204 });
 }
 ```
 
@@ -159,6 +197,12 @@ const transport = new DefaultChatTransport({
 
 export default function Chat() {
   const chat = useChat({ transport, resume: true });
+
+  async function stop() {
+    await fetch(`/api/chat/${chat.id}/stop`, { method: "POST" });
+    chat.stop();
+  }
+
   return null;
 }
 ```
@@ -246,7 +290,7 @@ Server fields:
 | `mode` | Storage layout: `single-use`, `shared`, or `session`. Use `session` for multi-turn chats and multi-tab replay. |
 | `batchSize` | Maximum number of chunks to append to S2 at once. Defaults to `10`. |
 | `lingerDuration` | Maximum batching delay in milliseconds. Defaults to `50`. |
-| `leaseDurationMs` | `shared` mode takeover window for stale active generations. Defaults to `5000`. |
+| `leaseDurationMs` | `shared` and `session` mode takeover window for stale active generations. Defaults to `5000`. |
 | `onError` | Maps upstream errors to the stored/rendered error message. |
 
 `makeResumable` fields:

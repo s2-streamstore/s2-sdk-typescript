@@ -1,4 +1,5 @@
 import {
+	AppendInput,
 	AppendRecord,
 	FencingTokenMismatchError,
 	randomToken,
@@ -10,12 +11,14 @@ import {
 } from "@s2-dev/streamstore";
 import {
 	appendFenceCommand,
-	createTerminalRecords,
+	dataRecords,
+	isFenceRecord,
 	persistToS2,
 } from "./protocol.js";
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
+	readLastFence,
 	readSessionReplayState,
 	replayActiveGenerationStringRecords,
 	replaySessionStringRecords,
@@ -31,6 +34,7 @@ export type { SseFrame } from "./shared.js";
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_LINGER_DURATION = 50;
 const DEFAULT_LEASE_DURATION_MS = 5 * 1000;
+const STOP_POLL_MS = 1000;
 
 export const DEFAULT_ERROR_TEXT = "An error occurred.";
 const STREAM_IN_USE_TEXT = "Stream already in use";
@@ -53,14 +57,15 @@ export interface ResumableChatConfig {
 	 * How to map generations to S2 streams. Defaults to `single-use`.
 	 * - `single-use`: each generation gets a dedicated stream.
 	 * - `shared`: generations reuse one stream; later writers take over via lease-based fencing.
-	 *   The stream is trimmed on each claim, so replay yields only the active generation.
+	 *   Older generations are trimmed on each claim, and replay yields only the active generation.
 	 * - `session`: generations append to one durable session log. Replay tails the stream,
 	 *   surfacing chunks from every generation as they land.
 	 */
 	mode?: ResumableChatMode;
 	/**
-	 * Only applies to `shared`. If an active generation hasn't written a record
-	 * for this many milliseconds, the next claim takes it over. Defaults to 5000.
+	 * Applies to `shared` and `session`. If an active generation hasn't written
+	 * a record for this many milliseconds, the next claim takes it over.
+	 * Defaults to 5000.
 	 */
 	leaseDurationMs?: number;
 	/**
@@ -68,7 +73,14 @@ export interface ResumableChatConfig {
 	 * Defaults to returning "An error occurred.".
 	 */
 	onError?: (error: unknown) => string;
+	/** Called when persisting a generation fails. Defaults to `console.error`. */
+	onPersistError?: (error: unknown) => void;
 }
+
+/** Chunks to persist, or a function called after the claim with a signal that aborts on stop or takeover. */
+export type ResumableSource<T> =
+	| AsyncIterable<T>
+	| ((signal: AbortSignal) => AsyncIterable<T> | Promise<AsyncIterable<T>>);
 
 /** Options for `makeResumable`. */
 export interface MakeResumableOptions {
@@ -87,6 +99,8 @@ export interface MakeResumableOptions {
 	 * @default "response"
 	 */
 	delivery?: "response" | "replay";
+	/** Id of the request, such as the last user message id. A retry with the same id rejoins the active generation instead of getting 409. */
+	requestId?: string;
 }
 
 /** Options for `replay`. */
@@ -111,7 +125,7 @@ export interface Chat<T> {
 	 */
 	makeResumable(
 		streamName: string,
-		source: AsyncIterable<T>,
+		source: ResumableSource<T>,
 		options?: MakeResumableOptions,
 	): Promise<Response>;
 	/**
@@ -119,12 +133,16 @@ export interface Chat<T> {
 	 * unless session replay is called with `{ live: true }`.
 	 */
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
+	/** Ends the active generation with the adapter's stop chunk. Returns false if none is active. */
+	stop(streamName: string): Promise<boolean>;
 }
 
 /** Adapter contract for plugging a chunk shape into the shared chat implementation. */
 export interface ChatAdapter<T> {
 	/** Synthesize an error chunk to surface upstream failures to the client. */
 	makeErrorChunk(err: unknown, onError?: (err: unknown) => string): T;
+	/** Chunk appended when a generation is stopped. */
+	makeStopChunk?: () => T;
 	/** Prepare a chunk before storage. */
 	prepareForStorage?: (chunk: T) => T;
 	/** SSE response headers. */
@@ -133,6 +151,22 @@ export interface ChatAdapter<T> {
 	 * Adds an `event:` line to SSE frames when the format needs one.
 	 */
 	formatSseFrame?: (storedBody: string) => SseFrame;
+}
+
+async function* resolveSource<T>(
+	source: ResumableSource<T>,
+	signal: AbortSignal,
+): AsyncIterable<T> {
+	yield* typeof source === "function" ? await source(signal) : source;
+}
+
+/** Retries of one request share this prefix; each writer adds a unique suffix. */
+async function requestFencingTokenPrefix(requestId: string): Promise<string> {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(requestId),
+	);
+	return `req-${btoa(String.fromCharCode(...new Uint8Array(digest))).slice(0, 24)}-`;
 }
 
 function streamInUseResponse(): Response {
@@ -202,29 +236,53 @@ export function createChat<T>(
 	const leaseDurationMs = config.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
 	const errorChunk = (err: unknown): T =>
 		adapter.makeErrorChunk(err, config.onError);
+	const onPersistError =
+		config.onPersistError ??
+		((err: unknown) =>
+			console.error("[resumable-stream] Persist failed:", err));
 
 	const isShared = mode === "shared" || mode === "session";
 	const isSession = mode === "session";
-	const trimOnTerminalFence = mode === "single-use";
+	// Once fenced by a stop or takeover, other failures are consequences of it.
 	const isExpectedTakeover = (err: unknown): boolean =>
-		isShared &&
-		(err instanceof FencingTokenMismatchError ||
-			(err instanceof AggregateError &&
-				err.errors.length > 0 &&
-				err.errors.every(
-					(error) => error instanceof FencingTokenMismatchError,
-				)));
+		err instanceof FencingTokenMismatchError ||
+		(err instanceof AggregateError &&
+			err.errors.some((error) => error instanceof FencingTokenMismatchError));
+	const toBody = (chunk: T): string =>
+		JSON.stringify(
+			adapter.prepareForStorage ? adapter.prepareForStorage(chunk) : chunk,
+		);
 
 	return {
 		async makeResumable(
 			streamName: string,
-			source: AsyncIterable<T>,
+			source: ResumableSource<T>,
 			options?: MakeResumableOptions,
 		): Promise<Response> {
-			const fencingToken = `session-${randomToken(8)}`;
+			const requestPrefix = options?.requestId
+				? await requestFencingTokenPrefix(options.requestId)
+				: undefined;
+			// Fencing tokens are at most 36 bytes; the prefix is 29.
+			const fencingToken = requestPrefix
+				? `${requestPrefix}${randomToken(3)}`
+				: `session-${randomToken(8)}`;
 			let matchSeqNumStart = 1;
 			const handle = s2.basin(basin).stream(streamName);
 			const delivery = options?.delivery ?? "response";
+
+			const inUse = async (): Promise<Response> => {
+				if (!requestPrefix) return streamInUseResponse();
+				const rejoinHandle = s2.basin(basin).stream(streamName);
+				const rejoined = await replayResponse(
+					closeHandleWhenDone(
+						rejoinHandle,
+						replayActiveGenerationStringRecords(rejoinHandle, 0, requestPrefix),
+					),
+					adapter.responseHeaders,
+					adapter.formatSseFrame,
+				);
+				return rejoined.status === 204 ? streamInUseResponse() : rejoined;
+			};
 
 			let claimed = false;
 			try {
@@ -232,9 +290,10 @@ export function createChat<T>(
 					const claim = await claimSessionGeneration({
 						stream: handle,
 						fencingToken,
+						leaseDurationMs,
 					});
 					if (!claim) {
-						return streamInUseResponse();
+						return inUse();
 					}
 					matchSeqNumStart = claim.matchSeqNumStart;
 				} else if (isShared) {
@@ -244,7 +303,7 @@ export function createChat<T>(
 						leaseDurationMs,
 					});
 					if (!claim) {
-						return streamInUseResponse();
+						return inUse();
 					}
 					matchSeqNumStart = claim.matchSeqNumStart;
 				} else {
@@ -260,61 +319,83 @@ export function createChat<T>(
 					err instanceof FencingTokenMismatchError ||
 					err instanceof SeqNumMismatchError
 				) {
-					return streamInUseResponse();
+					return inUse();
 				}
 				throw err;
 			} finally {
 				if (!claimed) await handle.close();
 			}
 
-			const persistPromise = persistToS2({
+			const abort = new AbortController();
+			let lastWrite = Date.now();
+			let finishing = false;
+			// Records after our own durable appends can only be a stop or takeover.
+			let from = matchSeqNumStart;
+			const watchForStop = async () => {
+				const watchHandle = s2.basin(basin).stream(streamName);
+				try {
+					while (!finishing && !abort.signal.aborted) {
+						await new Promise((resolve) => setTimeout(resolve, STOP_POLL_MS));
+						if (finishing || Date.now() - lastWrite < STOP_POLL_MS) continue;
+						const batch = await watchHandle
+							.read(
+								{ start: { from: { seqNum: from } }, stop: { waitSecs: 0 } },
+								{ as: "string" },
+							)
+							.catch(() => undefined);
+						const records = batch?.records ?? [];
+						if (records.length === 0) continue;
+						from = records.at(-1)!.seqNum + 1;
+						if (records.some(isFenceRecord) && !finishing) abort.abort();
+					}
+				} finally {
+					await watchHandle.close();
+				}
+			};
+			if (typeof source === "function") void watchForStop();
+
+			const persisted = persistToS2({
 				s2,
 				basin,
 				stream: streamName,
-				source,
+				source: resolveSource(source, abort.signal),
+				abortSource: () => abort.abort(),
+				onAppended: (seqNum) => {
+					from = Math.max(from, seqNum + 1);
+				},
 				fencingToken,
 				batchSize,
 				lingerDuration,
 				matchSeqNumStart,
-				toRecord: (chunk) =>
-					AppendRecord.string({
-						body: JSON.stringify(
-							adapter.prepareForStorage
-								? adapter.prepareForStorage(chunk)
-								: chunk,
-						),
-					}),
-				finalRecords: (sourceError) => {
-					if (sourceError === undefined) {
-						return createTerminalRecords({
-							terminalFenceToken: `end-${randomToken(4)}`,
-							trim: trimOnTerminalFence,
-						});
-					}
-					return createTerminalRecords({
-						errorRecord: AppendRecord.string({
-							body: JSON.stringify(errorChunk(sourceError)),
-						}),
-						terminalFenceToken: `error-${randomToken(4)}`,
-						trim: trimOnTerminalFence,
-					});
+				toRecords: (chunk) => {
+					lastWrite = Date.now();
+					return dataRecords(toBody(chunk));
 				},
-			});
-			const handledPersistPromise = persistPromise.catch((err) => {
-				if (isExpectedTakeover(err)) return;
-				throw err;
-			});
+				finalRecords: (sourceError) => {
+					finishing = true;
+					return sourceError === undefined
+						? [AppendRecord.fence(`end-${randomToken(4)}`)]
+						: [
+								...dataRecords(JSON.stringify(errorChunk(sourceError))),
+								AppendRecord.fence(`error-${randomToken(4)}`),
+							];
+				},
+			})
+				.catch((err) => {
+					if (isExpectedTakeover(err)) {
+						abort.abort();
+						return;
+					}
+					onPersistError(err);
+				})
+				.finally(() => {
+					finishing = true;
+				});
 
 			if (options?.waitUntil) {
-				options.waitUntil(handledPersistPromise);
+				options.waitUntil(persisted);
 			} else if (delivery === "replay") {
-				await handledPersistPromise.catch((err) => {
-					console.error("[resumable-stream] Persist failed:", err);
-				});
-			} else {
-				handledPersistPromise.catch((err) => {
-					console.error("[resumable-stream] Background persist failed:", err);
-				});
+				await persisted;
 			}
 
 			if (delivery === "replay") {
@@ -384,6 +465,32 @@ export function createChat<T>(
 				adapter.responseHeaders,
 				adapter.formatSseFrame,
 			);
+		},
+
+		async stop(streamName: string): Promise<boolean> {
+			const handle = s2.basin(basin).stream(streamName);
+			try {
+				const { fence } = await readLastFence(handle);
+				if (!fence?.active) return false;
+				const stopChunk = adapter.makeStopChunk?.();
+				await handle.append(
+					AppendInput.create(
+						[
+							...(stopChunk === undefined
+								? []
+								: dataRecords(toBody(stopChunk))),
+							AppendRecord.fence(`end-${randomToken(4)}`),
+						],
+						{ fencingToken: fence.body },
+					),
+				);
+				return true;
+			} catch (err) {
+				if (err instanceof FencingTokenMismatchError) return false;
+				throw err;
+			} finally {
+				await handle.close();
+			}
 		},
 	};
 }

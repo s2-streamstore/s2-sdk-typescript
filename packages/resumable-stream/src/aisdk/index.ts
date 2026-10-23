@@ -12,6 +12,7 @@ export type {
 	ReplayOptions,
 	ResumableChatConfig,
 	ResumableChatMode,
+	ResumableSource,
 } from "../adapter.js";
 
 export type Chunk = UIMessageChunk;
@@ -24,6 +25,7 @@ const adapter: ChatAdapter<Chunk> = {
 			errorText: onError ? onError(err) : DEFAULT_ERROR_TEXT,
 		} satisfies UIMessageChunk;
 	},
+	makeStopChunk: () => ({ type: "abort" }),
 	responseHeaders: UI_MESSAGE_STREAM_HEADERS,
 };
 

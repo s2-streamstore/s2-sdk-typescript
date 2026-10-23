@@ -1,12 +1,15 @@
 import {
 	AppendInput,
+	AppendRecord,
 	RangeNotSatisfiableError,
+	randomToken,
 	S2Error,
 	type S2Stream,
 } from "@s2-dev/streamstore";
 import {
 	appendFenceCommand,
 	appendTrimCommand,
+	createPartAssembler,
 	isFenceRecord,
 	isTerminalFence,
 	isTrimRecord,
@@ -86,6 +89,7 @@ async function* tailDataRecords(
 	const session = await openStringReadSession(stream, fromSeqNum);
 	if (!session) return;
 
+	const assemble = createPartAssembler();
 	try {
 		for await (const record of session) {
 			if (isFenceRecord(record)) {
@@ -98,7 +102,8 @@ async function* tailDataRecords(
 				continue;
 			}
 			if (isTrimRecord(record) || !record.body) continue;
-			yield { body: record.body, nextSeqNum: record.seqNum + 1 };
+			const body = assemble(record);
+			if (body !== undefined) yield { body, nextSeqNum: record.seqNum + 1 };
 		}
 	} finally {
 		await session[Symbol.asyncDispose]?.();
@@ -124,13 +129,15 @@ async function* readAvailableDataRecords(
 		});
 	if (!session) return;
 
+	const assemble = createPartAssembler();
 	try {
 		for await (const record of session) {
 			if (record.seqNum >= untilSeqNum) break;
 			if (isFenceRecord(record) || isTrimRecord(record) || !record.body) {
 				continue;
 			}
-			yield { body: record.body, nextSeqNum: record.seqNum + 1 };
+			const body = assemble(record);
+			if (body !== undefined) yield { body, nextSeqNum: record.seqNum + 1 };
 		}
 	} finally {
 		await session[Symbol.asyncDispose]?.();
@@ -235,9 +242,9 @@ export async function claimSharedGeneration({
 	/** Time source override for tests. */
 	now?: () => number;
 	/**
-	 * Trim records before the new fence after claiming. `true` for one-shot
-	 * generations (`createResumableGeneration` `shared` mode). `false` for
-	 * session logs that need to preserve history across generations.
+	 * Trim generations older than the previous one after claiming, so slow
+	 * readers of the previous generation are not cut off. `false` for session
+	 * logs that need to preserve history across generations.
 	 *
 	 * @default true
 	 */
@@ -267,11 +274,11 @@ export async function claimSharedGeneration({
 	const fenceAck = await appendFenceCommand(stream, currentToken, fencingToken);
 	let matchSeqNumStart = fenceAck.end.seqNum;
 
-	if (trim && state.nextSeqNum > 0) {
+	if (trim && state.activeGenerationStartSeqNum) {
 		const trimAck = await appendTrimCommand(
 			stream,
 			fencingToken,
-			fenceAck.start.seqNum,
+			state.activeGenerationStartSeqNum,
 		);
 		matchSeqNumStart = trimAck.end.seqNum;
 	}
@@ -285,9 +292,12 @@ export async function claimSharedGeneration({
 export async function claimSessionGeneration({
 	stream,
 	fencingToken,
+	leaseDurationMs,
 }: {
 	stream: S2Stream;
 	fencingToken: string;
+	/** Take over an active generation that hasn't written for this long. */
+	leaseDurationMs?: number;
 }): Promise<{
 	fromSeqNum: number;
 	matchSeqNumStart: number;
@@ -318,7 +328,28 @@ export async function claimSessionGeneration({
 	}
 
 	if (!isFenceRecord(lastRecord) || !isTerminalFence(lastRecord)) {
-		return null;
+		if (
+			leaseDurationMs === undefined ||
+			Date.now() - lastRecord.timestamp.getTime() < leaseDurationMs
+		) {
+			return null;
+		}
+		// End the abandoned generation so its readers finish, and claim atomically.
+		const { fence } = await readLastFence(stream);
+		if (!fence?.active) return null;
+		const ack = await stream.append(
+			AppendInput.create(
+				[
+					AppendRecord.fence(`error-${randomToken(4)}`),
+					AppendRecord.fence(fencingToken),
+				],
+				{ fencingToken: fence.body },
+			),
+		);
+		return {
+			fromSeqNum: ack.start.seqNum + 1,
+			matchSeqNumStart: ack.end.seqNum,
+		};
 	}
 
 	const fenceAck = await appendFenceCommand(
@@ -332,36 +363,105 @@ export async function claimSessionGeneration({
 	};
 }
 
+interface LastFence {
+	seqNum: number;
+	body: string;
+	active: boolean;
+}
+
+export async function readLastFence(
+	stream: S2Stream,
+): Promise<{ fence: LastFence | null; nextSeqNum: number }> {
+	for (let window = 64; ; window *= 4) {
+		const session = await stream
+			.readSession(
+				{ start: { from: { tailOffset: window } }, stop: { waitSecs: 0 } },
+				{ as: "string" },
+			)
+			.catch((error: unknown) => {
+				if (
+					isMissingStreamError(error) ||
+					error instanceof RangeNotSatisfiableError
+				) {
+					return null;
+				}
+				throw error;
+			});
+		if (!session) return { fence: null, nextSeqNum: 0 };
+
+		let fence: LastFence | null = null;
+		let count = 0;
+		let nextSeqNum = 0;
+		try {
+			for await (const record of session) {
+				count += 1;
+				nextSeqNum = record.seqNum + 1;
+				if (isFenceRecord(record)) {
+					fence = {
+						seqNum: record.seqNum,
+						body: record.body,
+						active: !isTerminalFence(record),
+					};
+				}
+			}
+		} finally {
+			await session[Symbol.asyncDispose]?.();
+		}
+		if (fence || count < window) return { fence, nextSeqNum };
+	}
+}
+
 export async function* replayActiveGenerationStringRecords(
 	stream: S2Stream,
 	fromSeqNum = 0,
+	fenceTokenPrefix?: string,
 ): AsyncIterable<TailedStringRecord> {
-	const state = await readSharedStreamState(stream);
-	if (state.activeGenerationStartSeqNum === null) return;
-	if (!state.hasActiveGeneration) return;
+	const { fence, nextSeqNum } = await readLastFence(stream);
+	if (!fence?.active) return;
+	if (
+		fenceTokenPrefix !== undefined &&
+		!fence.body.startsWith(fenceTokenPrefix)
+	) {
+		return;
+	}
 
 	yield* tailDataRecords(
 		stream,
-		Math.max(state.activeGenerationStartSeqNum, fromSeqNum),
+		Math.max(fence.seqNum, cursorWithin(fromSeqNum, nextSeqNum)),
 		"stop-terminal",
 	);
+}
+
+/** A cursor past the tail is from a deleted and recreated stream: start over. */
+function cursorWithin(fromSeqNum: number, nextSeqNum: number): number {
+	return fromSeqNum > nextSeqNum ? 0 : fromSeqNum;
 }
 
 export async function* tailStringRecords(
 	stream: S2Stream,
 	fromSeqNum = 0,
 ): AsyncIterable<TailedStringRecord> {
-	yield* tailDataRecords(stream, fromSeqNum, "skip");
+	const nextSeqNum =
+		fromSeqNum > 0
+			? await stream.checkTail().then(
+					({ tail }) => tail.seqNum,
+					(error: unknown) => {
+						if (isMissingStreamError(error)) return 0;
+						throw error;
+					},
+				)
+			: 0;
+	yield* tailDataRecords(stream, cursorWithin(fromSeqNum, nextSeqNum), "skip");
 }
 
 export async function readSessionReplayState(
 	stream: S2Stream,
 ): Promise<SessionReplayState> {
-	const state = await readSharedStreamState(stream);
+	const { fence, nextSeqNum } = await readLastFence(stream);
 	return {
-		hasActiveGeneration: state.hasActiveGeneration,
-		activeGenerationStartSeqNum: state.activeGenerationStartSeqNum,
-		nextSeqNum: state.nextSeqNum,
+		hasActiveGeneration: fence?.active ?? false,
+		activeGenerationStartSeqNum: fence?.active ? fence.seqNum : null,
+		nextSeqNum,
 	};
 }
 
@@ -371,6 +471,7 @@ export async function* replaySessionStringRecords(
 	state?: SessionReplayState,
 ): AsyncIterable<TailedStringRecord> {
 	const replayState = state ?? (await readSessionReplayState(stream));
+	fromSeqNum = cursorWithin(fromSeqNum, replayState.nextSeqNum);
 	if (!replayState.hasActiveGeneration) {
 		if (fromSeqNum >= replayState.nextSeqNum) return;
 		yield* readAvailableDataRecords(stream, fromSeqNum);

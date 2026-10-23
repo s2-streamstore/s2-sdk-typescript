@@ -11,6 +11,7 @@ export type {
 	ReplayOptions,
 	ResumableChatConfig,
 	ResumableChatMode,
+	ResumableSource,
 } from "../adapter.js";
 
 /** Structural shape that matches `@tanstack/ai`'s `StreamChunk`. */
@@ -39,6 +40,13 @@ const adapter: ChatAdapter<Chunk> = {
 			error: { message },
 		};
 	},
+	makeStopChunk: () => ({
+		type: "RUN_FINISHED",
+		threadId: "s2-stop",
+		runId: `s2-stop-${Date.now()}`,
+		timestamp: Date.now(),
+		finishReason: "stop",
+	}),
 	responseHeaders: SSE_HEADERS,
 };
 
