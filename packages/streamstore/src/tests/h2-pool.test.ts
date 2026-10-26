@@ -4,6 +4,7 @@ import http2, {
 } from "node:http2";
 import net, { type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import { S2Error } from "../error.js";
 import * as Redacted from "../lib/redacted.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import { S2STransport } from "../lib/stream/transport/s2s/index.js";
@@ -641,5 +642,100 @@ describe("S2STransport connection sharing", () => {
 			}
 		},
 		TEST_TIMEOUT_MS,
+	);
+});
+
+// Regression test for: tail-idle timer (TAIL_TIMEOUT_MS = 20s in
+// S2SReadSession) leaks the pooled HTTP/2 stream. When the timer fires, the
+// read session enqueues a 408 TIMEOUT result into the ReadableStream
+// controller and closes the controller, but never closes the underlying
+// ClientHttp2Stream. Once `controller.close()` runs, the underlying-source
+// `cancel` algorithm is unreachable (per the WHATWG streams spec,
+// ReadableStreamCancel returns early when the stream is not in the "readable"
+// state), so the retry layer's subsequent `session.cancel("retry")` is a
+// silent no-op. The leaked stream keeps `activeStreams` pinned at 1 forever
+// (it only decrements on stream 'close'), the keep-alive pings keep the
+// connection healthy, and `transport.close()` hangs in `detach()`'s awaited
+// `session.close()` (graceful close waits for in-flight streams). The fix
+// closes the HTTP/2 stream before erroring the controller, matching every
+// other error path in S2SReadSession.
+describe("S2STransport tail-read timeout", () => {
+	// TAIL_TIMEOUT_MS is 20s; the test waits for it to fire, then verifies
+	// close() does not hang on the leaked stream.
+	const TAIL_TIMEOUT_TEST_MS = 30_000;
+	// transport.close() should complete promptly once the leaked stream is
+	// closed. Without the fix, it hangs indefinitely — fail fast instead.
+	const CLOSE_DEADLINE_MS = 5_000;
+
+	it(
+		"closes the underlying HTTP/2 stream when the tail-idle timer fires, releasing the pool slot",
+		async () => {
+			const server = await startServer((_stream) => {
+				// `startServer` already responds with `:status: 200` and
+				// attaches a stream "error" handler for us. We deliberately
+				// never send a body frame here, so the client's 20s
+				// tail-idle timer (TAIL_TIMEOUT_MS) fires.
+			});
+
+			try {
+				const transport = new S2STransport({
+					baseUrl: `${server.origin}/v1`,
+					accessToken: Redacted.make("test-token"),
+					retry: {
+						maxAttempts: 1,
+						minBaseDelayMillis: 1,
+						maxBaseDelayMillis: 1,
+					},
+				});
+
+				const session = await transport.makeReadSession("test-stream");
+
+				// Iterate until the tail-idle timer fires and surfaces a
+				// TIMEOUT result. The retry layer converts that into a stream
+				// error that for-await-of rethrows.
+				let caught: unknown;
+				try {
+					for await (const _ of session) {
+						// Server never sends a record; no iterations expected.
+					}
+				} catch (err) {
+					caught = err;
+				}
+				expect(caught).toBeInstanceOf(S2Error);
+				expect(caught as S2Error).toMatchObject({
+					code: "TIMEOUT",
+					status: 408,
+				});
+
+				// transport.close() awaits a graceful session close. Without
+				// the fix, the leaked HTTP/2 stream keeps `activeStreams > 0`
+				// forever and keep-alive pings keep the connection healthy,
+				// so session.close() never completes. The deadline fails the
+				// test fast instead of hanging.
+				let closeTimer: ReturnType<typeof setTimeout> | undefined;
+				const closeDeadline = new Promise<never>((_, reject) => {
+					closeTimer = setTimeout(
+						() =>
+							reject(
+								new Error(
+									`transport.close() did not settle within ${CLOSE_DEADLINE_MS}ms`,
+								),
+							),
+						CLOSE_DEADLINE_MS,
+					);
+				});
+				try {
+					await Promise.race([transport.close(), closeDeadline]);
+				} finally {
+					if (closeTimer) clearTimeout(closeTimer);
+				}
+
+				// After close, no leaked stream holds the server-side session.
+				await waitFor(() => server.openSessions().size === 0);
+			} finally {
+				await server.close().catch(() => {});
+			}
+		},
+		TAIL_TIMEOUT_TEST_MS,
 	);
 });

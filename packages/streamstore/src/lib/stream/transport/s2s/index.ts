@@ -342,6 +342,20 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 							code: "TIMEOUT",
 						});
 						debug("tail timeout detected");
+						// Close the underlying HTTP/2 stream before erroring the
+						// ReadableStream controller. Once `controller.close()` runs
+						// (inside `safeError`), the underlying-source `cancel`
+						// algorithm is unreachable, so without this the pooled
+						// stream stays open and permanently holds a pool slot /
+						// server-side read session; `transport.close()` then hangs
+						// on the graceful session close that waits for in-flight
+						// streams. The pre-assignment race (timer fires before
+						// `openH2Stream` resolves) is handled by the existing
+						// `if (controllerClosed) { stream.close(); return; }` check
+						// after `openH2Stream` resolves.
+						if (http2Stream && !http2Stream.closed) {
+							http2Stream.close();
+						}
 						safeError(timeoutError);
 					}, TAIL_TIMEOUT_MS);
 				};
