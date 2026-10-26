@@ -1,4 +1,5 @@
 import http2, {
+	type Http2Session,
 	type ServerHttp2Session,
 	type ServerHttp2Stream,
 } from "node:http2";
@@ -492,6 +493,106 @@ describe("Http2ConnectionPool", () => {
 			} finally {
 				await proxy.close();
 			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+describe("Http2ConnectionPool graceful close fallback", () => {
+	const servers: TestServer[] = [];
+
+	afterEach(async () => {
+		await Promise.all(servers.splice(0).map((s) => s.close().catch(() => {})));
+	});
+
+	async function newServer(onStream?: (stream: ServerHttp2Stream) => void) {
+		const server = await startServer(onStream);
+		servers.push(server);
+		return server;
+	}
+
+	/**
+	 * Simulate Bun's wedged `session.close(cb)`: the callback (and the session
+	 * `'close'` event) never fire, so a graceful close hangs forever. On Node
+	 * `session.close()` always completes, so the wedge only reproduces via this
+	 * stub; it deterministically exercises the destroy fallback that must keep
+	 * `S2Stream.close()`/`transport.close()` from hanging on Bun after a stream
+	 * is RST'd in the same tick as `session.request()`, before any response
+	 * byte is processed, with a response frame arriving afterwards.
+	 */
+	function wedgeSessionClose(session: Http2Session): () => void {
+		const original = session.close.bind(session);
+		const mutable = session as unknown as {
+			close: (callback?: () => void) => void;
+		};
+		mutable.close = () => {};
+		return () => {
+			mutable.close = original;
+		};
+	}
+
+	it(
+		"detach resolves within the graceful-close deadline when session.close never completes",
+		async () => {
+			const server = await newServer();
+			const pool = new Http2ConnectionPool({
+				gracefulCloseTimeoutMillis: 100,
+			});
+
+			pool.attach(server.origin);
+			const { stream } = await pool.request(server.origin, GET_HEADERS);
+			await waitFor(() => server.sessionCount() === 1);
+			const session = stream.session;
+			if (!session) throw new Error("no session");
+			// RST the stream so the session is idle, mirroring the wedge trigger.
+			stream.close();
+			server.endAllStreams();
+			await waitFor(() => stream.closed);
+
+			const restore = wedgeSessionClose(session);
+
+			const detach = pool.detach(server.origin);
+			const outcome = await Promise.race([
+				detach.then(() => "resolved" as const),
+				sleep(1000).then(() => "hung" as const),
+			]);
+			restore();
+
+			// Without the destroy fallback, the wedged close hangs forever.
+			expect(outcome).toBe("resolved");
+			expect(session.destroyed).toBe(true);
+			expect(pool.connectionCount(server.origin)).toBe(0);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"evict destroys a session whose graceful close never completes within the deadline",
+		async () => {
+			const server = await newServer();
+			const pool = new Http2ConnectionPool({
+				gracefulCloseTimeoutMillis: 100,
+			});
+
+			pool.attach(server.origin);
+			const { stream } = await pool.request(server.origin, GET_HEADERS);
+			stream.on("error", () => {});
+			await waitFor(() => server.sessionCount() === 1);
+			const session = stream.session;
+			if (!session) throw new Error("no session");
+
+			const restore = wedgeSessionClose(session);
+
+			// A server GOAWAY triggers `evict()` -> `closeConnection()`. With the
+			// wedge the graceful close never completes, so the pool must destroy
+			// the session itself instead of leaving the socket wedged forever.
+			for (const s of server.openSessions()) {
+				s.goaway();
+			}
+			await waitFor(() => pool.connectionCount(server.origin) === 0);
+			await waitFor(() => session.destroyed);
+
+			restore();
 		},
 		TEST_TIMEOUT_MS,
 	);

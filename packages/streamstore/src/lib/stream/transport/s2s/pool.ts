@@ -21,6 +21,14 @@ const DEFAULT_CONNECTION_TIMEOUT_MS = 3000;
 // Matches the Rust SDK's `http2_keep_alive_interval` / `_timeout`.
 const DEFAULT_KEEP_ALIVE_INTERVAL_MS = 20_000;
 const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 10_000;
+// Graceful close deadline before falling back to `session.destroy()`. Node
+// completes a graceful `session.close()` in milliseconds, so this only ever
+// fires when a runtime's `node:http2` wedges a session — e.g. Bun after a
+// stream RST'd in the same tick as the request, before any response byte was
+// processed. Unbounded close there hangs `S2Stream.close()`/`transport.close()`
+// forever; the destroy fallback is semantically equivalent for a session with
+// no open streams and guarantees close always resolves.
+const DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS = 5000;
 const DEFAULT_WINDOW_SIZE = 10 * 1024 * 1024; // 10 MiB
 const MIN_WINDOW_SIZE = 65_535; // HTTP/2 default window
 const MAX_WINDOW_SIZE = 2 ** 31 - 1; // RFC 9113 (https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5.2-2.8.3)
@@ -114,11 +122,13 @@ export class Http2ConnectionPool {
 	private readonly maxStreamsPerConnection: number;
 	private readonly keepAliveIntervalMillis: number;
 	private readonly keepAliveTimeoutMillis: number;
+	private readonly gracefulCloseTimeoutMillis: number;
 
 	constructor(options?: {
 		maxConcurrentStreamsPerConnection?: number;
 		keepAliveIntervalMillis?: number;
 		keepAliveTimeoutMillis?: number;
+		gracefulCloseTimeoutMillis?: number;
 	}) {
 		this.maxStreamsPerConnection =
 			options?.maxConcurrentStreamsPerConnection ??
@@ -127,6 +137,8 @@ export class Http2ConnectionPool {
 			options?.keepAliveIntervalMillis ?? DEFAULT_KEEP_ALIVE_INTERVAL_MS;
 		this.keepAliveTimeoutMillis =
 			options?.keepAliveTimeoutMillis ?? DEFAULT_KEEP_ALIVE_TIMEOUT_MS;
+		this.gracefulCloseTimeoutMillis =
+			options?.gracefulCloseTimeoutMillis ?? DEFAULT_GRACEFUL_CLOSE_TIMEOUT_MS;
 	}
 
 	/**
@@ -179,15 +191,9 @@ export class Http2ConnectionPool {
 			origin,
 		);
 		await Promise.all(
-			endpoint.connections.map((connection) => {
-				const { session } = connection;
-				if (session.closed || session.destroyed) {
-					return undefined;
-				}
-				return new Promise<void>((resolve) => {
-					session.close(() => resolve());
-				});
-			}),
+			endpoint.connections.map((connection) =>
+				this.closeConnection(connection),
+			),
 		);
 	}
 
@@ -445,11 +451,57 @@ export class Http2ConnectionPool {
 			removeFrom(endpoint.connections, connection);
 		}
 		// The pool loses track of the connection here, so make sure it winds
-		// down instead of relying on the server to close it.
+		// down instead of relying on the server to close it. Bound the close
+		// so a wedged session cannot linger forever (see `closeConnection`).
+		void this.closeConnection(connection);
+	}
+
+	/**
+	 * Gracefully close a pooled session, falling back to `session.destroy()`
+	 * after `gracefulCloseTimeoutMillis`. On Node the graceful close always
+	 * completes in milliseconds; the deadline + destroy only ever fire when a
+	 * runtime's `node:http2` wedges a session — notably Bun after a stream
+	 * RST'd in the same tick as `session.request()`, before any response byte
+	 * is processed, with a response frame arriving afterwards — so that the
+	 * pool's `detach()` (and therefore `S2Stream.close()`/`transport.close()`)
+	 * always resolves instead of hanging indefinitely. Destroying an evicted
+	 * session with no open streams is semantically equivalent to a graceful
+	 * close, so the fallback cannot corrupt in-flight work.
+	 */
+	private closeConnection(connection: PooledConnection): Promise<void> {
 		const { session } = connection;
-		if (!session.closed && !session.destroyed) {
-			session.close();
+		if (session.closed || session.destroyed) {
+			return Promise.resolve();
 		}
+		return new Promise<void>((resolve) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(() => {
+				debug(
+					"graceful session close timed out after %dms, destroying",
+					this.gracefulCloseTimeoutMillis,
+				);
+				try {
+					if (!session.closed && !session.destroyed) {
+						session.destroy();
+					}
+				} catch {
+					// Best effort; the session is leaving the pool regardless.
+				}
+				finish();
+			}, this.gracefulCloseTimeoutMillis);
+			timer.unref?.();
+			try {
+				session.close(finish);
+			} catch {
+				finish();
+			}
+		});
 	}
 }
 
