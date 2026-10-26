@@ -292,8 +292,11 @@ export namespace AppendInput {
 			});
 		}
 
-		const totalBytes = records.reduce((sum, r) => sum + r.meteredBytes, 0);
-		if (totalBytes > MAX_APPEND_BYTES) {
+		const totalBytes = records.reduce(
+			(sum, r) => sum + calculateMeteredBytes(r),
+			0,
+		);
+		if (!Number.isFinite(totalBytes) || totalBytes > MAX_APPEND_BYTES) {
 			throw new S2Error({
 				message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
 				origin: "sdk",
