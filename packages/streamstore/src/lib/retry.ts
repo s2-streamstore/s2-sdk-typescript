@@ -1210,7 +1210,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		this.pumpPromise = this.runPump().catch((e) => {
 			debugSession("[%s] pump crashed unexpectedly: %s", this.streamName, e);
-			// This should never happen - pump handles all errors internally
+			// Treat any pump crash as fatal so the error reaches all
+			// submitters and waiters instead of leaving the session
+			// silently hung.
+			void this.abort(s2Error(e));
 		});
 	}
 
@@ -1340,7 +1343,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					);
 					const attemptStarted = performance.now();
 					entry.attemptStartedMonotonicMs = attemptStarted;
-					entry.innerPromise = this.session.submit(entry.input);
+					// Convert a transport rejection into an ordinary err()
+					// result so it flows through the retry/abort machinery
+					// instead of escaping the pump.
+					entry.innerPromise = this.session
+						.submit(entry.input)
+						.catch((e) => err(s2Error(e)));
 					delete entry.needsSubmit;
 				}
 			}
@@ -1700,7 +1708,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Create new promise from new session
 			const attemptStarted = performance.now();
 			entry.attemptStartedMonotonicMs = attemptStarted;
-			entry.innerPromise = session.submit(entry.input);
+			// Convert a transport rejection into an ordinary err()
+			// result so it flows through the retry/abort machinery
+			// instead of escaping the pump.
+			entry.innerPromise = session
+				.submit(entry.input)
+				.catch((e) => err(s2Error(e)));
 			delete entry.needsSubmit;
 			debugSession(
 				"[%s] resubmitted entry (%d records, %d bytes, match_seq_num=%s)",

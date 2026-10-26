@@ -126,6 +126,7 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	constructor(
 		private readonly behavior: {
 			submitError?: S2Error; // if provided, submit() returns error result
+			submitRejection?: unknown; // if provided, submit() rejects (throws) with this value
 			closeError?: S2Error; // if provided, close() returns error result
 			neverAck?: boolean; // if true, submit() hangs forever (for timeout tests)
 			customAcks?: AppendAck[]; // if provided, return these acks in sequence
@@ -144,6 +145,13 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	async submit(input: AppendInput): Promise<AppendResult> {
 		if (this.closed) {
 			return err(new S2Error({ message: "session is closed", status: 400 }));
+		}
+
+		// Simulate a transport that throws during framing/encoding/compression
+		// (e.g. oversized frame) — surfacing as a rejected promise rather than
+		// an err(...) result, in violation of the TransportAppendSession contract.
+		if (this.behavior.submitRejection !== undefined) {
+			throw this.behavior.submitRejection;
 		}
 
 		// Signal effect unless explicitly overridden by behavior
@@ -621,5 +629,159 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(error.message).toContain("previous=10");
 		expect(error.message).toContain("current=10");
 		expect(error.status).toBe(0);
+	});
+});
+
+describe("RetryAppendSession: rejecting transport submit()", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("aborts the session instead of hanging when submit() rejects with a plain Error", async () => {
+		const session = await AppendSessionImpl.create(
+			async () =>
+				new FakeTransportAppendSession({
+					submitRejection: new Error("boom"),
+				}),
+			undefined,
+			{
+				maxAttempts: 1,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				requestTimeoutMillis: 5000,
+			},
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		// Without the fix this hangs forever (pump dies silently).
+		await expect(ticket.ack()).rejects.toBeInstanceOf(S2Error);
+		expect(session.failureCause()).toBeInstanceOf(S2Error);
+		expect(session.failureCause()?.message).toContain("boom");
+	});
+
+	it("retries when the rejection is a retryable S2Error and the next session succeeds", async () => {
+		let call = 0;
+		const session = await AppendSessionImpl.create(
+			async () => {
+				call++;
+				if (call === 1) {
+					// Rejects with a retryable S2Error — must be treated like an
+					// err(...) result with the same status and flow through retry.
+					return new FakeTransportAppendSession({
+						submitRejection: new S2Error({
+							message: "boom",
+							status: 500,
+							origin: "server",
+						}),
+					});
+				}
+				return new FakeTransportAppendSession();
+			},
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 2,
+				appendRetryPolicy: "all",
+				requestTimeoutMillis: 5000,
+			},
+		);
+
+		const p = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+		const ticket = await p;
+		const ack = await ticket.ack();
+		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
+		expect(session.failureCause()).toBeUndefined();
+	});
+
+	it("aborts when submit() rejects during recovery", async () => {
+		let call = 0;
+		const session = await AppendSessionImpl.create(
+			async () => {
+				call++;
+				if (call === 1) {
+					// First session returns a retryable error result to trigger recovery.
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "unavailable",
+							status: 503,
+							origin: "server",
+						}),
+					});
+				}
+				// Recovery session rejects — must be converted and flow through
+				// retry/abort instead of escaping the pump a second time.
+				return new FakeTransportAppendSession({
+					submitRejection: new Error("recovery boom"),
+				});
+			},
+			undefined,
+			{
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				maxAttempts: 2,
+				appendRetryPolicy: "all",
+				requestTimeoutMillis: 5000,
+			},
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10);
+		await Promise.resolve();
+
+		const error = await ticket.ack().catch((e) => e);
+		expect(error).toBeInstanceOf(S2Error);
+		expect(session.failureCause()).toBeInstanceOf(S2Error);
+		// The recovery rejection (status 0, non-retryable) aborts immediately.
+		expect(session.failureCause()?.message).toContain("recovery boom");
+	});
+
+	it("settles every pipelined ack when the head rejects (no unhandled rejection)", async () => {
+		const session = await AppendSessionImpl.create(
+			async () =>
+				new FakeTransportAppendSession({
+					submitRejection: new Error("boom"),
+				}),
+			undefined,
+			{
+				maxAttempts: 1,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+				requestTimeoutMillis: 5000,
+			},
+		);
+
+		const p1 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "a" })]),
+		);
+		const p2 = session.submit(
+			AppendInput.create([AppendRecord.string({ body: "b" })]),
+		);
+		const [ticket1, ticket2] = await Promise.all([p1, p2]);
+
+		// Both acks must settle. Without the fix, the pump dies on the head
+		// rejection and both acks hang forever; the trailing entry's rejected
+		// innerPromise also becomes an unhandled rejection.
+		const results = await Promise.allSettled([
+			ticket1.ack().catch((e) => e),
+			ticket2.ack().catch((e) => e),
+		]);
+		for (const r of results) {
+			expect(r.status).toBe("fulfilled");
+		}
+		expect(session.failureCause()).toBeInstanceOf(S2Error);
 	});
 });
