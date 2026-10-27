@@ -283,7 +283,7 @@ describeIf("resumable-stream/aisdk", () => {
 
 	describe("replay", () => {
 		it(
-			"tails the active generation from S2 while the client drops the POST body",
+			"replays oversized chunks after the client drops the POST body",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -292,6 +292,11 @@ describeIf("resumable-stream/aisdk", () => {
 				});
 				const streamName = makeStreamName("replay-bg");
 				const chunks = sampleChunks();
+				chunks.splice(-1, 0, {
+					type: "file",
+					url: `data:image/png;base64,${"A".repeat(1_500_000)}`,
+					mediaType: "image/png",
+				});
 				const releaseSource = deferred();
 
 				let bgPromise: Promise<unknown> | undefined;
@@ -314,7 +319,7 @@ describeIf("resumable-stream/aisdk", () => {
 				expect(replayRes.status).toBe(200);
 				expect(replayRes.headers.get("Content-Type")).toBe("text/event-stream");
 
-				const records = await readSseResponse(replayRes);
+				const records = await within(readSseResponse(replayRes));
 				expect(records).toEqual(chunks);
 
 				await bgPromise;
@@ -323,77 +328,7 @@ describeIf("resumable-stream/aisdk", () => {
 		);
 	});
 
-	describe("large chunks", () => {
-		it(
-			"round-trips a chunk larger than the S2 record limit",
-			async () => {
-				const chat = createResumableChat({
-					accessToken: process.env.S2_ACCESS_TOKEN!,
-					basin: basinName,
-					...s2EndpointsFromEnv(),
-				});
-				const chunks: UIMessageChunk[] = [
-					{ type: "start" },
-					{
-						type: "file",
-						url: `data:image/png;base64,${"A".repeat(1_500_000)}`,
-						mediaType: "image/png",
-					},
-					{ type: "finish" },
-				];
-
-				let bg: Promise<unknown> | undefined;
-				const res = await chat.makeResumable(
-					makeStreamName("large-chunk"),
-					arrayToAsyncIterable(chunks),
-					{ waitUntil: (promise) => (bg = promise) },
-				);
-				expect(await within(readSseResponse(res))).toEqual(chunks);
-				await bg;
-			},
-			TEST_TIMEOUT_MS,
-		);
-	});
-
 	describe("stop", () => {
-		it(
-			"aborts the model call of an idle generation",
-			async () => {
-				const chat = createResumableChat({
-					accessToken: process.env.S2_ACCESS_TOKEN!,
-					basin: basinName,
-					...s2EndpointsFromEnv(),
-				});
-				const streamName = makeStreamName("stop-idle");
-				let signal: AbortSignal | undefined;
-				const res = await chat.makeResumable(streamName, (abortSignal) => {
-					signal = abortSignal;
-					return (async function* (): AsyncIterable<UIMessageChunk> {
-						yield { type: "start" };
-						await new Promise((resolve) =>
-							abortSignal.addEventListener("abort", resolve),
-						);
-					})();
-				});
-				await sleep(300);
-
-				expect(await chat.stop(streamName)).toBe(true);
-				expect(await within(readSseResponse(res))).toEqual([
-					{ type: "start" },
-					{ type: "abort" },
-				]);
-				await within(
-					new Promise((resolve) =>
-						signal?.aborted
-							? resolve(undefined)
-							: signal?.addEventListener("abort", resolve),
-					),
-					5000,
-				);
-			},
-			TEST_TIMEOUT_MS,
-		);
-
 		it(
 			"ends the active generation for readers and the writer",
 			async () => {
@@ -479,7 +414,7 @@ describeIf("resumable-stream/aisdk", () => {
 
 	describe("session streams", () => {
 		it(
-			"replay and stop find an active generation far behind the tail",
+			"replay and stop find an idle generation far behind the tail and abort its source",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -496,24 +431,38 @@ describeIf("resumable-stream/aisdk", () => {
 						delta: `${i}`,
 					})),
 				];
-				const release = deferred();
-				async function* long(): AsyncIterable<UIMessageChunk> {
+				let signal: AbortSignal | undefined;
+				async function* long(
+					abortSignal: AbortSignal,
+				): AsyncIterable<UIMessageChunk> {
+					signal = abortSignal;
 					yield* active;
-					await release.promise;
+					await new Promise((resolve) =>
+						abortSignal.addEventListener("abort", resolve, { once: true }),
+					);
 				}
 				let bg: Promise<unknown> | undefined;
-				const res = await chat.makeResumable(streamName, long(), {
+				const res = await chat.makeResumable(streamName, long, {
 					waitUntil: (promise) => (bg = promise),
 				});
-				await res.body?.cancel();
-				await sleep(1000);
+				const handle = s2.basin(basinName).stream(streamName);
+				await expect
+					.poll(async () => (await handle.checkTail()).tail.seqNum, {
+						timeout: 15_000,
+					})
+					.toBe(active.length + 1);
+				await handle.close();
 
 				const replay = await chat.replay(streamName);
 				expect(await chat.stop(streamName)).toBe(true);
-				const replayed = await within(readSseResponse(replay));
-				expect(replayed).toEqual([...active, { type: "abort" }]);
-				release.resolve();
-				await bg;
+				for (const response of [res, replay]) {
+					expect(await within(readSseResponse(response))).toEqual([
+						...active,
+						{ type: "abort" },
+					]);
+				}
+				await within(bg!, 5000);
+				expect(signal?.aborted).toBe(true);
 			},
 			TEST_TIMEOUT_MS,
 		);
