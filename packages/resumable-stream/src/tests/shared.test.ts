@@ -1,10 +1,15 @@
 import {
 	type AppendAck,
-	type AppendInput,
+	AppendInput,
+	AppendRecord,
+	FencingTokenMismatchError,
 	type ReadRecord,
+	type S2,
 	S2Error,
+	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createChat } from "../adapter.js";
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
@@ -13,6 +18,52 @@ import {
 	tailGenerationStringRecords,
 	tailStringRecords,
 } from "../shared.js";
+
+it("PR #398: cancellation releases a reader while its transport is still opening", async () => {
+	let finishOpening!: () => void;
+	const opening = new Promise<void>((resolve) => {
+		finishOpening = resolve;
+	});
+	let startedReading!: () => void;
+	const reading = new Promise<void>((resolve) => {
+		startedReading = resolve;
+	});
+	const cancel = vi.fn();
+	const session = new ReadableStream<ReadRecord<"string">>({
+		async start() {
+			await opening;
+		},
+		cancel,
+	});
+	const handle = {
+		async readSession() {
+			startedReading();
+			return session;
+		},
+		close: vi.fn(),
+	};
+	const chat = createChat(
+		{ accessToken: "t", basin: "b", mode: "session" },
+		{ makeErrorChunk: () => ({}), responseHeaders: {} },
+		{ basin: () => ({ stream: () => handle }) } as unknown as S2,
+	);
+	try {
+		const response = await chat.replay("s", { live: true });
+		const reader = response.body!.getReader();
+		const pendingRead = reader.read();
+		await reading;
+		const cancelled = reader.cancel();
+		await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce(), {
+			timeout: 1000,
+		});
+		await cancelled;
+		expect(await pendingRead).toEqual({ done: true, value: undefined });
+		expect(handle.close).toHaveBeenCalled();
+		expect(session.locked).toBe(false);
+	} finally {
+		finishOpening();
+	}
+}, 3000);
 
 function readRecord(partial: {
 	seqNum: number;
@@ -48,11 +99,16 @@ class MockStreamHandle {
 	}): Promise<MockSession> {
 		const fromSeq = input?.start?.from?.seqNum ?? 0;
 		const records = this.records.filter((r) => r.seqNum >= fromSeq);
-		return {
-			[Symbol.asyncIterator]: async function* () {
-				for (const record of records) yield record;
+		return new ReadableStream<ReadRecord<"string">>({
+			start(controller) {
+				for (const record of records) controller.enqueue(record);
+				controller.close();
 			},
-		};
+		});
+	}
+
+	async checkTail() {
+		return { tail: { seqNum: (this.records.at(-1)?.seqNum ?? -1) + 1 } };
 	}
 
 	async read(input?: {
@@ -128,33 +184,47 @@ describe("claimSharedGeneration lease takeover", () => {
 		expect(handle.appends).toHaveLength(0);
 	});
 
-	it("takes over when the last record is older than the lease", async () => {
+	it("takes over a stale generation and trims only what precedes it", async () => {
 		const now = 10_000_000;
+		const old = new Date(now - 300_000);
 		const handle = new MockStreamHandle([
 			readRecord({
 				seqNum: 0,
 				body: "holder-1",
 				headers: [["", "fence"]],
-				timestamp: new Date(now - 300_000),
+				timestamp: old,
+			}),
+			readRecord({ seqNum: 1, body: "data-0", timestamp: old }),
+			readRecord({
+				seqNum: 2,
+				body: "end-a",
+				headers: [["", "fence"]],
+				timestamp: old,
 			}),
 			readRecord({
-				seqNum: 1,
-				body: "data-0",
-				timestamp: new Date(now - 120_000), // last write 2 min ago
+				seqNum: 3,
+				body: "holder-2",
+				headers: [["", "fence"]],
+				timestamp: old,
+			}),
+			readRecord({
+				seqNum: 4,
+				body: "data-1",
+				timestamp: new Date(now - 120_000),
 			}),
 		]);
 
 		const result = await claimSharedGeneration({
 			stream: handle as any,
 			fencingToken: "session-new",
-			leaseDurationMs: 60_000, // lease = 60s, last record 2 min ago → stale
+			leaseDurationMs: 60_000,
 			now: () => now,
 		});
 
 		expect(result).not.toBeNull();
-		// First append = new fence, second = trim (since nextSeqNum > 0).
 		expect(handle.appends).toHaveLength(2);
-		expect(handle.appends[0]?.fencingToken).toBe("holder-1");
+		expect(handle.appends[0]?.fencingToken).toBe("holder-2");
+		expect(handle.appends[1]?.records[0]).toEqual(AppendRecord.trim(3));
 	});
 
 	it("takes over a fence-only stream (no data records) once its fence is stale", async () => {
@@ -204,6 +274,93 @@ describe("claimSharedGeneration lease takeover", () => {
 
 describe("claimSessionGeneration", () => {
 	const ts = new Date(10_000_000);
+
+	it.each(["takeover", "append"] as const)(
+		"PR #398: a stale claim cannot fence an intervening %s",
+		async (intervening) => {
+			const records = [
+				readRecord({
+					seqNum: 0,
+					body: "holder",
+					headers: [["", "fence"]],
+					timestamp: ts,
+				}),
+				readRecord({ seqNum: 1, body: "old chunk", timestamp: ts }),
+			];
+			const handle = new (class extends MockStreamHandle {
+				private interleave = true;
+
+				override async read(input?: Parameters<MockStreamHandle["read"]>[0]) {
+					const stale = await super.read(input);
+					if (this.interleave) {
+						this.interleave = false;
+						// Advance after the claimant's tail snapshot, before its fence lookup.
+						if (intervening === "takeover") {
+							await claimSessionGeneration({
+								stream: this as any,
+								fencingToken: "winner",
+								leaseDurationMs: 5000,
+							});
+						} else {
+							await this.append(
+								AppendInput.create(
+									[AppendRecord.string({ body: "fresh chunk" })],
+									{ fencingToken: "holder" },
+								),
+							);
+						}
+					}
+					return stale;
+				}
+
+				override async append(input: AppendInput): Promise<AppendAck> {
+					const token = records
+						.filter((record) => record.headers[0]?.[1] === "fence")
+						.at(-1)!.body;
+					if (input.fencingToken !== token) {
+						throw new FencingTokenMismatchError({
+							message: "fenced",
+							expectedFencingToken: token,
+						});
+					}
+					if (
+						input.matchSeqNum !== undefined &&
+						input.matchSeqNum !== records.length
+					) {
+						throw new SeqNumMismatchError({
+							message: "tail advanced",
+							expectedSeqNum: records.length,
+						});
+					}
+					const ack = await super.append(input);
+					records.push(
+						...input.records.map((record, index) =>
+							readRecord({
+								seqNum: ack.start.seqNum + index,
+								body:
+									typeof record.body === "string"
+										? record.body
+										: new TextDecoder().decode(record.body),
+								headers: record.headers as ReadRecord<"string">["headers"],
+								timestamp: new Date(),
+							}),
+						),
+					);
+					return ack;
+				}
+			})(records);
+
+			await expect(
+				claimSessionGeneration({
+					stream: handle as any,
+					fencingToken: "loser",
+					leaseDurationMs: 5000,
+				}),
+			).rejects.toBeInstanceOf(SeqNumMismatchError);
+			expect(handle.appends).toHaveLength(1);
+		},
+		1000,
+	);
 
 	it("claims an empty session with matchSeqNum 0", async () => {
 		const handle = new MockStreamHandle([]);

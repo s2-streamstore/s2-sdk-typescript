@@ -9,9 +9,11 @@ Two S2 streams per chat:
 | Stream | Written by | Holds |
 | --- | --- | --- |
 | `${HISTORY_PREFIX}-${chatId}` | Raw `@s2-dev/streamstore` (`stream.append`) | One record per chat message: `{ role: "user", content: string }` or `{ role: "assistant", content: ContentBlock[] }`. |
-| `${LIVE_PREFIX}-${chatId}-${turnIdx}` | `createResumableChat` from `@s2-dev/resumable-stream/anthropic` | The raw Anthropic event sequence for one turn. One stream per turn (single-use mode). |
+| `${LIVE_PREFIX}-${chatId}` | `createResumableChat` from `@s2-dev/resumable-stream/anthropic` | The raw Anthropic events, using shared mode to serialize turns and retain the two most recent generations. |
 
 The server is the source of truth. The browser fetches `/api/chat/history` to render the conversation, then tails `/api/chat/stream` if a turn is in flight.
+
+A rejected concurrent POST does not change history or start a provider request. An accepted POST returns only after its user message is durable.
 
 ## Configuration
 
@@ -32,7 +34,7 @@ The server is the source of truth. The browser fetches `/api/chat/history` to re
 
 | Endpoint | Description |
 | --- | --- |
-| `POST /api/chat` | Starts a generation. Body: `{ id, message }`. Returns `202`; the stream is read from S2. |
+| `POST /api/chat` | Starts a generation. Body: `{ id, message }`. Returns `202`, or `409` if a turn is active; the stream is read from S2. |
 | `GET /api/chat/stream?id=...` | Replays the active turn's live stream if one exists, else `204`. |
 | `GET /api/chat/history?id=...` | Returns `{ messages: ChatMessage[] }` from the history stream. |
 

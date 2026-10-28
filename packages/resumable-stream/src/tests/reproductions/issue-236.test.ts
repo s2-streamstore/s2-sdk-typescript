@@ -25,6 +25,7 @@ function makeFencedS2(error: FencingTokenMismatchError): S2 {
 	};
 	const handle = {
 		appendSession: () => Promise.resolve(session),
+		append: () => Promise.reject(error),
 		close: () => Promise.resolve(),
 	};
 	return {

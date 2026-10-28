@@ -3,9 +3,10 @@ import {
 	AppendRecord,
 	S2,
 	S2Environment,
+	S2Stream,
 } from "@s2-dev/streamstore";
 import type { UIMessageChunk } from "ai";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createResumableChat } from "../aisdk/index.js";
 
 const TEST_TIMEOUT_MS = 120_000;
@@ -22,6 +23,14 @@ const makeStreamName = (prefix: string): string =>
 	`${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const within = <T>(promise: Promise<T>, ms = 15_000): Promise<T> =>
+	Promise.race([
+		promise,
+		sleep(ms).then(() => {
+			throw new Error(`timed out after ${ms}ms`);
+		}),
+	]);
 
 function deferred(): {
 	promise: Promise<void>;
@@ -213,7 +222,7 @@ describeIf("resumable-stream/aisdk", () => {
 		);
 
 		it(
-			"appends a trim after a single-use generation for self-cleanup",
+			"keeps a completed single-use generation readable",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
@@ -237,14 +246,11 @@ describeIf("resumable-stream/aisdk", () => {
 				await res.text();
 				await bgPromise;
 
-				// Opening fence + N data chunks + terminal fence + trim.
-				// The trim itself may already be trimmed by the time we read,
-				// but the stream's tail seqnum is preserved even after records
-				// are trimmed, so we assert on that rather than on record
-				// presence.
-				const expectedAppendCount = 1 + chunks.length + 1 + 1;
-				const tail = await s2.basin(basinName).stream(streamName).checkTail();
-				expect(tail.tail.seqNum).toBe(expectedAppendCount);
+				const raw = await s2
+					.basin(basinName)
+					.stream(streamName)
+					.read({ start: { from: { seqNum: 0 } } }, { as: "string" });
+				expect(raw.records).toHaveLength(1 + chunks.length + 1);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -278,41 +284,286 @@ describeIf("resumable-stream/aisdk", () => {
 
 	describe("replay", () => {
 		it(
-			"tails the active generation from S2 while the client drops the POST body",
+			"PR #398: disconnecting an idle reader releases it while oversized chunks remain replayable",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					batchSize: 1,
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("replay-bg");
+				const chunks = sampleChunks();
+				chunks.splice(-1, 0, {
+					type: "file",
+					url: `data:image/png;base64,${"A".repeat(1_500_000)}`,
+					mediaType: "image/png",
+				});
+				const releaseSource = deferred();
+				const idleRead = deferred();
+				let sourceSignal: AbortSignal | undefined;
+				let readerHandle: S2Stream | undefined;
+				let disposed = false;
+				const readSession = S2Stream.prototype.readSession;
+				const readSpy = vi
+					.spyOn(S2Stream.prototype, "readSession")
+					.mockImplementation(async function (input, options) {
+						const session = await readSession.call(this, input, options);
+						if (input?.stop?.waitSecs === 0) return session;
+						readerHandle = this;
+						const getReader = session.getReader.bind(session);
+						vi.spyOn(session, "getReader").mockImplementation(() => {
+							const reader = getReader();
+							const read = reader.read.bind(reader);
+							let sawStart = false;
+							vi.spyOn(reader, "read").mockImplementation(async () => {
+								if (sawStart) idleRead.resolve();
+								const next = await read();
+								if (!next.done && next.value.seqNum === 1) sawStart = true;
+								return next;
+							});
+							return reader;
+						});
+						const dispose = session[Symbol.asyncDispose].bind(session);
+						vi.spyOn(session, Symbol.asyncDispose).mockImplementation(
+							async () => {
+								await dispose();
+								disposed = true;
+							},
+						);
+						return session;
+					});
+				const closeSpy = vi.spyOn(S2Stream.prototype, "close");
+				let bgPromise: Promise<unknown> | undefined;
+				let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+				try {
+					const postRes = await chat.makeResumable(
+						streamName,
+						(signal) => {
+							sourceSignal = signal;
+							return heldOpenAsyncIterable(chunks, releaseSource.promise);
+						},
+						{ waitUntil: (promise) => (bgPromise = promise) },
+					);
+					reader = postRes.body!.getReader();
+					expect((await within(reader.read())).done).toBe(false);
+					const pendingRead = reader.read();
+					await within(idleRead.promise);
+					await within(reader.cancel(), 1000);
+					expect(await pendingRead).toEqual({ done: true, value: undefined });
+					expect(disposed).toBe(true);
+					expect(closeSpy.mock.contexts).toContain(readerHandle);
+					expect(sourceSignal?.aborted).toBe(false);
+
+					const replayRes = await chat.replay(streamName);
+					releaseSource.resolve();
+					expect(replayRes.status).toBe(200);
+					expect(await within(readSseResponse(replayRes))).toEqual(chunks);
+					await within(bgPromise!);
+				} finally {
+					releaseSource.resolve();
+					await within(bgPromise ?? Promise.resolve()).catch(() => {});
+					await within(reader?.cancel() ?? Promise.resolve(), 1000).catch(
+						() => {},
+					);
+					readSpy.mockRestore();
+					closeSpy.mockRestore();
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+	});
+
+	describe("stop", () => {
+		it(
+			"ends the active generation for readers and the writer",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
 					...s2EndpointsFromEnv(),
 				});
-				const streamName = makeStreamName("replay-bg");
+				const streamName = makeStreamName("stop");
+				let pulled = 0;
+				async function* endless(): AsyncIterable<UIMessageChunk> {
+					yield { type: "start" };
+					yield { type: "text-start", id: "t" };
+					while (true) {
+						pulled += 1;
+						yield { type: "text-delta", id: "t", delta: "x" };
+						await sleep(20);
+					}
+				}
+
+				let bg: Promise<unknown> | undefined;
+				const res = await chat.makeResumable(streamName, endless(), {
+					waitUntil: (promise) => (bg = promise),
+				});
+				await sleep(300);
+				expect(await chat.stop(streamName)).toBe(true);
+
+				const chunks = await readSseResponse(res);
+				expect(chunks.at(-1)).toEqual({ type: "abort" });
+				await bg;
+				const pulledAfterStop = pulled;
+				await sleep(200);
+				expect(pulled).toBe(pulledAfterStop);
+
+				expect(await chat.stop(streamName)).toBe(false);
+				expect((await chat.replay(streamName)).status).toBe(204);
+			},
+			TEST_TIMEOUT_MS,
+		);
+	});
+
+	describe("requestId", () => {
+		it(
+			"keeps retries within their generation and delivery mode (PR #398)",
+			async () => {
+				const config = {
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					mode: "shared" as const,
+					leaseDurationMs: 60_000,
+					...s2EndpointsFromEnv(),
+				};
+				const chat = createResumableChat(config);
+				const streamName = makeStreamName("request-id");
 				const chunks = sampleChunks();
-				const releaseSource = deferred();
+				const continueSource = deferred();
+				const release = deferred();
+				let calls = 0;
+				const source = async function* () {
+					calls += 1;
+					yield chunks[0]!;
+					await continueSource.promise;
+					yield* chunks.slice(1, -1);
+					await release.promise;
+					yield chunks.at(-1)!;
+				};
 
-				let bgPromise: Promise<unknown> | undefined;
-				const postRes = await chat.makeResumable(
-					streamName,
-					heldOpenAsyncIterable(chunks, releaseSource.promise),
-					{
-						waitUntil: (promise) => {
-							bgPromise = promise;
-						},
-					},
-				);
+				let bg: Promise<unknown> | undefined;
+				const responses: Response[] = [];
+				const handle = s2.basin(basinName).stream(streamName);
+				try {
+					const first = await chat.makeResumable(streamName, source, {
+						requestId: "msg-1",
+						waitUntil: (promise) => (bg = promise),
+					});
+					responses.push(first);
+					await expect
+						.poll(async () => (await handle.checkTail()).tail.seqNum, {
+							timeout: 15_000,
+						})
+						.toBe(2);
+					const retry = await within(
+						chat.makeResumable(streamName, source, {
+							requestId: "msg-1",
+						}),
+					);
+					responses.push(retry);
+					expect(retry.status).toBe(200);
+					const replayRetry = await within(
+						chat.makeResumable(streamName, source, {
+							requestId: "msg-1",
+							delivery: "replay",
+						}),
+					);
+					responses.push(replayRetry);
+					expect(replayRetry.status).toBe(202);
+					expect(replayRetry.body).toBeNull();
+					expect(
+						(
+							await chat.makeResumable(streamName, source, {
+								requestId: "msg-2",
+							})
+						).status,
+					).toBe(409);
+					expect(calls).toBe(1);
+					continueSource.resolve();
+					await expect
+						.poll(async () => (await handle.checkTail()).tail.seqNum, {
+							timeout: 15_000,
+						})
+						.toBe(chunks.length);
 
-				// Simulate the client disconnecting before consuming any chunks.
-				// Tee semantics: persist branch continues independently.
-				await postRes.body?.cancel();
+					const nextChunks = sampleChunks("Next generation");
+					const takeover = await createResumableChat({
+						...config,
+						leaseDurationMs: 0,
+					}).makeResumable(streamName, arrayToAsyncIterable(nextChunks));
+					expect(await within(readSseResponse(takeover))).toEqual(nextChunks);
+					expect(await within(readSseResponse(first))).toEqual(
+						chunks.slice(0, -1),
+					);
+					expect(await within(readSseResponse(retry))).toEqual(
+						chunks.slice(0, -1),
+					);
+				} finally {
+					continueSource.resolve();
+					release.resolve();
+					await within(bg ?? Promise.resolve());
+					for (const response of responses) {
+						if (!response.bodyUsed) await response.body?.cancel();
+					}
+					await handle.close();
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+	});
 
-				const replayRes = await chat.replay(streamName);
-				releaseSource.resolve();
-				expect(replayRes.status).toBe(200);
-				expect(replayRes.headers.get("Content-Type")).toBe("text/event-stream");
+	describe("session streams", () => {
+		it(
+			"replay and stop find an idle generation far behind the tail and abort its source",
+			async () => {
+				const chat = createResumableChat({
+					accessToken: process.env.S2_ACCESS_TOKEN!,
+					basin: basinName,
+					mode: "session",
+					...s2EndpointsFromEnv(),
+				});
+				const streamName = makeStreamName("session-long");
+				const active: UIMessageChunk[] = [
+					{ type: "start" },
+					...Array.from({ length: 300 }, (_, i) => ({
+						type: "text-delta" as const,
+						id: "t",
+						delta: `${i}`,
+					})),
+				];
+				let signal: AbortSignal | undefined;
+				async function* long(
+					abortSignal: AbortSignal,
+				): AsyncIterable<UIMessageChunk> {
+					signal = abortSignal;
+					yield* active;
+					await new Promise((resolve) =>
+						abortSignal.addEventListener("abort", resolve, { once: true }),
+					);
+				}
+				let bg: Promise<unknown> | undefined;
+				const res = await chat.makeResumable(streamName, long, {
+					waitUntil: (promise) => (bg = promise),
+				});
+				const handle = s2.basin(basinName).stream(streamName);
+				await expect
+					.poll(async () => (await handle.checkTail()).tail.seqNum, {
+						timeout: 15_000,
+					})
+					.toBe(active.length + 1);
+				await handle.close();
 
-				const records = await readSseResponse(replayRes);
-				expect(records).toEqual(chunks);
-
-				await bgPromise;
+				const replay = await chat.replay(streamName);
+				expect(await chat.stop(streamName)).toBe(true);
+				for (const response of [res, replay]) {
+					expect(await within(readSseResponse(response))).toEqual([
+						...active,
+						{ type: "abort" },
+					]);
+				}
+				await within(bg!, 5000);
+				expect(signal?.aborted).toBe(true);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -377,14 +628,9 @@ describeIf("resumable-stream/aisdk", () => {
 						},
 						{ as: "string" },
 					);
-				expect(
-					raw.records.some(
-						(record) =>
-							record.headers.length === 1 &&
-							record.headers[0]?.[0] === "" &&
-							record.headers[0]?.[1] === "trim",
-					),
-				).toBe(true);
+				expect(raw.records.map((record) => record.body)).toContain(
+					JSON.stringify(firstChunks[2]),
+				);
 			},
 			TEST_TIMEOUT_MS,
 		);

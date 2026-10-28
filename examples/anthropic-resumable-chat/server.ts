@@ -7,8 +7,8 @@
  *       { role: "user",      content: string }
  *       { role: "assistant", content: ContentBlock[] }
  *
- *   - Live stream `${LIVE_PREFIX}-${chatId}-${turnIdx}`
- *     One S2 stream per turn, written via `createResumableChat`.
+ *   - Live stream `${LIVE_PREFIX}-${chatId}`
+ *     One shared S2 stream per chat, written via `createResumableChat`.
  *     Stores the raw Anthropic event sequence so the browser can replay
  *     an in-flight turn after F5 / disconnect.
  *
@@ -58,9 +58,8 @@ const chat = createResumableChat({
 	accessToken,
 	basin,
 	endpoints,
-	// One fresh stream per turn — single-use mode makes replay close cleanly
-	// after the terminal fence.
-	mode: "single-use",
+	// A shared claim serializes turns across server instances; history is separate.
+	mode: "shared",
 });
 const anthropic = new Anthropic({ apiKey: anthropicKey });
 
@@ -75,8 +74,7 @@ interface AssistantMessage {
 type ChatMessage = UserMessage | AssistantMessage;
 
 const historyStreamName = (chatId: string) => `${HISTORY_PREFIX}-${chatId}`;
-const liveStreamName = (chatId: string, turnIdx: number) =>
-	`${LIVE_PREFIX}-${chatId}-${turnIdx}`;
+const liveStreamName = (chatId: string) => `${LIVE_PREFIX}-${chatId}`;
 
 const isValidChatId = (value: unknown): value is string =>
 	typeof value === "string" && CHAT_ID_PATTERN.test(value);
@@ -142,19 +140,6 @@ async function appendHistoryMessage(
 	} finally {
 		await stream.close();
 	}
-}
-
-// History is `[user, assistant, user, assistant, ...]`. A divergence between
-// user and assistant counts means the latest user message has no matching
-// assistant — that turn is in flight and its index is `userCount - 1`.
-function turnIndexForNewTurn(history: ChatMessage[]): number {
-	return history.filter((m) => m.role === "user").length;
-}
-
-function activeTurnIndex(history: ChatMessage[]): number | null {
-	const userCount = history.filter((m) => m.role === "user").length;
-	const assistantCount = history.filter((m) => m.role === "assistant").length;
-	return userCount > assistantCount ? userCount - 1 : null;
 }
 
 // Yields each event through to S2 unchanged while folding content blocks on
@@ -255,45 +240,61 @@ async function handleChat(req: Request): Promise<Response> {
 	const chatId = body.id;
 	const userText = body.message;
 
-	const history = await readHistory(chatId);
-	const turnIdx = turnIndexForNewTurn(history);
-
-	// Persist before POST returns: `/stream` reads history to find the active turn.
-	await appendHistoryMessage(chatId, { role: "user", content: userText });
-
-	const messages: MessageParam[] = [
-		...toMessageParams(history),
-		{ role: "user", content: userText },
-	];
-	const source = anthropic.messages.stream({
-		model: MODEL,
-		max_tokens: MAX_TOKENS,
-		messages,
+	let historyReady = false;
+	let finishStarting!: () => void;
+	const started = new Promise<void>((resolve) => {
+		finishStarting = resolve;
 	});
-
-	return chat.makeResumable(
-		liveStreamName(chatId, turnIdx),
-		persistCompletedTurn(chatId, source),
+	const response = await chat.makeResumable(
+		liveStreamName(chatId),
+		async function* (signal) {
+			// Only the winning claim may mutate history or start the provider.
+			const history = await readHistory(chatId);
+			const messages: MessageParam[] = [
+				...toMessageParams(history),
+				{ role: "user", content: userText },
+			];
+			await appendHistoryMessage(chatId, { role: "user", content: userText });
+			historyReady = true;
+			finishStarting();
+			yield* persistCompletedTurn(
+				chatId,
+				anthropic.messages.stream(
+					{ model: MODEL, max_tokens: MAX_TOKENS, messages },
+					{ signal },
+				),
+			);
+		},
 		{
 			delivery: "replay",
 			waitUntil: (promise) =>
-				promise.catch((err) => {
-					console.error("[example] makeResumable failed:", err);
-				}),
+				promise
+					.catch((err) => {
+						console.error("[example] makeResumable failed:", err);
+					})
+					.finally(finishStarting),
 		},
 	);
+	if (response.status === 202) {
+		// A refresh after an accepted POST must already find its user message.
+		await started;
+		if (!historyReady) {
+			return new Response("Could not start generation", { status: 500 });
+		}
+	}
+	return response;
 }
 
 async function handleStream(chatId: string): Promise<Response> {
 	const history = await readHistory(chatId);
-	const idx = activeTurnIndex(history);
-	if (idx === null) {
+	// History can finish before the live stream's terminal fence is persisted.
+	if (history.at(-1)?.role === "assistant") {
 		return new Response(null, {
 			status: 204,
 			headers: { "Cache-Control": "no-store" },
 		});
 	}
-	return chat.replay(liveStreamName(chatId, idx));
+	return chat.replay(liveStreamName(chatId));
 }
 
 async function handleHistory(chatId: string): Promise<Response> {
