@@ -56,7 +56,7 @@ describe("Issue #236: persist failure during takeover stays classifiable", () =>
 			fencingToken: "session-original",
 			batchSize: 1,
 			lingerDuration: 0,
-			toRecords: (value) => [AppendRecord.string({ body: value })],
+			toRecord: (value) => AppendRecord.string({ body: value }),
 			finalRecords: () => [AppendRecord.fence("end-test")],
 		}).then(
 			() => undefined,

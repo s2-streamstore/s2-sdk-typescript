@@ -33,7 +33,7 @@ const adapter: ChatAdapter<Chunk> = {
 			error: { type: "api_error", message },
 		};
 	},
-	makeStopChunk: () => ({ type: "message_stop" }),
+	stopChunks: [{ type: "message_stop" }],
 	responseHeaders: SSE_HEADERS,
 	formatSseFrame(storedBody) {
 		try {

@@ -93,14 +93,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
 
 ## Production notes
 
-For the chat adapters:
-
-- **Retention:** `single-use` keeps each stream, `shared` the last two generations, `session` everything. Set basin retention to bound storage.
+- **Retention:** chat adapters keep each stream in `single-use`, the last two generations in `shared`, and all generations in `session`. Set basin retention to bound storage.
 - **Auth:** check that the caller owns the chat before `replay` or `stop`.
 - **Leases:** a generation idle longer than `leaseDurationMs` can be taken over. Raise it for long tool calls.
-- **Failures:** readers always finish. Persistence errors go to `onPersistError`.
-- **Cloudflare Workers:** S2 calls count as subrequests. Raise `limits.subrequests` for long generations.
-- **Next.js:** use the Node runtime.
+- **Failures:** persistence errors go to `onPersistError` (default: `console.error`).
 
 ## AI SDK
 
@@ -151,8 +147,7 @@ export async function POST(req: Request) {
 }
 ```
 
-- A function source starts the model only after the claim; `abortSignal` fires on stop or takeover.
-- `requestId` lets a retry rejoin the running generation instead of getting 409.
+A function source starts the model only after the claim; `abortSignal` fires on stop or takeover. `requestId` lets a retry rejoin the running generation instead of getting 409.
 
 ```ts
 // app/api/chat/[id]/stream/route.ts
@@ -167,20 +162,11 @@ export async function GET(
 }
 ```
 
-With `resume: true`, `useChat`'s `stop()` only disconnects. To end the generation, call `chat.stop` from a route:
+With `resume: true`, `useChat`'s `stop()` only disconnects. To end the generation, add a `POST /api/chat/[id]/stop` route with this handler body, using `id` from the route params:
 
 ```ts
-// app/api/chat/[id]/stop/route.ts
-import { chat } from "@/lib/s2";
-
-export async function POST(
-  _req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const { id } = await params;
-  await chat.stop(`chat-${id}`);
-  return new Response(null, { status: 204 });
-}
+await chat.stop(`chat-${id}`);
+return new Response(null, { status: 204 });
 ```
 
 ```tsx
@@ -230,11 +216,11 @@ const chat = createResumableChat({
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-  const source = anthropic.messages.stream({
+  const source = (signal: AbortSignal) => anthropic.messages.stream({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 1024,
     messages,
-  });
+  }, { signal });
 
   return chat.makeResumable(`chat-${id}`, source, {
     delivery: "replay",
@@ -336,10 +322,18 @@ const chat = createResumableChat({
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-  const source = tanstackChat({
-    adapter: openaiText("gpt-4o-mini"),
-    messages: convertMessagesToModelMessages(messages),
-  });
+  const source = (signal: AbortSignal) => {
+    const abortController = new AbortController();
+    const abort = () => abortController.abort(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    return tanstackChat({
+      adapter: openaiText("gpt-4o-mini"),
+      messages: convertMessagesToModelMessages(messages),
+      threadId: id,
+      abortController,
+    });
+  };
   return chat.makeResumable(`chat-${id}`, source, {
     delivery: "replay",
     waitUntil: (p) => p.catch(console.error),
@@ -359,6 +353,11 @@ export async function GET(req: Request) {
 }
 ```
 
+For history loading, `readStoredChunks(stream)` from `./tanstack-ai` reads the
+currently stored chunks without waiting. It reassembles large chunks and yields
+`{ chunk, nextSeqNum }`; use `nextSeqNum` to resume replay, and close the S2 stream
+handle when finished.
+
 The `./tanstack-ai/client` subpath builds a `SubscribeConnectionAdapter` for
 TanStack `useChat`. It tracks the last seen SSE `id:` internally, so repeated
 `subscribe()` calls resume from the previous chunk without exposing cursor
@@ -377,8 +376,9 @@ const connection = createConnection({
 const chat = useChat({ connection, live: true });
 ```
 
-Server-side stop/cancel remains application code. For example, keep a
-process-local `Map<string, AbortController>` and expose a `DELETE` route that
-aborts the active model call. See
+Stop a generation from a server route with `await chat.stop(streamName)`.
+The stop is stored in S2, so it works even when another server owns the
+generation; the source's signal then aborts the upstream model call. Retry a
+failed stop request to finish closing the generation. See
 [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat) for a complete
 TanStack `useChat` setup.

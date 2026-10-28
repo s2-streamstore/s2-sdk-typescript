@@ -371,42 +371,93 @@ describeIf("resumable-stream/aisdk", () => {
 	});
 
 	describe("requestId", () => {
-		it(
-			"rejoins an active generation started by the same request",
-			async () => {
-				const chat = createResumableChat({
+		it.each(["response", "replay"] as const)(
+			"keeps retries within their generation and delivery mode (%s; PR #398)",
+			async (delivery) => {
+				const config = {
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
+					mode: "shared" as const,
+					leaseDurationMs: 60_000,
 					...s2EndpointsFromEnv(),
-				});
+				};
+				const chat = createResumableChat(config);
 				const streamName = makeStreamName("request-id");
 				const chunks = sampleChunks();
+				const continueSource = deferred();
 				const release = deferred();
 				let calls = 0;
-				const source = () => {
+				const source = async function* () {
 					calls += 1;
-					return heldOpenAsyncIterable(chunks, release.promise);
+					yield chunks[0]!;
+					await continueSource.promise;
+					yield* chunks.slice(1, -1);
+					await release.promise;
+					yield chunks.at(-1)!;
 				};
 
 				let bg: Promise<unknown> | undefined;
-				const first = await chat.makeResumable(streamName, source, {
-					requestId: "msg-1",
-					waitUntil: (promise) => (bg = promise),
-				});
-				const retry = await chat.makeResumable(streamName, source, {
-					requestId: "msg-1",
-				});
-				const other = await chat.makeResumable(streamName, source, {
-					requestId: "msg-2",
-				});
-				release.resolve();
+				const responses: Response[] = [];
+				const handle = s2.basin(basinName).stream(streamName);
+				try {
+					const first = await chat.makeResumable(streamName, source, {
+						requestId: "msg-1",
+						waitUntil: (promise) => (bg = promise),
+					});
+					responses.push(first);
+					await expect
+						.poll(async () => (await handle.checkTail()).tail.seqNum, {
+							timeout: 15_000,
+						})
+						.toBe(2);
+					const retry = await within(
+						chat.makeResumable(streamName, source, {
+							requestId: "msg-1",
+							delivery,
+						}),
+					);
+					responses.push(retry);
+					expect(retry.status).toBe(delivery === "response" ? 200 : 202);
+					expect(
+						(
+							await chat.makeResumable(streamName, source, {
+								requestId: "msg-2",
+							})
+						).status,
+					).toBe(409);
+					expect(calls).toBe(1);
+					continueSource.resolve();
+					await expect
+						.poll(async () => (await handle.checkTail()).tail.seqNum, {
+							timeout: 15_000,
+						})
+						.toBe(chunks.length);
 
-				expect(retry.status).toBe(200);
-				expect(other.status).toBe(409);
-				expect(calls).toBe(1);
-				expect(await within(readSseResponse(retry))).toEqual(chunks);
-				await first.body?.cancel();
-				await bg;
+					const nextChunks = sampleChunks("Next generation");
+					const takeover = await createResumableChat({
+						...config,
+						leaseDurationMs: 0,
+					}).makeResumable(streamName, arrayToAsyncIterable(nextChunks));
+					expect(await within(readSseResponse(takeover))).toEqual(nextChunks);
+					expect(await within(readSseResponse(first))).toEqual(
+						chunks.slice(0, -1),
+					);
+					if (delivery === "response") {
+						expect(await within(readSseResponse(retry))).toEqual(
+							chunks.slice(0, -1),
+						);
+					} else {
+						expect(retry.body).toBeNull();
+					}
+				} finally {
+					continueSource.resolve();
+					release.resolve();
+					await within(bg ?? Promise.resolve());
+					for (const response of responses) {
+						if (!response.bodyUsed) await response.body?.cancel();
+					}
+					await handle.close();
+				}
 			},
 			TEST_TIMEOUT_MS,
 		);

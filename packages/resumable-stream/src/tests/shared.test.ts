@@ -1,9 +1,11 @@
 import {
 	type AppendAck,
-	type AppendInput,
+	AppendInput,
 	AppendRecord,
+	FencingTokenMismatchError,
 	type ReadRecord,
 	S2Error,
+	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
 import { describe, expect, it } from "vitest";
 import {
@@ -49,11 +51,12 @@ class MockStreamHandle {
 	}): Promise<MockSession> {
 		const fromSeq = input?.start?.from?.seqNum ?? 0;
 		const records = this.records.filter((r) => r.seqNum >= fromSeq);
-		return {
-			[Symbol.asyncIterator]: async function* () {
-				for (const record of records) yield record;
+		return new ReadableStream<ReadRecord<"string">>({
+			start(controller) {
+				for (const record of records) controller.enqueue(record);
+				controller.close();
 			},
-		};
+		});
 	}
 
 	async checkTail() {
@@ -223,6 +226,93 @@ describe("claimSharedGeneration lease takeover", () => {
 
 describe("claimSessionGeneration", () => {
 	const ts = new Date(10_000_000);
+
+	it.each(["takeover", "append"] as const)(
+		"PR #398: a stale claim cannot fence an intervening %s",
+		async (intervening) => {
+			const records = [
+				readRecord({
+					seqNum: 0,
+					body: "holder",
+					headers: [["", "fence"]],
+					timestamp: ts,
+				}),
+				readRecord({ seqNum: 1, body: "old chunk", timestamp: ts }),
+			];
+			const handle = new (class extends MockStreamHandle {
+				private interleave = true;
+
+				override async read(input?: Parameters<MockStreamHandle["read"]>[0]) {
+					const stale = await super.read(input);
+					if (this.interleave) {
+						this.interleave = false;
+						// Advance after the claimant's tail snapshot, before its fence lookup.
+						if (intervening === "takeover") {
+							await claimSessionGeneration({
+								stream: this as any,
+								fencingToken: "winner",
+								leaseDurationMs: 5000,
+							});
+						} else {
+							await this.append(
+								AppendInput.create(
+									[AppendRecord.string({ body: "fresh chunk" })],
+									{ fencingToken: "holder" },
+								),
+							);
+						}
+					}
+					return stale;
+				}
+
+				override async append(input: AppendInput): Promise<AppendAck> {
+					const token = records
+						.filter((record) => record.headers[0]?.[1] === "fence")
+						.at(-1)!.body;
+					if (input.fencingToken !== token) {
+						throw new FencingTokenMismatchError({
+							message: "fenced",
+							expectedFencingToken: token,
+						});
+					}
+					if (
+						input.matchSeqNum !== undefined &&
+						input.matchSeqNum !== records.length
+					) {
+						throw new SeqNumMismatchError({
+							message: "tail advanced",
+							expectedSeqNum: records.length,
+						});
+					}
+					const ack = await super.append(input);
+					records.push(
+						...input.records.map((record, index) =>
+							readRecord({
+								seqNum: ack.start.seqNum + index,
+								body:
+									typeof record.body === "string"
+										? record.body
+										: new TextDecoder().decode(record.body),
+								headers: record.headers as ReadRecord<"string">["headers"],
+								timestamp: new Date(),
+							}),
+						),
+					);
+					return ack;
+				}
+			})(records);
+
+			await expect(
+				claimSessionGeneration({
+					stream: handle as any,
+					fencingToken: "loser",
+					leaseDurationMs: 5000,
+				}),
+			).rejects.toBeInstanceOf(SeqNumMismatchError);
+			expect(handle.appends).toHaveLength(1);
+		},
+		1000,
+	);
 
 	it("claims an empty session with matchSeqNum 0", async () => {
 		const handle = new MockStreamHandle([]);

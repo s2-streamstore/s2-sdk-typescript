@@ -1,10 +1,16 @@
 import type {
 	AppendAck,
-	AppendInput,
 	AppendRecord as AppendRecordType,
 	ReadRecord,
 } from "@s2-dev/streamstore";
+import {
+	AppendInput,
+	AppendRecord,
+	FencingTokenMismatchError,
+} from "@s2-dev/streamstore";
+import { ChatClient } from "@tanstack/ai-client";
 import { describe, expect, it, vi } from "vitest";
+import { createConnection } from "../tanstack-ai/client.js";
 
 interface SubmitTicket {
 	ack(): Promise<AppendAck>;
@@ -83,6 +89,19 @@ class FakeStream {
 				expectedSeqNum: 1,
 			});
 		}
+		const fencingToken =
+			this.currentRecords().findLast(
+				(record) => record.headers[0]?.[1] === "fence",
+			)?.body ?? "";
+		if (
+			input.fencingToken !== undefined &&
+			input.fencingToken !== fencingToken
+		) {
+			throw new FencingTokenMismatchError({
+				message: "writer has been fenced",
+				expectedFencingToken: fencingToken,
+			});
+		}
 		this.directAppends.push(input);
 		const start = this.nextSeqOnAppend;
 		this.nextSeqOnAppend += input.records.length;
@@ -120,29 +139,33 @@ class FakeStream {
 		const stream = this;
 		const fromSeqNum = input?.start?.from?.seqNum ?? 0;
 		const snapshot = input?.stop?.waitSecs === 0;
-		return {
-			[Symbol.asyncIterator]: async function* () {
-				let nextSeqNum = fromSeqNum;
-				let idlePolls = 0;
-				while (true) {
-					const records = stream
+		let nextSeqNum = fromSeqNum;
+		let idlePolls = 0;
+		let cancelled = false;
+		return new ReadableStream<ReadRecord<"string">>({
+			async pull(controller) {
+				while (!cancelled) {
+					const record = stream
 						.currentRecords()
-						.filter((record) => record.seqNum >= nextSeqNum);
-					if (records.length > 0) {
-						for (const record of records) {
-							yield record;
-							nextSeqNum = record.seqNum + 1;
-						}
+						.find((record) => record.seqNum >= nextSeqNum);
+					if (record) {
+						controller.enqueue(record);
+						nextSeqNum = record.seqNum + 1;
 						idlePolls = 0;
-						continue;
+						return;
 					}
-					if (snapshot || stream.session.closeCount > 0) return;
 					idlePolls += 1;
-					if (idlePolls > 100) return;
+					if (snapshot || stream.session.closeCount > 0 || idlePolls > 100) {
+						controller.close();
+						return;
+					}
 					await new Promise((resolve) => setTimeout(resolve, 0));
 				}
 			},
-		};
+			cancel() {
+				cancelled = true;
+			},
+		});
 	}
 
 	async close(): Promise<void> {
@@ -288,14 +311,19 @@ async function* okSource(): AsyncIterable<{
 	timestamp?: number;
 	[key: string]: unknown;
 }> {
-	yield { type: "RUN_STARTED", timestamp: 1 };
+	yield { type: "RUN_STARTED", timestamp: 1, runId: "run", threadId: "thread" };
 	yield {
 		type: "TEXT_MESSAGE_CONTENT",
 		timestamp: 2,
 		messageId: "m1",
 		delta: "hello",
 	};
-	yield { type: "RUN_FINISHED", timestamp: 3 };
+	yield {
+		type: "RUN_FINISHED",
+		timestamp: 3,
+		runId: "run",
+		threadId: "thread",
+	};
 }
 
 async function* failingSource(): AsyncIterable<{
@@ -303,7 +331,7 @@ async function* failingSource(): AsyncIterable<{
 	timestamp?: number;
 	[key: string]: unknown;
 }> {
-	yield { type: "RUN_STARTED", timestamp: 1 };
+	yield { type: "RUN_STARTED", timestamp: 1, runId: "run", threadId: "thread" };
 	yield {
 		type: "TEXT_MESSAGE_CONTENT",
 		timestamp: 2,
@@ -314,6 +342,121 @@ async function* failingSource(): AsyncIterable<{
 }
 
 describe("createResumableChat (tanstack-ai)", () => {
+	it.each([0, 2])(
+		"PR #398: stopping %i persisted active runs completes the real client",
+		async (runCount) => {
+			const { createResumableChat } = await import("../tanstack-ai/index.js");
+			const runs = Array.from({ length: runCount }, (_, i) => ({
+				runId: `run-${i}`,
+				threadId: `thread-${i}`,
+			}));
+			const lateRun = { runId: "late-run", threadId: "late-thread" };
+			const chunks = runCount
+				? [
+						{ type: "RUN_STARTED", runId: "completed", threadId: "old" },
+						{ type: "RUN_FINISHED", runId: "completed", threadId: "old" },
+						...runs.map((run) => ({ type: "RUN_STARTED", ...run })),
+						{ type: "TEXT_MESSAGE_START", messageId: "m", role: "assistant" },
+						{ type: "TEXT_MESSAGE_CONTENT", messageId: "m", delta: "Hello" },
+					]
+				: [];
+			const stream = new FakeStream({
+				readRecords: [
+					{
+						seqNum: 0,
+						body: "session-persisted",
+						headers: [["", "fence"]],
+						timestamp: new Date(),
+					},
+					...chunks.map((chunk, index) => chunkReadRecord(index + 1, chunk)),
+				],
+			});
+			activeStreamRef.current = stream;
+			if (runCount) {
+				const append = stream.append.bind(stream);
+				const appendRun = (run: { runId: string; threadId: string }) =>
+					append(
+						AppendInput.create(
+							[
+								AppendRecord.string({
+									body: JSON.stringify({ type: "RUN_STARTED", ...run }),
+								}),
+							],
+							{ fencingToken: "session-persisted" },
+						),
+					);
+				stream.append = async (input) => {
+					const stopping = input.records.some((record) =>
+						recordBody(record).startsWith("stop-"),
+					);
+					// The stopping snapshot must include this run, and exclude later writes.
+					if (stopping) await appendRun(lateRun);
+					const ack = await append(input);
+					if (stopping) {
+						await expect(
+							appendRun({ runId: "blocked", threadId: "blocked" }),
+						).rejects.toBeInstanceOf(FencingTokenMismatchError);
+					}
+					return ack;
+				};
+			}
+			const config = { accessToken: "t", basin: "b", mode: "session" as const };
+			const reader = createResumableChat(config);
+			const stopper = createResumableChat(config);
+			const onFinish = vi.fn();
+			const client = new ChatClient({
+				id: "stop-test",
+				connection: createConnection({
+					sendUrl: "/chat",
+					subscribeUrl: "/chat/stream",
+					fetch: async (_input, init) =>
+						init?.method === "POST"
+							? new Response(null, { status: 202 })
+							: reader.replay("s"),
+				}),
+				onFinish,
+			});
+			try {
+				const pendingSend = runCount ? undefined : client.sendMessage("hello");
+				if (runCount) client.subscribe();
+				await expect
+					.poll(
+						() =>
+							runCount
+								? client.getStatus() === "streaming"
+								: client.getStatus() === "submitted",
+						{ interval: 1, timeout: 1000 },
+					)
+					.toBe(true);
+				expect(await stopper.stop("s")).toBe(true);
+				await expect
+					.poll(() => [client.getSessionGenerating(), client.getIsLoading()], {
+						interval: 1,
+						timeout: 1000,
+					})
+					.toEqual([false, false]);
+				await pendingSend;
+				if (runCount) expect(client.getStatus()).toBe("ready");
+				expect(onFinish).toHaveBeenCalledTimes(runCount ? 1 : 0);
+				const finished = stream.directReadRecords
+					.filter((record) => record.headers.length === 0)
+					.map((record) => JSON.parse(record.body))
+					.filter((chunk) => chunk.type === "RUN_FINISHED");
+				expect(finished).toMatchObject(
+					runCount
+						? [...runs, lateRun].map((run) => ({
+								type: "RUN_FINISHED",
+								...run,
+							}))
+						: [{ type: "RUN_FINISHED" }],
+				);
+			} finally {
+				client.unsubscribe();
+			}
+		},
+		5000,
+	);
+
 	it("persists chunks verbatim and replays them as SSE", async () => {
 		const { createResumableChat } = await import("../tanstack-ai/index.js");
 		const stream = new FakeStream();

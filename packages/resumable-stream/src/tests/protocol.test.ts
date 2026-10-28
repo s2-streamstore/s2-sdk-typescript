@@ -151,7 +151,7 @@ describe("persistToS2", () => {
 			fencingToken: "session-1",
 			batchSize: 1,
 			lingerDuration: 0,
-			toRecords: (value) => [AppendRecord.string({ body: value })],
+			toRecord: (value) => AppendRecord.string({ body: value }),
 			finalRecords: () => [AppendRecord.fence("end-token")],
 		});
 
@@ -178,7 +178,7 @@ describe("persistToS2", () => {
 				fencingToken: "session-1",
 				batchSize: 1,
 				lingerDuration: 0,
-				toRecords: (value) => [AppendRecord.string({ body: value })],
+				toRecord: (value) => AppendRecord.string({ body: value }),
 				finalRecords: (failed) =>
 					failed
 						? [
@@ -209,7 +209,7 @@ describe("persistToS2", () => {
 				fencingToken: "session-1",
 				batchSize: 1,
 				lingerDuration: 0,
-				toRecords: (value) => [AppendRecord.string({ body: value })],
+				toRecord: (value) => AppendRecord.string({ body: value }),
 				finalRecords: () => [AppendRecord.fence("end-token")],
 			}),
 		).rejects.toThrow("submit #2 failed");
@@ -237,7 +237,7 @@ describe("persistToS2", () => {
 				fencingToken: "session-1",
 				batchSize: 1,
 				lingerDuration: 0,
-				toRecords: (value) => [AppendRecord.string({ body: value })],
+				toRecord: (value) => AppendRecord.string({ body: value }),
 				finalRecords: (sourceError) => {
 					finalRecordsError = sourceError;
 					return [AppendRecord.fence("end-token")];

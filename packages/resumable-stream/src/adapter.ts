@@ -14,10 +14,12 @@ import {
 	dataRecords,
 	isFenceRecord,
 	persistToS2,
+	stoppingGenerationStart,
 } from "./protocol.js";
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
+	readAvailableDataRecords,
 	readLastFence,
 	readSessionReplayState,
 	replayActiveGenerationStringRecords,
@@ -133,7 +135,7 @@ export interface Chat<T> {
 	 * unless session replay is called with `{ live: true }`.
 	 */
 	replay(streamName: string, options?: ReplayOptions): Promise<Response>;
-	/** Ends the active generation with the adapter's stop chunk. Returns false if none is active. */
+	/** Ends the active generation with the adapter's stop events. Returns false if none is active. */
 	stop(streamName: string): Promise<boolean>;
 }
 
@@ -141,8 +143,10 @@ export interface Chat<T> {
 export interface ChatAdapter<T> {
 	/** Synthesize an error chunk to surface upstream failures to the client. */
 	makeErrorChunk(err: unknown, onError?: (err: unknown) => string): T;
-	/** Chunk appended when a generation is stopped. */
-	makeStopChunk?: () => T;
+	/** Stop events, optionally derived from the active generation's stored chunks. */
+	stopChunks?:
+		| ReadonlyArray<T>
+		| ((chunks: AsyncIterable<T>) => Promise<ReadonlyArray<T>>);
 	/** Prepare a chunk before storage. */
 	prepareForStorage?: (chunk: T) => T;
 	/** SSE response headers. */
@@ -151,13 +155,6 @@ export interface ChatAdapter<T> {
 	 * Adds an `event:` line to SSE frames when the format needs one.
 	 */
 	formatSseFrame?: (storedBody: string) => SseFrame;
-}
-
-async function* resolveSource<T>(
-	source: ResumableSource<T>,
-	signal: AbortSignal,
-): AsyncIterable<T> {
-	yield* typeof source === "function" ? await source(signal) : source;
 }
 
 /** Retries of one request share this prefix; each writer adds a unique suffix. */
@@ -192,6 +189,7 @@ async function replayResponse(
 	source: AsyncIterable<TailedStringRecord>,
 	headers: Readonly<Record<string, string>>,
 	formatter?: (body: string) => SseFrame,
+	cancelRead?: () => void | Promise<void>,
 ): Promise<Response> {
 	const iterator = source[Symbol.asyncIterator]();
 	const first = await iterator.next();
@@ -218,6 +216,7 @@ async function replayResponse(
 		})(),
 		headers,
 		formatter,
+		cancelRead,
 	);
 }
 
@@ -252,6 +251,25 @@ export function createChat<T>(
 		JSON.stringify(
 			adapter.prepareForStorage ? adapter.prepareForStorage(chunk) : chunk,
 		);
+	const streamResponse = (
+		handle: S2Stream,
+		source: (signal: AbortSignal) => AsyncIterable<TailedStringRecord>,
+		prime = false,
+	): Response | Promise<Response> => {
+		const readAbort = new AbortController();
+		const records = closeHandleWhenDone(handle, source(readAbort.signal));
+		const respond = prime ? replayResponse : tailAsSse;
+		return respond(
+			records,
+			adapter.responseHeaders,
+			adapter.formatSseFrame,
+			async () => {
+				readAbort.abort();
+				// A generator cancelled before its first pull never enters finally.
+				await handle.close();
+			},
+		);
+	};
 
 	return {
 		async makeResumable(
@@ -273,15 +291,26 @@ export function createChat<T>(
 			const inUse = async (): Promise<Response> => {
 				if (!requestPrefix) return streamInUseResponse();
 				const rejoinHandle = s2.basin(basin).stream(streamName);
-				const rejoined = await replayResponse(
-					closeHandleWhenDone(
-						rejoinHandle,
-						replayActiveGenerationStringRecords(rejoinHandle, 0, requestPrefix),
-					),
-					adapter.responseHeaders,
-					adapter.formatSseFrame,
-				);
-				return rejoined.status === 204 ? streamInUseResponse() : rejoined;
+				let streaming = false;
+				try {
+					const { fence } = await readLastFence(rejoinHandle);
+					if (!fence?.active || !fence.body.startsWith(requestPrefix)) {
+						return streamInUseResponse();
+					}
+					if (delivery === "replay") {
+						return new Response(null, {
+							status: 202,
+							headers: { "Cache-Control": "no-store" },
+						});
+					}
+					const response = await streamResponse(rejoinHandle, (signal) =>
+						tailGenerationStringRecords(rejoinHandle, fence.seqNum + 1, signal),
+					);
+					streaming = true;
+					return response;
+				} finally {
+					if (!streaming) await rejoinHandle.close();
+				}
 			};
 
 			let claimed = false;
@@ -354,11 +383,20 @@ export function createChat<T>(
 			};
 			if (typeof source === "function") void watchForStop();
 
+			async function* sourceRecords(): AsyncIterable<AppendRecord> {
+				const chunks =
+					typeof source === "function" ? await source(abort.signal) : source;
+				for await (const chunk of chunks) {
+					lastWrite = Date.now();
+					yield* dataRecords(toBody(chunk));
+				}
+			}
+
 			const persisted = persistToS2({
 				s2,
 				basin,
 				stream: streamName,
-				source: resolveSource(source, abort.signal),
+				source: sourceRecords(),
 				abortSource: () => abort.abort(),
 				onAppended: (seqNum) => {
 					from = Math.max(from, seqNum + 1);
@@ -367,10 +405,7 @@ export function createChat<T>(
 				batchSize,
 				lingerDuration,
 				matchSeqNumStart,
-				toRecords: (chunk) => {
-					lastWrite = Date.now();
-					return dataRecords(toBody(chunk));
-				},
+				toRecord: (record) => record,
 				finalRecords: (sourceError) => {
 					finishing = true;
 					return sourceError === undefined
@@ -406,13 +441,8 @@ export function createChat<T>(
 				});
 			}
 
-			return tailAsSse(
-				closeHandleWhenDone(
-					handle,
-					tailGenerationStringRecords(handle, matchSeqNumStart),
-				),
-				adapter.responseHeaders,
-				adapter.formatSseFrame,
+			return streamResponse(handle, (signal) =>
+				tailGenerationStringRecords(handle, matchSeqNumStart, signal),
 			);
 		},
 
@@ -424,13 +454,8 @@ export function createChat<T>(
 
 			if (isSession) {
 				if (options?.live) {
-					return tailAsSse(
-						closeHandleWhenDone(
-							handle,
-							tailStringRecords(handle, options.fromSeqNum),
-						),
-						adapter.responseHeaders,
-						adapter.formatSseFrame,
+					return streamResponse(handle, (signal) =>
+						tailStringRecords(handle, options.fromSeqNum, signal),
 					);
 				}
 				const state = await readSessionReplayState(handle).catch(
@@ -439,49 +464,69 @@ export function createChat<T>(
 						throw err;
 					},
 				);
-				const records = closeHandleWhenDone(
+				return streamResponse(
 					handle,
-					replaySessionStringRecords(handle, options?.fromSeqNum, state),
-				);
-				if (state.hasActiveGeneration) {
-					return tailAsSse(
-						records,
-						adapter.responseHeaders,
-						adapter.formatSseFrame,
-					);
-				}
-				return replayResponse(
-					records,
-					adapter.responseHeaders,
-					adapter.formatSseFrame,
+					(signal) =>
+						replaySessionStringRecords(
+							handle,
+							options?.fromSeqNum,
+							state,
+							signal,
+						),
+					!state.hasActiveGeneration,
 				);
 			}
 
-			return replayResponse(
-				closeHandleWhenDone(
-					handle,
-					replayActiveGenerationStringRecords(handle, options?.fromSeqNum),
-				),
-				adapter.responseHeaders,
-				adapter.formatSseFrame,
+			return streamResponse(
+				handle,
+				(signal) =>
+					replayActiveGenerationStringRecords(
+						handle,
+						options?.fromSeqNum,
+						signal,
+					),
+				true,
 			);
 		},
 
 		async stop(streamName: string): Promise<boolean> {
 			const handle = s2.basin(basin).stream(streamName);
 			try {
-				const { fence } = await readLastFence(handle);
+				const { fence, nextSeqNum } = await readLastFence(handle);
 				if (!fence?.active) return false;
-				const stopChunk = adapter.makeStopChunk?.();
+				let fencingToken = fence.body;
+				let untilSeqNum = nextSeqNum;
+				if (
+					typeof adapter.stopChunks === "function" &&
+					stoppingGenerationStart(fencingToken) === undefined
+				) {
+					fencingToken = `stop-${fence.seqNum.toString(36)}-${randomToken(4)}`;
+					const ack = await appendFenceCommand(
+						handle,
+						fence.body,
+						fencingToken,
+					);
+					untilSeqNum = ack.start.seqNum;
+				}
+				const records = readAvailableDataRecords(
+					handle,
+					fence.seqNum + 1,
+					untilSeqNum,
+				);
+				async function* chunks(): AsyncIterable<T> {
+					for await (const { body } of records) yield JSON.parse(body) as T;
+				}
+				const stopChunks =
+					typeof adapter.stopChunks === "function"
+						? await adapter.stopChunks(chunks())
+						: (adapter.stopChunks ?? []);
 				await handle.append(
 					AppendInput.create(
 						[
-							...(stopChunk === undefined
-								? []
-								: dataRecords(toBody(stopChunk))),
+							...stopChunks.flatMap((chunk) => dataRecords(toBody(chunk))),
 							AppendRecord.fence(`end-${randomToken(4)}`),
 						],
-						{ fencingToken: fence.body },
+						{ fencingToken },
 					),
 				);
 				return true;

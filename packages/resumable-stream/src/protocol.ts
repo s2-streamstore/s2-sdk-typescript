@@ -41,6 +41,13 @@ export function isTerminalFence(
 	);
 }
 
+/** A stop first fences the writer while retaining the generation's opening position. */
+export function stoppingGenerationStart(token: string): number | undefined {
+	const match = /^stop-([0-9a-z]+)-/.exec(token);
+	const seqNum = match ? Number.parseInt(match[1]!, 36) : Number.NaN;
+	return Number.isSafeInteger(seqNum) ? seqNum : undefined;
+}
+
 export async function appendFenceCommand(
 	stream: S2Stream,
 	currentToken: string | null | undefined,
@@ -137,7 +144,7 @@ export interface PersistToS2Options<T> {
 	fencingToken: string;
 	batchSize: number;
 	lingerDuration: number;
-	toRecords: (value: T) => ReadonlyArray<AppendRecord>;
+	toRecord: (value: T) => AppendRecord;
 	finalRecords: (sourceError: unknown) => ReadonlyArray<AppendRecord>;
 	matchSeqNumStart?: number;
 	onSeqNumMismatch?: (error: SeqNumMismatchError) => void;
@@ -182,7 +189,7 @@ export async function persistToS2<T>({
 	fencingToken,
 	batchSize,
 	lingerDuration,
-	toRecords,
+	toRecord,
 	finalRecords,
 	matchSeqNumStart,
 	onSeqNumMismatch,
@@ -203,14 +210,12 @@ export async function persistToS2<T>({
 		let sourceError: unknown | undefined;
 		try {
 			for await (const value of source) {
-				for (const record of toRecords(value)) {
-					const ticket = await producer.submit(record);
-					// A failed append must stop an idle source, not wait for its next chunk.
-					ticket.ack().then(
-						(ack) => onAppended?.(ack.seqNum()),
-						() => abortSource?.(),
-					);
-				}
+				const ticket = await producer.submit(toRecord(value));
+				// A failed append must stop an idle source, not wait for its next chunk.
+				ticket.ack().then(
+					(ack) => onAppended?.(ack.seqNum()),
+					() => abortSource?.(),
+				);
 			}
 		} catch (err) {
 			sourceError = err;

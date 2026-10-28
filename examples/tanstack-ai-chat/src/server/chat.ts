@@ -1,8 +1,9 @@
 import {
 	type Chunk,
 	createResumableChat,
+	readStoredChunks,
 } from "@s2-dev/resumable-stream/tanstack-ai";
-import { S2, S2Error } from "@s2-dev/streamstore";
+import { S2 } from "@s2-dev/streamstore";
 import {
 	convertMessagesToModelMessages,
 	type ModelMessage,
@@ -70,11 +71,6 @@ const chat = createResumableChat({
 });
 const s2 = new S2({ accessToken, endpoints });
 
-// Process-local active-generation tracking. The resumable-stream package no
-// longer owns this; we keep the abort controller for each in-flight turn here
-// so `/stop` can abort the upstream model call.
-const activeGenerations = new Map<string, AbortController>();
-
 function streamName(chatId: string): string {
 	return `${STREAM_PREFIX}-${chatId}`;
 }
@@ -119,34 +115,14 @@ function isUiMessageArray(value: unknown): value is UIMessage[] {
 }
 
 async function readHistory(chatId: string): Promise<ChatHistory> {
-	const session = await s2
-		.basin(basin)
-		.stream(streamName(chatId))
-		.readSession(
-			{
-				start: { from: { seqNum: 0 }, clamp: true },
-				stop: { waitSecs: 0 },
-			},
-			{ as: "string" },
-		)
-		.catch((error: unknown) => {
-			if (error instanceof S2Error && error.status === 404) return null;
-			throw error;
-		});
+	const stream = s2.basin(basin).stream(streamName(chatId));
 	const history: ChatHistory = { messages: [] };
 	let processor: StreamProcessor | null = null;
 
-	if (!session) return history;
-
 	try {
-		for await (const record of session) {
-			history.cursor = record.seqNum + 1;
-			if (!record.body) continue;
+		for await (const { chunk, nextSeqNum } of readStoredChunks(stream)) {
+			history.cursor = nextSeqNum;
 			try {
-				const chunk = JSON.parse(record.body) as Chunk & {
-					type?: unknown;
-					messages?: unknown;
-				};
 				if (
 					chunk.type === "MESSAGES_SNAPSHOT" &&
 					isUiMessageArray(chunk.messages)
@@ -165,7 +141,7 @@ async function readHistory(chatId: string): Promise<ChatHistory> {
 			} catch {}
 		}
 	} finally {
-		await session[Symbol.asyncDispose]?.();
+		await stream.close();
 	}
 
 	if (processor) {
@@ -190,6 +166,7 @@ function getModelMessageText(message: ModelMessage): string {
 
 async function* fallbackStream(
 	prompt: string,
+	threadId: string,
 	messageId = FALLBACK_MESSAGE_ID,
 	signal?: AbortSignal,
 ): AsyncIterable<Chunk> {
@@ -197,7 +174,7 @@ async function* fallbackStream(
 	const timestamp = Date.now();
 	const runId = `fallback-run-${timestamp}`;
 
-	yield { type: "RUN_STARTED", timestamp, runId };
+	yield { type: "RUN_STARTED", timestamp, runId, threadId };
 	yield {
 		type: "TEXT_MESSAGE_START",
 		timestamp: timestamp + 1,
@@ -225,15 +202,17 @@ async function* fallbackStream(
 		type: "RUN_FINISHED",
 		timestamp: timestamp + 3 + words.length,
 		runId,
+		threadId,
 		model: "fallback",
 		finishReason: "stop",
 	};
 }
 
-async function createChunks(
+async function* createChunks(
 	messages: UIMessage[],
-	{ abortController }: { abortController: AbortController },
-): Promise<AsyncIterable<Chunk>> {
+	threadId: string,
+	signal: AbortSignal,
+): AsyncIterable<Chunk> {
 	const modelMessages = convertMessagesToModelMessages(messages);
 	let latestUserMessage: ModelMessage | undefined;
 	for (let index = modelMessages.length - 1; index >= 0; index -= 1) {
@@ -248,11 +227,8 @@ async function createChunks(
 		"";
 
 	if (!process.env.OPENAI_API_KEY) {
-		return fallbackStream(
-			latestPrompt,
-			FALLBACK_MESSAGE_ID,
-			abortController.signal,
-		);
+		yield* fallbackStream(latestPrompt, threadId, FALLBACK_MESSAGE_ID, signal);
+		return;
 	}
 
 	const [{ chat: tanstackChat }, { openaiText }] = await Promise.all([
@@ -268,32 +244,20 @@ async function createChunks(
 		typeof openaiText
 	>[0];
 
-	return tanstackChat({
-		adapter: openaiText(model),
-		messages: modelMessages,
-		abortController,
-	} as unknown as Parameters<typeof tanstackChat>[0]) as AsyncIterable<Chunk>;
-}
-
-// Wraps the chunk stream so we yield each event through, see what's terminal,
-// and clear the active-generations entry on completion / abort.
-function withActiveTracking(
-	name: string,
-	active: AbortController,
-	source: AsyncIterable<Chunk>,
-): AsyncIterable<Chunk> {
-	return (async function* () {
-		try {
-			for await (const chunk of source) {
-				if (active.signal.aborted) return;
-				yield chunk;
-			}
-		} finally {
-			if (activeGenerations.get(name) === active) {
-				activeGenerations.delete(name);
-			}
-		}
-	})();
+	const abortController = new AbortController();
+	const abort = () => abortController.abort(signal.reason);
+	if (signal.aborted) abort();
+	else signal.addEventListener("abort", abort, { once: true });
+	try {
+		yield* tanstackChat({
+			adapter: openaiText(model),
+			messages: modelMessages,
+			threadId,
+			abortController,
+		} as unknown as Parameters<typeof tanstackChat>[0]) as AsyncIterable<Chunk>;
+	} finally {
+		signal.removeEventListener("abort", abort);
+	}
 }
 
 function withMessageHistory(
@@ -332,40 +296,21 @@ export async function postChat(request: Request): Promise<Response> {
 			return new Response("Expected at least one message", { status: 400 });
 		}
 
-		const name = streamName(body.id);
-		if (activeGenerations.has(name)) {
-			return new Response("Stream already has an active generation", {
-				status: 409,
-			});
-		}
-
-		const active = new AbortController();
-		activeGenerations.set(name, active);
-
+		const threadId = body.id;
 		const messages = body.messages as UIMessage[];
-		const source = await createChunks(messages, {
-			abortController: active,
-		});
-
-		try {
-			return await chat.makeResumable(
-				name,
-				withActiveTracking(name, active, withMessageHistory(messages, source)),
-				{
-					delivery: "replay",
-					// Without waitUntil, makeResumable awaits persistence so the POST
-					// holds open for the full generation. Fire-and-forget the promise
-					// here; Bun keeps the task alive past the response.
-					waitUntil: (p) =>
-						p.catch((err) =>
-							console.error("[tanstack-ai-chat] persist failed:", err),
-						),
-				},
-			);
-		} catch (err) {
-			activeGenerations.delete(name);
-			throw err;
-		}
+		return await chat.makeResumable(
+			streamName(threadId),
+			(signal) =>
+				withMessageHistory(messages, createChunks(messages, threadId, signal)),
+			{
+				delivery: "replay",
+				// Bun keeps persistence alive after this response returns.
+				waitUntil: (p) =>
+					p.catch((err) =>
+						console.error("[tanstack-ai-chat] persist failed:", err),
+					),
+			},
+		);
 	} catch (error) {
 		return routeError(error);
 	}
@@ -377,10 +322,9 @@ export async function stopChat(request: Request): Promise<Response> {
 		if (!isValidChatId(body.id)) {
 			return new Response("Missing or invalid id", { status: 400 });
 		}
-		const active = activeGenerations.get(streamName(body.id));
-		active?.abort();
+		const stopped = await chat.stop(streamName(body.id));
 		return new Response(null, {
-			status: active ? 202 : 204,
+			status: stopped ? 202 : 204,
 			headers: { "Cache-Control": "no-store" },
 		});
 	} catch (error) {
