@@ -3,9 +3,10 @@ import {
 	AppendRecord,
 	S2,
 	S2Environment,
+	S2Stream,
 } from "@s2-dev/streamstore";
 import type { UIMessageChunk } from "ai";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createResumableChat } from "../aisdk/index.js";
 
 const TEST_TIMEOUT_MS = 120_000;
@@ -283,11 +284,12 @@ describeIf("resumable-stream/aisdk", () => {
 
 	describe("replay", () => {
 		it(
-			"replays oversized chunks after the client drops the POST body",
+			"PR #398: disconnecting an idle reader releases it while oversized chunks remain replayable",
 			async () => {
 				const chat = createResumableChat({
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
+					batchSize: 1,
 					...s2EndpointsFromEnv(),
 				});
 				const streamName = makeStreamName("replay-bg");
@@ -298,31 +300,75 @@ describeIf("resumable-stream/aisdk", () => {
 					mediaType: "image/png",
 				});
 				const releaseSource = deferred();
-
+				const idleRead = deferred();
+				let sourceSignal: AbortSignal | undefined;
+				let readerHandle: S2Stream | undefined;
+				let disposed = false;
+				const readSession = S2Stream.prototype.readSession;
+				const readSpy = vi
+					.spyOn(S2Stream.prototype, "readSession")
+					.mockImplementation(async function (input, options) {
+						const session = await readSession.call(this, input, options);
+						if (input?.stop?.waitSecs === 0) return session;
+						readerHandle = this;
+						const getReader = session.getReader.bind(session);
+						vi.spyOn(session, "getReader").mockImplementation(() => {
+							const reader = getReader();
+							const read = reader.read.bind(reader);
+							let sawStart = false;
+							vi.spyOn(reader, "read").mockImplementation(async () => {
+								if (sawStart) idleRead.resolve();
+								const next = await read();
+								if (!next.done && next.value.seqNum === 1) sawStart = true;
+								return next;
+							});
+							return reader;
+						});
+						const dispose = session[Symbol.asyncDispose].bind(session);
+						vi.spyOn(session, Symbol.asyncDispose).mockImplementation(
+							async () => {
+								await dispose();
+								disposed = true;
+							},
+						);
+						return session;
+					});
+				const closeSpy = vi.spyOn(S2Stream.prototype, "close");
 				let bgPromise: Promise<unknown> | undefined;
-				const postRes = await chat.makeResumable(
-					streamName,
-					heldOpenAsyncIterable(chunks, releaseSource.promise),
-					{
-						waitUntil: (promise) => {
-							bgPromise = promise;
+				let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+				try {
+					const postRes = await chat.makeResumable(
+						streamName,
+						(signal) => {
+							sourceSignal = signal;
+							return heldOpenAsyncIterable(chunks, releaseSource.promise);
 						},
-					},
-				);
+						{ waitUntil: (promise) => (bgPromise = promise) },
+					);
+					reader = postRes.body!.getReader();
+					expect((await within(reader.read())).done).toBe(false);
+					const pendingRead = reader.read();
+					await within(idleRead.promise);
+					await within(reader.cancel(), 1000);
+					expect(await pendingRead).toEqual({ done: true, value: undefined });
+					expect(disposed).toBe(true);
+					expect(closeSpy.mock.contexts).toContain(readerHandle);
+					expect(sourceSignal?.aborted).toBe(false);
 
-				// Simulate the client disconnecting before consuming any chunks.
-				// Tee semantics: persist branch continues independently.
-				await postRes.body?.cancel();
-
-				const replayRes = await chat.replay(streamName);
-				releaseSource.resolve();
-				expect(replayRes.status).toBe(200);
-				expect(replayRes.headers.get("Content-Type")).toBe("text/event-stream");
-
-				const records = await within(readSseResponse(replayRes));
-				expect(records).toEqual(chunks);
-
-				await bgPromise;
+					const replayRes = await chat.replay(streamName);
+					releaseSource.resolve();
+					expect(replayRes.status).toBe(200);
+					expect(await within(readSseResponse(replayRes))).toEqual(chunks);
+					await within(bgPromise!);
+				} finally {
+					releaseSource.resolve();
+					await within(bgPromise ?? Promise.resolve()).catch(() => {});
+					await within(reader?.cancel() ?? Promise.resolve(), 1000).catch(
+						() => {},
+					);
+					readSpy.mockRestore();
+					closeSpy.mockRestore();
+				}
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -371,9 +417,9 @@ describeIf("resumable-stream/aisdk", () => {
 	});
 
 	describe("requestId", () => {
-		it.each(["response", "replay"] as const)(
-			"keeps retries within their generation and delivery mode (%s; PR #398)",
-			async (delivery) => {
+		it(
+			"keeps retries within their generation and delivery mode (PR #398)",
+			async () => {
 				const config = {
 					accessToken: process.env.S2_ACCESS_TOKEN!,
 					basin: basinName,
@@ -413,11 +459,19 @@ describeIf("resumable-stream/aisdk", () => {
 					const retry = await within(
 						chat.makeResumable(streamName, source, {
 							requestId: "msg-1",
-							delivery,
 						}),
 					);
 					responses.push(retry);
-					expect(retry.status).toBe(delivery === "response" ? 200 : 202);
+					expect(retry.status).toBe(200);
+					const replayRetry = await within(
+						chat.makeResumable(streamName, source, {
+							requestId: "msg-1",
+							delivery: "replay",
+						}),
+					);
+					responses.push(replayRetry);
+					expect(replayRetry.status).toBe(202);
+					expect(replayRetry.body).toBeNull();
 					expect(
 						(
 							await chat.makeResumable(streamName, source, {
@@ -442,13 +496,9 @@ describeIf("resumable-stream/aisdk", () => {
 					expect(await within(readSseResponse(first))).toEqual(
 						chunks.slice(0, -1),
 					);
-					if (delivery === "response") {
-						expect(await within(readSseResponse(retry))).toEqual(
-							chunks.slice(0, -1),
-						);
-					} else {
-						expect(retry.body).toBeNull();
-					}
+					expect(await within(readSseResponse(retry))).toEqual(
+						chunks.slice(0, -1),
+					);
 				} finally {
 					continueSource.resolve();
 					release.resolve();

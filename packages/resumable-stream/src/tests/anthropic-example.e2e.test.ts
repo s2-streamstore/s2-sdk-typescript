@@ -73,7 +73,12 @@ describeIf("Anthropic example routes", () => {
 				import.meta.url,
 			),
 		);
-		const server = spawn("bun", ["run", serverPath], {
+		// The test job has no dist/ output; resolve workspace imports from source.
+		const tsconfig = fileURLToPath(
+			new URL("../../../../examples/tsconfig.json", import.meta.url),
+		);
+		const serverArgs = ["run", "--tsconfig-override", tsconfig, serverPath];
+		const server = spawn("bun", serverArgs, {
 			env: {
 				...process.env,
 				PORT: "0",

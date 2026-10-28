@@ -4,10 +4,12 @@ import {
 	AppendRecord,
 	FencingTokenMismatchError,
 	type ReadRecord,
+	type S2,
 	S2Error,
 	SeqNumMismatchError,
 } from "@s2-dev/streamstore";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createChat } from "../adapter.js";
 import {
 	claimSessionGeneration,
 	claimSharedGeneration,
@@ -16,6 +18,52 @@ import {
 	tailGenerationStringRecords,
 	tailStringRecords,
 } from "../shared.js";
+
+it("PR #398: cancellation releases a reader while its transport is still opening", async () => {
+	let finishOpening!: () => void;
+	const opening = new Promise<void>((resolve) => {
+		finishOpening = resolve;
+	});
+	let startedReading!: () => void;
+	const reading = new Promise<void>((resolve) => {
+		startedReading = resolve;
+	});
+	const cancel = vi.fn();
+	const session = new ReadableStream<ReadRecord<"string">>({
+		async start() {
+			await opening;
+		},
+		cancel,
+	});
+	const handle = {
+		async readSession() {
+			startedReading();
+			return session;
+		},
+		close: vi.fn(),
+	};
+	const chat = createChat(
+		{ accessToken: "t", basin: "b", mode: "session" },
+		{ makeErrorChunk: () => ({}), responseHeaders: {} },
+		{ basin: () => ({ stream: () => handle }) } as unknown as S2,
+	);
+	try {
+		const response = await chat.replay("s", { live: true });
+		const reader = response.body!.getReader();
+		const pendingRead = reader.read();
+		await reading;
+		const cancelled = reader.cancel();
+		await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce(), {
+			timeout: 1000,
+		});
+		await cancelled;
+		expect(await pendingRead).toEqual({ done: true, value: undefined });
+		expect(handle.close).toHaveBeenCalled();
+		expect(session.locked).toBe(false);
+	} finally {
+		finishOpening();
+	}
+}, 3000);
 
 function readRecord(partial: {
 	seqNum: number;
