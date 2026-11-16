@@ -255,6 +255,22 @@ async function expectPending(promise: Promise<unknown>): Promise<void> {
 	expect(state).toBe(pending);
 }
 
+async function expectSettles(promise: Promise<unknown>): Promise<void> {
+	const pending = Symbol("pending");
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const state = await Promise.race([
+		promise.then(
+			() => "fulfilled" as const,
+			() => "rejected" as const,
+		),
+		new Promise<typeof pending>((resolve) => {
+			timer = setTimeout(() => resolve(pending), 500);
+		}),
+	]);
+	clearTimeout(timer);
+	expect(state).not.toBe(pending);
+}
+
 describe("Producer", () => {
 	it("preserves record order when batching", async () => {
 		const session = new MockAppendSession();
@@ -445,5 +461,48 @@ describe("Producer", () => {
 		expect(lateError).toBeInstanceOf(S2Error);
 		expect((lateError as S2Error).message).toBe("Producer is closed");
 		expect(session.getValues()).toEqual(["a", "b", "c"]);
+	});
+
+	it.each([
+		{
+			name: "a write rejected after writer.close()",
+			session: () => new MockAppendSession(),
+			drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => {
+				void writer.write(AppendRecord.string({ body: "a" }));
+				void writer.close();
+				void writer.write(AppendRecord.string({ body: "x" })).catch(() => {});
+			},
+		},
+		{
+			name: "an abort with writes queued",
+			session: () => new MockAppendSession(),
+			drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => {
+				for (const body of ["a", "b", "c"]) {
+					void writer.write(AppendRecord.string({ body })).catch(() => {});
+				}
+				void writer.abort("stop").catch(() => {});
+			},
+		},
+		{
+			name: "a failed sink write with writes queued",
+			session: () =>
+				new ControlledAppendSession({
+					submitNumber: 1,
+					error: new S2Error({ message: "append failed", status: 500 }),
+				}),
+			drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => {
+				for (const body of ["a", "b", "c", "d", "e"]) {
+					void writer.write(AppendRecord.string({ body })).catch(() => {});
+				}
+			},
+		},
+	])("operations after $name still settle", async ({ session, drop }) => {
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+			session(),
+		);
+		drop(producer.writable.getWriter());
+
+		await expectSettles(producer.close());
 	});
 });
