@@ -45,7 +45,8 @@ export class EncryptionKeyFormatError extends S2Error {
 	}
 }
 
-const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+const BASE64_PATTERN =
+	/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 /**
  * Helpers for normalizing client-supplied encryption keys.

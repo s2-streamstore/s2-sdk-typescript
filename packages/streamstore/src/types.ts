@@ -83,7 +83,16 @@ function validateTimestamp(timestamp: number | Date | undefined): void {
 	if (timestamp === undefined) {
 		return;
 	}
-	const ms = timestamp instanceof Date ? timestamp.getTime() : timestamp;
+	let ms: number;
+	try {
+		// Works for a Date from another realm, where `instanceof Date` is false.
+		ms =
+			typeof timestamp === "number"
+				? timestamp
+				: Date.prototype.getTime.call(timestamp);
+	} catch {
+		ms = Number.NaN;
+	}
 	if (!Number.isFinite(ms) || ms < 0) {
 		throw new S2Error({
 			message:
