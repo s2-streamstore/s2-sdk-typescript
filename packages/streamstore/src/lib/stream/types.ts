@@ -64,8 +64,8 @@ export interface AcksStream
  * Low-level append session implemented by transports.
  *
  * - Returns errors in the {@link AppendResult}; a rejection is treated as one.
- * - Sends nothing once an append has failed: the retry layer resends on a
- *   new session.
+ * - Sends nothing once a sent append has failed: the retry layer resends on
+ *   a new session.
  * - Does not implement retry or backpressure; those are added by {@link AppendSession}.
  */
 export interface TransportAppendSession {

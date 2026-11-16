@@ -917,6 +917,12 @@ type InflightEntry = {
 const MIN_MAX_INFLIGHT_BYTES = 1 * 1024 * 1024; // 1 MiB minimum
 const DEFAULT_MAX_INFLIGHT_BYTES = 3 * 1024 * 1024; // 3 MiB default
 
+/** How waiting for the head entry ends. */
+type HeadResult =
+	| { kind: "settled"; value: AppendResult }
+	| { kind: "timeout" }
+	| { kind: "stopped" };
+
 type CapacityWaiter = {
 	input: Types.AppendInput;
 	resolve: (ticket: BatchSubmitTicket) => void;
@@ -1097,6 +1103,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	}
 
 	private hasCapacity(input: Types.AppendInput): boolean {
+		// Admit any batch into an empty session, so one larger than
+		// maxInflightBytes reaches the transport and fails, rather than waiting
+		// forever and blocking every later submit.
+		if (this.inflight.length === 0) {
+			return true;
+		}
 		return (
 			this.queuedBytes + input.meteredBytes <= this.maxQueuedBytes &&
 			(this.maxInflightBatches === undefined ||
@@ -1163,6 +1175,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 	/** Fail the submits waiting for capacity: the session is closing or failed (#177). */
 	private rejectCapacityWaiters(): void {
+		if (this.capacityWaiters.length === 0) {
+			return;
+		}
 		const error = appendSessionClosedError(this.fatalError);
 		for (const waiter of this.capacityWaiters) {
 			waiter.reject(error);
@@ -1533,25 +1548,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * - If attempt start is missing (for backward compatibility), we measure
 	 *   from "now" with the full timeout window.
 	 */
-	private waitForHead(
-		head: InflightEntry,
-	): Promise<
-		| { kind: "settled"; value: AppendResult }
-		| { kind: "timeout" }
-		| { kind: "stopped" }
-	> {
+	private waitForHead(head: InflightEntry): Promise<HeadResult> {
 		const attemptStart = head.attemptStartedMonotonicMs ?? performance.now();
 		const deadline = attemptStart + this.requestTimeoutMillis;
 		const remaining = Math.max(0, Math.ceil(deadline - performance.now()));
 
 		return new Promise((resolve) => {
 			let done = false;
-			const finish = (
-				result:
-					| { kind: "settled"; value: AppendResult }
-					| { kind: "timeout" }
-					| { kind: "stopped" },
-			) => {
+			const finish = (result: HeadResult) => {
 				if (done) return;
 				done = true;
 				clearTimeout(timer);
@@ -1652,13 +1656,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			entry.input.matchSeqNum ?? "none",
 		);
 		entry.attemptStartedMonotonicMs = performance.now();
-		entry.innerPromise = session
-			.submit(entry.input, () => {
+		// A transport should return errors, but one that throws or rejects must
+		// fail this attempt, not the pump or the caller of submit().
+		let result: Promise<AppendResult>;
+		try {
+			result = session.submit(entry.input, () => {
 				entry.sent = true;
-			})
-			// A transport should return errors, but one that rejects must not
-			// crash the pump.
-			.catch((e) => err(s2Error(e)));
+			});
+		} catch (e) {
+			result = Promise.reject(e);
+		}
+		entry.innerPromise = result.catch((e) => err(s2Error(e)));
 	}
 
 	/**

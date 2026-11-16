@@ -382,8 +382,10 @@ export function appendSessionClosedError(cause?: S2Error): S2Error {
 		message: "AppendSession is closed",
 		code: "SESSION_CLOSED",
 	});
-	if (cause) {
-		error.cause = cause;
+	// Why the session closed, not another closed-session error.
+	const reason = cause?.code === "SESSION_CLOSED" ? cause.cause : cause;
+	if (reason) {
+		error.cause = reason;
 	}
 	return error;
 }
