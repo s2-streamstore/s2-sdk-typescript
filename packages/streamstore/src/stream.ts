@@ -267,8 +267,9 @@ export class S2Stream {
 	 *
 	 * Once `requestOptions.signal` aborts, at any point, the session fails with
 	 * an `S2Error` with code `ABORTED` (status 499) on either transport: a
-	 * pending `appendSession()` rejects with it, and so do inflight appends and
-	 * later `submit()` calls. An abort is never retried.
+	 * pending `appendSession()` and inflight appends reject with it. An abort is
+	 * never retried. As after any failure, later `submit()` calls reject with
+	 * code `SESSION_CLOSED`.
 	 *
 	 * @param sessionOptions Options that control append session behavior
 	 * @param requestOptions Optional request options

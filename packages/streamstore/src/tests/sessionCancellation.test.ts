@@ -1,13 +1,11 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
-import { BatchTransform } from "../batch-transform.js";
 import type { RetryConfig } from "../common.js";
 import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
-import type { AppendSession, SessionTransports } from "../lib/stream/types.js";
-import { Producer } from "../producer.js";
+import type { SessionTransports } from "../lib/stream/types.js";
 import type { S2Stream } from "../stream.js";
 import { AppendInput, AppendRecord } from "../types.js";
 import {
@@ -53,13 +51,10 @@ interface SessionServerOptions {
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
 
 const ABORTED = { message: "Request cancelled", code: "ABORTED", status: 499 };
-
-/** The error `promise` rejects with, or undefined if it resolves. */
-const rejectionOf = (promise: Promise<unknown>) =>
-	promise.then(
-		() => undefined,
-		(error: S2Error) => error,
-	);
+const SESSION_CLOSED = {
+	message: "AppendSession is closed",
+	code: "SESSION_CLOSED",
+};
 
 /** The status and body of the `n`th append failure, from 0. */
 function appendFailure(n: number): [number, string] {
@@ -352,13 +347,6 @@ async function abortableSession(
 	return { controller, session };
 }
 
-/** A Producer that appends a batch a record. */
-const producerOn = (session: AppendSession) =>
-	new Producer(
-		new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
-		session,
-	);
-
 /**
  * Issue #406: `S2Stream.close()` with sessions open never settled on s2s when
  * the handle was the endpoint's last pool user, since a graceful HTTP/2 close
@@ -466,7 +454,8 @@ describe.each(TRANSPORTS)(
  * Issue #410: an s2s append session took an abort of its signal for a dropped
  * connection and reconnected, so appends went on being acked, while the fetch
  * transport failed them with the cancellation error. Once the signal aborts,
- * appends must fail with that error, without reconnecting, on both transports.
+ * inflight appends must fail with that error and later ones as closed,
+ * without reconnecting, on both transports.
  */
 describe.each(TRANSPORTS)(
 	"Issue #410: aborting a %s append session",
@@ -487,7 +476,7 @@ describe.each(TRANSPORTS)(
 		);
 
 		it(
-			"rejects later appends when the signal aborts after an ack",
+			"rejects later appends as closed when the signal aborts after an ack",
 			async () => {
 				const server = await startSessionServer(transport, {
 					appends: "open",
@@ -499,11 +488,9 @@ describe.each(TRANSPORTS)(
 				await (await session.submit(record())).ack();
 
 				controller.abort();
-				const unsent = await rejectionOf(
+				await expect(
 					withinDeadline(session.submit(record())),
-				);
-				expect(unsent).toMatchObject(ABORTED);
-				expect(unsent?.hasNoSideEffects()).toBe(true);
+				).rejects.toMatchObject(SESSION_CLOSED);
 				// Cancelled, not left for the server to end.
 				await waitFor(() => server.open() === 0);
 				expect(server.requests()).toBe(1);
@@ -536,104 +523,59 @@ describe.each(TRANSPORTS)(
 );
 
 /**
- * Issue #378: once an append session failed, both the session and a Producer
- * on it rejected batches they never sent with `AppendIndefiniteFailureError`
- * whenever an earlier batch may have taken effect.
+ * Issue #378: once an append session failed, it rejected a batch submitted
+ * afterwards with `AppendIndefiniteFailureError` whenever an earlier batch may
+ * have taken effect, though the new batch was never sent. As in the Go SDK,
+ * only the batches a failed session held get its error: it is closed to the
+ * rest.
  */
 describe.each(TRANSPORTS)(
 	"Issue #378: a failed %s append session",
 	(transport) => {
 		it(
-			"rejects batches it never sent with a definite error",
+			"rejects later batches as closed",
 			async () => {
 				const server = await startSessionServer(transport, {
 					appends: "fail",
 				});
-				const session = await streamOn(server, transport).appendSession({
-					maxInflightBatches: 1,
-				});
-				// The second batch waits for the first to settle.
-				const producer = producerOn(session);
-				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
-				const queued = producer.submit(AppendRecord.string({ body: "b" }));
-				await expect(withinDeadline(sent.ack())).rejects.toBeInstanceOf(
+				const session = await streamOn(server, transport).appendSession();
+				const sent = (await session.submit(record())).ack();
+				await expect(withinDeadline(sent)).rejects.toBeInstanceOf(
 					AppendIndefiniteFailureError,
 				);
 
-				for (const unsent of [
-					queued.then((ticket) => ticket.ack()),
-					session.submit(record()),
-				]) {
-					const error = await rejectionOf(unsent);
-					expect(error?.code).toBe("rate_limited");
-					expect(error?.hasNoSideEffects()).toBe(true);
-				}
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		// Fetch sends one append at a time. A retry hands it both batches, so
-		// the second waits in its queue, handed over but never sent.
-		it.runIf(transport === "fetch")(
-			"treats a batch its transport queued but never sent as never sent",
-			async () => {
-				const server = await startSessionServer(transport, {
-					appends: "busy",
-				});
-				const { controller, session } = await abortableSession(
-					server,
-					transport,
-					{ appendRetryPolicy: "noSideEffects" },
+				await expect(session.submit(record())).rejects.toMatchObject(
+					SESSION_CLOSED,
 				);
-				const first = await session.submit(record());
-				await waitFor(() => server.requests() === 1);
-				const second = await session.submit(record());
-				// The second 429 fails the queued batch too. noSideEffects still
-				// retries, as that batch was never sent.
-				await waitFor(() => server.requests() === 3);
-
-				controller.abort();
-				const [sentError, queuedError] = await withinDeadline(
-					Promise.all([rejectionOf(first.ack()), rejectionOf(second.ack())]),
-				);
-				expect(sentError?.hasNoSideEffects()).toBe(false);
-				expect(queuedError?.hasNoSideEffects()).toBe(true);
-				expect(server.requests()).toBe(3);
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
-			"rejects a Producer record queued behind an aborted append as never sent",
-			async () => {
-				const server = await startSessionServer(transport, {
-					appends: "hold",
-				});
-				const { controller, session } = await abortableSession(
-					server,
-					transport,
-				);
-				const producer = producerOn(session);
-				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
-				await waitFor(() => server.requests() === 1);
-				// The session holds it back until the first batch is acked.
-				const queued = await producer.submit(
-					AppendRecord.string({ body: "b" }),
-				);
-				await sleep(10);
-
-				controller.abort();
-				const [sentError, queuedError] = await withinDeadline(
-					Promise.all([rejectionOf(sent.ack()), rejectionOf(queued.ack())]),
-				);
-				expect(sentError?.hasNoSideEffects()).toBe(false);
-				expect(queuedError).toMatchObject(ABORTED);
-				expect(queuedError?.hasNoSideEffects()).toBe(true);
 			},
 			TEST_TIMEOUT_MS,
 		);
 	},
 );
+
+/**
+ * Fetch sends one append at a time, so a retry that hands it two batches
+ * leaves the second in its queue, never sent. When the first then fails, the
+ * second must not count as possibly applied: noSideEffects still retries.
+ */
+describe("noSideEffects on fetch", () => {
+	it(
+		"retries a batch its transport queued but never sent",
+		async () => {
+			const server = await startSessionServer("fetch", { appends: "busy" });
+			const { controller, session } = await abortableSession(server, "fetch", {
+				appendRetryPolicy: "noSideEffects",
+			});
+			await session.submit(record());
+			await waitFor(() => server.requests() === 1);
+			await session.submit(record());
+			// The second 429 also fails the queued batch.
+			await waitFor(() => server.requests() === 3);
+			controller.abort();
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
 
 /**
  * `fetch` rejects with whatever reason the caller passed to `abort()`, so a

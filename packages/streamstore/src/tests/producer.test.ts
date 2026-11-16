@@ -403,22 +403,16 @@ describe("Producer", () => {
 			const secondTicket = await producer.submit(
 				AppendRecord.string({ body: "second" }),
 			);
-			const firstSubmission = await session.nextSubmission();
+			await session.nextSubmission();
 			const failingSubmission = await session.nextSubmission();
 			const flushPromise = producer.flush();
-			// A failed session settles every batch it was given.
-			firstSubmission.ack.reject(error);
 			if (failurePhase === "ack") {
 				failingSubmission.ack.reject(error);
 			}
 
 			await Promise.all([
 				expect(firstTicket.ack()).rejects.toBe(error),
-				// A copy if its batch was never sent.
-				expect(secondTicket.ack()).rejects.toMatchObject({
-					message: error.message,
-					status: error.status,
-				}),
+				expect(secondTicket.ack()).rejects.toBe(error),
 				expect(flushPromise).rejects.toBe(error),
 			]);
 			await expect(producer.flush()).rejects.toBe(error);

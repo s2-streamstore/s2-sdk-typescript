@@ -345,34 +345,6 @@ export function withPriorUncertainty(
 	return error;
 }
 
-/**
- * The error for an append that failed before it was sent, which has no side
- * effects. An {@link AppendIndefiniteFailureError} is unwrapped, as its
- * uncertainty belongs to appends that were sent. An error that cannot rule out
- * side effects on its own is copied, and the copy's
- * {@link S2Error.hasNoSideEffects} is `true`. The copy shares the error's
- * prototype, so it keeps its class and `instanceof` checks still match.
- */
-export function unsentAppendError(error: S2Error): S2Error {
-	const final =
-		error instanceof AppendIndefiniteFailureError
-			? error.finalAttemptError
-			: error;
-	if (final.hasNoSideEffects()) {
-		return final;
-	}
-	// Built on a native Error, so the copy is still one to `Error.isError()`.
-	return Object.defineProperties(
-		Object.setPrototypeOf(new Error(), Object.getPrototypeOf(final)),
-		{
-			...Object.getOwnPropertyDescriptors(final),
-			// V8 keeps `stack` behind an accessor that only works on the original.
-			stack: { value: final.stack, writable: true, configurable: true },
-			hasNoSideEffects: { value: () => true },
-		},
-	);
-}
-
 /** Helper: construct a non-retryable invariant violation error (status 0). */
 export function invariantViolation(
 	message: string,
@@ -394,6 +366,17 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 		code: "ABORTED",
 		status: 499,
 		origin: "sdk",
+	});
+}
+
+/**
+ * An append to a session that has closed or failed. Only the appends the
+ * session held when it failed get the error it failed with.
+ */
+export function sessionClosedError(): S2Error {
+	return new S2Error({
+		message: "AppendSession is closed",
+		code: "SESSION_CLOSED",
 	});
 }
 

@@ -7,7 +7,7 @@ import {
 	RECONNECT_ADVISED_CODE,
 	S2Error,
 	s2Error,
-	unsentAppendError,
+	sessionClosedError,
 	withPriorUncertainty,
 	withS2Error,
 } from "../error.js";
@@ -1021,7 +1021,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.writable = new WritableStream<Types.AppendInput>({
 			write: async (chunk) => {
 				if (this.closed || this.closing) {
-					throw new S2Error({ message: "AppendSession is closed" });
+					throw sessionClosedError();
 				}
 
 				// chunk is already AppendInput with meteredBytes computed
@@ -1055,8 +1055,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 *
 	 * Once `options.signal` aborts, the session fails with
 	 * {@link abortedError}: `create` rejects with it if the signal has already
-	 * aborted, and otherwise appends inflight and submitted later do. An abort
-	 * is never retried.
+	 * aborted, and otherwise its inflight appends do. An abort is never
+	 * retried. As after any failure, later appends reject with
+	 * {@link sessionClosedError}.
 	 */
 	static async create(
 		generator: (
@@ -1107,13 +1108,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					this.streamName,
 					this.fatalError.message,
 				);
-				throw this.fatalError;
+				throw sessionClosedError();
 			}
 
 			// Reject if session is closing/closed so blocked submits fail fast
 			// instead of producing tickets whose ack() can hang (#177)
 			if (this.closing || this.closed) {
-				throw new S2Error({ message: "AppendSession is closed" });
+				throw sessionClosedError();
 			}
 
 			// Byte-based gating
@@ -1159,23 +1160,18 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * This method applies backpressure and will block if capacity limits are reached.
 	 */
 	async submit(input: Types.AppendInput): Promise<BatchSubmitTicket> {
+		if (this.closed || this.closing) {
+			return Promise.reject(sessionClosedError());
+		}
+
 		// Use cached metered size from AppendInput
 		const batchMeteredSize = input.meteredBytes;
 
-		try {
-			if (this.closed || this.closing) {
-				throw new S2Error({ message: "AppendSession is closed" });
-			}
+		// This needs to happen in the sync path.
+		this.ensurePump();
 
-			// This needs to happen in the sync path.
-			this.ensurePump();
-
-			// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
-			await this.waitForCapacity(batchMeteredSize, 1);
-		} catch (error) {
-			// Rejected before it was enqueued, so the batch is never sent.
-			throw unsentAppendError(s2Error(error));
-		}
+		// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
+		await this.waitForCapacity(batchMeteredSize, 1);
 
 		// Move reserved bytes and batches to queued accounting before submission
 		this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
@@ -1211,14 +1207,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		input: Types.AppendInput,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
-		// Check for fatal error (e.g., from abort()). The batch is never sent.
+		// Check for fatal error (e.g., from abort())
 		if (this.fatalError) {
 			debugSession(
 				"[%s] [SUBMIT] rejecting due to fatal error: %s",
 				this.streamName,
 				this.fatalError.message,
 			);
-			return Promise.resolve(err(unsentAppendError(this.fatalError)));
+			return Promise.resolve(err(sessionClosedError()));
 		}
 
 		// Create promise for submit() callers
@@ -1895,15 +1891,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			this.streamName,
 			this.inflight.length,
 		);
-		const unsentError = unsentAppendError(error);
 		for (const entry of this.inflight) {
 			if (entry.maybeResolve) {
 				entry.maybeResolve(
-					err(
-						entry.sent
-							? withPriorUncertainty(error, entry.priorUncertainty ?? false)
-							: unsentError,
-					),
+					err(withPriorUncertainty(error, entry.priorUncertainty ?? false)),
 				);
 			}
 		}

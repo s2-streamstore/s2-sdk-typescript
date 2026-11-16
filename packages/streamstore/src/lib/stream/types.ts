@@ -139,6 +139,8 @@ export interface AppendSession extends AsyncDisposable {
 	 * Returns a promise that resolves to a submit ticket once the batch is enqueued (has capacity).
 	 * Call ticket.ack() to get a promise for the AppendAck once the batch is durable.
 	 * This method applies backpressure and will block if capacity limits are reached.
+	 * Once the session has closed or failed, rejects with an `S2Error` with code
+	 * `SESSION_CLOSED`.
 	 */
 	submit(input: Types.AppendInput): Promise<BatchSubmitTicket>;
 	/**
