@@ -233,6 +233,9 @@ export async function withS2Data<T>(
 	}
 }
 
+/** Copies of errors made by {@link unsentAppendError}. */
+const unsentAppendErrors = new WeakSet<S2Error>();
+
 /**
  * Rich error type used by the SDK to surface HTTP and protocol errors.
  *
@@ -281,8 +284,14 @@ export class S2Error extends Error {
 	 * A draining server acknowledges every input it accepted before ending the
 	 * session with `server_draining`, so anything still unacknowledged was never
 	 * registered and can be resubmitted.
+	 *
+	 * An append that failed before it was sent has no side effects, whatever
+	 * the error.
 	 */
 	hasNoSideEffects(): boolean {
+		if (unsentAppendErrors.has(this)) {
+			return true;
+		}
 		if (this.origin === "server") {
 			return (
 				(this.status === 429 && this.code === "rate_limited") ||
@@ -345,39 +354,33 @@ export function withPriorUncertainty(
 	return error;
 }
 
-/** A cancellation of an append that was never sent. */
-class UnsentAbortError extends S2Error {
-	constructor(cause: S2Error) {
-		super({
-			message: cause.message,
-			code: cause.code,
-			status: cause.status,
-			data: cause.data,
-			origin: cause.origin,
-		});
-		this.cause = cause;
-	}
-
-	override hasNoSideEffects(): boolean {
-		return true;
-	}
-}
-
 /**
- * The error for an append that failed before it was sent. An
- * {@link AppendIndefiniteFailureError} is unwrapped, as its uncertainty
- * belongs to appends that were sent. An `ABORTED` error is copied to report
- * no side effects, which it cannot rule out for an append that was sent.
- * Other errors are kept as they are, so their type is too.
+ * The error for an append that failed before it was sent, which has no side
+ * effects. An {@link AppendIndefiniteFailureError} is unwrapped, as its
+ * uncertainty belongs to appends that were sent. An error that cannot rule out
+ * side effects on its own is copied, and the copy's
+ * {@link S2Error.hasNoSideEffects} is `true`. The copy shares the error's
+ * prototype, so it keeps its class and `instanceof` checks still match.
  */
 export function unsentAppendError(error: S2Error): S2Error {
 	const final =
 		error instanceof AppendIndefiniteFailureError
 			? error.finalAttemptError
 			: error;
-	return final.code === "ABORTED" && !final.hasNoSideEffects()
-		? new UnsentAbortError(final)
-		: final;
+	if (final.hasNoSideEffects()) {
+		return final;
+	}
+	// Built on a native Error, so the copy is still one to `Error.isError()`.
+	const copy: S2Error = Object.defineProperties(
+		Object.setPrototypeOf(new Error(), Object.getPrototypeOf(final)),
+		{
+			...Object.getOwnPropertyDescriptors(final),
+			// V8 keeps `stack` behind an accessor that only works on the original.
+			stack: { value: final.stack, writable: true, configurable: true },
+		},
+	);
+	unsentAppendErrors.add(copy);
+	return copy;
 }
 
 /** Helper: construct a non-retryable invariant violation error (status 0). */

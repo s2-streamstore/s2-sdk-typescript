@@ -412,7 +412,11 @@ describe("Producer", () => {
 
 			await Promise.all([
 				expect(firstTicket.ack()).rejects.toBe(error),
-				expect(secondTicket.ack()).rejects.toBe(error),
+				// A copy if its batch was never sent.
+				expect(secondTicket.ack()).rejects.toMatchObject({
+					message: error.message,
+					status: error.status,
+				}),
 				expect(flushPromise).rejects.toBe(error),
 			]);
 			await expect(producer.flush()).rejects.toBe(error);
