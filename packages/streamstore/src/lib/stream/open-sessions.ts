@@ -1,4 +1,4 @@
-import { S2Error } from "../../error.js";
+import { abortedError } from "../../error.js";
 
 /**
  * The sessions a transport has opened and that have not ended, so closing
@@ -9,16 +9,13 @@ export class OpenSessions {
 	private closed = false;
 
 	/**
-	 * Track a session until the returned function is called.
-	 * Throws once {@link closeAll} has been called.
+	 * Track a session until the returned function is called. Once
+	 * {@link closeAll} has been called, throws the error a closed session ends
+	 * with, since the session would be ended at once.
 	 */
 	register(close: () => Promise<void>): () => void {
 		if (this.closed) {
-			throw new S2Error({
-				message: "Transport is closed",
-				status: 400,
-				origin: "sdk",
-			});
+			throw abortedError("Transport is closed");
 		}
 		this.closers.add(close);
 		return () => {
