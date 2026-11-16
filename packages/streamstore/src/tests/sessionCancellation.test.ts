@@ -26,10 +26,11 @@ interface SessionServer {
 
 interface SessionServerOptions {
 	/**
-	 * How reads are answered: with one record (default), not at all, or with
-	 * a batch that cannot be parsed. The read is held open in every case.
+	 * How reads are answered: with one record (default), not at all, with a
+	 * batch that cannot be parsed, or (HTTP/1.1 only) with JSON headers and
+	 * part of a body. The read is held open in every case.
 	 */
-	reads?: "batch" | "hold" | "malformed";
+	reads?: "batch" | "hold" | "malformed" | "partial";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
@@ -185,6 +186,11 @@ async function startH1Server(
 				res.writeHead(200, { "content-type": "application/json" });
 				res.end(ack);
 			});
+			return;
+		}
+		if (options?.reads === "partial") {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.write('{"tail":');
 			return;
 		}
 		if (options?.reads !== "hold") {
@@ -355,3 +361,34 @@ describe.each(TRANSPORTS)(
 		);
 	},
 );
+
+/**
+ * `fetch` rejects with whatever reason the caller passed to `abort()`, so a
+ * one-shot request aborted with a reason used to fail with status 0 instead
+ * of `ABORTED`, also once its response had started.
+ */
+describe("aborting a one-shot request", () => {
+	it(
+		"fails with ABORTED whatever reason abort() is given",
+		async () => {
+			const server = await startSessionServer("fetch", { reads: "partial" });
+			try {
+				const stream = clientFor(server).basin("test-basin").stream("stream");
+				const controller = new AbortController();
+				const tail = stream.checkTail({ signal: controller.signal });
+				await server.requested;
+				// Let the response headers arrive, so the abort lands in the body.
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				controller.abort("done");
+
+				await expect(withinDeadline(tail)).rejects.toMatchObject({
+					code: "ABORTED",
+					status: 499,
+				});
+			} finally {
+				await server.close();
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});

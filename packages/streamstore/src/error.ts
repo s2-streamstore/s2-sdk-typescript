@@ -102,11 +102,8 @@ export function s2Error(error: any): S2Error {
 		});
 	}
 
-	// Cancelled through a signal, by `abort()` or `AbortSignal.timeout()`.
-	if (
-		error instanceof Error &&
-		(error.name === "AbortError" || error.name === "TimeoutError")
-	) {
+	// Cancelled through a signal; `fetchWithAbortError` makes every abort an `AbortError`.
+	if (error instanceof Error && error.name === "AbortError") {
 		return abortedError();
 	}
 

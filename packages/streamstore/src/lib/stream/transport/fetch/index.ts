@@ -24,6 +24,7 @@ import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import { EventStream } from "../../../event-stream.js";
+import { fetchWithAbortError } from "../../../fetch.js";
 import { FifoQueue } from "../../../queue.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
@@ -453,6 +454,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				baseUrl: transportConfig.baseUrl,
 				auth: () => Redacted.value(transportConfig.accessToken),
 				headers: headers,
+				fetch: fetchWithAbortError,
 			}),
 		);
 
@@ -704,6 +706,7 @@ export class FetchTransport implements SessionTransport {
 				baseUrl: config.baseUrl,
 				auth: () => Redacted.value(config.accessToken),
 				headers: headers,
+				fetch: fetchWithAbortError,
 			}),
 		);
 		this.transportConfig = config;

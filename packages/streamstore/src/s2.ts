@@ -6,6 +6,7 @@ import { S2Endpoints } from "./endpoints.js";
 import { makeServerError, S2Error } from "./error.js";
 import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
+import { fetchWithAbortError } from "./lib/fetch.js";
 import * as Redacted from "./lib/redacted.js";
 import {
 	canSetUserAgentHeader,
@@ -80,6 +81,7 @@ export class S2 {
 				baseUrl: this.endpoints.accountBaseUrl(),
 				auth: () => Redacted.value(this.accessToken),
 				headers: headers,
+				fetch: fetchWithAbortError,
 			}),
 		);
 

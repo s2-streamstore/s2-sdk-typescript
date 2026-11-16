@@ -3,6 +3,7 @@ import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
 import type { EncryptionKeyInput } from "./lib/encryption.js";
 import { resolveEncryptionKey } from "./lib/encryption.js";
+import { fetchWithAbortError } from "./lib/fetch.js";
 import * as Redacted from "./lib/redacted.js";
 import {
 	canSetUserAgentHeader,
@@ -65,6 +66,7 @@ export class S2Basin {
 				baseUrl: options.baseUrl,
 				auth: () => Redacted.value(this.transportConfig.accessToken),
 				headers: headers,
+				fetch: fetchWithAbortError,
 			}),
 		);
 
