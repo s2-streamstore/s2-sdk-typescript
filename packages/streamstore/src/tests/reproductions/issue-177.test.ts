@@ -36,7 +36,6 @@ function createSlowMockTransport(): TransportAppendSession {
 			};
 		},
 		close: async (): Promise<CloseResult> => ({ ok: true }),
-		effectSignalled: () => false,
 	};
 }
 

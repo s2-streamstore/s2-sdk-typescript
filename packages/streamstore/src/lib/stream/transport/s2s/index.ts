@@ -24,6 +24,7 @@ import {
 	reconnectAdvisedError,
 	S2Error,
 	s2Error,
+	sessionClosedError,
 } from "../../../../error.js";
 import type * as API from "../../../../generated/index.js";
 import * as Proto from "../../../../generated/proto/s2.js";
@@ -655,9 +656,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
  */
 // Removed S2SAcksStream - transport sessions no longer expose streams
 
-const appendSessionClosedError = () =>
-	new S2Error({ message: "AppendSession is closed", status: 400 });
-
 /**
  * S2S-based transport session for appending records via HTTP/2.
  * Pipelined: multiple requests can be in-flight simultaneously.
@@ -672,7 +670,6 @@ class S2SAppendSession implements TransportAppendSession {
 		batchSize: number;
 	}>();
 	private initPromise?: Promise<void>;
-	private _effectSignalled = false;
 	private reconnectAdvised = false;
 	private reconnectDeclined = false;
 	private terminalError?: S2Error;
@@ -754,9 +751,6 @@ class S2SAppendSession implements TransportAppendSession {
 				pending.resolve(err(normalized));
 			}
 			this.pendingAcks.clear();
-			// Note: do NOT reset _effectSignalled here. Data may have been
-			// written to the wire before the error occurred, so the flag
-			// must stay true until the session is recreated.
 		};
 		const handleServerError = (error: S2Error) => {
 			if (isServerDraining(error)) {
@@ -856,9 +850,7 @@ class S2SAppendSession implements TransportAppendSession {
 							if (pending) {
 								pending.resolve(ok(ack));
 							}
-							// Reset effect signal when dormant (no pending acks)
 							if (this.pendingAcks.length === 0) {
-								this._effectSignalled = false;
 								// Everything submitted was acknowledged; half-close so the
 								// draining server can end the response cleanly.
 								if (
@@ -919,20 +911,6 @@ class S2SAppendSession implements TransportAppendSession {
 		input: Types.AppendInput,
 		onSend?: () => void,
 	): Promise<AppendResult> {
-		if (this.reconnectAdvised && !this.reconnectDeclined) {
-			// Refuse the advised stream without writing, so the retry layer can
-			// resubmit on a fresh session with no risk of duplication.
-			return Promise.resolve(err(reconnectAdvisedError()));
-		}
-		if (this.terminalError) {
-			return Promise.resolve(err(this.terminalError));
-		}
-		if (!this.http2Stream || this.http2Stream.closed) {
-			return Promise.resolve(
-				err(new S2Error({ message: "HTTP/2 stream is not open", status: 502 })),
-			);
-		}
-
 		const protoBytes = encodeProtoAppendInput(input);
 		const shouldCompress =
 			this.compression !== "none" &&
@@ -950,10 +928,23 @@ class S2SAppendSession implements TransportAppendSession {
 			body: bodyBytes,
 		});
 
-		// close() may have run while the stream was opening or the body was
-		// compressed; writing now would send a batch the caller gave up on.
+		// Checked at the write, as the stream can change while the body is
+		// compressed.
 		if (this.closed) {
-			return err(appendSessionClosedError());
+			return err(sessionClosedError());
+		}
+		if (this.reconnectAdvised && !this.reconnectDeclined) {
+			// Refuse the advised stream without writing, so the retry layer can
+			// resubmit on a fresh session with no risk of duplication.
+			return err(reconnectAdvisedError());
+		}
+		if (this.terminalError) {
+			return err(this.terminalError);
+		}
+		if (!this.http2Stream || this.http2Stream.closed) {
+			return err(
+				new S2Error({ message: "HTTP/2 stream is not open", status: 502 }),
+			);
 		}
 
 		// Track pending ack - this promise resolves when the ack is received (FIFO)
@@ -964,29 +955,17 @@ class S2SAppendSession implements TransportAppendSession {
 			});
 
 			// Send the frame (pipelined - non-blocking)
-			this._effectSignalled = true;
 			onSend?.();
 			this.http2Stream!.write(frame, (writeErr) => {
 				if (writeErr) {
 					// Remove from pending acks on write error
 					this.pendingAcks.removeFirst((p) => p.resolve === resolve);
-					// Note: do NOT reset _effectSignalled here. The write call
-					// was attempted, so data may have partially entered the
-					// kernel buffer before the error was reported.
 					// Resolve with error result
 					resolve(err(s2Error(writeErr)));
 				}
 				// Write completed successfully - promise resolves later when ack is received
 			});
 		});
-	}
-
-	/**
-	 * Returns true if data may have been written to the HTTP/2 stream
-	 * since the last time pendingAcks was empty (dormant).
-	 */
-	effectSignalled(): boolean {
-		return this._effectSignalled;
 	}
 
 	/**
@@ -1047,7 +1026,7 @@ class S2SAppendSession implements TransportAppendSession {
 	): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
-			return err(appendSessionClosedError());
+			return err(sessionClosedError());
 		}
 
 		// Lazy initialize HTTP/2 stream on first submit

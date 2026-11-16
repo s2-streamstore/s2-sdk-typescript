@@ -10,6 +10,7 @@ import {
 	RangeNotSatisfiableError,
 	S2Error,
 	s2Error,
+	sessionClosedError,
 } from "../../../../error.js";
 import type { Client } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
@@ -395,12 +396,12 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
 export class FetchAppendSession implements TransportAppendSession {
-	private queue = new FifoQueue<Types.AppendInput>();
-	private pendingResolvers = new FifoQueue<{
+	// Appends waiting to be sent, one at a time.
+	private readonly pending = new FifoQueue<{
+		input: Types.AppendInput;
 		resolve: (result: AppendResult) => void;
 		onSend?: () => void;
 	}>();
-	private _effectSignalled = false;
 	private readonly stream: string;
 	private closed = false;
 	private processingPromise: Promise<void> | null = null;
@@ -444,15 +445,6 @@ export class FetchAppendSession implements TransportAppendSession {
 	}
 
 	/**
-	 * Returns true if data may have been sent to the server since the
-	 * last time the session was dormant (queue fully drained with no errors).
-	 * Only resets after the processing loop completes successfully.
-	 */
-	effectSignalled(): boolean {
-		return this._effectSignalled;
-	}
-
-	/**
 	 * Close the append session.
 	 * Cancels any in-flight append and fails queued ones, rather than waiting
 	 * for them: the retry layer closes a session either once every append is
@@ -490,7 +482,7 @@ export class FetchAppendSession implements TransportAppendSession {
 			this.stream,
 			input.records.length,
 			input.matchSeqNum ?? "none",
-			this.queue.length,
+			this.pending.length,
 		);
 
 		// Validate closed state
@@ -499,9 +491,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				"[%s] FetchAppendSession.submit: session closed, rejecting",
 				this.stream,
 			);
-			return Promise.resolve(
-				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
-			);
+			return Promise.resolve(err(sessionClosedError()));
 		}
 
 		// Validate batch size limits (non-retryable 400-level error)
@@ -544,12 +534,11 @@ export class FetchAppendSession implements TransportAppendSession {
 		}
 
 		return new Promise((resolve) => {
-			this.queue.push(input);
-			this.pendingResolvers.push({ resolve, onSend });
+			this.pending.push({ input, resolve, onSend });
 			debug(
 				"[%s] FetchAppendSession.submit: queued, queueLen=%d",
 				this.stream,
-				this.queue.length,
+				this.pending.length,
 			);
 
 			// Start processing if not already running
@@ -566,9 +555,16 @@ export class FetchAppendSession implements TransportAppendSession {
 	 */
 	private async processLoop(): Promise<void> {
 		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
-		while (this.queue.length > 0) {
-			const input = this.queue.shift()!;
-			const resolver = this.pendingResolvers.shift()!;
+		while (this.pending.length > 0) {
+			// Once closed, send nothing more.
+			if (this.closed) {
+				for (const queued of this.pending) {
+					queued.resolve(err(sessionClosedError()));
+				}
+				this.pending.clear();
+				break;
+			}
+			const { input, resolve, onSend } = this.pending.shift()!;
 
 			debug(
 				"[%s] FetchAppendSession.processLoop: sending %d records, match_seq_num=%s",
@@ -577,9 +573,8 @@ export class FetchAppendSession implements TransportAppendSession {
 				input.matchSeqNum ?? "none",
 			);
 
-			// Mark effect before sending — data is about to enter the network
-			this._effectSignalled = true;
-			resolver.onSend?.();
+			// Data is about to enter the network
+			onSend?.();
 
 			try {
 				const preferProtobuf = input.records.some(
@@ -605,7 +600,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				);
 
 				// Resolve with success result
-				resolver.resolve(ok(ack));
+				resolve(ok(ack));
 			} catch (error) {
 				// Convert error to S2Error and resolve with error result
 				const s2Err = s2Error(error);
@@ -617,36 +612,26 @@ export class FetchAppendSession implements TransportAppendSession {
 					s2Err.message,
 				);
 
-				// Note: do NOT reset _effectSignalled here. The fetch was
-				// attempted, so data may have reached the server before the
-				// error was reported. The flag stays true until the session
-				// is recreated by the retry layer.
-
 				// Resolve this request with error
-				resolver.resolve(err(s2Err));
+				resolve(err(s2Err));
 
 				// Resolve all remaining pending promises with the same error
 				// (transport failure affects all queued requests)
 				debug(
 					"[%s] FetchAppendSession.processLoop: failing %d queued requests",
 					this.stream,
-					this.pendingResolvers.length,
+					this.pending.length,
 				);
-				for (const pendingResolver of this.pendingResolvers) {
-					pendingResolver.resolve(err(s2Err));
+				for (const queued of this.pending) {
+					queued.resolve(err(s2Err));
 				}
-				this.pendingResolvers.clear();
-
-				// Clear the queue
-				this.queue.clear();
+				this.pending.clear();
 
 				this.processingPromise = null;
 				return;
 			}
 		}
 
-		// Queue fully drained with no errors — session is dormant
-		this._effectSignalled = false;
 		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
 	}

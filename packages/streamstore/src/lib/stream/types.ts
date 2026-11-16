@@ -69,7 +69,8 @@ export interface AcksStream
 export interface TransportAppendSession {
 	/**
 	 * Send `input`, calling `onSend` once it may have reached the server. A
-	 * batch that fails before then was never sent.
+	 * batch that fails before then was never sent, so cannot have taken
+	 * effect: the retry layer may resubmit it even under `noSideEffects`.
 	 */
 	submit(
 		input: Types.AppendInput,
@@ -80,15 +81,6 @@ export interface TransportAppendSession {
 	 * server finish.
 	 */
 	close(options?: { cancel?: boolean }): Promise<Result.CloseResult>;
-	/**
-	 * Returns true if data may have been sent to the server since the last
-	 * time the session was dormant (zero pending acks).
-	 *
-	 * Used by the retry layer under the `noSideEffects` policy: when false,
-	 * it is safe to retry even errors that could otherwise indicate a
-	 * mutation, because no bytes left the client.
-	 */
-	effectSignalled(): boolean;
 }
 
 export class BatchSubmitTicket {

@@ -910,7 +910,7 @@ type InflightEntry = {
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
-	sent?: boolean; // May have reached the server, in any attempt
+	sent?: boolean; // May have reached the server in the current attempt
 	priorUncertainty?: boolean; // An earlier attempt may have taken effect
 };
 
@@ -1595,7 +1595,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				if (
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!error.hasNoSideEffects() &&
-					(this.session?.effectSignalled() ?? true)
+					this.inflight.some((entry) => entry.sent === true)
 				) {
 					debugSession(
 						"[%s] error not policy-compliant (noSideEffects), aborting",
@@ -1666,10 +1666,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				} else {
 					this.consecutiveFailures++;
 					this.currentAttempt++;
-					if (
-						!error.hasNoSideEffects() &&
-						(this.session?.effectSignalled() ?? true)
-					) {
+					if (!error.hasNoSideEffects()) {
 						for (const entry of this.inflight) {
 							if (entry.sent) {
 								entry.priorUncertainty = true;
@@ -1804,6 +1801,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Create new promise from new session
 			const attemptStarted = performance.now();
 			entry.attemptStartedMonotonicMs = attemptStarted;
+			// What an earlier attempt may have done is kept in priorUncertainty.
+			entry.sent = false;
 			entry.innerPromise = session.submit(entry.input, () => {
 				entry.sent = true;
 			});

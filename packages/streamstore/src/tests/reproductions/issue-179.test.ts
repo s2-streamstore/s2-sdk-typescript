@@ -34,7 +34,6 @@ function createMockTransport(): TransportAppendSession {
 			};
 		},
 		close: async (): Promise<CloseResult> => ({ ok: true }),
-		effectSignalled: () => false,
 	};
 }
 

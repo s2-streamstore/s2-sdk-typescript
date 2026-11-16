@@ -524,7 +524,7 @@ export class Producer implements AsyncDisposable {
 			// A failed session's own error, not the closed-session error a later
 			// batch gets from it.
 			this.terminalError = toS2Error(
-				this.appendSession.failureCause?.() ?? cause,
+				this.appendSession.failureCause() ?? cause,
 			);
 		}
 		const error = this.terminalError;
