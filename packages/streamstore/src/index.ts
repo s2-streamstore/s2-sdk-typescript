@@ -116,6 +116,7 @@ export {
 	AppendInput,
 	AppendRecord,
 	EncryptionKey,
+	EncryptionKeyFormatError,
 	EncryptionKeyLengthError,
 	MAX_APPEND_BYTES,
 	MAX_APPEND_RECORDS,

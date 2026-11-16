@@ -104,10 +104,12 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 							message: response.error.message,
 							code: response.error.code ?? undefined,
 							status,
+							origin: "server",
 						})
 					: new S2Error({
 							message: response.response.statusText ?? "Request failed",
 							status,
+							origin: "server",
 						});
 			throw error;
 		}
@@ -181,6 +183,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					parserError = new S2Error({
 						message: msg.data ?? "Unknown error",
 						status: 503,
+						origin: "server",
 					});
 					return { done: true };
 				}

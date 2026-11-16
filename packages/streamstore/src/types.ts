@@ -21,7 +21,11 @@ export type {
 	EncryptionAlgorithm,
 	EncryptionKeyInput,
 } from "./lib/encryption.js";
-export { EncryptionKey, EncryptionKeyLengthError } from "./lib/encryption.js";
+export {
+	EncryptionKey,
+	EncryptionKeyFormatError,
+	EncryptionKeyLengthError,
+} from "./lib/encryption.js";
 
 // =============================================================================
 // Stream Position
@@ -75,24 +79,24 @@ export type AppendRecord = StringAppendRecord | BytesAppendRecord;
 
 const textEncoder = new TextEncoder();
 
+function validateTimestamp(timestamp: number | Date | undefined): void {
+	if (timestamp === undefined) {
+		return;
+	}
+	const ms = timestamp instanceof Date ? timestamp.getTime() : timestamp;
+	if (!Number.isFinite(ms) || ms < 0) {
+		throw new S2Error({
+			message:
+				"timestamp must be a valid Date or a finite, non-negative number of milliseconds",
+			origin: "sdk",
+		});
+	}
+}
+
 /**
  * Factory functions for creating AppendRecord instances.
  */
 export namespace AppendRecord {
-	function validateTimestamp(timestamp: number | Date | undefined): void {
-		if (timestamp === undefined) {
-			return;
-		}
-		const ms = typeof timestamp === "number" ? timestamp : timestamp.getTime();
-		if (!Number.isFinite(ms) || ms < 0) {
-			throw new S2Error({
-				message:
-					"timestamp must be a valid Date or a finite, non-negative number of milliseconds",
-				origin: "sdk",
-			});
-		}
-	}
-
 	/**
 	 * Create a string-format append record with pre-calculated metered size.
 	 */
@@ -268,7 +272,7 @@ export namespace AppendInput {
 	 * Create an AppendInput with validation.
 	 * A batch may contain both string and bytes records.
 	 *
-	 * @throws {S2Error} If validation fails (empty, too many records, or too large)
+	 * @throws {S2Error} If validation fails (empty, too many records, too large, or a record has an invalid `meteredBytes` or `timestamp`)
 	 */
 	export function create(
 		records: ReadonlyArray<AppendRecord>,
@@ -292,7 +296,21 @@ export namespace AppendInput {
 			});
 		}
 
-		const totalBytes = records.reduce((sum, r) => sum + r.meteredBytes, 0);
+		let totalBytes = 0;
+		for (const record of records) {
+			if (
+				!Number.isSafeInteger(record.meteredBytes) ||
+				record.meteredBytes < 0
+			) {
+				throw new S2Error({
+					message:
+						"record meteredBytes must be a non-negative safe integer; create records with AppendRecord.string() or AppendRecord.bytes()",
+					origin: "sdk",
+				});
+			}
+			validateTimestamp(record.timestamp);
+			totalBytes += record.meteredBytes;
+		}
 		if (totalBytes > MAX_APPEND_BYTES) {
 			throw new S2Error({
 				message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,

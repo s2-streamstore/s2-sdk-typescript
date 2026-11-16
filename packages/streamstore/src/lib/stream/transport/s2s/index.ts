@@ -81,6 +81,11 @@ const COMPRESSION_THRESHOLD_BYTES = 1024;
 // `http2.constants.NGHTTP2_CANCEL`; node:http2 is only imported for types here.
 const NGHTTP2_CANCEL = 0x8;
 
+function recordsPath(baseUrl: URL, streamName: string): string {
+	const prefix = baseUrl.pathname.replace(/\/+$/, "");
+	return `${prefix}/streams/${encodeURIComponent(streamName)}/records`;
+}
+
 /** Query string for a read session request. */
 export function readQueryString(args: ReadArgs<any> | undefined): string {
 	const queryParams = new URLSearchParams();
@@ -327,7 +332,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 
 					const { as } = args ?? {};
 					const queryString = readQueryString(args);
-					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
+					const path = `${recordsPath(url, streamName)}${queryString ? `?${queryString}` : ""}`;
 
 					const acceptEncoding = await acceptEncodingHeader(compression);
 					if (controllerClosed) {
@@ -716,7 +721,7 @@ class S2SAppendSession implements TransportAppendSession {
 	private async initializeStream(): Promise<void> {
 		const url = new URL(this.baseUrl);
 
-		const path = `${url.pathname}/streams/${encodeURIComponent(this.streamName)}/records`;
+		const path = recordsPath(url, this.streamName);
 
 		const acceptEncoding = await acceptEncodingHeader(this.compression);
 		const { stream, poison } = await this.openH2Stream({
