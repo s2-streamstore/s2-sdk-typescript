@@ -7,11 +7,7 @@ This package is the core client for S2's [REST API](https://s2.dev/docs/rest/pro
 ## Installation
 
 ```bash
-npm add @s2-dev/streamstore
-# or
-yarn add @s2-dev/streamstore
-# or
-bun add @s2-dev/streamstore
+npm install @s2-dev/streamstore
 ```
 
 ## Quick start
