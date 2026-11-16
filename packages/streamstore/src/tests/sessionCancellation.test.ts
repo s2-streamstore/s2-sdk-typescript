@@ -1,12 +1,14 @@
+import { getEventListeners } from "node:events";
 import http, { type ServerResponse } from "node:http";
 import http2, { type ServerHttp2Session } from "node:http2";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import type { SessionTransports } from "../lib/stream/types.js";
+import type { S2Stream } from "../stream.js";
 import { AppendInput, AppendRecord } from "../types.js";
 
 const TEST_TIMEOUT_MS = 15_000;
@@ -35,6 +37,8 @@ interface SessionServerOptions {
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
 
+const FROM_START = { start: { from: { seqNum: 0 } } };
+
 const DEADLINE_MS = 2_000;
 
 /** Fails instead of hanging if `promise` doesn't settle in time. */
@@ -49,19 +53,42 @@ function withinDeadline<T>(promise: Promise<T>): Promise<T> {
 	return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
-function clientFor(server: SessionServer): S2 {
-	return new S2({
-		accessToken: "token",
-		endpoints: { account: server.origin, basin: server.origin },
-		retry: { maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 5 },
-	});
-}
+// Run in order after each test: servers first, so a handle that cannot close
+// cleanly is not left waiting on a live server.
+const cleanups: Array<() => Promise<unknown>> = [];
+afterEach(async () => {
+	for (const cleanup of cleanups.splice(0)) {
+		await cleanup().catch(() => {});
+	}
+});
 
-function startSessionServer(
+/** A server for `transport`, closed after the test. */
+async function startSessionServer(
 	transport: SessionTransports,
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
-	return transport === "s2s" ? startH2Server(options) : startH1Server(options);
+	const server =
+		transport === "s2s"
+			? await startH2Server(options)
+			: await startH1Server(options);
+	cleanups.push(server.close);
+	return server;
+}
+
+/** A stream handle on `server`, closed after the test. */
+function streamOn(
+	server: SessionServer,
+	transport: SessionTransports,
+): S2Stream {
+	const stream = new S2({
+		accessToken: "token",
+		endpoints: { account: server.origin, basin: server.origin },
+		retry: { maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 5 },
+	})
+		.basin("test-basin")
+		.stream("stream", { forceTransport: transport });
+	cleanups.push(() => withinDeadline(stream.close()));
+	return stream;
 }
 
 function listen(server: http.Server | http2.Http2Server): Promise<string> {
@@ -242,49 +269,63 @@ describe.each(TRANSPORTS)(
 		it.each(CASES)(
 			"ends with ABORTED when the signal aborts $when",
 			async ({ when, requests }) => {
-				const server: SessionServer = await startSessionServer(transport, {
+				const server = await startSessionServer(transport, {
 					reads:
 						when === "while the server holds the response" ? "hold" : "batch",
 				});
-				const stream = clientFor(server)
-					.basin("test-basin")
-					.stream("stream", { forceTransport: transport });
+				const stream = streamOn(server, transport);
 				const controller = new AbortController();
-				try {
-					if (when === "before readSession()") controller.abort();
-					const opening = stream.readSession(
-						{ start: { from: { seqNum: 0 } } },
-						{ signal: controller.signal },
-					);
-					if (when === "right after readSession() is called")
-						controller.abort();
-					if (when === "while the server holds the response") {
-						await server.requested;
-						controller.abort();
-					}
-					const reading = opening.then(async (session) => {
-						for await (const _ of session) {
-							setTimeout(() => controller.abort(), 10);
-						}
-					});
 
-					await expect(withinDeadline(reading)).rejects.toMatchObject({
-						message: "Request cancelled",
-						code: "ABORTED",
-						status: 499,
-					});
-					expect(server.requests()).toBe(requests);
-				} finally {
-					await server.close();
-					await withinDeadline(stream.close()).catch(() => {});
+				if (when === "before readSession()") controller.abort();
+				const opening = stream.readSession(FROM_START, {
+					signal: controller.signal,
+				});
+				if (when === "right after readSession() is called") controller.abort();
+				if (when === "while the server holds the response") {
+					await server.requested;
+					controller.abort();
 				}
+				const reading = opening.then(async (session) => {
+					for await (const _ of session) {
+						setTimeout(() => controller.abort(), 10);
+					}
+				});
+
+				await expect(withinDeadline(reading)).rejects.toMatchObject({
+					message: "Request cancelled",
+					code: "ABORTED",
+					status: 499,
+				});
+				expect(server.requests()).toBe(requests);
 			},
 			TEST_TIMEOUT_MS,
 		);
 	},
 );
 
-const FROM_START = { start: { from: { seqNum: 0 } } };
+/**
+ * Issue #142: a read session left its listener on the caller's signal after
+ * it ended, so a long-lived signal shared by many sessions collected them.
+ */
+describe.each(TRANSPORTS)("Issue #142: a %s read session", (transport) => {
+	it(
+		"removes its listener from the caller's signal when it ends",
+		async () => {
+			const stream = streamOn(await startSessionServer(transport), transport);
+			const signal = new AbortController().signal;
+
+			const session = await stream.readSession(FROM_START, { signal });
+			expect(getEventListeners(signal, "abort")).toHaveLength(1);
+			for await (const _ of session) break;
+
+			await vi.waitFor(
+				() => expect(getEventListeners(signal, "abort")).toHaveLength(0),
+				{ timeout: 2_000 },
+			);
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
 
 const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
 
@@ -293,7 +334,8 @@ const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
  * the handle was the endpoint's last pool user, since a graceful HTTP/2 close
  * waits for open streams, and resolved at once otherwise. No transport ended
  * the sessions opened from the handle. It must end them, then settle, whether
- * or not another handle shares the connection.
+ * or not another handle shares the connection, and leave that handle's
+ * sessions alone.
  */
 describe.each(TRANSPORTS)(
 	"Issue #406: closing a %s stream handle",
@@ -305,31 +347,39 @@ describe.each(TRANSPORTS)(
 			"ends its sessions and settles with $others",
 			async ({ otherHandle }) => {
 				const server = await startSessionServer(transport);
-				const basin = clientFor(server).basin("test-basin");
-				const other = basin.stream("stream", { forceTransport: transport });
-				const stream = basin.stream("stream", { forceTransport: transport });
-				try {
-					if (otherHandle) {
-						const session = await other.readSession(FROM_START);
-						await session[Symbol.asyncIterator]().next();
-					}
-					const session = await stream.readSession(FROM_START);
-					const records = session[Symbol.asyncIterator]();
-					await records.next();
-					const appends = await stream.appendSession();
-					await (await appends.submit(record())).ack();
+				let otherRecords: AsyncIterator<unknown> | undefined;
+				if (otherHandle) {
+					const other = streamOn(server, transport);
+					otherRecords = (await other.readSession(FROM_START))[
+						Symbol.asyncIterator
+					]();
+					await otherRecords.next();
+				}
+				const stream = streamOn(server, transport);
+				const records = (await stream.readSession(FROM_START))[
+					Symbol.asyncIterator
+				]();
+				await records.next();
+				const appends = await stream.appendSession();
+				await (await appends.submit(record())).ack();
 
-					await withinDeadline(stream.close());
-					await expect(withinDeadline(records.next())).rejects.toMatchObject({
-						code: "ABORTED",
-					});
-					await expect(appends.submit(record())).rejects.toThrow(
-						"AppendSession is closed",
-					);
-				} finally {
-					await server.close();
-					await withinDeadline(other.close()).catch(() => {});
-					await withinDeadline(stream.close()).catch(() => {});
+				await withinDeadline(stream.close());
+				await expect(withinDeadline(records.next())).rejects.toMatchObject({
+					code: "ABORTED",
+				});
+				await expect(appends.submit(record())).rejects.toThrow(
+					"AppendSession is closed",
+				);
+				if (otherRecords) {
+					// Still waiting at the tail: neither failed nor reconnected.
+					const outcome = await Promise.race([
+						otherRecords.next().then(
+							() => "delivered",
+							(error) => `failed: ${error}`,
+						),
+						new Promise((resolve) => setTimeout(resolve, 100, "waiting")),
+					]);
+					expect(outcome).toBe("waiting");
 				}
 			},
 			TEST_TIMEOUT_MS,
@@ -342,20 +392,13 @@ describe.each(TRANSPORTS)(
 				const server = await startSessionServer(transport, {
 					reads: "malformed",
 				});
-				const stream = clientFor(server)
-					.basin("test-basin")
-					.stream("stream", { forceTransport: transport });
-				try {
-					const session = await stream.readSession(FROM_START);
-					await expect(
-						withinDeadline(session[Symbol.asyncIterator]().next()),
-					).rejects.toBeInstanceOf(S2Error);
+				const stream = streamOn(server, transport);
 
-					await withinDeadline(stream.close());
-				} finally {
-					await server.close();
-					await withinDeadline(stream.close()).catch(() => {});
-				}
+				const session = await stream.readSession(FROM_START);
+				await expect(
+					withinDeadline(session[Symbol.asyncIterator]().next()),
+				).rejects.toBeInstanceOf(S2Error);
+				await withinDeadline(stream.close());
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -372,22 +415,19 @@ describe("aborting a one-shot request", () => {
 		"fails with ABORTED whatever reason abort() is given",
 		async () => {
 			const server = await startSessionServer("fetch", { reads: "partial" });
-			try {
-				const stream = clientFor(server).basin("test-basin").stream("stream");
-				const controller = new AbortController();
-				const tail = stream.checkTail({ signal: controller.signal });
-				await server.requested;
-				// Let the response headers arrive, so the abort lands in the body.
-				await new Promise((resolve) => setTimeout(resolve, 50));
-				controller.abort("done");
+			const stream = streamOn(server, "fetch");
+			const controller = new AbortController();
 
-				await expect(withinDeadline(tail)).rejects.toMatchObject({
-					code: "ABORTED",
-					status: 499,
-				});
-			} finally {
-				await server.close();
-			}
+			const tail = stream.checkTail({ signal: controller.signal });
+			await server.requested;
+			// Let the response headers arrive, so the abort lands in the body.
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			controller.abort("done");
+
+			await expect(withinDeadline(tail)).rejects.toMatchObject({
+				code: "ABORTED",
+				status: 499,
+			});
 		},
 		TEST_TIMEOUT_MS,
 	);
