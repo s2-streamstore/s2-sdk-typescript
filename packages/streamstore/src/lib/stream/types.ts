@@ -63,7 +63,9 @@ export interface AcksStream
 /**
  * Low-level append session implemented by transports.
  *
- * - Never throws: errors are encoded in the returned {@link AppendResult}.
+ * - Returns errors in the {@link AppendResult}; a rejection is treated as one.
+ * - Sends nothing once an append has failed: the retry layer resends on a
+ *   new session.
  * - Does not implement retry or backpressure; those are added by {@link AppendSession}.
  */
 export interface TransportAppendSession {
@@ -73,7 +75,7 @@ export interface TransportAppendSession {
 	 */
 	submit(
 		input: Types.AppendInput,
-		onSend?: () => void,
+		onSend: () => void,
 	): Promise<Result.AppendResult>;
 	/** Close the session. `cancel` ends it without letting the server finish. */
 	close(options?: { cancel?: boolean }): Promise<Result.CloseResult>;

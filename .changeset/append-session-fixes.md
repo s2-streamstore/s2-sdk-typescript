@@ -10,4 +10,6 @@ When an s2s append timed out while its HTTP/2 stream was still opening, the aban
 
 An append session whose transport fails an append by throwing now fails with that error, rather than hanging with no error.
 
+Batches submitted while others wait for capacity keep their order. Before, a small batch could be enqueued ahead of a larger one submitted before it.
+
 A batch submitted just as `close()` is called no longer leaves its `ack()` pending forever.

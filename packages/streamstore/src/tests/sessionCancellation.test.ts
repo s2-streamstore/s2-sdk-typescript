@@ -1,12 +1,12 @@
 import { getEventListeners } from "node:events";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { BatchTransform } from "../batch-transform.js";
 import type { RetryConfig } from "../common.js";
 import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
-import type { AppendSession, SessionTransports } from "../lib/stream/types.js";
+import type { SessionTransports } from "../lib/stream/types.js";
 import { Producer } from "../producer.js";
 import type { S2Stream } from "../stream.js";
 import {
@@ -15,7 +15,9 @@ import {
 	type AppendSessionOptions,
 } from "../types.js";
 import {
+	cleanupAfterEach,
 	type LocalServer,
+	s2sAckFrame,
 	serveHttp1,
 	serveHttp2,
 	sleep,
@@ -32,8 +34,6 @@ const TEST_TIMEOUT_MS = 15_000;
 interface SessionServer extends LocalServer {
 	/** Requests received so far, reads and appends. */
 	requests: () => number;
-	/** Requests not yet closed by either side. */
-	open: () => number;
 	/** Answers the append a "busy" server holds back. */
 	release?: () => void;
 }
@@ -71,22 +71,19 @@ const rejectionOf = (promise: Promise<unknown>) =>
 		(error: S2Error) => error,
 	);
 
-/** The status and body of the `n`th append failure, from 0. */
-function appendFailure(n: number): [number, string] {
-	const code = n === 0 ? "unavailable" : "rate_limited";
-	return [n === 0 ? 503 : 429, JSON.stringify({ code, message: code })];
-}
+/** An append failure's status and body. */
+const failure = (status: number, code: string): [number, string] => [
+	status,
+	JSON.stringify({ code, message: code }),
+];
+/** The append may have taken effect. */
+const UNAVAILABLE = failure(503, "unavailable");
+/** The append did not take effect. */
+const RATE_LIMITED = failure(429, "rate_limited");
 
 const FROM_START = { start: { from: { seqNum: 0 } } };
 
-// Run in order after each test: servers first, so a handle that cannot close
-// cleanly is not left waiting on a live server.
-const cleanups: Array<() => Promise<unknown>> = [];
-afterEach(async () => {
-	for (const cleanup of cleanups.splice(0)) {
-		await cleanup().catch(() => {});
-	}
-});
+const cleanup = cleanupAfterEach();
 
 /** A server for `transport`, closed after the test. */
 async function startSessionServer(
@@ -97,7 +94,7 @@ async function startSessionServer(
 		transport === "s2s"
 			? await startH2Server(options)
 			: await startH1Server(options);
-	cleanups.push(server.close);
+	cleanup(server.close);
 	return server;
 }
 
@@ -119,7 +116,7 @@ function streamOn(
 	})
 		.basin("test-basin")
 		.stream("stream", { forceTransport: transport });
-	cleanups.push(() => withinDeadline(stream.close()));
+	cleanup(() => withinDeadline(stream.close()));
 	return stream;
 }
 
@@ -161,16 +158,7 @@ async function startH2Server(
 		}),
 		frameMessage({ terminal: true, statusCode: 200, body: new Uint8Array(0) }),
 	]);
-	const ackFrame = Buffer.from(
-		frameMessage({
-			terminal: false,
-			body: Proto.AppendAck.toBinary({
-				start: { seqNum: 1n, timestamp: 1n },
-				end: { seqNum: 2n, timestamp: 1n },
-				tail: { seqNum: 2n, timestamp: 1n },
-			}),
-		}),
-	);
+	const ackFrame = s2sAckFrame(1, 2);
 
 	let failures = 0;
 	const server = await serveHttp2((stream, headers) => {
@@ -178,7 +166,7 @@ async function startH2Server(
 		if (headers[":method"] === "POST") {
 			if (options?.appends === "fail") {
 				stream.once("data", () => {
-					const [status, body] = appendFailure(failures++);
+					const [status, body] = failures++ === 0 ? UNAVAILABLE : RATE_LIMITED;
 					stream.respond({ ":status": status });
 					stream.end(body);
 				});
@@ -245,13 +233,15 @@ async function startH1Server(
 				if (options?.appends === "hold") return;
 				if (options?.appends === "busy") {
 					const n = failures++;
-					if (n === 0) held = () => respond(appendFailure(1));
-					if (n === 1) respond(appendFailure(1));
+					if (n === 0) held = () => respond(RATE_LIMITED);
+					if (n === 1) respond(RATE_LIMITED);
 					return;
 				}
-				respond(
-					options?.appends === "fail" ? appendFailure(failures++) : [200, ack],
-				);
+				if (options?.appends === "fail") {
+					respond(failures++ === 0 ? UNAVAILABLE : RATE_LIMITED);
+				} else {
+					respond([200, ack]);
+				}
 			});
 			return;
 		}
@@ -358,13 +348,6 @@ async function abortableSession(
 	).appendSession(options?.session, { signal: controller.signal });
 	return { controller, session };
 }
-
-/** A Producer that appends a batch a record. */
-const producerOn = (session: AppendSession) =>
-	new Producer(
-		new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
-		session,
-	);
 
 /**
  * Issue #406: `S2Stream.close()` with sessions open never settled on s2s when
@@ -581,7 +564,10 @@ describe.each(TRANSPORTS)(
 				);
 				// The second batch waits for capacity, so the session never
 				// accepts it.
-				const producer = producerOn(session);
+				const producer = new Producer(
+					new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+					session,
+				);
 				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
 				await waitFor(() => server.requests() === 1);
 				const unsent = await producer.submit(

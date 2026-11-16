@@ -1,24 +1,23 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { RetryConfig } from "../common.js";
 import * as Proto from "../generated/proto/s2.js";
 import * as Redacted from "../lib/redacted.js";
 import { decompressFrameBody } from "../lib/stream/transport/s2s/compression.js";
-import {
-	frameMessage,
-	S2SFrameParser,
-} from "../lib/stream/transport/s2s/framing.js";
+import { S2SFrameParser } from "../lib/stream/transport/s2s/framing.js";
 import { S2STransport } from "../lib/stream/transport/s2s/index.js";
 import { AppendInput, AppendRecord } from "../types.js";
-import { serveHttp2, sleep, waitFor, withinDeadline } from "./helpers.js";
+import {
+	cleanupAfterEach,
+	s2sAckFrame,
+	serveHttp2,
+	sleep,
+	waitFor,
+	withinDeadline,
+} from "./helpers.js";
 
 const TEST_TIMEOUT_MS = 15_000;
 
-const cleanups: Array<() => Promise<unknown>> = [];
-afterEach(async () => {
-	for (const cleanup of cleanups.splice(0)) {
-		await cleanup().catch(() => {});
-	}
-});
+const cleanup = cleanupAfterEach();
 
 /**
  * An s2s append session on a server that records each record's body, and
@@ -40,7 +39,7 @@ async function sessionOnServer({
 		const parser = new S2SFrameParser();
 		const unacked: number[] = [];
 		let received = 0;
-		let seqNum = 0n;
+		let seqNum = 0;
 		stream.on("data", (chunk: Buffer) => {
 			parser.push(chunk);
 			for (
@@ -59,44 +58,33 @@ async function sessionOnServer({
 			}
 			if (received < ackAfter) return;
 			for (const count of unacked.splice(0)) {
-				const start = seqNum;
-				seqNum += BigInt(count);
-				stream.write(
-					frameMessage({
-						terminal: false,
-						body: Proto.AppendAck.toBinary({
-							start: { seqNum: start, timestamp: 1n },
-							end: { seqNum, timestamp: 1n },
-							tail: { seqNum, timestamp: 1n },
-						}),
-					}),
-				);
+				stream.write(s2sAckFrame(seqNum, seqNum + count));
+				seqNum += count;
 			}
 		});
 		stream.on("end", () => stream.end());
 	});
-	cleanups.push(server.close);
+	cleanup(server.close);
 	const transport = new S2STransport({
 		baseUrl: `${server.origin}/v1`,
 		accessToken: Redacted.make("token"),
 		compression: "gzip",
 		retry: { requestTimeoutMillis: 10_000, ...retry },
 	});
-	cleanups.push(() => transport.close());
-	const internals = transport as unknown as {
-		openH2Stream: (headers: unknown) => Promise<unknown>;
-	};
-	const openH2Stream = internals.openH2Stream.bind(transport);
-	let held = false;
-	internals.openH2Stream = async (headers) => {
-		if (!held) {
-			held = true;
+	// Also closes the session.
+	cleanup(() => withinDeadline(transport.close()));
+	if (holdFirstStreamMs > 0) {
+		const internals = transport as unknown as {
+			openH2Stream: (headers: unknown) => Promise<unknown>;
+		};
+		const openH2Stream = internals.openH2Stream.bind(transport);
+		internals.openH2Stream = async (headers) => {
+			internals.openH2Stream = openH2Stream;
 			await sleep(holdFirstStreamMs);
-		}
-		return openH2Stream(headers);
-	};
+			return openH2Stream(headers);
+		};
+	}
 	const session = await transport.makeAppendSession("events");
-	cleanups.unshift(() => withinDeadline(session.close()));
 	return { session, bodies };
 }
 

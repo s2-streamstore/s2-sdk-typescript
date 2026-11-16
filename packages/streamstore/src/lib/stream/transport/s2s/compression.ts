@@ -93,16 +93,17 @@ export function compressFrameBody(
 	type: CompressionType,
 ): Uint8Array {
 	assertDecompressedPayloadSize(body);
-	if (type !== "none" && !zlibModule) {
+	if (type === "none") {
+		return body;
+	}
+	const z = zlibModule;
+	if (!z) {
 		throw new Error(`${type} compression used before zlib was loaded`);
 	}
 	switch (type) {
-		case "none":
-			return body;
 		case "gzip":
-			return assertAndReturnCompressed(zlibModule!.gzipSync(body));
+			return assertAndReturnCompressed(z.gzipSync(body));
 		case "zstd": {
-			const z = zlibModule!;
 			if (!z.zstdCompressSync) {
 				throw new Error("zstd compression requires Node.js v22.15+");
 			}

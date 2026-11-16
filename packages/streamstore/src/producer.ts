@@ -1,6 +1,6 @@
 import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
-import { S2Error, sessionClosedError } from "./error.js";
+import { appendSessionClosedError, S2Error } from "./error.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import { type AppendAck, AppendInput, type AppendRecord } from "./types.js";
 
@@ -528,7 +528,7 @@ export class Producer implements AsyncDisposable {
 
 		// Sent records settle from their batch's ack. These were never sent.
 		if (this.inflightRecords.length > 0) {
-			const unsentError = sessionClosedError({ cause: error });
+			const unsentError = appendSessionClosedError(error);
 			for (const record of this.inflightRecords.splice(0)) {
 				record.rejectAck(unsentError);
 			}

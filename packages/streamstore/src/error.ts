@@ -295,7 +295,6 @@ export class S2Error extends Error {
 		if (this.origin === "sdk") {
 			// Pre-connection errors: the TCP handshake never completed, so no
 			// request bytes could have been written and no mutation occurred.
-			// A closed session never sent the append.
 			return [
 				"ECONNREFUSED",
 				"UND_ERR_CONNECT_TIMEOUT",
@@ -374,18 +373,15 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 }
 
 /**
- * For an operation on a closed session. A failed append session is closed to
- * all but the appends that may have reached the server, which get its own
- * error. `cause` is that error.
+ * For an append on a closed append session. A failed session is closed to all
+ * but the appends that may have reached the server, which get its own error.
+ * `cause` is that error.
  */
-export function sessionClosedError({
-	message = "AppendSession is closed",
-	cause,
-}: {
-	message?: string;
-	cause?: S2Error;
-} = {}): S2Error {
-	const error = new S2Error({ message, code: "SESSION_CLOSED" });
+export function appendSessionClosedError(cause?: S2Error): S2Error {
+	const error = new S2Error({
+		message: "AppendSession is closed",
+		code: "SESSION_CLOSED",
+	});
 	if (cause) {
 		error.cause = cause;
 	}

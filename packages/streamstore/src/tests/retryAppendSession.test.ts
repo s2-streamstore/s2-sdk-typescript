@@ -300,6 +300,36 @@ describe("AppendSessionImpl (unit)", () => {
 		});
 	});
 
+	it("keeps submit order when a later batch would fit before one waiting for capacity", async () => {
+		vi.useRealTimers();
+		const position = (seqNum: number) => ({ seqNum, timestamp: new Date(0) });
+		const transport = new FakeTransportAppendSession({
+			customAcks: [0, 1, 2].map((n) => ({
+				start: position(n),
+				end: position(n + 1),
+				tail: position(n + 1),
+			})),
+		});
+		const session = await AppendSessionImpl.create(async () => transport, {
+			maxInflightBytes: 1024 * 1024,
+		});
+		const batch = (body: string) =>
+			AppendInput.create([AppendRecord.string({ body })]);
+
+		// The second waits for capacity, which the third would fit in.
+		const tickets = await withinDeadline(
+			Promise.all([
+				session.submit(batch("a".repeat(600 * 1024))),
+				session.submit(batch("b".repeat(600 * 1024))),
+				session.submit(batch("c")),
+			]),
+		);
+		await withinDeadline(Promise.all(tickets.map((ticket) => ticket.ack())));
+		expect(
+			transport.writes.map(({ records }) => String(records[0]!.body)[0]),
+		).toEqual(["a", "b", "c"]);
+	});
+
 	// Detail bug_54158d21: a rejected transport submit() crashed the pump, so
 	// the session hung with no error.
 	it("fails the session when the transport's submit() rejects", async () => {

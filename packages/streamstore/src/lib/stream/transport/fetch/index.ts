@@ -7,10 +7,10 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 
 import type { S2RequestOptions } from "../../../../common.js";
 import {
+	appendSessionClosedError,
 	RangeNotSatisfiableError,
 	S2Error,
 	s2Error,
-	sessionClosedError,
 } from "../../../../error.js";
 import type { Client } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
@@ -400,10 +400,11 @@ export class FetchAppendSession implements TransportAppendSession {
 	private readonly pending = new FifoQueue<{
 		input: Types.AppendInput;
 		resolve: (result: AppendResult) => void;
-		onSend?: () => void;
+		onSend: () => void;
 	}>();
 	private readonly stream: string;
-	private closed = false;
+	// Why the session sends nothing more: it closed, or an append failed.
+	private endedWith?: S2Error;
 	private processingPromise: Promise<void> | null = null;
 	private readonly client: Client;
 	// Cancels in-flight appends on close().
@@ -454,7 +455,7 @@ export class FetchAppendSession implements TransportAppendSession {
 	async close(): Promise<CloseResult> {
 		debug("[%s] FetchAppendSession close requested", this.stream);
 		try {
-			this.closed = true;
+			this.endedWith ??= appendSessionClosedError();
 			// Fails the append in flight; the loop then fails the queued ones.
 			this.abortController.abort();
 			await this.processingPromise;
@@ -476,7 +477,7 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * The request will be queued and sent when no other request is in-flight.
 	 * Never throws - returns AppendResult discriminated union.
 	 */
-	submit(input: Types.AppendInput, onSend?: () => void): Promise<AppendResult> {
+	submit(input: Types.AppendInput, onSend: () => void): Promise<AppendResult> {
 		debug(
 			"[%s] FetchAppendSession.submit: records=%d, match_seq_num=%s, queueLen=%d",
 			this.stream,
@@ -485,13 +486,12 @@ export class FetchAppendSession implements TransportAppendSession {
 			this.pending.length,
 		);
 
-		// Validate closed state
-		if (this.closed) {
+		if (this.endedWith) {
 			debug(
-				"[%s] FetchAppendSession.submit: session closed, rejecting",
+				"[%s] FetchAppendSession.submit: session ended, rejecting",
 				this.stream,
 			);
-			return Promise.resolve(err(sessionClosedError()));
+			return Promise.resolve(err(this.endedWith));
 		}
 
 		// Validate batch size limits (non-retryable 400-level error)
@@ -556,9 +556,8 @@ export class FetchAppendSession implements TransportAppendSession {
 	private async processLoop(): Promise<void> {
 		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
 		while (this.pending.length > 0) {
-			// Once closed, send nothing more.
-			if (this.closed) {
-				this.failPending(sessionClosedError());
+			if (this.endedWith) {
+				this.failPending(this.endedWith);
 				break;
 			}
 			const { input, resolve, onSend } = this.pending.shift()!;
@@ -570,7 +569,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				input.matchSeqNum ?? "none",
 			);
 
-			onSend?.();
+			onSend();
 
 			try {
 				const preferProtobuf = input.records.some(
@@ -608,15 +607,9 @@ export class FetchAppendSession implements TransportAppendSession {
 					s2Err.message,
 				);
 
-				// Resolve this request with error
+				// The loop then fails the queued requests with the same error.
 				resolve(err(s2Err));
-
-				// Resolve all remaining pending promises with the same error
-				// (transport failure affects all queued requests)
-				this.failPending(s2Err);
-
-				this.processingPromise = null;
-				return;
+				this.endedWith ??= s2Err;
 			}
 		}
 

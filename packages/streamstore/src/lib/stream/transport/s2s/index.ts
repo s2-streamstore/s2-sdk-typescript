@@ -17,6 +17,7 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 import type { S2RequestOptions } from "../../../../common.js";
 import {
 	abortedError,
+	appendSessionClosedError,
 	isServerDraining,
 	makeAppendPreconditionError,
 	makeServerError,
@@ -24,7 +25,6 @@ import {
 	reconnectAdvisedError,
 	S2Error,
 	s2Error,
-	sessionClosedError,
 } from "../../../../error.js";
 import type * as API from "../../../../generated/index.js";
 import * as Proto from "../../../../generated/proto/s2.js";
@@ -909,10 +909,10 @@ class S2SAppendSession implements TransportAppendSession {
 	 */
 	private async sendBatch(
 		input: Types.AppendInput,
-		onSend?: () => void,
+		onSend: () => void,
 	): Promise<AppendResult> {
 		if (this.closed) {
-			return err(sessionClosedError());
+			return err(appendSessionClosedError());
 		}
 		if (this.reconnectAdvised && !this.reconnectDeclined) {
 			// Refuse the advised stream without writing, so the retry layer can
@@ -953,7 +953,7 @@ class S2SAppendSession implements TransportAppendSession {
 			});
 
 			// Send the frame (pipelined - non-blocking)
-			onSend?.();
+			onSend();
 			this.http2Stream!.write(frame, (writeErr) => {
 				if (writeErr) {
 					// Remove from pending acks on write error
@@ -1020,11 +1020,11 @@ class S2SAppendSession implements TransportAppendSession {
 	 */
 	async submit(
 		input: Types.AppendInput,
-		onSend?: () => void,
+		onSend: () => void,
 	): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
-			return err(sessionClosedError());
+			return err(appendSessionClosedError());
 		}
 
 		// Lazy initialize HTTP/2 stream on first submit

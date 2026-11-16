@@ -8,14 +8,13 @@ import type { TransportAppendSession } from "../../lib/stream/types.js";
  * Issue #177: ticket.ack() can hang forever if close() happens during
  * backpressure.
  *
- * When submit() is blocked in waitForCapacity() and close() is called,
- * the pump loop can stop before the capacity waiter's microtask adds
- * the new entry to inflight. The entry is never processed and
- * ticket.ack() hangs indefinitely.
+ * When submit() is waiting for capacity and close() is called, the pump
+ * loop can stop before the waiting submit adds its entry to inflight. The
+ * entry is never processed and ticket.ack() hangs indefinitely.
  *
- * The fix: close() wakes capacity waiters, and waitForCapacity() checks
- * the closing flag so blocked submits fail fast with "AppendSession is
- * closed" instead of producing tickets whose ack() never settles.
+ * The fix: close() rejects submits waiting for capacity with "AppendSession
+ * is closed", instead of letting them produce tickets whose ack() never
+ * settles.
  */
 
 function createSlowMockTransport(): TransportAppendSession {
@@ -75,13 +74,12 @@ describe("Issue #177: ticket.ack() hangs when close() races with backpressure", 
 				return undefined;
 			});
 
-		// Let microtasks settle (submit2 is now blocked in waitForCapacity)
+		// Let microtasks settle (submit2 is now waiting for capacity)
 		await vi.advanceTimersByTimeAsync(0);
 		await Promise.resolve();
 
 		// Call close() while submit2 is still blocked on capacity.
-		// With the fix, close() wakes capacity waiters and waitForCapacity
-		// checks the closing flag, causing submit2 to reject.
+		// With the fix, close() rejects submit2.
 		const closePromise = session.close();
 
 		// Process the first submit so the pump can proceed
@@ -138,7 +136,7 @@ describe("Issue #177: ticket.ack() hangs when close() races with backpressure", 
 				return undefined;
 			});
 
-		// Let submit2 park in waitForCapacity
+		// Let submit2 wait for capacity
 		await vi.advanceTimersByTimeAsync(0);
 		await Promise.resolve();
 
