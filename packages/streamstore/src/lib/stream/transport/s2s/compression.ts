@@ -84,18 +84,25 @@ function assertCompressedPayloadSize(body: Uint8Array): void {
 	}
 }
 
-export async function compressFrameBody(
+/**
+ * Synchronous, so pipelined batches are written in the order they were
+ * submitted. {@link assertCompressionSupported} loads zlib beforehand.
+ */
+export function compressFrameBody(
 	body: Uint8Array,
 	type: CompressionType,
-): Promise<Uint8Array> {
+): Uint8Array {
 	assertDecompressedPayloadSize(body);
+	if (type !== "none" && !zlibModule) {
+		throw new Error(`${type} compression used before zlib was loaded`);
+	}
 	switch (type) {
 		case "none":
 			return body;
 		case "gzip":
-			return assertAndReturnCompressed((await loadZlib()).gzipSync(body));
+			return assertAndReturnCompressed(zlibModule!.gzipSync(body));
 		case "zstd": {
-			const z = await loadZlib();
+			const z = zlibModule!;
 			if (!z.zstdCompressSync) {
 				throw new Error("zstd compression requires Node.js v22.15+");
 			}

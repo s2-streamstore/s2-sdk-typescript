@@ -267,8 +267,8 @@ export class S2Stream {
 	 *
 	 * Aborting `requestOptions.signal` fails the session with code `ABORTED`,
 	 * without retrying: `appendSession()` rejects if it has already aborted, and
-	 * otherwise inflight appends do. As after any failure, later `submit()`
-	 * calls reject with code `SESSION_CLOSED`.
+	 * otherwise appends that may have reached the server do. As after any
+	 * failure, other appends reject with code `SESSION_CLOSED`.
 	 *
 	 * @param sessionOptions Options that control append session behavior
 	 * @param requestOptions Optional request options

@@ -601,13 +601,13 @@ describe.each(TRANSPORTS)(
 );
 
 /**
- * Fetch sends one append at a time, so after a retry resubmits two batches,
- * the second waits unsent. If the first then fails, noSideEffects must still
- * retry: the second cannot have taken effect.
+ * Fetch sends one append at a time, so a batch can wait unsent in its queue.
+ * It cannot have taken effect: noSideEffects must still retry it, and a
+ * failed session must reject it as closed.
  */
-describe("noSideEffects on fetch", () => {
+describe("a batch fetch queued but never sent", () => {
 	it(
-		"retries a batch its transport queued but never sent",
+		"is retried under noSideEffects",
 		async () => {
 			const server = await startSessionServer("fetch", { appends: "busy" });
 			const { controller, session } = await abortableSession(server, "fetch", {
@@ -620,6 +620,27 @@ describe("noSideEffects on fetch", () => {
 			// The second 429 also fails the queued batch.
 			await waitFor(() => server.requests() === 3);
 			controller.abort();
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"rejects as closed when the session aborts",
+		async () => {
+			const server = await startSessionServer("fetch", { appends: "hold" });
+			const { controller, session } = await abortableSession(server, "fetch");
+			const sent = (await session.submit(record())).ack();
+			await waitFor(() => server.requests() === 1);
+			const queued = (await session.submit(record())).ack();
+
+			controller.abort();
+			const [sentError, queuedError] = await withinDeadline(
+				Promise.all([rejectionOf(sent), rejectionOf(queued)]),
+			);
+			expect(sentError).toMatchObject(ABORTED);
+			expect(queuedError).toMatchObject(SESSION_CLOSED);
+			expect(queuedError?.cause).toMatchObject(ABORTED);
+			expect(queuedError?.hasNoSideEffects()).toBe(true);
 		},
 		TEST_TIMEOUT_MS,
 	);

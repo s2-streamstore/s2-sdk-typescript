@@ -910,7 +910,7 @@ type InflightEntry = {
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
-	sent?: boolean; // May have reached the server in the current attempt
+	sent: boolean; // May have reached the server in the current attempt
 	priorUncertainty?: boolean; // An earlier attempt may have taken effect
 };
 
@@ -1050,8 +1050,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Create an append session. Closing `options.sessions` closes it as
 	 * {@link RetryAppendSession.close} does. Aborting `options.signal` fails it
 	 * with {@link abortedError}, without retrying; `create` rejects if the
-	 * signal has already aborted. As after any failure, later appends reject
-	 * with {@link sessionClosedError}.
+	 * signal has already aborted. As after any failure, appends it never sent
+	 * and later ones reject with {@link sessionClosedError}.
 	 */
 	static async create(
 		generator: (
@@ -1102,7 +1102,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					"[%s] [CAPACITY] session failed or closed, rejecting",
 					this.streamName,
 				);
-				throw sessionClosedError();
+				throw sessionClosedError({ cause: this.fatalError });
 			}
 
 			// Byte-based gating
@@ -1149,7 +1149,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	async submit(input: Types.AppendInput): Promise<BatchSubmitTicket> {
 		if (this.closed || this.closing) {
-			return Promise.reject(sessionClosedError());
+			return Promise.reject(sessionClosedError({ cause: this.fatalError }));
 		}
 
 		// Use cached metered size from AppendInput
@@ -1162,7 +1162,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		await this.waitForCapacity(batchMeteredSize, 1);
 		// It may have failed since granting capacity.
 		if (this.fatalError) {
-			throw sessionClosedError();
+			throw sessionClosedError({ cause: this.fatalError });
 		}
 
 		// Move reserved bytes and batches to queued accounting before submission
@@ -1207,6 +1207,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				expectedCount: input.records.length,
 				innerPromise: new Promise(() => {}), // Never-resolving placeholder
 				maybeResolve: resolve,
+				sent: false,
 			};
 
 			debugSession(
@@ -1340,11 +1341,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 
 			// If closing and queue is empty, stop
-			// BUT: if there are capacity waiters, they might add to inflight, so keep running
+			// BUT: if there are capacity waiters, or submits granted capacity but
+			// not yet enqueued, they might add to inflight, so keep running
 			if (
 				this.closing &&
 				this.inflight.length === 0 &&
-				this.capacityWaiters.length === 0
+				this.capacityWaiters.length === 0 &&
+				this.pendingBatches === 0
 			) {
 				debugSession(
 					"[%s] [PUMP] closing and queue empty, stopping",
@@ -1430,18 +1433,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				entry !== undefined;
 				entry = this.toSubmit.shift()
 			) {
-				debugSession(
-					"[%s] [PUMP] submitting entry to inner session (%d records, %d bytes, match_seq_num=%s)",
-					this.streamName,
-					entry.expectedCount,
-					entry.input.meteredBytes,
-					entry.input.matchSeqNum ?? "none",
-				);
-				const attemptStarted = performance.now();
-				entry.attemptStartedMonotonicMs = attemptStarted;
-				entry.innerPromise = this.session.submit(entry.input, () => {
-					entry.sent = true;
-				});
+				this.send(this.session, entry);
 			}
 
 			// Wait for head with timeout
@@ -1452,6 +1444,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// parked here; don't process the now-stale result.
 				debugSession("[%s] [PUMP] stopped after waitForHead", this.streamName);
 				return;
+			}
+			if (result.kind === "wakeup") {
+				// Send what was submitted meanwhile, then wait for the head again.
+				continue;
 			}
 			debugSession(
 				"[%s] [PUMP] got result: kind=%s",
@@ -1576,7 +1572,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				// Check policy compliance: under noSideEffects, only retry when
 				// we can determine no mutation occurred. This is true if either:
 				// 1. The error itself guarantees no side effects (e.g. rate_limited, hot_server)
-				// 2. The transport reports no data was sent since the last dormant state
+				// 2. No inflight batch may have reached the server in this attempt
 				// Planned drain handoffs. Both errors guarantee no side effects: an
 				// advised session refuses new input without writing it, and a
 				// draining server acknowledges everything it accepted before ending
@@ -1590,7 +1586,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				if (
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!error.hasNoSideEffects() &&
-					this.inflight.some((entry) => entry.sent === true)
+					this.inflight.some((entry) => entry.sent)
 				) {
 					debugSession(
 						"[%s] error not policy-compliant (noSideEffects), aborting",
@@ -1612,9 +1608,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				) {
 					const hasNonIdempotentSent = this.inflight.some(
 						(entry, index) =>
-							index > 0 &&
-							entry.sent === true &&
-							entry.input.matchSeqNum === undefined,
+							index > 0 && entry.sent && entry.input.matchSeqNum === undefined,
 					);
 					if (hasNonIdempotentSent) {
 						debugSession(
@@ -1661,13 +1655,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				} else {
 					this.consecutiveFailures++;
 					this.currentAttempt++;
-					if (!error.hasNoSideEffects()) {
-						for (const entry of this.inflight) {
-							if (entry.sent) {
-								entry.priorUncertainty = true;
-							}
-						}
-					}
 
 					debugSession(
 						"[%s] performing recovery (retry %d/%d)",
@@ -1677,14 +1664,17 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					);
 				}
 
-				await this.recover(draining ? 0 : undefined);
+				await this.recover(
+					!draining && !error.hasNoSideEffects(),
+					draining ? 0 : undefined,
+				);
 			}
 		}
 	}
 
 	/**
 	 * Wait for head entry's innerPromise with timeout.
-	 * Returns either the settled result or a timeout indicator.
+	 * Returns the settled result, a timeout indicator, or a wakeup indicator.
 	 *
 	 * Per-attempt ack timeout semantics:
 	 * - The deadline is computed from the current attempt's start time using a
@@ -1696,7 +1686,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 */
 	private async waitForHead(
 		head: InflightEntry,
-	): Promise<{ kind: "settled"; value: AppendResult } | { kind: "timeout" }> {
+	): Promise<
+		| { kind: "settled"; value: AppendResult }
+		| { kind: "timeout" }
+		| { kind: "wakeup" }
+	> {
 		const attemptStart = head.attemptStartedMonotonicMs ?? performance.now();
 		const deadline = attemptStart + this.requestTimeoutMillis;
 		const remaining = Math.max(0, deadline - performance.now());
@@ -1711,37 +1705,32 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			value: result,
 		}));
 
+		// A submit, close() or abort() wakes the pump while it waits.
+		const wakeupP = new Promise<{ kind: "wakeup" }>((resolve) => {
+			this.pumpWakeup = () => resolve({ kind: "wakeup" });
+		});
+
 		try {
-			return await Promise.race([settledP, timeoutP]);
+			return await Promise.race([settledP, timeoutP, wakeupP]);
 		} finally {
 			if (timer) clearTimeout(timer);
+			this.pumpWakeup = undefined;
 		}
 	}
 
 	/**
 	 * Recover from transient error: recreate session and resubmit all inflight entries.
+	 *
+	 * @param uncertain Whether a batch the failed attempt sent may have taken effect
 	 */
-	private async recover(backoffMillis?: number): Promise<void> {
+	private async recover(
+		uncertain: boolean,
+		backoffMillis?: number,
+	): Promise<void> {
 		debugSession("[%s] starting recovery", this.streamName);
 
-		// Calculate backoff unless the caller supplied a delay.
-		const delay =
-			backoffMillis ??
-			calculateDelay(
-				this.consecutiveFailures - 1,
-				this.retryConfig.minBaseDelayMillis,
-				this.retryConfig.maxBaseDelayMillis,
-			);
-		debugSession("[%s] backing off for %dms", this.streamName, delay);
-		await sleep(delay, this.stopped.signal);
-
-		// Check if aborted during backoff sleep
-		if (this.pumpStopped) {
-			debugSession("[%s] stopped during recovery backoff", this.streamName);
-			return;
-		}
-
-		// Teardown old session
+		// End the failed attempt, so it sends nothing more, and keep what it may
+		// have done in priorUncertainty.
 		if (this.session) {
 			try {
 				const closeResult = await this.session.close();
@@ -1761,6 +1750,29 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			}
 			this.session = undefined;
 		}
+		for (const entry of this.inflight) {
+			if (entry.sent && uncertain) {
+				entry.priorUncertainty = true;
+			}
+			entry.sent = false;
+		}
+
+		// Calculate backoff unless the caller supplied a delay.
+		const delay =
+			backoffMillis ??
+			calculateDelay(
+				this.consecutiveFailures - 1,
+				this.retryConfig.minBaseDelayMillis,
+				this.retryConfig.maxBaseDelayMillis,
+			);
+		debugSession("[%s] backing off for %dms", this.streamName, delay);
+		await sleep(delay, this.stopped.signal);
+
+		// Check if aborted during backoff sleep
+		if (this.pumpStopped) {
+			debugSession("[%s] stopped during recovery backoff", this.streamName);
+			return;
+		}
 
 		// Create new session
 		await this.ensureSession();
@@ -1776,7 +1788,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				"[%s] failed to create new session during recovery",
 				this.streamName,
 			);
-			// Will retry on next pump iteration
+			// Will retry on next pump iteration, which sends every inflight entry
+			// in order.
+			this.toSubmit.clear();
+			for (const entry of this.inflight) {
+				this.toSubmit.push(entry);
+			}
 			return;
 		}
 
@@ -1792,27 +1809,27 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		for (const entry of this.inflight) {
 			// Attach .catch to superseded promise to avoid unhandled rejection
 			entry.innerPromise.catch(() => {});
-
-			// Create new promise from new session
-			const attemptStarted = performance.now();
-			entry.attemptStartedMonotonicMs = attemptStarted;
-			// priorUncertainty keeps what earlier attempts may have done.
-			entry.sent = false;
-			entry.innerPromise = session.submit(entry.input, () => {
-				entry.sent = true;
-			});
-			debugSession(
-				"[%s] resubmitted entry (%d records, %d bytes, match_seq_num=%s)",
-				this.streamName,
-				entry.expectedCount,
-				entry.input.meteredBytes,
-				entry.input.matchSeqNum ?? "none",
-			);
+			this.send(session, entry);
 		}
 		// Every entry in toSubmit is inflight, so was just resubmitted.
 		this.toSubmit.clear();
 
 		debugSession("[%s] recovery complete", this.streamName);
+	}
+
+	/** Start an attempt to send `entry` on `session`. */
+	private send(session: TransportAppendSession, entry: InflightEntry): void {
+		debugSession(
+			"[%s] sending entry (%d records, %d bytes, match_seq_num=%s)",
+			this.streamName,
+			entry.expectedCount,
+			entry.input.meteredBytes,
+			entry.input.matchSeqNum ?? "none",
+		);
+		entry.attemptStartedMonotonicMs = performance.now();
+		entry.innerPromise = session.submit(entry.input, () => {
+			entry.sent = true;
+		});
 	}
 
 	/**
@@ -1825,7 +1842,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		try {
 			debugSession("[%s] creating new transport session", this.streamName);
-			this.session = await this.generator(this.sessionOptions);
+			const session = await this.generator(this.sessionOptions);
+			if (this.pumpStopped) {
+				// abort() ran meanwhile, so nothing else would close it.
+				await session.close({ cancel: true });
+				return;
+			}
+			this.session = session;
 			debugSession("[%s] transport session created", this.streamName);
 		} catch (e) {
 			const error = s2Error(e);
@@ -1867,12 +1890,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			this.streamName,
 			this.inflight.length,
 		);
+		// Only appends that may have reached the server get the session's error.
 		for (const entry of this.inflight) {
-			if (entry.maybeResolve) {
-				entry.maybeResolve(
-					err(withPriorUncertainty(error, entry.priorUncertainty ?? false)),
-				);
-			}
+			entry.maybeResolve?.(
+				err(
+					entry.sent || entry.priorUncertainty
+						? withPriorUncertainty(error, entry.priorUncertainty ?? false)
+						: sessionClosedError({ cause: sessionError }),
+				),
+			);
 		}
 		this.inflight.clear();
 		this.toSubmit.clear();

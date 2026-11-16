@@ -911,24 +911,6 @@ class S2SAppendSession implements TransportAppendSession {
 		input: Types.AppendInput,
 		onSend?: () => void,
 	): Promise<AppendResult> {
-		const protoBytes = encodeProtoAppendInput(input);
-		const shouldCompress =
-			this.compression !== "none" &&
-			protoBytes.byteLength >= COMPRESSION_THRESHOLD_BYTES;
-		const frameCompression: CompressionType = shouldCompress
-			? this.compression
-			: "none";
-		const bodyBytes = shouldCompress
-			? await compressFrameBody(protoBytes, this.compression)
-			: protoBytes;
-
-		const frame = frameMessage({
-			terminal: false,
-			compression: frameCompression,
-			body: bodyBytes,
-		});
-
-		// Checked after compressing, as the stream may have changed meanwhile.
 		if (this.closed) {
 			return err(sessionClosedError());
 		}
@@ -945,6 +927,23 @@ class S2SAppendSession implements TransportAppendSession {
 				new S2Error({ message: "HTTP/2 stream is not open", status: 502 }),
 			);
 		}
+
+		const protoBytes = encodeProtoAppendInput(input);
+		const shouldCompress =
+			this.compression !== "none" &&
+			protoBytes.byteLength >= COMPRESSION_THRESHOLD_BYTES;
+		const frameCompression: CompressionType = shouldCompress
+			? this.compression
+			: "none";
+		const bodyBytes = shouldCompress
+			? compressFrameBody(protoBytes, this.compression)
+			: protoBytes;
+
+		const frame = frameMessage({
+			terminal: false,
+			compression: frameCompression,
+			body: bodyBytes,
+		});
 
 		// Track pending ack - this promise resolves when the ack is received (FIFO)
 		return new Promise((resolve) => {

@@ -274,9 +274,10 @@ export class S2Error extends Error {
 	/**
 	 * Returns true if the error guarantees that no mutation occurred.
 	 *
-	 * Certain server errors (`rate_limited`, `hot_server`, `server_draining`)
-	 * and pre-connection client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`)
-	 * are safe to retry since they guarantee no side effects.
+	 * Certain server errors (`rate_limited`, `hot_server`, `server_draining`),
+	 * pre-connection client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`)
+	 * and `SESSION_CLOSED`, for an append a session never sent, are safe to
+	 * retry since they guarantee no side effects.
 	 *
 	 * A draining server acknowledges every input it accepted before ending the
 	 * session with `server_draining`, so anything still unacknowledged was never
@@ -294,9 +295,12 @@ export class S2Error extends Error {
 		if (this.origin === "sdk") {
 			// Pre-connection errors: the TCP handshake never completed, so no
 			// request bytes could have been written and no mutation occurred.
-			return ["ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(
-				this.code as string,
-			);
+			// A closed session never sent the append.
+			return [
+				"ECONNREFUSED",
+				"UND_ERR_CONNECT_TIMEOUT",
+				"SESSION_CLOSED",
+			].includes(this.code as string);
 		}
 		return false;
 	}
@@ -371,12 +375,21 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 
 /**
  * For an operation on a closed session. A failed append session is closed to
- * all but the appends it held, which get its own error.
+ * all but the appends that may have reached the server, which get its own
+ * error. `cause` is that error.
  */
-export function sessionClosedError(
-	message: string = "AppendSession is closed",
-): S2Error {
-	return new S2Error({ message, code: "SESSION_CLOSED" });
+export function sessionClosedError({
+	message = "AppendSession is closed",
+	cause,
+}: {
+	message?: string;
+	cause?: S2Error;
+} = {}): S2Error {
+	const error = new S2Error({ message, code: "SESSION_CLOSED" });
+	if (cause) {
+		error.cause = cause;
+	}
+	return error;
 }
 
 /** Error code for a session interrupted by server reconnect advice. */

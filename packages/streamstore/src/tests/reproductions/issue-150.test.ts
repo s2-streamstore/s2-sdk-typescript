@@ -35,9 +35,13 @@ describe("Issue #150: RetryAppendSession ignores maxAttempts on connection failu
 			await Promise.resolve();
 		}
 
+		// Never sent, so closed; failureCause() says why.
 		await expect(ticket.ack()).rejects.toMatchObject({
-			message: expect.stringContaining("Max attempts (3) exhausted"),
+			code: "SESSION_CLOSED",
 		});
+		expect(session.failureCause()?.message).toContain(
+			"Max attempts (3) exhausted",
+		);
 
 		// With maxAttempts=3, we expect 3 total creation attempts (1 initial + 2 retries)
 		expect(createCalls).toBe(3);
@@ -69,8 +73,11 @@ describe("Issue #150: RetryAppendSession ignores maxAttempts on connection failu
 		}
 
 		await expect(ticket.ack()).rejects.toMatchObject({
-			message: expect.stringContaining("Max attempts (1) exhausted"),
+			code: "SESSION_CLOSED",
 		});
+		expect(session.failureCause()?.message).toContain(
+			"Max attempts (1) exhausted",
+		);
 
 		// With maxAttempts=1, only 1 creation attempt (no retries)
 		expect(createCalls).toBe(1);

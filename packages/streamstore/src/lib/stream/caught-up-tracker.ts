@@ -42,7 +42,7 @@ function copyPosition(position: StreamPosition): StreamPosition {
 
 /** Error a pending {@link CaughtUpTracker.caughtUp} call rejects with on a clean end. */
 const endedBeforeCaughtUp = () =>
-	sessionClosedError("Read session ended before catching up");
+	sessionClosedError({ message: "Read session ended before catching up" });
 
 class Boundary implements CaughtUpBoundary {
 	private readonly caughtUpTail: StreamPosition;

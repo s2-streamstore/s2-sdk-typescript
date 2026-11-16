@@ -558,10 +558,7 @@ export class FetchAppendSession implements TransportAppendSession {
 		while (this.pending.length > 0) {
 			// Once closed, send nothing more.
 			if (this.closed) {
-				for (const queued of this.pending) {
-					queued.resolve(err(sessionClosedError()));
-				}
-				this.pending.clear();
+				this.failPending(sessionClosedError());
 				break;
 			}
 			const { input, resolve, onSend } = this.pending.shift()!;
@@ -616,15 +613,7 @@ export class FetchAppendSession implements TransportAppendSession {
 
 				// Resolve all remaining pending promises with the same error
 				// (transport failure affects all queued requests)
-				debug(
-					"[%s] FetchAppendSession.processLoop: failing %d queued requests",
-					this.stream,
-					this.pending.length,
-				);
-				for (const queued of this.pending) {
-					queued.resolve(err(s2Err));
-				}
-				this.pending.clear();
+				this.failPending(s2Err);
 
 				this.processingPromise = null;
 				return;
@@ -633,6 +622,18 @@ export class FetchAppendSession implements TransportAppendSession {
 
 		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
+	}
+
+	private failPending(error: S2Error): void {
+		debug(
+			"[%s] FetchAppendSession.processLoop: failing %d queued requests",
+			this.stream,
+			this.pending.length,
+		);
+		for (const queued of this.pending) {
+			queued.resolve(err(error));
+		}
+		this.pending.clear();
 	}
 }
 

@@ -528,7 +528,7 @@ export class Producer implements AsyncDisposable {
 
 		// Sent records settle from their batch's ack. These were never sent.
 		if (this.inflightRecords.length > 0) {
-			const unsentError = sessionClosedError();
+			const unsentError = sessionClosedError({ cause: error });
 			for (const record of this.inflightRecords.splice(0)) {
 				record.rejectAck(unsentError);
 			}
