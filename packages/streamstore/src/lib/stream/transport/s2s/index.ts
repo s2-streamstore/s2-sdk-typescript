@@ -6,7 +6,7 @@
  */
 
 import type { OutgoingHttpHeaders } from "node:http";
-import type { ClientHttp2Stream, Http2Session } from "node:http2";
+import type { ClientHttp2Stream } from "node:http2";
 import createDebug from "debug";
 
 /** Type for ReadableStream with optional async iterator support. */
@@ -275,15 +275,12 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		const textDecoder = new TextDecoder();
 		let http2Stream: ClientHttp2Stream | undefined;
 		let controllerClosed = false;
-		let cleanupListeners: (() => void) | undefined;
 		// Track timeout for detecting when server stops sending data
 		const TAIL_TIMEOUT_MS = 20000; // 20 seconds
 		let timeoutTimer: NodeJS.Timeout | undefined;
 		const markControllerClosed = () => {
 			if (controllerClosed) return false;
 			controllerClosed = true;
-			cleanupListeners?.();
-			cleanupListeners = undefined;
 			if (timeoutTimer) {
 				clearTimeout(timeoutTimer);
 				timeoutTimer = undefined;
@@ -301,23 +298,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				let responseCode: number | undefined;
 				let pendingChunks: Buffer[] | undefined;
 
-				// Listener references for cleanup (issue #142)
-				let goawayHandler:
-					| ((
-							errorCode: number,
-							lastStreamID: number,
-							opaqueData: Buffer,
-					  ) => void)
-					| undefined;
-				let sessionConnection: Http2Session | undefined;
-
-				cleanupListeners = () => {
-					if (goawayHandler && sessionConnection) {
-						sessionConnection.removeListener("goaway", goawayHandler);
-					}
-					goawayHandler = undefined;
-					sessionConnection = undefined;
-				};
 				const safeClose = () => {
 					if (markControllerClosed()) {
 						try {
@@ -409,12 +389,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 							}
 						}
 					});
-
-					sessionConnection = stream.session;
-					goawayHandler = (errorCode, lastStreamID, opaqueData) => {
-						debug("received GOAWAY from server");
-					};
-					sessionConnection?.on("goaway", goawayHandler);
 
 					stream.on("error", (err) => {
 						safeError(err);
@@ -510,7 +484,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									} else {
 										safeClose();
 									}
-									stream.close();
 								} else {
 									try {
 										const batchBytes =
@@ -553,7 +526,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 												this.advisedReconnects.record();
 												debug("reconnect advised, ending read session");
 												safeError(reconnectAdvisedError());
-												stream.close();
 												return;
 											}
 											declinedAdvice = true;
@@ -628,9 +600,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			},
 			cancel: async () => {
 				markControllerClosed();
-				if (http2Stream && !http2Stream.closed) {
-					http2Stream.close();
-				}
 			},
 		});
 	}

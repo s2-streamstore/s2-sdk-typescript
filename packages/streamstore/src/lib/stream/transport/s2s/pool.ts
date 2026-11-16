@@ -334,13 +334,6 @@ export class Http2ConnectionPool {
 			},
 		});
 
-		try {
-			// Each pooled stream may add its own session listeners (e.g. goaway).
-			session.setMaxListeners(0);
-		} catch {
-			// Not available in every runtime.
-		}
-
 		const connection: PooledConnection = {
 			session,
 			activeStreams: 0,

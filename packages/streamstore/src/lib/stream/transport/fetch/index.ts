@@ -402,7 +402,6 @@ export class FetchAppendSession implements TransportAppendSession {
 	private pendingResolvers = new FifoQueue<{
 		resolve: (result: AppendResult) => void;
 	}>();
-	private inFlight = false;
 	private _effectSignalled = false;
 	private readonly options?: S2RequestOptions;
 	private readonly stream: string;
@@ -492,8 +491,9 @@ export class FetchAppendSession implements TransportAppendSession {
 				this.options?.signal?.removeEventListener("abort", this.abortHandler);
 				this.abortHandler = undefined;
 			}
+			// Fails the append in flight; the loop then fails the queued ones.
 			this.abortController.abort();
-			await this.waitForDrain();
+			await this.processingPromise;
 			debug("[%s] FetchAppendSession close complete", this.stream);
 			return okClose();
 		} catch (error) {
@@ -595,7 +595,6 @@ export class FetchAppendSession implements TransportAppendSession {
 	private async processLoop(): Promise<void> {
 		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
 		while (this.queue.length > 0) {
-			this.inFlight = true;
 			const input = this.queue.shift()!;
 			const resolver = this.pendingResolvers.shift()!;
 
@@ -669,30 +668,15 @@ export class FetchAppendSession implements TransportAppendSession {
 				// Clear the queue
 				this.queue.clear();
 
-				this.inFlight = false;
 				this.processingPromise = null;
 				return;
 			}
-
-			this.inFlight = false;
 		}
 
 		// Queue fully drained with no errors — session is dormant
 		this._effectSignalled = false;
 		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
-	}
-
-	private async waitForDrain(): Promise<void> {
-		// Wait for processing to complete
-		if (this.processingPromise) {
-			await this.processingPromise;
-		}
-
-		// Wait until queue is empty and nothing is in flight
-		while (this.queue.length > 0 || this.inFlight) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
 	}
 }
 
