@@ -265,6 +265,11 @@ export class S2Stream {
 	 * `sessionOptions.streamConfig` is sent whenever the session connects and is
 	 * applied only if the append auto-creates the stream.
 	 *
+	 * Once `requestOptions.signal` aborts, at any point, the session fails with
+	 * an `S2Error` with code `ABORTED` (status 499) on either transport: a
+	 * pending `appendSession()` rejects with it, and so do inflight appends and
+	 * later `submit()` calls. An abort is never retried.
+	 *
 	 * @param sessionOptions Options that control append session behavior
 	 * @param requestOptions Optional request options
 	 */

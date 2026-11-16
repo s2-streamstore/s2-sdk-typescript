@@ -1,6 +1,6 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
-import { S2Error } from "../error.js";
+import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
@@ -35,9 +35,21 @@ interface SessionServerOptions {
 	 * read that reached its limit.
 	 */
 	reads?: "batch" | "hold" | "malformed" | "bounded";
+	/**
+	 * How appends are answered: acked (default), not at all, or failed, the
+	 * first with a 503 after which it may have taken effect, and the rest with
+	 * a 429 after which it has not.
+	 */
+	appends?: "ack" | "hold" | "fail";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
+
+/** The status and body of the `n`th append failure, from 0. */
+function appendFailure(n: number): [number, string] {
+	const code = n === 0 ? "unavailable" : "rate_limited";
+	return [n === 0 ? 503 : 429, JSON.stringify({ code, message: code })];
+}
 
 const FROM_START = { start: { from: { seqNum: 0 } } };
 
@@ -128,11 +140,22 @@ async function startH2Server(
 		}),
 	);
 
+	let failures = 0;
 	const server = await serveHttp2((stream, headers) => {
 		requests++;
 		if (headers[":method"] === "POST") {
+			if (options?.appends === "fail") {
+				stream.once("data", () => {
+					const [status, body] = appendFailure(failures++);
+					stream.respond({ ":status": status });
+					stream.end(body);
+				});
+				return;
+			}
 			stream.respond({ ":status": 200 });
-			stream.on("data", () => stream.write(ackFrame));
+			if (options?.appends !== "hold") {
+				stream.on("data", () => stream.write(ackFrame));
+			}
 			stream.on("end", () => stream.end());
 			return;
 		}
@@ -174,13 +197,17 @@ async function startH1Server(
 		tail: { seq_num: 2, timestamp: 1 },
 	});
 
+	let failures = 0;
 	const server = await serveHttp1((req, res) => {
 		requests++;
 		if (req.method === "POST") {
 			req.resume();
 			req.on("end", () => {
-				res.writeHead(200, { "content-type": "application/json" });
-				res.end(ack);
+				if (options?.appends === "hold") return;
+				const [status, body] =
+					options?.appends === "fail" ? appendFailure(failures++) : [200, ack];
+				res.writeHead(status, { "content-type": "application/json" });
+				res.end(body);
 			});
 			return;
 		}
@@ -374,6 +401,122 @@ describe.each(TRANSPORTS)(
 					withinDeadline(session[Symbol.asyncIterator]().next()),
 				).rejects.toBeInstanceOf(S2Error);
 				await withinDeadline(stream.close());
+			},
+			TEST_TIMEOUT_MS,
+		);
+	},
+);
+
+const ABORTED = { message: "Request cancelled", code: "ABORTED", status: 499 };
+
+/**
+ * Issue #410: an s2s append session took an abort of its signal for a dropped
+ * connection and reconnected, so appends went on being acked, while the fetch
+ * transport failed them with the cancellation error. Once the signal aborts,
+ * appends must fail with that error, without reconnecting, on both transports.
+ */
+describe.each(TRANSPORTS)(
+	"Issue #410: aborting a %s append session",
+	(transport) => {
+		it(
+			"rejects appendSession() when the signal has already aborted",
+			async () => {
+				const server = await startSessionServer(transport);
+
+				await expect(
+					streamOn(server, transport).appendSession(undefined, {
+						signal: AbortSignal.abort(),
+					}),
+				).rejects.toMatchObject(ABORTED);
+				expect(server.requests()).toBe(0);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"rejects later appends when the signal aborts after an ack",
+			async () => {
+				const server = await startSessionServer(transport);
+				const controller = new AbortController();
+				const session = await streamOn(server, transport).appendSession(
+					undefined,
+					{ signal: controller.signal },
+				);
+				await (await session.submit(record())).ack();
+
+				controller.abort();
+				await expect(
+					withinDeadline(session.submit(record())),
+				).rejects.toMatchObject(ABORTED);
+				expect(server.requests()).toBe(1);
+				expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"rejects an append the server has not acked",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "hold",
+				});
+				const controller = new AbortController();
+				const session = await streamOn(server, transport).appendSession(
+					undefined,
+					{ signal: controller.signal },
+				);
+				const ack = (await session.submit(record())).ack();
+				await waitFor(() => server.requests() === 1);
+
+				controller.abort();
+				await expect(withinDeadline(ack)).rejects.toMatchObject(ABORTED);
+				expect(server.requests()).toBe(1);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"removes its listener from the caller's signal when it closes",
+			async () => {
+				const stream = streamOn(await startSessionServer(transport), transport);
+				const signal = new AbortController().signal;
+
+				const session = await stream.appendSession(undefined, { signal });
+				await (await session.submit(record())).ack();
+				await session.close();
+				expect(getEventListeners(signal, "abort")).toHaveLength(0);
+			},
+			TEST_TIMEOUT_MS,
+		);
+	},
+);
+
+/**
+ * Issue #378: once an append session failed, it rejected a batch submitted
+ * afterwards with `AppendIndefiniteFailureError` whenever an earlier batch may
+ * have taken effect, though the new batch was never sent.
+ */
+describe.each(TRANSPORTS)(
+	"Issue #378: a failed %s append session",
+	(transport) => {
+		it(
+			"rejects a batch it never sent with the plain error",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "fail",
+				});
+				const session = await streamOn(server, transport).appendSession();
+				const sent = (await session.submit(record())).ack();
+				await expect(withinDeadline(sent)).rejects.toBeInstanceOf(
+					AppendIndefiniteFailureError,
+				);
+
+				const unsent = await session.submit(record()).then(
+					() => undefined,
+					(error: S2Error) => error,
+				);
+				expect(unsent?.code).toBe("rate_limited");
+				expect(unsent?.hasNoSideEffects()).toBe(true);
 			},
 			TEST_TIMEOUT_MS,
 		);

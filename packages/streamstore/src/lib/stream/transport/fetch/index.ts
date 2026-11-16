@@ -400,36 +400,26 @@ export class FetchAppendSession implements TransportAppendSession {
 		resolve: (result: AppendResult) => void;
 	}>();
 	private _effectSignalled = false;
-	private readonly options?: S2RequestOptions;
 	private readonly stream: string;
 	private closed = false;
 	private processingPromise: Promise<void> | null = null;
 	private readonly client: Client;
-	// Cancels in-flight appends on close(), and follows the caller's signal.
+	// Cancels in-flight appends on close().
 	private readonly abortController = new AbortController();
-	private abortHandler?: () => void;
 
 	static async create(
 		stream: string,
 		transportConfig: TransportConfig,
 		sessionOptions?: AppendSessionOptions,
-		requestOptions?: S2RequestOptions,
 	): Promise<FetchAppendSession> {
-		return new FetchAppendSession(
-			stream,
-			transportConfig,
-			sessionOptions,
-			requestOptions,
-		);
+		return new FetchAppendSession(stream, transportConfig, sessionOptions);
 	}
 
 	private constructor(
 		stream: string,
 		transportConfig: TransportConfig,
 		sessionOptions?: AppendSessionOptions,
-		requestOptions?: S2RequestOptions,
 	) {
-		this.options = requestOptions;
 		this.stream = stream;
 		debug("[%s] FetchAppendSession created", stream);
 		const headers: Record<string, string> = {};
@@ -450,16 +440,6 @@ export class FetchAppendSession implements TransportAppendSession {
 			() => Redacted.value(transportConfig.accessToken),
 			headers,
 		);
-
-		const signal = requestOptions?.signal;
-		if (signal?.aborted) {
-			this.abortController.abort(signal.reason);
-		} else if (signal) {
-			// Removed on close: the retry layer reuses the caller's signal
-			// across many sessions, so an unremovable listener leaks.
-			this.abortHandler = () => this.abortController.abort(signal.reason);
-			signal.addEventListener("abort", this.abortHandler);
-		}
 	}
 
 	/**
@@ -482,10 +462,6 @@ export class FetchAppendSession implements TransportAppendSession {
 		debug("[%s] FetchAppendSession close requested", this.stream);
 		try {
 			this.closed = true;
-			if (this.abortHandler) {
-				this.options?.signal?.removeEventListener("abort", this.abortHandler);
-				this.abortHandler = undefined;
-			}
 			// Fails the append in flight; the loop then fails the queued ones.
 			this.abortController.abort();
 			await this.processingPromise;
@@ -608,7 +584,6 @@ export class FetchAppendSession implements TransportAppendSession {
 					(record) => computeAppendRecordFormat(record) === "bytes",
 				);
 				const appendOptions = {
-					...this.options,
 					signal: this.abortController.signal,
 					preferProtobuf,
 				};
@@ -713,13 +688,12 @@ export class FetchTransport implements SessionTransport {
 					stream,
 					this.transportConfig,
 					myOptions,
-					requestOptions,
 				);
 			},
 			sessionOptions,
 			this.transportConfig.retry,
 			stream, // Pass stream name for debug context
-			this.sessions,
+			{ signal: requestOptions?.signal, sessions: this.sessions },
 		);
 	}
 
