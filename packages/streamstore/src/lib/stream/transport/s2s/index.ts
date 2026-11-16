@@ -288,6 +288,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				clearTimeout(timeoutTimer);
 				timeoutTimer = undefined;
 			}
+			// An ended session can't be cancelled later, so release the stream
+			// now: a graceful close of its connection waits for it.
+			if (http2Stream && !http2Stream.closed) {
+				http2Stream.close();
+			}
 			return true;
 		};
 

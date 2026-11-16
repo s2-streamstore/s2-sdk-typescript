@@ -2,6 +2,7 @@ import http, { type ServerResponse } from "node:http";
 import http2, { type ServerHttp2Session } from "node:http2";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
+import { S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
@@ -24,8 +25,11 @@ interface SessionServer {
 }
 
 interface SessionServerOptions {
-	/** Hold read requests without responding (default: respond). */
-	holdReads?: boolean;
+	/**
+	 * How reads are answered: with one record (default), not at all, or with
+	 * a batch that cannot be parsed. The read is held open in every case.
+	 */
+	reads?: "batch" | "hold" | "malformed";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
@@ -90,6 +94,9 @@ async function startH2Server(
 	const server = http2.createServer();
 	const sessions = new Set<ServerHttp2Session>();
 	const { requested, requests, record } = counter();
+	const malformedFrame = Buffer.from(
+		frameMessage({ terminal: false, body: new Uint8Array([0x0a, 0x64]) }),
+	);
 	const batchFrame = Buffer.from(
 		frameMessage({
 			terminal: false,
@@ -132,9 +139,11 @@ async function startH2Server(
 			stream.on("end", () => stream.end());
 			return;
 		}
-		if (!options?.holdReads) {
+		if (options?.reads !== "hold") {
 			stream.respond({ ":status": 200 });
-			stream.write(batchFrame);
+			stream.write(
+				options?.reads === "malformed" ? malformedFrame : batchFrame,
+			);
 		}
 	});
 
@@ -178,9 +187,13 @@ async function startH1Server(
 			});
 			return;
 		}
-		if (!options?.holdReads) {
+		if (options?.reads !== "hold") {
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.write(batchEvent);
+			res.write(
+				options?.reads === "malformed"
+					? "event: batch\ndata: not json\n\n"
+					: batchEvent,
+			);
 		}
 	});
 
@@ -224,7 +237,8 @@ describe.each(TRANSPORTS)(
 			"ends with ABORTED when the signal aborts $when",
 			async ({ when, requests }) => {
 				const server: SessionServer = await startSessionServer(transport, {
-					holdReads: when === "while the server holds the response",
+					reads:
+						when === "while the server holds the response" ? "hold" : "batch",
 				});
 				const stream = clientFor(server)
 					.basin("test-basin")
@@ -309,6 +323,31 @@ describe.each(TRANSPORTS)(
 				} finally {
 					await server.close();
 					await withinDeadline(other.close()).catch(() => {});
+					await withinDeadline(stream.close()).catch(() => {});
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		// A failed read must not keep its stream open: the server still holds it.
+		it(
+			"settles after one of its read sessions failed",
+			async () => {
+				const server = await startSessionServer(transport, {
+					reads: "malformed",
+				});
+				const stream = clientFor(server)
+					.basin("test-basin")
+					.stream("stream", { forceTransport: transport });
+				try {
+					const session = await stream.readSession(FROM_START);
+					await expect(
+						withinDeadline(session[Symbol.asyncIterator]().next()),
+					).rejects.toBeInstanceOf(S2Error);
+
+					await withinDeadline(stream.close());
+				} finally {
+					await server.close();
 					await withinDeadline(stream.close()).catch(() => {});
 				}
 			},
