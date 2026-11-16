@@ -1,5 +1,63 @@
 # @s2-dev/streamstore
 
+## 0.31.0
+
+### Minor Changes
+
+- 45b3f9c: Append sessions honour their `signal` on both transports. An abort fails the session with code `ABORTED`, without retrying: `appendSession()` rejects if the signal has already aborted, and otherwise appends that may have reached the server do. Before, an s2s session reconnected and kept acking appends.
+
+  A failed append session gives its error only to appends that may have reached the server. Appends it never sent, and later `submit()` calls, reject with code `SESSION_CLOSED`, as after `close()`. That error's `cause` is the session's error, and its `hasNoSideEffects()` is true. Before, a batch never sent could be reported as `AppendIndefiniteFailureError`.
+
+  A `Producer` record's `ack()` now shows whether it may have been sent: such a record settles with its batch's outcome, and any other rejects with `SESSION_CLOSED`. `Producer.submit()`, `flush()` and `close()` on a failed `Producer` still throw the session's error.
+
+  Retries treat a batch as possibly applied only once it may have reached the server, so `appendRetryPolicy: "noSideEffects"` can now retry on fetch where it gave up.
+
+  **Breaking:** after an append session fails, appends it never sent, later `submit()` calls and unsent `Producer` records reject with code `SESSION_CLOSED`, not the session's error. Get that from the error's `cause` or `failureCause()`, then open a new session.
+
+  **Note:** on fetch, an already-aborted signal used to fail the first append's `ack()`. Now `appendSession()` rejects, as `readSession()` does.
+
+  **Note:** when a `Producer` fails for a reason other than its session, such as `writable.abort()`, records already sent settle with their batch's outcome rather than rejecting at once. A custom `AppendSession` used with a `Producer` must settle every ticket it returns.
+
+- 9b50fe3: **Breaking:** Drop Deno support. Deno is no longer detected as a distinct runtime, and its `node:http2` and `Request` workarounds have been removed.
+- 8830ba8: `S2Stream.close()` ends the sessions opened from the handle and then settles, the same way on both transports. Read sessions end with an `S2Error` with code `ABORTED`, as when their `signal` aborts, and append sessions close as `AppendSession.close()` does. Previously, with a session open, `close()` never settled on s2s when the handle was the endpoint's last user, and otherwise resolved at once while its sessions kept running.
+
+  **Breaking:** sessions no longer outlive the handle they were opened from. Finish reading and appending before closing the handle.
+
+### Patch Changes
+
+- 45b3f9c: s2s append sessions write batches in the order they were submitted. With compression on, a batch large enough to compress could be written after a smaller one submitted after it, which reordered records on the stream and failed the session.
+
+  Append sessions send a batch as soon as it is submitted, rather than holding it until earlier batches are acked, so s2s pipelines appends. Under `appendRetryPolicy: "noSideEffects"`, a session can therefore give up more often when appends without `matchSeqNum` are pipelined: once a later batch may have reached the server, a failed earlier one is not retried.
+
+  When an s2s append timed out while its HTTP/2 stream was still opening, the abandoned attempt could still write it once the stream opened, so the retry appended it twice, even under `appendRetryPolicy: "noSideEffects"` (#364).
+
+  An append session whose transport fails an append by throwing now fails with that error, rather than hanging with no error.
+
+  Batches submitted while others wait for capacity keep their order. Before, a small batch could be enqueued ahead of a larger one submitted before it. A batch larger than `maxInflightBytes` is sent once the session is empty, and fails, rather than waiting forever.
+
+  A batch submitted just as `close()` is called no longer leaves its `ack()` pending forever.
+
+- 88b49d9: `Producer.close()` now appends records written to `producer.writable` before it was called, and waits for their acks, as it does for records from `submit()`. Previously, records still queued in the writable were dropped while `close()` resolved successfully, including when closing through `await using` or `readable.cancel()`. `Producer.flush()` likewise now covers records written to the writable before it was called; previously it resolved without waiting for writes still queued in the stream.
+
+  Records submitted after `close()` is called, and records written to the writable after a direct `close()` call, now fail with an `S2Error` "Producer is closed", or with the Producer's earlier error if it had already failed. Once a direct `close()` completes, the writable errors with that same error, so a pipe into it ends instead of waiting for its next record, and a later `writer.close()` rejects.
+
+- 90ba29e: When the fetch transport fails to load its protobuf codec (used for bytes records and `as: "bytes"` reads), it now fails at once with "Failed to load the protobuf codec: …" and the import error as `cause`. Before, an import error worded like a failed fetch, such as Safari's "Load failed", was retried as a `NETWORK_ERROR`.
+- 8830ba8: Read sessions honour their `signal` the same way on both transports: once it aborts, before `readSession()`, during setup or while waiting at the tail, the session ends with an `S2Error` with code `ABORTED` (status 499) and is not retried. Previously an s2s read session missed an abort that came before its HTTP/2 stream was set up, so a session following the tail waited forever, and a later abort ended it quietly (`done: true`). One-shot requests whose `signal` aborts before the response arrives now fail with this same error too, whatever reason `abort()` was given and including `AbortSignal.timeout()`. Before, they carried no code, or had status 0 when aborted with a reason.
+
+  **Note:** on s2s, the default transport on Node, a `for await` loop over a read session now throws this error when the session's signal aborts, instead of ending. Catch `ABORTED` where you abort. Leaving the loop with `break` or `return` right after calling `abort()` still ends it quietly.
+
+- e34e4f7: `AppendInput.create` rejects a record whose `meteredBytes` is not a non-negative integer, or whose `timestamp` is not a valid `Date` or a non-negative number of milliseconds up to `Number.MAX_SAFE_INTEGER`. Before, a hand-built record with a missing or `NaN` `meteredBytes` let an append session send only one batch at a time from then on, and an invalid timestamp was dropped on the fetch transport and threw a non-`S2Error` on s2s. A `null` timestamp still means no timestamp, now on s2s as well as fetch.
+
+  `Producer.submit` rejects such a record on its own, rather than letting it fail the batch it would join. `BatchTransform` rejects it when it is written, rather than when its batch flushes, and sizes records by their `meteredBytes` instead of measuring each one again. An append session rejects a hand-built `AppendInput` whose `meteredBytes` is not a non-negative integer.
+
+  s2s sessions build request paths without a double slash when the endpoint ends with `/`, such as `https://host/v1/`.
+
+  Errors a fetch read session gets from the server have `origin: "server"` instead of `"sdk"`. Basin and stream management calls that fail with a plain-text body use that text as the error message, as account calls and appends already did, instead of the HTTP status text.
+
+  Disposing a read session (`await using`, or `[Symbol.asyncDispose]()`) while a reader holds it ends the session, failing that reader's pending read with `ABORTED`. Before, it threw "ReadableStream is locked" and left the session open.
+
+  `EncryptionKey.from` rejects a string key that is not standard, padded base64 with an `EncryptionKeyFormatError`, whose message does not include the key.
+
 ## 0.30.0
 
 ### Minor Changes
