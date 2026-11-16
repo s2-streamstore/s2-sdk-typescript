@@ -321,7 +321,7 @@ export class Http2ConnectionPool {
 			// Headroom above the flow-control windows so Node's session memory
 			// cap (default 10 MB) does not refuse streams when windows are raised.
 			// This is just a heuristic to avoid memory issues in case.
-			// Deno and Bun dont support this setting.
+			// Bun doesn't support this setting.
 			maxSessionMemory: Math.max(
 				10, // default maxSessionMemory
 				Math.ceil(

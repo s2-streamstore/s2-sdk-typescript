@@ -286,7 +286,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		super({
 			start: async (controller) => {
 				let responseCode: number | undefined;
-				let pendingChunks: Buffer[] | undefined;
 
 				const safeClose = () => {
 					if (markControllerClosed()) {
@@ -371,13 +370,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						// Cache the status.
 						// This informs whether we should attempt to parse s2s frames in the "data" handler.
 						responseCode = headers[":status"] ?? 500;
-						if (pendingChunks) {
-							const buffered = pendingChunks;
-							pendingChunks = undefined;
-							for (const chunk of buffered) {
-								processChunk(chunk);
-							}
-						}
 					});
 
 					stream.on("error", (err) => {
@@ -546,15 +538,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						}
 					};
 
-					stream.on("data", (chunk: Buffer) => {
-						// Deno >= 2.7.5 emits "data" before "response";
-						// buffer until the status is known so an error body isn't parsed as acks.
-						if (responseCode === undefined) {
-							(pendingChunks ??= []).push(chunk);
-							return;
-						}
-						processChunk(chunk);
-					});
+					stream.on("data", processChunk);
 
 					stream.on("end", () => {
 						if (stream.rstCode != 0) {
@@ -571,7 +555,7 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					});
 
 					stream.on("close", () => {
-						if (pendingChunks || parser.hasData()) {
+						if (parser.hasData()) {
 							safeError(
 								new S2Error({
 									message: "Stream closed with unparsed data remaining",
@@ -773,7 +757,6 @@ class S2SAppendSession implements TransportAppendSession {
 
 		const textDecoder = new TextDecoder();
 		let responseCode: number | undefined;
-		let pendingChunks: Buffer[] | undefined;
 
 		const safeError = (error: unknown) => {
 			const normalized = s2Error(error);
@@ -800,13 +783,6 @@ class S2SAppendSession implements TransportAppendSession {
 		// Capture HTTP response status
 		stream.on("response", (headers) => {
 			responseCode = headers[":status"] ?? 500;
-			if (pendingChunks) {
-				const buffered = pendingChunks;
-				pendingChunks = undefined;
-				for (const chunk of buffered) {
-					processChunk(chunk);
-				}
-			}
 		});
 
 		// Handle incoming data (acks or error response)
@@ -924,15 +900,7 @@ class S2SAppendSession implements TransportAppendSession {
 			}
 		};
 
-		stream.on("data", (chunk: Buffer) => {
-			// Deno >= 2.7.5 emits "data" before "response";
-			// buffer until the status is known so an error body isn't parsed as acks.
-			if (responseCode === undefined) {
-				(pendingChunks ??= []).push(chunk);
-				return;
-			}
-			processChunk(chunk);
-		});
+		stream.on("data", processChunk);
 
 		stream.on("error", (streamErr: Error) => {
 			queueMicrotask(() => safeError(streamErr));
