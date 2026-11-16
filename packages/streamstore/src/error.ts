@@ -102,13 +102,12 @@ export function s2Error(error: any): S2Error {
 		});
 	}
 
-	// Abort error?
-	if (error instanceof Error && error.name === "AbortError") {
-		return new S2Error({
-			message: "Request cancelled",
-			status: 499, // Client Closed Request (nginx non-standard)
-			origin: "sdk",
-		});
+	// Cancelled through a signal, by `abort()` or `AbortSignal.timeout()`.
+	if (
+		error instanceof Error &&
+		(error.name === "AbortError" || error.name === "TimeoutError")
+	) {
+		return abortedError();
 	}
 
 	// Other unknown errors
