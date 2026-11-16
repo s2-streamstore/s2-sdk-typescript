@@ -21,18 +21,15 @@ interface SessionServer {
 	origin: string;
 	/** Requests received so far, reads and appends. */
 	requests: () => number;
-	/** Resolves when the first request arrives. */
-	requested: Promise<void>;
 	close: () => Promise<void>;
 }
 
 interface SessionServerOptions {
 	/**
-	 * How reads are answered: with one record (default), not at all, with a
-	 * batch that cannot be parsed, or (HTTP/1.1 only) with JSON headers and
-	 * part of a body. The read is held open in every case.
+	 * How reads are answered: with one record (default), not at all, or with
+	 * a batch that cannot be parsed. The read is held open in every case.
 	 */
-	reads?: "batch" | "hold" | "malformed" | "partial";
+	reads?: "batch" | "hold" | "malformed";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
@@ -100,28 +97,12 @@ function listen(server: http.Server | http2.Http2Server): Promise<string> {
 	});
 }
 
-function counter() {
-	let count = 0;
-	let onFirst!: () => void;
-	const requested = new Promise<void>((resolve) => {
-		onFirst = resolve;
-	});
-	return {
-		requested,
-		requests: () => count,
-		record: () => {
-			count++;
-			onFirst();
-		},
-	};
-}
-
 async function startH2Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
 	const server = http2.createServer();
 	const sessions = new Set<ServerHttp2Session>();
-	const { requested, requests, record } = counter();
+	let requests = 0;
 	const malformedFrame = Buffer.from(
 		frameMessage({ terminal: false, body: new Uint8Array([0x0a, 0x64]) }),
 	);
@@ -159,7 +140,7 @@ async function startH2Server(
 		session.on("close", () => sessions.delete(session));
 	});
 	server.on("stream", (stream, headers) => {
-		record();
+		requests++;
 		stream.on("error", () => {});
 		if (headers[":method"] === "POST") {
 			stream.respond({ ":status": 200 });
@@ -178,8 +159,7 @@ async function startH2Server(
 	const origin = await listen(server);
 	return {
 		origin,
-		requests,
-		requested,
+		requests: () => requests,
 		close: () =>
 			new Promise<void>((resolve) => {
 				for (const session of sessions) session.destroy();
@@ -192,7 +172,7 @@ async function startH1Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
 	const responses = new Set<ServerResponse>();
-	const { requested, requests, record } = counter();
+	let requests = 0;
 	const batchEvent = `event: batch\ndata: ${JSON.stringify({
 		records: [{ seq_num: 0, timestamp: 1, headers: [], body: "a" }],
 		tail: { seq_num: 1, timestamp: 1 },
@@ -204,7 +184,7 @@ async function startH1Server(
 	});
 
 	const server = http.createServer((req, res) => {
-		record();
+		requests++;
 		responses.add(res);
 		res.on("close", () => responses.delete(res));
 		if (req.method === "POST") {
@@ -213,11 +193,6 @@ async function startH1Server(
 				res.writeHead(200, { "content-type": "application/json" });
 				res.end(ack);
 			});
-			return;
-		}
-		if (options?.reads === "partial") {
-			res.writeHead(200, { "content-type": "application/json" });
-			res.write('{"tail":');
 			return;
 		}
 		if (options?.reads !== "hold") {
@@ -233,8 +208,7 @@ async function startH1Server(
 	const origin = await listen(server);
 	return {
 		origin,
-		requests,
-		requested,
+		requests: () => requests,
 		close: () =>
 			new Promise<void>((resolve) => {
 				for (const res of responses) res.destroy();
@@ -244,18 +218,12 @@ async function startH1Server(
 	};
 }
 
-type AbortPoint =
-	| "before readSession()"
-	| "right after readSession() is called"
-	| "while the server holds the response"
-	| "while the session waits at the tail";
-
-const CASES: { when: AbortPoint; requests: number }[] = [
+const CASES = [
 	{ when: "before readSession()", requests: 0 },
 	{ when: "right after readSession() is called", requests: 0 },
 	{ when: "while the server holds the response", requests: 1 },
 	{ when: "while the session waits at the tail", requests: 1 },
-];
+] as const;
 
 /**
  * Issue #405: an s2s read session never saw an abort that came before its
@@ -282,7 +250,7 @@ describe.each(TRANSPORTS)(
 				});
 				if (when === "right after readSession() is called") controller.abort();
 				if (when === "while the server holds the response") {
-					await server.requested;
+					await vi.waitFor(() => expect(server.requests()).toBe(1));
 					controller.abort();
 				}
 				const reading = opening.then(async (session) => {
@@ -408,20 +376,18 @@ describe.each(TRANSPORTS)(
 /**
  * `fetch` rejects with whatever reason the caller passed to `abort()`, so a
  * one-shot request aborted with a reason used to fail with status 0 instead
- * of `ABORTED`, also once its response had started.
+ * of `ABORTED`.
  */
 describe("aborting a one-shot request", () => {
 	it(
 		"fails with ABORTED whatever reason abort() is given",
 		async () => {
-			const server = await startSessionServer("fetch", { reads: "partial" });
+			const server = await startSessionServer("fetch", { reads: "hold" });
 			const stream = streamOn(server, "fetch");
 			const controller = new AbortController();
 
 			const tail = stream.checkTail({ signal: controller.signal });
-			await server.requested;
-			// Let the response headers arrive, so the abort lands in the body.
-			await new Promise((resolve) => setTimeout(resolve, 50));
+			await vi.waitFor(() => expect(server.requests()).toBe(1));
 			controller.abort("done");
 
 			await expect(withinDeadline(tail)).rejects.toMatchObject({

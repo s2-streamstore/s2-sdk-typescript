@@ -1,9 +1,8 @@
 import type { RetryConfig, S2Compression } from "./common.js";
-import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
+import { createApiClient } from "./lib/client.js";
 import type { EncryptionKeyInput } from "./lib/encryption.js";
 import { resolveEncryptionKey } from "./lib/encryption.js";
-import { fetchWithAbortError } from "./lib/fetch.js";
 import * as Redacted from "./lib/redacted.js";
 import {
 	canSetUserAgentHeader,
@@ -61,13 +60,10 @@ export class S2Basin {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
-		this.client = createClient(
-			createConfig({
-				baseUrl: options.baseUrl,
-				auth: () => Redacted.value(this.transportConfig.accessToken),
-				headers: headers,
-				fetch: fetchWithAbortError,
-			}),
+		this.client = createApiClient(
+			options.baseUrl,
+			() => Redacted.value(this.transportConfig.accessToken),
+			headers,
 		);
 
 		this.streams = new S2Streams(this.client, this.retryConfig);

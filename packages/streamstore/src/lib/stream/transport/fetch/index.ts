@@ -11,20 +11,16 @@ import {
 	S2Error,
 	s2Error,
 } from "../../../../error.js";
-import {
-	type Client,
-	createClient,
-	createConfig,
-} from "../../../../generated/client/index.js";
+import type { Client } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
 import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
+import { createApiClient } from "../../../client.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import { EventStream } from "../../../event-stream.js";
-import { fetchWithAbortError } from "../../../fetch.js";
 import { FifoQueue } from "../../../queue.js";
 import * as Redacted from "../../../redacted.js";
 import type { AppendResult, CloseResult } from "../../../result.js";
@@ -449,13 +445,10 @@ export class FetchAppendSession implements TransportAppendSession {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
-		this.client = createClient(
-			createConfig({
-				baseUrl: transportConfig.baseUrl,
-				auth: () => Redacted.value(transportConfig.accessToken),
-				headers: headers,
-				fetch: fetchWithAbortError,
-			}),
+		this.client = createApiClient(
+			transportConfig.baseUrl,
+			() => Redacted.value(transportConfig.accessToken),
+			headers,
 		);
 
 		const signal = requestOptions?.signal;
@@ -701,13 +694,10 @@ export class FetchTransport implements SessionTransport {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
-		this.client = createClient(
-			createConfig({
-				baseUrl: config.baseUrl,
-				auth: () => Redacted.value(config.accessToken),
-				headers: headers,
-				fetch: fetchWithAbortError,
-			}),
+		this.client = createApiClient(
+			config.baseUrl,
+			() => Redacted.value(config.accessToken),
+			headers,
 		);
 		this.transportConfig = config;
 	}
