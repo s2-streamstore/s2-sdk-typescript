@@ -915,7 +915,10 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Send a batch and wait for ack. Returns AppendResult (never throws).
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
-	private async sendBatch(input: Types.AppendInput): Promise<AppendResult> {
+	private async sendBatch(
+		input: Types.AppendInput,
+		onSend?: () => void,
+	): Promise<AppendResult> {
 		if (this.reconnectAdvised && !this.reconnectDeclined) {
 			// Refuse the advised stream without writing, so the retry layer can
 			// resubmit on a fresh session with no risk of duplication.
@@ -962,6 +965,7 @@ class S2SAppendSession implements TransportAppendSession {
 
 			// Send the frame (pipelined - non-blocking)
 			this._effectSignalled = true;
+			onSend?.();
 			this.http2Stream!.write(frame, (writeErr) => {
 				if (writeErr) {
 					// Remove from pending acks on write error
@@ -989,10 +993,11 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Close the append session.
 	 * Fails pending appends and cancels the stream, rather than waiting for
 	 * acks: the retry layer closes a session either once every append is
-	 * acknowledged, or to abandon a stalled attempt.
+	 * acknowledged, or to abandon a stalled attempt. `cancel` also resets a
+	 * stream with no pending acks, which the server could otherwise hold open.
 	 * Never throws - returns CloseResult.
 	 */
-	async close(): Promise<CloseResult> {
+	async close(options?: { cancel?: boolean }): Promise<CloseResult> {
 		try {
 			this.closed = true;
 
@@ -1006,8 +1011,8 @@ class S2SAppendSession implements TransportAppendSession {
 				await this.initPromise.catch(() => {});
 			}
 
-			const cancel = this.pendingAcks.length > 0;
-			if (cancel) {
+			const abandoned = this.pendingAcks.length > 0;
+			if (abandoned) {
 				const error = abortedError("Append session closed with pending acks");
 				for (const pending of this.pendingAcks) {
 					pending.resolve(err(error));
@@ -1018,7 +1023,7 @@ class S2SAppendSession implements TransportAppendSession {
 			// Client doesn't send a terminal frame for a clean close; reset the
 			// stream instead if acks were abandoned.
 			if (this.http2Stream && !this.http2Stream.closed) {
-				if (cancel) {
+				if (abandoned || options?.cancel) {
 					this.http2Stream.close(NGHTTP2_CANCEL);
 				} else {
 					this.http2Stream.end();
@@ -1036,7 +1041,10 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Returns AppendResult (never throws).
 	 * Pipelined: multiple submits can be in-flight; acks resolve FIFO.
 	 */
-	async submit(input: Types.AppendInput): Promise<AppendResult> {
+	async submit(
+		input: Types.AppendInput,
+		onSend?: () => void,
+	): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
 			return err(appendSessionClosedError());
@@ -1077,7 +1085,7 @@ class S2SAppendSession implements TransportAppendSession {
 			);
 		}
 
-		return this.sendBatch(input);
+		return this.sendBatch(input, onSend);
 	}
 }
 

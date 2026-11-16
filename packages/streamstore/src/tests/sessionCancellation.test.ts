@@ -40,11 +40,12 @@ interface SessionServerOptions {
 	 */
 	reads?: "batch" | "hold" | "malformed" | "bounded";
 	/**
-	 * How appends are answered: acked (default), not at all, or failed, the
+	 * How appends are answered: acked (default), acked with the s2s response
+	 * left open after the client ends its side, not at all, or failed, the
 	 * first with a 503 after which it may have taken effect, and the rest with
 	 * a 429 after which it has not.
 	 */
-	appends?: "hold" | "fail";
+	appends?: "open" | "hold" | "fail";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
@@ -169,7 +170,9 @@ async function startH2Server(
 			if (options?.appends !== "hold") {
 				stream.on("data", () => stream.write(ackFrame));
 			}
-			stream.on("end", () => stream.end());
+			if (options?.appends !== "open") {
+				stream.on("end", () => stream.end());
+			}
 			return;
 		}
 		if (options?.reads === "bounded") {
@@ -462,7 +465,9 @@ describe.each(TRANSPORTS)(
 		it(
 			"rejects later appends when the signal aborts after an ack",
 			async () => {
-				const server = await startSessionServer(transport);
+				const server = await startSessionServer(transport, {
+					appends: "open",
+				});
 				const { controller, session } = await abortableSession(
 					server,
 					transport,
@@ -475,6 +480,8 @@ describe.each(TRANSPORTS)(
 				);
 				expect(unsent).toMatchObject(ABORTED);
 				expect(unsent?.hasNoSideEffects()).toBe(true);
+				// Cancelled, not left for the server to end.
+				await waitFor(() => server.open() === 0);
 				expect(server.requests()).toBe(1);
 				expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
 			},
@@ -537,6 +544,35 @@ describe.each(TRANSPORTS)(
 					expect(error?.code).toBe("rate_limited");
 					expect(error?.hasNoSideEffects()).toBe(true);
 				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		// Fetch sends one append at a time, so a batch can wait in its queue,
+		// handed over but never sent.
+		it.runIf(transport === "fetch")(
+			"rejects a batch its transport queued but never sent as never sent",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "hold",
+				});
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
+				);
+				const [first, second] = await Promise.all([
+					session.submit(record()),
+					session.submit(record()),
+				]);
+				await waitFor(() => server.requests() === 1);
+
+				controller.abort();
+				const [sentError, queuedError] = await withinDeadline(
+					Promise.all([rejectionOf(first.ack()), rejectionOf(second.ack())]),
+				);
+				expect(sentError?.hasNoSideEffects()).toBe(false);
+				expect(queuedError?.hasNoSideEffects()).toBe(true);
+				expect(server.requests()).toBe(1);
 			},
 			TEST_TIMEOUT_MS,
 		);

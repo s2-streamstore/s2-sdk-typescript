@@ -911,6 +911,7 @@ type InflightEntry = {
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
 	needsSubmit?: boolean;
+	sent?: boolean; // May have reached the server, in any attempt
 	priorUncertainty?: boolean; // An earlier attempt may have taken effect
 };
 
@@ -1463,7 +1464,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					);
 					const attemptStarted = performance.now();
 					entry.attemptStartedMonotonicMs = attemptStarted;
-					entry.innerPromise = this.session.submit(entry.input);
+					entry.innerPromise = this.session.submit(entry.input, () => {
+						entry.sent = true;
+					});
 					delete entry.needsSubmit;
 				}
 			}
@@ -1823,7 +1826,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Create new promise from new session
 			const attemptStarted = performance.now();
 			entry.attemptStartedMonotonicMs = attemptStarted;
-			entry.innerPromise = session.submit(entry.input);
+			entry.innerPromise = session.submit(entry.input, () => {
+				entry.sent = true;
+			});
 			delete entry.needsSubmit;
 			debugSession(
 				"[%s] resubmitted entry (%d records, %d bytes, match_seq_num=%s)",
@@ -1895,9 +1900,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			if (entry.maybeResolve) {
 				entry.maybeResolve(
 					err(
-						entry.needsSubmit
-							? unsentError
-							: withPriorUncertainty(error, entry.priorUncertainty ?? false),
+						entry.sent
+							? withPriorUncertainty(error, entry.priorUncertainty ?? false)
+							: unsentError,
 					),
 				);
 			}
@@ -1925,11 +1930,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 		this.capacityWaiters.clear();
 
-		// Close inner session
+		// Close inner session, without waiting for the server to end it
 		if (this.session) {
 			debugSession("[%s] closing inner session", this.streamName);
 			try {
-				await this.session.close();
+				await this.session.close({ cancel: true });
 			} catch (e) {
 				debugSession(
 					"[%s] error closing session during abort: %s",

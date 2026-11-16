@@ -141,7 +141,7 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		return this._effectSignalled;
 	}
 
-	async submit(input: AppendInput): Promise<AppendResult> {
+	async submit(input: AppendInput, onSend?: () => void): Promise<AppendResult> {
 		if (this.closed) {
 			return err(new S2Error({ message: "session is closed", status: 400 }));
 		}
@@ -150,6 +150,7 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		if (this.behavior.effectSignalled === undefined) {
 			this._effectSignalled = true;
 		}
+		onSend?.();
 
 		if (this.behavior.submitError) {
 			return err(this.behavior.submitError);

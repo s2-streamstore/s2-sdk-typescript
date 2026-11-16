@@ -398,6 +398,7 @@ export class FetchAppendSession implements TransportAppendSession {
 	private queue = new FifoQueue<Types.AppendInput>();
 	private pendingResolvers = new FifoQueue<{
 		resolve: (result: AppendResult) => void;
+		onSend?: () => void;
 	}>();
 	private _effectSignalled = false;
 	private readonly stream: string;
@@ -483,7 +484,7 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * The request will be queued and sent when no other request is in-flight.
 	 * Never throws - returns AppendResult discriminated union.
 	 */
-	submit(input: Types.AppendInput): Promise<AppendResult> {
+	submit(input: Types.AppendInput, onSend?: () => void): Promise<AppendResult> {
 		debug(
 			"[%s] FetchAppendSession.submit: records=%d, match_seq_num=%s, queueLen=%d",
 			this.stream,
@@ -544,7 +545,7 @@ export class FetchAppendSession implements TransportAppendSession {
 
 		return new Promise((resolve) => {
 			this.queue.push(input);
-			this.pendingResolvers.push({ resolve });
+			this.pendingResolvers.push({ resolve, onSend });
 			debug(
 				"[%s] FetchAppendSession.submit: queued, queueLen=%d",
 				this.stream,
@@ -578,6 +579,7 @@ export class FetchAppendSession implements TransportAppendSession {
 
 			// Mark effect before sending — data is about to enter the network
 			this._effectSignalled = true;
+			resolver.onSend?.();
 
 			try {
 				const preferProtobuf = input.records.some(

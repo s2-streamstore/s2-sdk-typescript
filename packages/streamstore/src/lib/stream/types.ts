@@ -67,8 +67,19 @@ export interface AcksStream
  * - Does not implement retry or backpressure; those are added by {@link AppendSession}.
  */
 export interface TransportAppendSession {
-	submit(input: Types.AppendInput): Promise<Result.AppendResult>;
-	close(): Promise<Result.CloseResult>;
+	/**
+	 * Send `input`, calling `onSend` once it may have reached the server. A
+	 * batch that fails before then was never sent.
+	 */
+	submit(
+		input: Types.AppendInput,
+		onSend?: () => void,
+	): Promise<Result.AppendResult>;
+	/**
+	 * Close the session. `cancel` ends it at once, rather than letting the
+	 * server finish.
+	 */
+	close(options?: { cancel?: boolean }): Promise<Result.CloseResult>;
 	/**
 	 * Returns true if data may have been sent to the server since the last
 	 * time the session was dormant (zero pending acks).
