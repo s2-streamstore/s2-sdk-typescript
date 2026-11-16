@@ -301,25 +301,9 @@ for await (const record of readSession) {
 
 ### Ending sessions
 
-To stop a read session early, break out of the `for await` loop, or pass a `signal` and abort it:
+To stop a read session early, break out of its loop, or abort the `signal` passed to `readSession()`. An aborted session throws an `S2Error` with code `ABORTED`.
 
-```ts
-const controller = new AbortController();
-const readSession = await stream.readSession(
-	{ start: { from: { seqNum: 0 } } },
-	{ signal: controller.signal },
-);
-```
-
-Once the signal aborts, at any point, the session ends with an `S2Error` with code `ABORTED` (status 499): a pending `readSession()` rejects with it, and reading the session throws it. An abort is never retried.
-
-Calling `cancel()` on the session works only while nothing is reading it. A `for await` loop or a reader holds the session's lock, and `cancel()` then throws without stopping it.
-
-`await stream.close()` ends every session opened from that stream handle, then releases its connection:
-- read sessions end with the same `ABORTED` error, as if their signal had aborted;
-- append sessions close as `appendSession.close()` does, waiting for inflight appends to settle.
-
-`close()` settles once this is done, whether or not other handles share the connection. Using the handle afterwards throws.
+`stream.close()` ends every session opened from that handle, then releases its connection: read sessions throw `ABORTED`, and append sessions finish their inflight appends, as `appendSession.close()` does.
 
 ## Client configuration
 
