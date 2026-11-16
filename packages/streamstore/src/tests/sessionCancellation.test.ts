@@ -1,13 +1,19 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { BatchTransform } from "../batch-transform.js";
 import type { RetryConfig } from "../common.js";
 import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
-import type { SessionTransports } from "../lib/stream/types.js";
+import type { AppendSession, SessionTransports } from "../lib/stream/types.js";
+import { Producer } from "../producer.js";
 import type { S2Stream } from "../stream.js";
-import { AppendInput, AppendRecord } from "../types.js";
+import {
+	AppendInput,
+	AppendRecord,
+	type AppendSessionOptions,
+} from "../types.js";
 import {
 	type LocalServer,
 	serveHttp1,
@@ -55,6 +61,13 @@ const SESSION_CLOSED = {
 	message: "AppendSession is closed",
 	code: "SESSION_CLOSED",
 };
+
+/** The error `promise` rejects with, or undefined if it resolves. */
+const rejectionOf = (promise: Promise<unknown>) =>
+	promise.then(
+		() => undefined,
+		(error: S2Error) => error,
+	);
 
 /** The status and body of the `n`th append failure, from 0. */
 function appendFailure(n: number): [number, string] {
@@ -337,15 +350,23 @@ const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
 async function abortableSession(
 	server: SessionServer,
 	transport: SessionTransports,
-	retry?: RetryConfig,
+	options?: { retry?: RetryConfig; session?: AppendSessionOptions },
 ) {
 	const controller = new AbortController();
-	const session = await streamOn(server, transport, retry).appendSession(
-		undefined,
-		{ signal: controller.signal },
-	);
+	const session = await streamOn(
+		server,
+		transport,
+		options?.retry,
+	).appendSession(options?.session, { signal: controller.signal });
 	return { controller, session };
 }
+
+/** A Producer that appends a batch a record. */
+const producerOn = (session: AppendSession) =>
+	new Producer(
+		new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+		session,
+	);
 
 /**
  * Issue #406: `S2Stream.close()` with sessions open never settled on s2s when
@@ -527,7 +548,8 @@ describe.each(TRANSPORTS)(
  * afterwards with `AppendIndefiniteFailureError` whenever an earlier batch may
  * have taken effect, though the new batch was never sent. As in the Go SDK,
  * only the batches a failed session held get its error: it is closed to the
- * rest.
+ * rest. A Producer's records follow: the session's error means the record was
+ * sent, `SESSION_CLOSED` that it was not.
  */
 describe.each(TRANSPORTS)(
 	"Issue #378: a failed %s append session",
@@ -550,6 +572,36 @@ describe.each(TRANSPORTS)(
 			},
 			TEST_TIMEOUT_MS,
 		);
+
+		it(
+			"gives its error only to the Producer records it accepted",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "hold",
+				});
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
+					{ session: { maxInflightBatches: 1 } },
+				);
+				// The second batch waits for capacity, so the session never
+				// accepts it.
+				const producer = producerOn(session);
+				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
+				await waitFor(() => server.requests() === 1);
+				const unsent = await producer.submit(
+					AppendRecord.string({ body: "b" }),
+				);
+
+				controller.abort();
+				const [sentError, unsentError] = await withinDeadline(
+					Promise.all([rejectionOf(sent.ack()), rejectionOf(unsent.ack())]),
+				);
+				expect(sentError).toMatchObject(ABORTED);
+				expect(unsentError).toMatchObject(SESSION_CLOSED);
+			},
+			TEST_TIMEOUT_MS,
+		);
 	},
 );
 
@@ -564,7 +616,7 @@ describe("noSideEffects on fetch", () => {
 		async () => {
 			const server = await startSessionServer("fetch", { appends: "busy" });
 			const { controller, session } = await abortableSession(server, "fetch", {
-				appendRetryPolicy: "noSideEffects",
+				retry: { appendRetryPolicy: "noSideEffects" },
 			});
 			await session.submit(record());
 			await waitFor(() => server.requests() === 1);

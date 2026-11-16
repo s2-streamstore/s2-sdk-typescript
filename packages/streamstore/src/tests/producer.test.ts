@@ -403,16 +403,23 @@ describe("Producer", () => {
 			const secondTicket = await producer.submit(
 				AppendRecord.string({ body: "second" }),
 			);
-			await session.nextSubmission();
+			const firstSubmission = await session.nextSubmission();
 			const failingSubmission = await session.nextSubmission();
 			const flushPromise = producer.flush();
+			// A failed session settles every batch it accepted.
+			firstSubmission.ack.reject(error);
 			if (failurePhase === "ack") {
 				failingSubmission.ack.reject(error);
 			}
 
 			await Promise.all([
 				expect(firstTicket.ack()).rejects.toBe(error),
-				expect(secondTicket.ack()).rejects.toBe(error),
+				// Never sent if the session rejected its batch.
+				failurePhase === "submit"
+					? expect(secondTicket.ack()).rejects.toMatchObject({
+							code: "SESSION_CLOSED",
+						})
+					: expect(secondTicket.ack()).rejects.toBe(error),
 				expect(flushPromise).rejects.toBe(error),
 			]);
 			await expect(producer.flush()).rejects.toBe(error);
