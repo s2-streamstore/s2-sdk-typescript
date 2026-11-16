@@ -117,7 +117,7 @@ export class Producer implements AsyncDisposable {
 	private operationChain: Promise<void> = Promise.resolve();
 	private closePromise: Promise<void> | null = null;
 	/** Writable records past this count were written after close() was called. */
-	private closeFence: number | null = null;
+	private closeFence = Number.POSITIVE_INFINITY;
 
 	constructor(
 		batchTransform: BatchTransform,
@@ -151,9 +151,7 @@ export class Producer implements AsyncDisposable {
 					this.writableController = controller;
 				},
 				write: async (record) => {
-					const index = ++this.writableReceived;
-					const afterClose =
-						this.closeFence !== null && index > this.closeFence;
+					const afterClose = ++this.writableReceived > this.closeFence;
 					const submitted = this.enqueueOperation(() =>
 						this.submitInternal(record, afterClose),
 					);
@@ -366,15 +364,15 @@ export class Producer implements AsyncDisposable {
 		if (received()) {
 			return this.enqueueOperation(operation);
 		}
-		return new Promise<void>((resolve) => {
+		return new Promise<T>((resolve) => {
 			const waiter = () => {
 				if (received()) {
 					this.writableWaiters.delete(waiter);
-					resolve();
+					resolve(this.enqueueOperation(operation));
 				}
 			};
 			this.writableWaiters.add(waiter);
-		}).then(() => this.enqueueOperation(operation));
+		});
 	}
 
 	private async submitInternal(
@@ -516,12 +514,11 @@ export class Producer implements AsyncDisposable {
 
 	/** Ends the writable once the Producer has closed, so writers and pipes into it stop. */
 	private fenceWritable(): void {
-		if (!this.writableEnded) {
-			this.writableEnded = true;
-			this.writableController?.error(
-				this.terminalError ?? producerClosedError(),
-			);
+		if (this.writableEnded) {
+			return;
 		}
+		this.endWritable();
+		this.writableController?.error(this.terminalError ?? producerClosedError());
 	}
 
 	private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {

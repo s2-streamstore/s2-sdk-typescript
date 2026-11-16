@@ -10,6 +10,7 @@ import {
 } from "../lib/stream/types.js";
 import { Producer } from "../producer.js";
 import { type AppendAck, type AppendInput } from "../types.js";
+import { withinDeadline } from "./helpers.js";
 
 class MockAppendSession implements AppendSession {
 	readonly readable = new ReadableStream<AppendAck>();
@@ -255,22 +256,6 @@ async function expectPending(promise: Promise<unknown>): Promise<void> {
 	expect(state).toBe(pending);
 }
 
-async function expectSettles(promise: Promise<unknown>): Promise<void> {
-	const pending = Symbol("pending");
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const state = await Promise.race([
-		promise.then(
-			() => "fulfilled" as const,
-			() => "rejected" as const,
-		),
-		new Promise<typeof pending>((resolve) => {
-			timer = setTimeout(() => resolve(pending), 500);
-		}),
-	]);
-	clearTimeout(timer);
-	expect(state).not.toBe(pending);
-}
-
 describe("Producer", () => {
 	it("preserves record order when batching", async () => {
 		const session = new MockAppendSession();
@@ -449,20 +434,14 @@ describe("Producer", () => {
 			writer.write(AppendRecord.string({ body })),
 		);
 		const closePromise = producer.close();
-		const lateWrite = writer.write(AppendRecord.string({ body: "late" }));
-		const lateWriteResult = lateWrite.then(
-			() => undefined,
-			(err: unknown) => err,
-		);
+		const lateWrite = expect(
+			writer.write(AppendRecord.string({ body: "late" })),
+		).rejects.toMatchObject({ name: "S2Error", message: "Producer is closed" });
 
 		await closePromise;
 		expect(session.getValues()).toEqual(["a", "b", "c"]);
 		await Promise.all(writes);
-
-		const lateError = await lateWriteResult;
-		expect(lateError).toBeInstanceOf(S2Error);
-		expect((lateError as S2Error).message).toBe("Producer is closed");
-		expect(session.getValues()).toEqual(["a", "b", "c"]);
+		await lateWrite;
 	});
 
 	it("flush covers records already written to the writable", async () => {
@@ -483,11 +462,14 @@ describe("Producer", () => {
 		await producer.close();
 	});
 
-	it.each([
+	it.each<{
+		name: string;
+		session?: AppendSession;
+		drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => void;
+	}>([
 		{
 			name: "a write rejected after writer.close()",
-			session: () => new MockAppendSession(),
-			drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => {
+			drop: (writer) => {
 				void writer.write(AppendRecord.string({ body: "a" }));
 				void writer.close();
 				void writer.write(AppendRecord.string({ body: "x" })).catch(() => {});
@@ -495,8 +477,7 @@ describe("Producer", () => {
 		},
 		{
 			name: "an abort with writes queued",
-			session: () => new MockAppendSession(),
-			drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => {
+			drop: (writer) => {
 				for (const body of ["a", "b", "c"]) {
 					void writer.write(AppendRecord.string({ body })).catch(() => {});
 				}
@@ -505,12 +486,11 @@ describe("Producer", () => {
 		},
 		{
 			name: "a failed sink write with writes queued",
-			session: () =>
-				new ControlledAppendSession({
-					submitNumber: 1,
-					error: new S2Error({ message: "append failed", status: 500 }),
-				}),
-			drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => {
+			session: new ControlledAppendSession({
+				submitNumber: 1,
+				error: new S2Error({ message: "append failed", status: 500 }),
+			}),
+			drop: (writer) => {
 				for (const body of ["a", "b", "c", "d", "e"]) {
 					void writer.write(AppendRecord.string({ body })).catch(() => {});
 				}
@@ -519,11 +499,11 @@ describe("Producer", () => {
 	])("close settles after $name", async ({ session, drop }) => {
 		const producer = new Producer(
 			new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
-			session(),
+			session ?? new MockAppendSession(),
 		);
 		drop(producer.writable.getWriter());
 
-		await expectSettles(producer.close());
+		await withinDeadline(producer.close().catch(() => {}));
 	});
 
 	it("close ends a pipe into the writable", async () => {
@@ -536,7 +516,6 @@ describe("Producer", () => {
 		);
 
 		await producer.close();
-		await expectSettles(piped);
-		await expect(piped).rejects.toThrow("Producer is closed");
+		await expect(withinDeadline(piped)).rejects.toThrow("Producer is closed");
 	});
 });
