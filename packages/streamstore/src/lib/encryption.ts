@@ -35,12 +35,28 @@ export class EncryptionKeyLengthError extends S2Error {
 	}
 }
 
+export class EncryptionKeyFormatError extends S2Error {
+	constructor() {
+		super({
+			message: "invalid encryption key: key material is not valid base64",
+			origin: "sdk",
+		});
+		this.name = "EncryptionKeyFormatError";
+	}
+}
+
+const BASE64_PATTERN =
+	/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
 /**
  * Helpers for normalizing client-supplied encryption keys.
  */
 export const EncryptionKey = {
 	/**
 	 * Normalize key material into the base64-encoded header form accepted by S2.
+	 *
+	 * @throws {EncryptionKeyLengthError} If the key is empty or too long
+	 * @throws {EncryptionKeyFormatError} If a string key is not base64
 	 */
 	from(value: EncryptionKeyInput): string {
 		const normalized =
@@ -53,6 +69,9 @@ export const EncryptionKey = {
 			normalized.length > MAX_ENCRYPTION_KEY_HEADER_VALUE_LEN
 		) {
 			throw new EncryptionKeyLengthError(keyMaterialLength);
+		}
+		if (!BASE64_PATTERN.test(normalized)) {
+			throw new EncryptionKeyFormatError();
 		}
 
 		return normalized;

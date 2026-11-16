@@ -313,6 +313,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	private _bytesRead: number = 0;
 
 	private readonly caughtUpTracker: CaughtUpTracker;
+	private readonly abortController: AbortController;
 
 	/**
 	 * Open a read session. The transport session is created eagerly, so
@@ -388,7 +389,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					generator,
 					config,
 					session,
-					abort.signal,
+					abort,
 					release,
 				);
 			}
@@ -403,9 +404,10 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		generator: ReadSessionGenerator<Format>,
 		config: RetryConfig | undefined,
 		initialSession: TransportReadSession<Format>,
-		abortSignal: AbortSignal,
+		abort: AbortController,
 		release: () => void,
 	) {
+		const abortSignal = abort.signal;
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
@@ -794,9 +796,15 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			{ highWaterMark: 0 },
 		);
 		this.caughtUpTracker = caughtUpTracker;
+		this.abortController = abort;
 	}
 
 	async [Symbol.asyncDispose]() {
+		// A locked stream can't be cancelled, so abort the session instead.
+		if (this.locked) {
+			this.abortController.abort();
+			return;
+		}
 		await this.cancel("disposed");
 	}
 
@@ -1084,6 +1092,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	async submit(input: Types.AppendInput): Promise<BatchSubmitTicket> {
 		if (this.fatalError || this.closing) {
 			throw appendSessionClosedError(this.fatalError);
+		}
+		// A NaN here would stick in queuedBytes and stall capacity for good.
+		if (!Number.isSafeInteger(input.meteredBytes) || input.meteredBytes < 0) {
+			throw new S2Error({
+				message:
+					"AppendInput meteredBytes must be a non-negative safe integer; create inputs with AppendInput.create()",
+				origin: "sdk",
+			});
 		}
 
 		// This needs to happen in the sync path.

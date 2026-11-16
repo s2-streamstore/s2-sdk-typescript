@@ -14,6 +14,7 @@ import type { EncryptionAlgorithm } from "./lib/encryption.js";
 import type { ListAllArgs } from "./lib/paginate.js";
 import {
 	meteredBytes as calculateMeteredBytes,
+	epochMillis,
 	utf8ByteLength,
 } from "./utils.js";
 
@@ -21,7 +22,11 @@ export type {
 	EncryptionAlgorithm,
 	EncryptionKeyInput,
 } from "./lib/encryption.js";
-export { EncryptionKey, EncryptionKeyLengthError } from "./lib/encryption.js";
+export {
+	EncryptionKey,
+	EncryptionKeyFormatError,
+	EncryptionKeyLengthError,
+} from "./lib/encryption.js";
 
 // =============================================================================
 // Stream Position
@@ -75,24 +80,47 @@ export type AppendRecord = StringAppendRecord | BytesAppendRecord;
 
 const textEncoder = new TextEncoder();
 
+function isValidTimestamp(timestamp: number | Date): boolean {
+	try {
+		const ms = epochMillis(timestamp);
+		return ms >= 0 && ms <= Number.MAX_SAFE_INTEGER;
+	} catch {
+		return false;
+	}
+}
+
+function validateTimestamp(timestamp: number | Date | null | undefined): void {
+	if (timestamp != null && !isValidTimestamp(timestamp)) {
+		throw new S2Error({
+			message:
+				"timestamp must be a valid Date or a non-negative number of milliseconds, at most Number.MAX_SAFE_INTEGER",
+			origin: "sdk",
+		});
+	}
+}
+
+/**
+ * Check a record that may have been built by hand rather than with
+ * {@link AppendRecord.string} or {@link AppendRecord.bytes}.
+ *
+ * @internal
+ * @throws {S2Error} If `meteredBytes` is not a non-negative safe integer, or `timestamp` is invalid
+ */
+export function validateAppendRecord(record: AppendRecord): void {
+	if (!Number.isSafeInteger(record.meteredBytes) || record.meteredBytes < 0) {
+		throw new S2Error({
+			message:
+				"record meteredBytes must be a non-negative safe integer; create records with AppendRecord.string() or AppendRecord.bytes()",
+			origin: "sdk",
+		});
+	}
+	validateTimestamp(record.timestamp);
+}
+
 /**
  * Factory functions for creating AppendRecord instances.
  */
 export namespace AppendRecord {
-	function validateTimestamp(timestamp: number | Date | undefined): void {
-		if (timestamp === undefined) {
-			return;
-		}
-		const ms = typeof timestamp === "number" ? timestamp : timestamp.getTime();
-		if (!Number.isFinite(ms) || ms < 0) {
-			throw new S2Error({
-				message:
-					"timestamp must be a valid Date or a finite, non-negative number of milliseconds",
-				origin: "sdk",
-			});
-		}
-	}
-
 	/**
 	 * Create a string-format append record with pre-calculated metered size.
 	 */
@@ -268,7 +296,7 @@ export namespace AppendInput {
 	 * Create an AppendInput with validation.
 	 * A batch may contain both string and bytes records.
 	 *
-	 * @throws {S2Error} If validation fails (empty, too many records, or too large)
+	 * @throws {S2Error} If validation fails (empty, too many records, too large, or a record has an invalid `meteredBytes` or `timestamp`)
 	 */
 	export function create(
 		records: ReadonlyArray<AppendRecord>,
@@ -292,7 +320,11 @@ export namespace AppendInput {
 			});
 		}
 
-		const totalBytes = records.reduce((sum, r) => sum + r.meteredBytes, 0);
+		let totalBytes = 0;
+		for (const record of records) {
+			validateAppendRecord(record);
+			totalBytes += record.meteredBytes;
+		}
 		if (totalBytes > MAX_APPEND_BYTES) {
 			throw new S2Error({
 				message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,

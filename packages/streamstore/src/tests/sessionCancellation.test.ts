@@ -332,6 +332,30 @@ describe.each(TRANSPORTS)("Issue #142: a %s read session", (transport) => {
 	);
 });
 
+/**
+ * Disposing a read session while a reader held it threw "ReadableStream is
+ * locked" and left the session open. It must end the session, failing the
+ * held reader's pending read and closing the request.
+ */
+describe.each(TRANSPORTS)("disposing a %s read session", (transport) => {
+	it(
+		"ends it while a reader holds it",
+		async () => {
+			const server = await startSessionServer(transport);
+			const stream = streamOn(server, transport);
+			const session = await stream.readSession(FROM_START);
+			const reader = session.getReader();
+			await reader.read();
+			const pending = reader.read();
+
+			await session[Symbol.asyncDispose]();
+			await expect(withinDeadline(pending)).rejects.toMatchObject(ABORTED);
+			await waitFor(() => server.open() === 0);
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
 const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
 
 /** An append session on `server` that aborts with the returned controller. */

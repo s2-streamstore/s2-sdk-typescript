@@ -43,6 +43,17 @@ export function utf8ByteLength(str: string): number {
 }
 
 /**
+ * Milliseconds since the Unix epoch, floored.
+ *
+ * @throws {TypeError} If `timestamp` is neither a number nor a Date (from any realm)
+ */
+export function epochMillis(timestamp: number | Date): number {
+	return typeof timestamp === "number"
+		? Math.floor(timestamp)
+		: Date.prototype.getTime.call(timestamp);
+}
+
+/**
  * Calculate the metered size in bytes of a record (append or read).
  * This includes the body and headers, but not metadata like timestamp.
  *

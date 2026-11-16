@@ -9,12 +9,13 @@ import {
 import { toCamelCase, toSnakeCase } from "./internal/case-transform.js";
 import { withRetries } from "./lib/retry.js";
 import type * as Types from "./types.js";
+import { epochMillis } from "./utils.js";
 
 /** Convert timestamp (Date or milliseconds) to Unix seconds (floored). */
 function toEpochSeconds(value: number | Date | undefined): number | undefined {
-	if (value === undefined) return undefined;
-	const ms = typeof value === "number" ? value : value.getTime();
-	return Math.floor(ms / 1000);
+	return value === undefined
+		? undefined
+		: Math.floor(epochMillis(value) / 1000);
 }
 
 /** Convert API metric response to SDK types with Date conversions. */
