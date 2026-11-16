@@ -1,14 +1,23 @@
 import { getEventListeners } from "node:events";
-import { afterEach, describe, expect, it } from "vitest";
-import { S2Error } from "../error.js";
+import { describe, expect, it } from "vitest";
+import { BatchTransform } from "../batch-transform.js";
+import type { RetryConfig } from "../common.js";
+import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import type { SessionTransports } from "../lib/stream/types.js";
+import { Producer } from "../producer.js";
 import type { S2Stream } from "../stream.js";
-import { AppendInput, AppendRecord } from "../types.js";
 import {
+	AppendInput,
+	AppendRecord,
+	type AppendSessionOptions,
+} from "../types.js";
+import {
+	cleanupAfterEach,
 	type LocalServer,
+	s2sAckFrame,
 	serveHttp1,
 	serveHttp2,
 	sleep,
@@ -25,6 +34,8 @@ const TEST_TIMEOUT_MS = 15_000;
 interface SessionServer extends LocalServer {
 	/** Requests received so far, reads and appends. */
 	requests: () => number;
+	/** Answers the append a "busy" server holds back. */
+	release?: () => void;
 }
 
 interface SessionServerOptions {
@@ -35,20 +46,44 @@ interface SessionServerOptions {
 	 * read that reached its limit.
 	 */
 	reads?: "batch" | "hold" | "malformed" | "bounded";
+	/**
+	 * How appends are answered. By default, acked.
+	 * - "open": acked, leaving the s2s response open after the client ends.
+	 * - "hold": never.
+	 * - "fail": a 503 (may have taken effect), then 429s (did not).
+	 * - "busy" (fetch only): a 429 once released, a 429, then never.
+	 */
+	appends?: "open" | "hold" | "fail" | "busy";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
 
+const ABORTED = { message: "Request cancelled", code: "ABORTED", status: 499 };
+const SESSION_CLOSED = {
+	message: "AppendSession is closed",
+	code: "SESSION_CLOSED",
+};
+
+/** The error `promise` rejects with, or undefined if it resolves. */
+const rejectionOf = (promise: Promise<unknown>) =>
+	promise.then(
+		() => undefined,
+		(error: S2Error) => error,
+	);
+
+/** An append failure's status and body. */
+const failure = (status: number, code: string): [number, string] => [
+	status,
+	JSON.stringify({ code, message: code }),
+];
+/** The append may have taken effect. */
+const UNAVAILABLE = failure(503, "unavailable");
+/** The append did not take effect. */
+const RATE_LIMITED = failure(429, "rate_limited");
+
 const FROM_START = { start: { from: { seqNum: 0 } } };
 
-// Run in order after each test: servers first, so a handle that cannot close
-// cleanly is not left waiting on a live server.
-const cleanups: Array<() => Promise<unknown>> = [];
-afterEach(async () => {
-	for (const cleanup of cleanups.splice(0)) {
-		await cleanup().catch(() => {});
-	}
-});
+const cleanup = cleanupAfterEach();
 
 /** A server for `transport`, closed after the test. */
 async function startSessionServer(
@@ -59,7 +94,7 @@ async function startSessionServer(
 		transport === "s2s"
 			? await startH2Server(options)
 			: await startH1Server(options);
-	cleanups.push(server.close);
+	cleanup(server.close);
 	return server;
 }
 
@@ -67,15 +102,21 @@ async function startSessionServer(
 function streamOn(
 	server: SessionServer,
 	transport: SessionTransports,
+	retry?: RetryConfig,
 ): S2Stream {
 	const stream = new S2({
 		accessToken: "token",
 		endpoints: { account: server.origin, basin: server.origin },
-		retry: { maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 5 },
+		retry: {
+			maxAttempts: 3,
+			minBaseDelayMillis: 1,
+			maxBaseDelayMillis: 5,
+			...retry,
+		},
 	})
 		.basin("test-basin")
 		.stream("stream", { forceTransport: transport });
-	cleanups.push(() => withinDeadline(stream.close()));
+	cleanup(() => withinDeadline(stream.close()));
 	return stream;
 }
 
@@ -117,23 +158,27 @@ async function startH2Server(
 		}),
 		frameMessage({ terminal: true, statusCode: 200, body: new Uint8Array(0) }),
 	]);
-	const ackFrame = Buffer.from(
-		frameMessage({
-			terminal: false,
-			body: Proto.AppendAck.toBinary({
-				start: { seqNum: 1n, timestamp: 1n },
-				end: { seqNum: 2n, timestamp: 1n },
-				tail: { seqNum: 2n, timestamp: 1n },
-			}),
-		}),
-	);
+	const ackFrame = s2sAckFrame(1, 2);
 
+	let failures = 0;
 	const server = await serveHttp2((stream, headers) => {
 		requests++;
 		if (headers[":method"] === "POST") {
+			if (options?.appends === "fail") {
+				stream.once("data", () => {
+					const [status, body] = failures++ === 0 ? UNAVAILABLE : RATE_LIMITED;
+					stream.respond({ ":status": status });
+					stream.end(body);
+				});
+				return;
+			}
 			stream.respond({ ":status": 200 });
-			stream.on("data", () => stream.write(ackFrame));
-			stream.on("end", () => stream.end());
+			if (options?.appends !== "hold") {
+				stream.on("data", () => stream.write(ackFrame));
+			}
+			if (options?.appends !== "open") {
+				stream.on("end", () => stream.end());
+			}
 			return;
 		}
 		if (options?.reads === "bounded") {
@@ -174,13 +219,29 @@ async function startH1Server(
 		tail: { seq_num: 2, timestamp: 1 },
 	});
 
+	let failures = 0;
+	let held: (() => void) | undefined;
 	const server = await serveHttp1((req, res) => {
 		requests++;
 		if (req.method === "POST") {
 			req.resume();
 			req.on("end", () => {
-				res.writeHead(200, { "content-type": "application/json" });
-				res.end(ack);
+				const respond = ([status, body]: [number, string]) => {
+					res.writeHead(status, { "content-type": "application/json" });
+					res.end(body);
+				};
+				if (options?.appends === "hold") return;
+				if (options?.appends === "busy") {
+					const n = failures++;
+					if (n === 0) held = () => respond(RATE_LIMITED);
+					if (n === 1) respond(RATE_LIMITED);
+					return;
+				}
+				if (options?.appends === "fail") {
+					respond(failures++ === 0 ? UNAVAILABLE : RATE_LIMITED);
+				} else {
+					respond([200, ack]);
+				}
 			});
 			return;
 		}
@@ -198,7 +259,7 @@ async function startH1Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests };
+	return { ...server, requests: () => requests, release: () => held?.() };
 }
 
 const CASES = [
@@ -242,11 +303,7 @@ describe.each(TRANSPORTS)(
 					}
 				});
 
-				await expect(withinDeadline(reading)).rejects.toMatchObject({
-					message: "Request cancelled",
-					code: "ABORTED",
-					status: 499,
-				});
+				await expect(withinDeadline(reading)).rejects.toMatchObject(ABORTED);
 				expect(server.requests()).toBe(requests);
 			},
 			TEST_TIMEOUT_MS,
@@ -276,6 +333,21 @@ describe.each(TRANSPORTS)("Issue #142: a %s read session", (transport) => {
 });
 
 const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
+
+/** An append session on `server` that aborts with the returned controller. */
+async function abortableSession(
+	server: SessionServer,
+	transport: SessionTransports,
+	options?: { retry?: RetryConfig; session?: AppendSessionOptions },
+) {
+	const controller = new AbortController();
+	const session = await streamOn(
+		server,
+		transport,
+		options?.retry,
+	).appendSession(options?.session, { signal: controller.signal });
+	return { controller, session };
+}
 
 /**
  * Issue #406: `S2Stream.close()` with sessions open never settled on s2s when
@@ -379,6 +451,186 @@ describe.each(TRANSPORTS)(
 		);
 	},
 );
+
+/**
+ * Issue #410: an s2s append session mistook its signal's abort for a dropped
+ * connection, and reconnected. On both transports, an abort must fail inflight
+ * appends with `ABORTED` and later ones with `SESSION_CLOSED`, without
+ * reconnecting.
+ */
+describe.each(TRANSPORTS)(
+	"Issue #410: aborting a %s append session",
+	(transport) => {
+		it(
+			"rejects appendSession() when the signal has already aborted",
+			async () => {
+				const server = await startSessionServer(transport);
+
+				await expect(
+					streamOn(server, transport).appendSession(undefined, {
+						signal: AbortSignal.abort(),
+					}),
+				).rejects.toMatchObject(ABORTED);
+				expect(server.requests()).toBe(0);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"rejects later appends as closed when the signal aborts after an ack",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "open",
+				});
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
+				);
+				await (await session.submit(record())).ack();
+
+				controller.abort();
+				await expect(
+					withinDeadline(session.submit(record())),
+				).rejects.toMatchObject(SESSION_CLOSED);
+				// Cancelled, not left for the server to end.
+				await waitFor(() => server.open() === 0);
+				expect(server.requests()).toBe(1);
+				expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"cancels an append the server has not acked",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "hold",
+				});
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
+				);
+				const ack = (await session.submit(record())).ack();
+				await waitFor(() => server.requests() === 1);
+
+				controller.abort();
+				await expect(withinDeadline(ack)).rejects.toMatchObject(ABORTED);
+				await waitFor(() => server.open() === 0);
+				expect(server.requests()).toBe(1);
+			},
+			TEST_TIMEOUT_MS,
+		);
+	},
+);
+
+/**
+ * Issue #378: a failed append session rejected later batches with its own
+ * error, so a batch never sent could be reported as
+ * `AppendIndefiniteFailureError`. As in the Go SDK, only the batches it held
+ * get its error, and the rest `SESSION_CLOSED`. So do a Producer's records.
+ */
+describe.each(TRANSPORTS)(
+	"Issue #378: a failed %s append session",
+	(transport) => {
+		it(
+			"rejects later batches as closed",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "fail",
+				});
+				const session = await streamOn(server, transport).appendSession();
+				const sent = (await session.submit(record())).ack();
+				await expect(withinDeadline(sent)).rejects.toBeInstanceOf(
+					AppendIndefiniteFailureError,
+				);
+
+				await expect(session.submit(record())).rejects.toMatchObject(
+					SESSION_CLOSED,
+				);
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		it(
+			"gives its error only to the Producer records it accepted",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "hold",
+				});
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
+					{ session: { maxInflightBatches: 1 } },
+				);
+				// The second batch waits for capacity, so the session never
+				// accepts it.
+				const producer = new Producer(
+					new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+					session,
+				);
+				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
+				await waitFor(() => server.requests() === 1);
+				const unsent = await producer.submit(
+					AppendRecord.string({ body: "b" }),
+				);
+
+				controller.abort();
+				const [sentError, unsentError] = await withinDeadline(
+					Promise.all([rejectionOf(sent.ack()), rejectionOf(unsent.ack())]),
+				);
+				expect(sentError).toMatchObject(ABORTED);
+				expect(unsentError).toMatchObject(SESSION_CLOSED);
+			},
+			TEST_TIMEOUT_MS,
+		);
+	},
+);
+
+/**
+ * Fetch sends one append at a time, so a batch can wait unsent in its queue.
+ * It cannot have taken effect: noSideEffects must still retry it, and a
+ * failed session must reject it as closed.
+ */
+describe("a batch fetch queued but never sent", () => {
+	it(
+		"is retried under noSideEffects",
+		async () => {
+			const server = await startSessionServer("fetch", { appends: "busy" });
+			const { controller, session } = await abortableSession(server, "fetch", {
+				retry: { appendRetryPolicy: "noSideEffects" },
+			});
+			await session.submit(record());
+			await waitFor(() => server.requests() === 1);
+			await session.submit(record());
+			server.release?.();
+			// The second 429 also fails the queued batch.
+			await waitFor(() => server.requests() === 3);
+			controller.abort();
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"rejects as closed when the session aborts",
+		async () => {
+			const server = await startSessionServer("fetch", { appends: "hold" });
+			const { controller, session } = await abortableSession(server, "fetch");
+			const sent = (await session.submit(record())).ack();
+			await waitFor(() => server.requests() === 1);
+			const queued = (await session.submit(record())).ack();
+
+			controller.abort();
+			const [sentError, queuedError] = await withinDeadline(
+				Promise.all([rejectionOf(sent), rejectionOf(queued)]),
+			);
+			expect(sentError).toMatchObject(ABORTED);
+			expect(queuedError).toMatchObject(SESSION_CLOSED);
+			expect(queuedError?.cause).toMatchObject(ABORTED);
+			expect(queuedError?.hasNoSideEffects()).toBe(true);
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
 
 /**
  * `fetch` rejects with whatever reason the caller passed to `abort()`, so a

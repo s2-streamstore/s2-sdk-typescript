@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
-import * as Proto from "../generated/proto/s2.js";
 import * as Redacted from "../lib/redacted.js";
 import { FetchTransport } from "../lib/stream/transport/fetch/index.js";
-import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import { S2STransport } from "../lib/stream/transport/s2s/index.js";
 import type { SessionTransport } from "../lib/stream/types.js";
 import { S2_STREAM_CONFIG_HEADER } from "../lib/stream-config.js";
 import { AppendInput, AppendRecord, type StreamConfig } from "../types.js";
-import { serveHttp1, serveHttp2, waitFor } from "./helpers.js";
+import { s2sAckFrame, serveHttp1, serveHttp2, waitFor } from "./helpers.js";
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -48,16 +46,7 @@ interface TestServer {
 async function startH2Server(): Promise<TestServer> {
 	const requests: Captured[] = [];
 	const shouldFail = firstAttemptFails();
-	const ackFrame = Buffer.from(
-		frameMessage({
-			terminal: false,
-			body: Proto.AppendAck.toBinary({
-				start: { seqNum: 0n, timestamp: 1n },
-				end: { seqNum: 1n, timestamp: 1n },
-				tail: { seqNum: 1n, timestamp: 1n },
-			}),
-		}),
-	);
+	const ackFrame = s2sAckFrame(0, 1);
 
 	const server = await serveHttp2((stream, headers) => {
 		requests.push({

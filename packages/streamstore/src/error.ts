@@ -274,9 +274,10 @@ export class S2Error extends Error {
 	/**
 	 * Returns true if the error guarantees that no mutation occurred.
 	 *
-	 * Certain server errors (`rate_limited`, `hot_server`, `server_draining`)
-	 * and pre-connection client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`)
-	 * are safe to retry since they guarantee no side effects.
+	 * Certain server errors (`rate_limited`, `hot_server`, `server_draining`),
+	 * pre-connection client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`)
+	 * and `SESSION_CLOSED`, for an append a session never sent, are safe to
+	 * retry since they guarantee no side effects.
 	 *
 	 * A draining server acknowledges every input it accepted before ending the
 	 * session with `server_draining`, so anything still unacknowledged was never
@@ -294,9 +295,11 @@ export class S2Error extends Error {
 		if (this.origin === "sdk") {
 			// Pre-connection errors: the TCP handshake never completed, so no
 			// request bytes could have been written and no mutation occurred.
-			return ["ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(
-				this.code as string,
-			);
+			return [
+				"ECONNREFUSED",
+				"UND_ERR_CONNECT_TIMEOUT",
+				"SESSION_CLOSED",
+			].includes(this.code as string);
 		}
 		return false;
 	}
@@ -367,6 +370,24 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 		status: 499,
 		origin: "sdk",
 	});
+}
+
+/**
+ * For an append on a closed append session. A failed session is closed to all
+ * but the appends that may have reached the server, which get its own error.
+ * `cause` is that error.
+ */
+export function appendSessionClosedError(cause?: S2Error): S2Error {
+	const error = new S2Error({
+		message: "AppendSession is closed",
+		code: "SESSION_CLOSED",
+	});
+	// Why the session closed, not another closed-session error.
+	const reason = cause?.code === "SESSION_CLOSED" ? cause.cause : cause;
+	if (reason) {
+		error.cause = reason;
+	}
+	return error;
 }
 
 /** Error code for a session interrupted by server reconnect advice. */

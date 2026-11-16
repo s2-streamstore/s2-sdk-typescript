@@ -146,7 +146,6 @@ describe("Issue #162: retry sessions should stop on cancel/abort", () => {
 					};
 				},
 				close: async (): Promise<CloseResult> => ({ ok: true }),
-				effectSignalled: () => false,
 			};
 		}
 
@@ -268,7 +267,6 @@ describe("Issue #162: retry sessions should stop on cancel/abort", () => {
 						};
 					},
 					close: async (): Promise<CloseResult> => ({ ok: true }),
-					effectSignalled: () => false,
 				};
 			};
 

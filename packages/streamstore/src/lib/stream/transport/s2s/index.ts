@@ -17,6 +17,7 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 import type { S2RequestOptions } from "../../../../common.js";
 import {
 	abortedError,
+	appendSessionClosedError,
 	isServerDraining,
 	makeAppendPreconditionError,
 	makeServerError,
@@ -138,13 +139,12 @@ export class S2STransport implements SessionTransport {
 					this.compression,
 					advisedReconnects,
 					myOptions,
-					requestOptions,
 				);
 			},
 			sessionOptions,
 			this.transportConfig.retry,
 			stream, // Pass stream name for debug context
-			this.sessions,
+			{ signal: requestOptions?.signal, sessions: this.sessions },
 		);
 	}
 
@@ -670,8 +670,6 @@ class S2SAppendSession implements TransportAppendSession {
 		batchSize: number;
 	}>();
 	private initPromise?: Promise<void>;
-	private _effectSignalled = false;
-	private abortHandler?: () => void;
 	private reconnectAdvised = false;
 	private reconnectDeclined = false;
 	private terminalError?: S2Error;
@@ -686,7 +684,6 @@ class S2SAppendSession implements TransportAppendSession {
 		compression: CompressionType,
 		advisedReconnects: AdvisedReconnects,
 		sessionOptions?: AppendSessionOptions,
-		requestOptions?: S2RequestOptions,
 	): Promise<S2SAppendSession> {
 		return new S2SAppendSession(
 			baseUrl,
@@ -698,7 +695,6 @@ class S2SAppendSession implements TransportAppendSession {
 			compression,
 			advisedReconnects,
 			sessionOptions,
-			requestOptions,
 		);
 	}
 
@@ -712,7 +708,6 @@ class S2SAppendSession implements TransportAppendSession {
 		private compression: CompressionType,
 		private advisedReconnects: AdvisedReconnects,
 		private sessionOptions?: AppendSessionOptions,
-		private options?: S2RequestOptions,
 	) {
 		// No stream setup
 		// Initialization happens lazily on first submit
@@ -745,16 +740,6 @@ class S2SAppendSession implements TransportAppendSession {
 
 		this.http2Stream = stream;
 
-		// Store the handler so close() can remove it. A caller-provided signal
-		// can outlive many sessions (RetryAppendSession recreates a session per
-		// recovery, reusing the same signal), so an unremovable listener leaks.
-		this.abortHandler = () => {
-			if (!stream.closed) {
-				stream.close();
-			}
-		};
-		this.options?.signal?.addEventListener("abort", this.abortHandler);
-
 		const textDecoder = new TextDecoder();
 		let responseCode: number | undefined;
 
@@ -766,9 +751,6 @@ class S2SAppendSession implements TransportAppendSession {
 				pending.resolve(err(normalized));
 			}
 			this.pendingAcks.clear();
-			// Note: do NOT reset _effectSignalled here. Data may have been
-			// written to the wire before the error occurred, so the flag
-			// must stay true until the session is recreated.
 		};
 		const handleServerError = (error: S2Error) => {
 			if (isServerDraining(error)) {
@@ -868,9 +850,7 @@ class S2SAppendSession implements TransportAppendSession {
 							if (pending) {
 								pending.resolve(ok(ack));
 							}
-							// Reset effect signal when dormant (no pending acks)
 							if (this.pendingAcks.length === 0) {
-								this._effectSignalled = false;
 								// Everything submitted was acknowledged; half-close so the
 								// draining server can end the response cleanly.
 								if (
@@ -907,7 +887,6 @@ class S2SAppendSession implements TransportAppendSession {
 		});
 
 		stream.on("close", () => {
-			this.removeAbortListener();
 			// Stream closed - resolve any remaining pending acks with error
 			// This can happen if the server closes the stream without sending all acks
 			if (this.pendingAcks.length > 0) {
@@ -928,18 +907,24 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Send a batch and wait for ack. Returns AppendResult (never throws).
 	 * Pipelined: multiple sends can be in-flight; acks resolve FIFO.
 	 */
-	private async sendBatch(input: Types.AppendInput): Promise<AppendResult> {
+	private async sendBatch(
+		input: Types.AppendInput,
+		onSend: () => void,
+	): Promise<AppendResult> {
+		if (this.closed) {
+			return err(appendSessionClosedError());
+		}
 		if (this.reconnectAdvised && !this.reconnectDeclined) {
 			// Refuse the advised stream without writing, so the retry layer can
 			// resubmit on a fresh session with no risk of duplication.
-			return Promise.resolve(err(reconnectAdvisedError()));
+			return err(reconnectAdvisedError());
 		}
 		if (this.terminalError) {
-			return Promise.resolve(err(this.terminalError));
+			return err(this.terminalError);
 		}
 		if (!this.http2Stream || this.http2Stream.closed) {
-			return Promise.resolve(
-				err(new S2Error({ message: "HTTP/2 stream is not open", status: 502 })),
+			return err(
+				new S2Error({ message: "HTTP/2 stream is not open", status: 502 }),
 			);
 		}
 
@@ -951,7 +936,7 @@ class S2SAppendSession implements TransportAppendSession {
 			? this.compression
 			: "none";
 		const bodyBytes = shouldCompress
-			? await compressFrameBody(protoBytes, this.compression)
+			? compressFrameBody(protoBytes, this.compression)
 			: protoBytes;
 
 		const frame = frameMessage({
@@ -968,14 +953,11 @@ class S2SAppendSession implements TransportAppendSession {
 			});
 
 			// Send the frame (pipelined - non-blocking)
-			this._effectSignalled = true;
+			onSend();
 			this.http2Stream!.write(frame, (writeErr) => {
 				if (writeErr) {
 					// Remove from pending acks on write error
 					this.pendingAcks.removeFirst((p) => p.resolve === resolve);
-					// Note: do NOT reset _effectSignalled here. The write call
-					// was attempted, so data may have partially entered the
-					// kernel buffer before the error was reported.
 					// Resolve with error result
 					resolve(err(s2Error(writeErr)));
 				}
@@ -985,29 +967,14 @@ class S2SAppendSession implements TransportAppendSession {
 	}
 
 	/**
-	 * Returns true if data may have been written to the HTTP/2 stream
-	 * since the last time pendingAcks was empty (dormant).
-	 */
-	effectSignalled(): boolean {
-		return this._effectSignalled;
-	}
-
-	/** Remove the abort listener from the caller-provided signal, if attached. */
-	private removeAbortListener(): void {
-		if (this.abortHandler && this.options?.signal) {
-			this.options.signal.removeEventListener("abort", this.abortHandler);
-		}
-		this.abortHandler = undefined;
-	}
-
-	/**
 	 * Close the append session.
 	 * Fails pending appends and cancels the stream, rather than waiting for
 	 * acks: the retry layer closes a session either once every append is
-	 * acknowledged, or to abandon a stalled attempt.
+	 * acknowledged, or to abandon a stalled attempt. `cancel` resets the
+	 * stream even with no pending acks, so the server cannot hold it open.
 	 * Never throws - returns CloseResult.
 	 */
-	async close(): Promise<CloseResult> {
+	async close(options?: { cancel?: boolean }): Promise<CloseResult> {
 		try {
 			this.closed = true;
 
@@ -1021,12 +988,8 @@ class S2SAppendSession implements TransportAppendSession {
 				await this.initPromise.catch(() => {});
 			}
 
-			// Detach from the caller-provided signal (init has now run, so the
-			// handler is registered if it ever will be).
-			this.removeAbortListener();
-
-			const cancel = this.pendingAcks.length > 0;
-			if (cancel) {
+			const abandoned = this.pendingAcks.length > 0;
+			if (abandoned) {
 				const error = abortedError("Append session closed with pending acks");
 				for (const pending of this.pendingAcks) {
 					pending.resolve(err(error));
@@ -1035,9 +998,9 @@ class S2SAppendSession implements TransportAppendSession {
 			}
 
 			// Client doesn't send a terminal frame for a clean close; reset the
-			// stream instead if acks were abandoned.
+			// stream instead if acks were abandoned or the caller cancels.
 			if (this.http2Stream && !this.http2Stream.closed) {
-				if (cancel) {
+				if (abandoned || options?.cancel) {
 					this.http2Stream.close(NGHTTP2_CANCEL);
 				} else {
 					this.http2Stream.end();
@@ -1055,12 +1018,13 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Returns AppendResult (never throws).
 	 * Pipelined: multiple submits can be in-flight; acks resolve FIFO.
 	 */
-	async submit(input: Types.AppendInput): Promise<AppendResult> {
+	async submit(
+		input: Types.AppendInput,
+		onSend: () => void,
+	): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
-			return err(
-				new S2Error({ message: "AppendSession is closed", status: 400 }),
-			);
+			return err(appendSessionClosedError());
 		}
 
 		// Lazy initialize HTTP/2 stream on first submit
@@ -1098,7 +1062,7 @@ class S2SAppendSession implements TransportAppendSession {
 			);
 		}
 
-		return this.sendBatch(input);
+		return this.sendBatch(input, onSend);
 	}
 }
 

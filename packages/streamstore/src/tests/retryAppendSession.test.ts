@@ -9,6 +9,7 @@ import type {
 	TransportAppendSession,
 } from "../lib/stream/types.js";
 import type { AppendAck, StreamPosition } from "../types.js";
+import { withinDeadline } from "./helpers.js";
 
 /**
  * Minimal controllable AppendSession for testing AppendSessionImpl.
@@ -121,7 +122,6 @@ class FakeTransportAppendSession implements TransportAppendSession {
 	public writes: Array<{ records: AppendRecord[]; args?: any }> = [];
 	private closed = false;
 	private ackIndex = 0;
-	private _effectSignalled = false;
 
 	constructor(
 		private readonly behavior: {
@@ -129,26 +129,17 @@ class FakeTransportAppendSession implements TransportAppendSession {
 			closeError?: S2Error; // if provided, close() returns error result
 			neverAck?: boolean; // if true, submit() hangs forever (for timeout tests)
 			customAcks?: AppendAck[]; // if provided, return these acks in sequence
-			effectSignalled?: boolean; // override effectSignalled() return value
+			unsent?: boolean; // if true, batches fail before reaching the server
 		} = {},
-	) {
-		if (behavior.effectSignalled !== undefined) {
-			this._effectSignalled = behavior.effectSignalled;
-		}
-	}
+	) {}
 
-	effectSignalled(): boolean {
-		return this._effectSignalled;
-	}
-
-	async submit(input: AppendInput): Promise<AppendResult> {
+	async submit(input: AppendInput, onSend?: () => void): Promise<AppendResult> {
 		if (this.closed) {
 			return err(new S2Error({ message: "session is closed", status: 400 }));
 		}
 
-		// Signal effect unless explicitly overridden by behavior
-		if (this.behavior.effectSignalled === undefined) {
-			this._effectSignalled = true;
+		if (!this.behavior.unsent) {
+			onSend?.();
 		}
 
 		if (this.behavior.submitError) {
@@ -177,8 +168,6 @@ class FakeTransportAppendSession implements TransportAppendSession {
 			this.ackIndex < this.behavior.customAcks.length
 		) {
 			const ack = this.behavior.customAcks[this.ackIndex++]!;
-			// Reset effect signal on successful ack (simulates dormancy)
-			this._effectSignalled = false;
 			return ok(ack);
 		}
 
@@ -188,8 +177,6 @@ class FakeTransportAppendSession implements TransportAppendSession {
 		const end: StreamPosition = { seqNum: count, timestamp: new Date(0) };
 		const tail: StreamPosition = { seqNum: count, timestamp: new Date(0) };
 		const ack: AppendAck = { start, end, tail };
-		// Reset effect signal on successful ack (simulates dormancy)
-		this._effectSignalled = false;
 		return ok(ack);
 	}
 
@@ -313,6 +300,63 @@ describe("AppendSessionImpl (unit)", () => {
 		});
 	});
 
+	it("keeps submit order when a later batch would fit before one waiting for capacity", async () => {
+		vi.useRealTimers();
+		const position = (seqNum: number) => ({ seqNum, timestamp: new Date(0) });
+		const transport = new FakeTransportAppendSession({
+			customAcks: [0, 1, 2].map((n) => ({
+				start: position(n),
+				end: position(n + 1),
+				tail: position(n + 1),
+			})),
+		});
+		const session = await AppendSessionImpl.create(async () => transport, {
+			maxInflightBytes: 1024 * 1024,
+		});
+		const batch = (body: string) =>
+			AppendInput.create([AppendRecord.string({ body })]);
+
+		// The second waits for capacity, which the third would fit in.
+		const tickets = await withinDeadline(
+			Promise.all([
+				session.submit(batch("a".repeat(600 * 1024))),
+				session.submit(batch("b".repeat(600 * 1024))),
+				session.submit(batch("c")),
+			]),
+		);
+		await withinDeadline(Promise.all(tickets.map((ticket) => ticket.ack())));
+		expect(
+			transport.writes.map(({ records }) => String(records[0]!.body)[0]),
+		).toEqual(["a", "b", "c"]);
+	});
+
+	// Detail bug_54158d21: a rejected transport submit() crashed the pump, so
+	// the session hung with no error.
+	it("fails the session when the transport's submit() rejects", async () => {
+		vi.useRealTimers();
+		const session = await AppendSessionImpl.create(
+			async () => ({
+				submit: async () => {
+					throw new Error("Message too large");
+				},
+				close: async () => okClose(),
+			}),
+			undefined,
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		await expect(withinDeadline(ticket.ack())).rejects.toMatchObject({
+			code: "SESSION_CLOSED",
+		});
+		expect(session.failureCause()?.message).toContain("Message too large");
+		await expect(withinDeadline(session.close())).rejects.toThrow(
+			"Message too large",
+		);
+	});
+
 	it("does not retry under noSideEffects policy when error may have side effects", async () => {
 		const error = new S2Error({
 			message: "boom",
@@ -419,20 +463,31 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
 	});
 
-	it("retries under noSideEffects when transport reports no effect signalled (dormant)", async () => {
+	it("retries under noSideEffects when the failing attempt never sent the batch", async () => {
 		let call = 0;
 		const session = await AppendSessionImpl.create(
 			async () => {
 				call++;
 				if (call === 1) {
-					// Transport that errors but reports no effect was signalled (dormant)
+					// Sent, but rejected with no side effects.
+					return new FakeTransportAppendSession({
+						submitError: new S2Error({
+							message: "rate limited",
+							status: 429,
+							code: "rate_limited",
+							origin: "server",
+						}),
+					});
+				}
+				if (call === 2) {
+					// Fails unsent: the first attempt's send must not count.
 					return new FakeTransportAppendSession({
 						submitError: new S2Error({
 							message: "stream closed",
 							status: 502,
 							origin: "server",
 						}),
-						effectSignalled: false, // No data was sent
+						unsent: true,
 					});
 				}
 				return new FakeTransportAppendSession();
@@ -441,7 +496,7 @@ describe("AppendSessionImpl (unit)", () => {
 			{
 				minBaseDelayMillis: 1,
 				maxBaseDelayMillis: 1,
-				maxAttempts: 2,
+				maxAttempts: 3,
 				appendRetryPolicy: "noSideEffects",
 			},
 		);
@@ -450,14 +505,14 @@ describe("AppendSessionImpl (unit)", () => {
 			AppendInput.create([AppendRecord.string({ body: "x" })]),
 		);
 		await Promise.resolve();
-		await vi.advanceTimersByTimeAsync(10);
+		await vi.advanceTimersByTimeAsync(20);
 		await Promise.resolve();
 		const ticket = await p;
 		const ack = await ticket.ack();
 		expect(ack.end.seqNum - ack.start.seqNum).toBe(1);
 	});
 
-	it("does not retry under noSideEffects when transport reports effect signalled", async () => {
+	it("does not retry under noSideEffects when the transport sent the batch", async () => {
 		const error = new S2Error({
 			message: "stream closed",
 			status: 502,
@@ -466,8 +521,7 @@ describe("AppendSessionImpl (unit)", () => {
 		const session = await AppendSessionImpl.create(
 			async () =>
 				new FakeTransportAppendSession({
-					submitError: error,
-					effectSignalled: true, // Data was sent, mutation may have occurred
+					submitError: error, // Sent, so a mutation may have occurred
 				}),
 			undefined,
 			{
@@ -499,7 +553,6 @@ describe("AppendSessionImpl (unit)", () => {
 									origin: "server",
 								}),
 								// Data reached the wire; only the drain contract makes this safe.
-								effectSignalled: true,
 							})
 						: new FakeTransportAppendSession();
 				sessions.push(s);

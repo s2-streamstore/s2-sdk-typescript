@@ -37,6 +37,7 @@ function makeMockAppendSession(opts: {
 			return new BatchSubmitTicket(ackPromise, 100, input.records.length);
 		},
 		close: async () => {},
+		failureCause: () => undefined,
 		readable: new ReadableStream(),
 		writable: new WritableStream(),
 		acks: new ReadableStream(),
@@ -81,6 +82,7 @@ describe("Issue #165: Producer.close() should propagate original error, not Type
 				});
 			},
 			close: async () => {},
+			failureCause: () => undefined,
 			readable: new ReadableStream(),
 			writable: new WritableStream(),
 			acks: new ReadableStream(),

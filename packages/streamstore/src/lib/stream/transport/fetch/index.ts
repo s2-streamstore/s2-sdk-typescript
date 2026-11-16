@@ -7,6 +7,7 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 
 import type { S2RequestOptions } from "../../../../common.js";
 import {
+	appendSessionClosedError,
 	RangeNotSatisfiableError,
 	S2Error,
 	s2Error,
@@ -395,41 +396,33 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
 export class FetchAppendSession implements TransportAppendSession {
-	private queue = new FifoQueue<Types.AppendInput>();
-	private pendingResolvers = new FifoQueue<{
+	// Unsent appends, sent one at a time.
+	private readonly pending = new FifoQueue<{
+		input: Types.AppendInput;
 		resolve: (result: AppendResult) => void;
+		onSend: () => void;
 	}>();
-	private _effectSignalled = false;
-	private readonly options?: S2RequestOptions;
 	private readonly stream: string;
-	private closed = false;
+	// Why the session sends nothing more: it closed, or an append failed.
+	private endedWith?: S2Error;
 	private processingPromise: Promise<void> | null = null;
 	private readonly client: Client;
-	// Cancels in-flight appends on close(), and follows the caller's signal.
+	// Cancels in-flight appends on close().
 	private readonly abortController = new AbortController();
-	private abortHandler?: () => void;
 
 	static async create(
 		stream: string,
 		transportConfig: TransportConfig,
 		sessionOptions?: AppendSessionOptions,
-		requestOptions?: S2RequestOptions,
 	): Promise<FetchAppendSession> {
-		return new FetchAppendSession(
-			stream,
-			transportConfig,
-			sessionOptions,
-			requestOptions,
-		);
+		return new FetchAppendSession(stream, transportConfig, sessionOptions);
 	}
 
 	private constructor(
 		stream: string,
 		transportConfig: TransportConfig,
 		sessionOptions?: AppendSessionOptions,
-		requestOptions?: S2RequestOptions,
 	) {
-		this.options = requestOptions;
 		this.stream = stream;
 		debug("[%s] FetchAppendSession created", stream);
 		const headers: Record<string, string> = {};
@@ -450,25 +443,6 @@ export class FetchAppendSession implements TransportAppendSession {
 			() => Redacted.value(transportConfig.accessToken),
 			headers,
 		);
-
-		const signal = requestOptions?.signal;
-		if (signal?.aborted) {
-			this.abortController.abort(signal.reason);
-		} else if (signal) {
-			// Removed on close: the retry layer reuses the caller's signal
-			// across many sessions, so an unremovable listener leaks.
-			this.abortHandler = () => this.abortController.abort(signal.reason);
-			signal.addEventListener("abort", this.abortHandler);
-		}
-	}
-
-	/**
-	 * Returns true if data may have been sent to the server since the
-	 * last time the session was dormant (queue fully drained with no errors).
-	 * Only resets after the processing loop completes successfully.
-	 */
-	effectSignalled(): boolean {
-		return this._effectSignalled;
 	}
 
 	/**
@@ -481,11 +455,7 @@ export class FetchAppendSession implements TransportAppendSession {
 	async close(): Promise<CloseResult> {
 		debug("[%s] FetchAppendSession close requested", this.stream);
 		try {
-			this.closed = true;
-			if (this.abortHandler) {
-				this.options?.signal?.removeEventListener("abort", this.abortHandler);
-				this.abortHandler = undefined;
-			}
+			this.endedWith ??= appendSessionClosedError();
 			// Fails the append in flight; the loop then fails the queued ones.
 			this.abortController.abort();
 			await this.processingPromise;
@@ -507,24 +477,21 @@ export class FetchAppendSession implements TransportAppendSession {
 	 * The request will be queued and sent when no other request is in-flight.
 	 * Never throws - returns AppendResult discriminated union.
 	 */
-	submit(input: Types.AppendInput): Promise<AppendResult> {
+	submit(input: Types.AppendInput, onSend: () => void): Promise<AppendResult> {
 		debug(
 			"[%s] FetchAppendSession.submit: records=%d, match_seq_num=%s, queueLen=%d",
 			this.stream,
 			input.records.length,
 			input.matchSeqNum ?? "none",
-			this.queue.length,
+			this.pending.length,
 		);
 
-		// Validate closed state
-		if (this.closed) {
+		if (this.endedWith) {
 			debug(
-				"[%s] FetchAppendSession.submit: session closed, rejecting",
+				"[%s] FetchAppendSession.submit: session ended, rejecting",
 				this.stream,
 			);
-			return Promise.resolve(
-				err(new S2Error({ message: "AppendSession is closed", status: 400 })),
-			);
+			return Promise.resolve(err(this.endedWith));
 		}
 
 		// Validate batch size limits (non-retryable 400-level error)
@@ -567,12 +534,11 @@ export class FetchAppendSession implements TransportAppendSession {
 		}
 
 		return new Promise((resolve) => {
-			this.queue.push(input);
-			this.pendingResolvers.push({ resolve });
+			this.pending.push({ input, resolve, onSend });
 			debug(
 				"[%s] FetchAppendSession.submit: queued, queueLen=%d",
 				this.stream,
-				this.queue.length,
+				this.pending.length,
 			);
 
 			// Start processing if not already running
@@ -589,9 +555,12 @@ export class FetchAppendSession implements TransportAppendSession {
 	 */
 	private async processLoop(): Promise<void> {
 		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
-		while (this.queue.length > 0) {
-			const input = this.queue.shift()!;
-			const resolver = this.pendingResolvers.shift()!;
+		while (this.pending.length > 0) {
+			if (this.endedWith) {
+				this.failPending(this.endedWith);
+				break;
+			}
+			const { input, resolve, onSend } = this.pending.shift()!;
 
 			debug(
 				"[%s] FetchAppendSession.processLoop: sending %d records, match_seq_num=%s",
@@ -600,15 +569,13 @@ export class FetchAppendSession implements TransportAppendSession {
 				input.matchSeqNum ?? "none",
 			);
 
-			// Mark effect before sending — data is about to enter the network
-			this._effectSignalled = true;
+			onSend();
 
 			try {
 				const preferProtobuf = input.records.some(
 					(record) => computeAppendRecordFormat(record) === "bytes",
 				);
 				const appendOptions = {
-					...this.options,
 					signal: this.abortController.signal,
 					preferProtobuf,
 				};
@@ -628,7 +595,7 @@ export class FetchAppendSession implements TransportAppendSession {
 				);
 
 				// Resolve with success result
-				resolver.resolve(ok(ack));
+				resolve(ok(ack));
 			} catch (error) {
 				// Convert error to S2Error and resolve with error result
 				const s2Err = s2Error(error);
@@ -640,38 +607,26 @@ export class FetchAppendSession implements TransportAppendSession {
 					s2Err.message,
 				);
 
-				// Note: do NOT reset _effectSignalled here. The fetch was
-				// attempted, so data may have reached the server before the
-				// error was reported. The flag stays true until the session
-				// is recreated by the retry layer.
-
-				// Resolve this request with error
-				resolver.resolve(err(s2Err));
-
-				// Resolve all remaining pending promises with the same error
-				// (transport failure affects all queued requests)
-				debug(
-					"[%s] FetchAppendSession.processLoop: failing %d queued requests",
-					this.stream,
-					this.pendingResolvers.length,
-				);
-				for (const pendingResolver of this.pendingResolvers) {
-					pendingResolver.resolve(err(s2Err));
-				}
-				this.pendingResolvers.clear();
-
-				// Clear the queue
-				this.queue.clear();
-
-				this.processingPromise = null;
-				return;
+				// The loop then fails the queued requests with the same error.
+				resolve(err(s2Err));
+				this.endedWith ??= s2Err;
 			}
 		}
 
-		// Queue fully drained with no errors — session is dormant
-		this._effectSignalled = false;
 		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
+	}
+
+	private failPending(error: S2Error): void {
+		debug(
+			"[%s] FetchAppendSession.processLoop: failing %d queued requests",
+			this.stream,
+			this.pending.length,
+		);
+		for (const queued of this.pending) {
+			queued.resolve(err(error));
+		}
+		this.pending.clear();
 	}
 }
 
@@ -713,13 +668,12 @@ export class FetchTransport implements SessionTransport {
 					stream,
 					this.transportConfig,
 					myOptions,
-					requestOptions,
 				);
 			},
 			sessionOptions,
 			this.transportConfig.retry,
 			stream, // Pass stream name for debug context
-			this.sessions,
+			{ signal: requestOptions?.signal, sessions: this.sessions },
 		);
 	}
 

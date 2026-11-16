@@ -2,6 +2,7 @@ import * as zlib from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
 	acceptEncodingHeader,
+	assertCompressionSupported,
 	compressFrameBody,
 	decompressFrameBody,
 } from "../lib/stream/transport/s2s/compression.js";
@@ -39,7 +40,8 @@ describe("s2s frame compression round-trip", () => {
 			"the quick brown fox jumps over the lazy dog ".repeat(100),
 		);
 
-		const compressed = await compressFrameBody(payload, alg);
+		await assertCompressionSupported(alg);
+		const compressed = compressFrameBody(payload, alg);
 		expect(compressed).not.toEqual(payload);
 
 		const frame = frameMessage({
@@ -63,7 +65,7 @@ describe("s2s frame compression round-trip", () => {
 
 	it("passes through none compression unchanged", async () => {
 		const payload = new Uint8Array([1, 2, 3, 4, 5]);
-		expect(await compressFrameBody(payload, "none")).toBe(payload);
+		expect(compressFrameBody(payload, "none")).toBe(payload);
 		expect(decompressFrameBody(payload, "none")).toBe(payload);
 	});
 
@@ -148,7 +150,7 @@ describe("s2s frame compression round-trip", () => {
 	});
 
 	it("rejects decompressed payloads over the 2 MiB payload limit", async () => {
-		await compressFrameBody(new Uint8Array(1024), "gzip");
+		await assertCompressionSupported("gzip");
 		const oversized = new Uint8Array(MAX_DECOMPRESSED_PAYLOAD_BYTES + 1);
 		const compressed = zlib.gzipSync(oversized);
 

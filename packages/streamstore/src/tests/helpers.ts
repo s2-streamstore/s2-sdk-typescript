@@ -12,7 +12,10 @@ import {
 	type ServerHttp2Stream,
 } from "node:http2";
 import type { AddressInfo } from "node:net";
+import { afterEach } from "vitest";
+import * as Proto from "../generated/proto/s2.js";
 import type { S2 } from "../index.js";
+import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 
 export const TEST_TIMEOUT_MS = 120_000;
 
@@ -89,7 +92,44 @@ export async function waitFor(
 /** A local server on a free port. */
 export interface LocalServer {
 	origin: string;
+	/** Requests not yet closed by either side. */
+	open: () => number;
 	close: () => Promise<void>;
+}
+
+/**
+ * Returns a function that registers a cleanup to run after each test, in the
+ * order registered. Register servers first, so a client that cannot close
+ * cleanly is not left waiting on a live server.
+ */
+export function cleanupAfterEach(): (cleanup: () => Promise<unknown>) => void {
+	const cleanups: Array<() => Promise<unknown>> = [];
+	afterEach(async () => {
+		for (const cleanup of cleanups.splice(0)) {
+			await cleanup().catch(() => {});
+		}
+	});
+	return (cleanup) => {
+		cleanups.push(cleanup);
+	};
+}
+
+/** An s2s frame acking the records from `start` up to `end`. */
+export function s2sAckFrame(start: number, end: number): Buffer {
+	const position = (seqNum: number) => ({
+		seqNum: BigInt(seqNum),
+		timestamp: 1n,
+	});
+	return Buffer.from(
+		frameMessage({
+			terminal: false,
+			body: Proto.AppendAck.toBinary({
+				start: position(start),
+				end: position(end),
+				tail: position(end),
+			}),
+		}),
+	);
 }
 
 function listen(server: Server | Http2Server): Promise<string> {
@@ -118,6 +158,7 @@ export async function serveHttp2(
 	const server = createHttp2Server();
 	const openSessions = new Set<ServerHttp2Session>();
 	let sessionCount = 0;
+	let open = 0;
 	server.on("sessionError", () => {});
 	server.on("session", (session) => {
 		sessionCount++;
@@ -126,6 +167,8 @@ export async function serveHttp2(
 		session.on("close", () => openSessions.delete(session));
 	});
 	server.on("stream", (stream, headers) => {
+		open++;
+		stream.on("close", () => open--);
 		stream.on("error", () => {});
 		onStream(stream, headers);
 	});
@@ -133,6 +176,7 @@ export async function serveHttp2(
 		origin: await listen(server),
 		sessionCount: () => sessionCount,
 		openSessions,
+		open: () => open,
 		close: () =>
 			new Promise<void>((resolve) => {
 				for (const session of openSessions) session.destroy();
@@ -157,6 +201,7 @@ export async function serveHttp1(
 	});
 	return {
 		origin: await listen(server),
+		open: () => responses.size,
 		close: () =>
 			new Promise<void>((resolve) => {
 				for (const res of responses) res.destroy();

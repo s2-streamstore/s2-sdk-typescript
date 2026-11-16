@@ -303,6 +303,8 @@ for await (const record of readSession) {
 
 To stop a read session early, break out of its loop, or abort the `signal` passed to `readSession()`. An aborted session throws an `S2Error` with code `ABORTED`.
 
+To stop an append session, abort the `signal` passed to `appendSession()`: appends that may have reached the server reject with code `ABORTED`. Once an append session fails, appends it never sent and later ones reject with code `SESSION_CLOSED`, as do unsent `Producer` records. The error's `cause`, or `failureCause()`, gives the reason.
+
 `stream.close()` ends every session opened from that handle, then releases its connection: read sessions throw `ABORTED`, and append sessions finish their inflight appends, as `appendSession.close()` does.
 
 ## Client configuration

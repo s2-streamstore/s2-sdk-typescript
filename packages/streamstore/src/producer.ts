@@ -1,6 +1,6 @@
 import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
-import { S2Error } from "./error.js";
+import { appendSessionClosedError, S2Error } from "./error.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import { type AppendAck, AppendInput, type AppendRecord } from "./types.js";
 
@@ -198,8 +198,9 @@ export class Producer implements AsyncDisposable {
 			while (true) {
 				const { value: batch, done } = await this.transformReader.read();
 
-				if (done) {
-					debugProducer("[%s] pump done (transform closed)", this.debugName);
+				// After a failure, fail() has already rejected this batch's records.
+				if (done || this.terminalError) {
+					debugProducer("[%s] pump done", this.debugName);
 					// Await all pending ack handlers before exiting
 					if (!this.terminalError && pendingAckHandlers.size > 0) {
 						debugProducer(
@@ -220,17 +221,17 @@ export class Producer implements AsyncDisposable {
 					this.inflightRecords.length,
 				);
 
-				// Associate records with this batch (FIFO correspondence)
+				// Records map to batches in order. This batch's outcome now settles
+				// these.
 				const recordCount = batch.records.length;
-				const associatedRecords = this.inflightRecords.splice(0, recordCount);
-
-				if (associatedRecords.length !== recordCount) {
+				if (this.inflightRecords.length < recordCount) {
 					throw new S2Error({
-						message: `Internal error: flushed ${recordCount} records but only ${associatedRecords.length} inflight entries`,
+						message: `Internal error: flushed ${recordCount} records but only ${this.inflightRecords.length} inflight entries`,
 						status: 500,
 						origin: "sdk",
 					});
 				}
+				const associatedRecords = this.inflightRecords.splice(0, recordCount);
 
 				// Submit to AppendSession (blocks on capacity)
 				let ticket: BatchSubmitTicket;
@@ -250,6 +251,8 @@ export class Producer implements AsyncDisposable {
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
+					// Never sent: fail() rejects these with the records still waiting.
+					this.inflightRecords.unshift(...associatedRecords);
 					const error = this.fail(err);
 					debugProducer(
 						"[%s] pump submit error: %s",
@@ -285,7 +288,11 @@ export class Producer implements AsyncDisposable {
 						}
 					})
 					.catch((err) => {
-						const error = this.fail(err);
+						const error = toS2Error(err);
+						for (const record of associatedRecords) {
+							record.rejectAck(error);
+						}
+						this.fail(error);
 						debugProducer(
 							"[%s] pump ack error: %s",
 							this.debugName,
@@ -297,25 +304,6 @@ export class Producer implements AsyncDisposable {
 					});
 				pendingAckHandlers.add(ackHandler);
 			}
-
-			// After the loop exits with an error, cancel the transform reader
-			// so pending transformWriter.write() calls are unblocked (they will
-			// reject, causing submit() to throw). Then reject any remaining
-			// inflight records whose ack promises would otherwise hang.
-			if (this.terminalError) {
-				this.transformReader.cancel(this.terminalError).catch(() => {});
-
-				if (this.inflightRecords.length > 0) {
-					debugProducer(
-						"[%s] pump exited with error, rejecting %d remaining inflight records",
-						this.debugName,
-						this.inflightRecords.length,
-					);
-					for (const record of this.inflightRecords.splice(0)) {
-						record.rejectAck(this.terminalError);
-					}
-				}
-			}
 		} catch (err) {
 			const error = this.fail(err);
 			debugProducer(
@@ -323,8 +311,6 @@ export class Producer implements AsyncDisposable {
 				this.debugName,
 				error.message,
 			);
-
-			this.inflightRecords.splice(0);
 		}
 	}
 
@@ -445,12 +431,7 @@ export class Producer implements AsyncDisposable {
 				err,
 			);
 
-			// Remove from inflight if the write failed
-			const idx = this.inflightRecords.indexOf(entry);
-			if (idx >= 0) {
-				this.inflightRecords.splice(idx, 1);
-			}
-
+			// Also rejects this record, still in inflightRecords.
 			const error = this.fail(err);
 			throw error;
 		}
@@ -467,7 +448,7 @@ export class Producer implements AsyncDisposable {
 	 * further submissions. Submissions queued after this call are excluded, unless
 	 * earlier writes to `writable` were still queued in the stream, in which case
 	 * they may be included. If an append included in this flush fails, this
-	 * throws the same terminal error as its record ticket.
+	 * throws the error the Producer failed with.
 	 */
 	flush(): Promise<void> {
 		return this.enqueueAfterWritable(async () => {
@@ -538,12 +519,19 @@ export class Producer implements AsyncDisposable {
 
 	private fail(cause: unknown): S2Error {
 		if (!this.terminalError) {
-			this.terminalError = toS2Error(cause);
+			// The session's own error, not the SESSION_CLOSED a later batch gets.
+			this.terminalError = toS2Error(
+				this.appendSession.failureCause() ?? cause,
+			);
 		}
 		const error = this.terminalError;
 
-		for (const entry of this.pendingAckEntries) {
-			entry.rejectAck(error);
+		// Sent records settle from their batch's ack. These were never sent.
+		if (this.inflightRecords.length > 0) {
+			const unsentError = appendSessionClosedError(error);
+			for (const record of this.inflightRecords.splice(0)) {
+				record.rejectAck(unsentError);
+			}
 		}
 		this.transformReader.cancel(error).catch(() => {});
 
@@ -583,7 +571,6 @@ export class Producer implements AsyncDisposable {
 					origin: "sdk",
 				}),
 			);
-			this.inflightRecords.splice(0);
 		}
 
 		// Close the readable stream

@@ -63,21 +63,23 @@ export interface AcksStream
 /**
  * Low-level append session implemented by transports.
  *
- * - Never throws: errors are encoded in the returned {@link AppendResult}.
+ * - Returns errors in the {@link AppendResult}; a rejection is treated as one.
+ * - Sends nothing once a sent append has failed: the retry layer resends on
+ *   a new session.
  * - Does not implement retry or backpressure; those are added by {@link AppendSession}.
  */
 export interface TransportAppendSession {
-	submit(input: Types.AppendInput): Promise<Result.AppendResult>;
-	close(): Promise<Result.CloseResult>;
 	/**
-	 * Returns true if data may have been sent to the server since the last
-	 * time the session was dormant (zero pending acks).
-	 *
-	 * Used by the retry layer under the `noSideEffects` policy: when false,
-	 * it is safe to retry even errors that could otherwise indicate a
-	 * mutation, because no bytes left the client.
+	 * Send `input`, calling `onSend` before any of it can reach the server. A
+	 * batch that fails without calling `onSend` was never sent, so is safe to
+	 * retry.
 	 */
-	effectSignalled(): boolean;
+	submit(
+		input: Types.AppendInput,
+		onSend: () => void,
+	): Promise<Result.AppendResult>;
+	/** Close the session. `cancel` ends it without letting the server finish. */
+	close(options?: { cancel?: boolean }): Promise<Result.CloseResult>;
 }
 
 export class BatchSubmitTicket {
@@ -128,6 +130,9 @@ export interface AppendSession extends AsyncDisposable {
 	 * Returns a promise that resolves to a submit ticket once the batch is enqueued (has capacity).
 	 * Call ticket.ack() to get a promise for the AppendAck once the batch is durable.
 	 * This method applies backpressure and will block if capacity limits are reached.
+	 * Rejects with code `SESSION_CLOSED` once the session has closed or failed.
+	 * If the session fails, the ticket's ack() rejects with its error if the
+	 * batch may have reached the server, and otherwise with `SESSION_CLOSED`.
 	 */
 	submit(input: Types.AppendInput): Promise<BatchSubmitTicket>;
 	/**

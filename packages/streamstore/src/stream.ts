@@ -265,6 +265,11 @@ export class S2Stream {
 	 * `sessionOptions.streamConfig` is sent whenever the session connects and is
 	 * applied only if the append auto-creates the stream.
 	 *
+	 * Aborting `requestOptions.signal` fails the session with code `ABORTED`,
+	 * without retrying: `appendSession()` rejects if it has already aborted, and
+	 * otherwise appends that may have reached the server do. As after any
+	 * failure, other appends reject with code `SESSION_CLOSED`.
+	 *
 	 * @param sessionOptions Options that control append session behavior
 	 * @param requestOptions Optional request options
 	 */
