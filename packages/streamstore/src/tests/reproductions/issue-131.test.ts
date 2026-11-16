@@ -5,10 +5,10 @@ import { canSetUserAgentHeader } from "../../lib/stream/runtime.js";
  * Issue #131: canSetUserAgentHeader is too conservative.
  *
  * Only browsers enforce the Fetch spec's "forbidden header name" restriction
- * that prevents setting User-Agent. Server-side runtimes (Node, Bun, Deno,
+ * that prevents setting User-Agent. Server-side runtimes (Node, Bun,
  * Cloudflare Workers) all allow it. The old implementation used an allowlist
- * (only Node and Bun returned true), which meant Deno, workerd, and unknown
- * server runtimes unnecessarily omitted the User-Agent header.
+ * (only Node and Bun returned true), which meant workerd and unknown server
+ * runtimes unnecessarily omitted the User-Agent header.
  *
  * The fix switches to a blocklist: only "browser" returns false.
  */
@@ -20,10 +20,6 @@ describe("Issue #131: canSetUserAgentHeader should allow all non-browser runtime
 
 	it("returns true for bun", () => {
 		expect(canSetUserAgentHeader("bun")).toBe(true);
-	});
-
-	it("returns true for deno", () => {
-		expect(canSetUserAgentHeader("deno")).toBe(true);
 	});
 
 	it("returns true for workerd (Cloudflare Workers)", () => {

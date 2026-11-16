@@ -78,22 +78,11 @@ export const createClient = (config: Config = {}): Client => {
   const request: Client['request'] = async (options) => {
     // @ts-expect-error
     const { opts, url } = await beforeRequest(options);
-    const requestInit = {
-      redirect: opts.redirect ?? 'follow',
-      cache: opts.cache,
-      credentials: opts.credentials,
-      headers: opts.headers,
-      integrity: opts.integrity,
-      keepalive: opts.keepalive,
-      method: opts.method,
-      mode: opts.mode,
-      priority: opts.priority,
-      referrer: opts.referrer,
-      referrerPolicy: opts.referrerPolicy,
-      signal: opts.signal,
+    const requestInit: ReqInit = {
+      redirect: 'follow',
+      ...opts,
       body: getValidRequestBody(opts),
-      ...('duplex' in opts ? { duplex: (opts as any).duplex } : undefined),
-    } as ReqInit;
+    };
 
     let request = new Request(url, requestInit);
 

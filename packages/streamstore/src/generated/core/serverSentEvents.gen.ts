@@ -126,16 +126,8 @@ export const createSseClient = <TData = unknown>({
 
       try {
         const requestInit: RequestInit = {
-          redirect: options.redirect ?? 'follow',
-          cache: options.cache,
-          credentials: options.credentials,
-          integrity: options.integrity,
-          keepalive: options.keepalive,
-          method: options.method,
-          mode: options.mode,
-          priority: options.priority,
-          referrer: options.referrer,
-          referrerPolicy: options.referrerPolicy,
+          redirect: 'follow',
+          ...options,
           body: options.serializedBody,
           headers,
           signal,

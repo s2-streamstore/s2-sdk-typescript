@@ -677,7 +677,7 @@ export class FetchAppendSession implements TransportAppendSession {
 
 /**
  * Fetch-based transport using HTTP/1.1 + JSON
- * Works in all JavaScript environments (browser, Node.js, Deno, etc.)
+ * Works in all JavaScript environments (browser, Node.js, Bun, etc.)
  */
 export class FetchTransport implements SessionTransport {
 	private readonly client: Client;
