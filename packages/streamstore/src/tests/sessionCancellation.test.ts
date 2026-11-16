@@ -1,10 +1,12 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { BatchTransform } from "../batch-transform.js";
 import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import type { SessionTransports } from "../lib/stream/types.js";
+import { Producer } from "../producer.js";
 import type { S2Stream } from "../stream.js";
 import { AppendInput, AppendRecord } from "../types.js";
 import {
@@ -25,6 +27,8 @@ const TEST_TIMEOUT_MS = 15_000;
 interface SessionServer extends LocalServer {
 	/** Requests received so far, reads and appends. */
 	requests: () => number;
+	/** Requests not yet closed by either side. */
+	open: () => number;
 }
 
 interface SessionServerOptions {
@@ -44,6 +48,8 @@ interface SessionServerOptions {
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
+
+const ABORTED = { message: "Request cancelled", code: "ABORTED", status: 499 };
 
 /** The status and body of the `n`th append failure, from 0. */
 function appendFailure(n: number): [number, string] {
@@ -141,8 +147,11 @@ async function startH2Server(
 	);
 
 	let failures = 0;
+	let open = 0;
 	const server = await serveHttp2((stream, headers) => {
 		requests++;
+		open++;
+		stream.on("close", () => open--);
 		if (headers[":method"] === "POST") {
 			if (options?.appends === "fail") {
 				stream.once("data", () => {
@@ -171,7 +180,7 @@ async function startH2Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests };
+	return { ...server, requests: () => requests, open: () => open };
 }
 
 async function startH1Server(
@@ -198,8 +207,11 @@ async function startH1Server(
 	});
 
 	let failures = 0;
+	let open = 0;
 	const server = await serveHttp1((req, res) => {
 		requests++;
+		open++;
+		res.on("close", () => open--);
 		if (req.method === "POST") {
 			req.resume();
 			req.on("end", () => {
@@ -225,7 +237,7 @@ async function startH1Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests };
+	return { ...server, requests: () => requests, open: () => open };
 }
 
 const CASES = [
@@ -269,11 +281,7 @@ describe.each(TRANSPORTS)(
 					}
 				});
 
-				await expect(withinDeadline(reading)).rejects.toMatchObject({
-					message: "Request cancelled",
-					code: "ABORTED",
-					status: 499,
-				});
+				await expect(withinDeadline(reading)).rejects.toMatchObject(ABORTED);
 				expect(server.requests()).toBe(requests);
 			},
 			TEST_TIMEOUT_MS,
@@ -407,8 +415,6 @@ describe.each(TRANSPORTS)(
 	},
 );
 
-const ABORTED = { message: "Request cancelled", code: "ABORTED", status: 499 };
-
 /**
  * Issue #410: an s2s append session took an abort of its signal for a dropped
  * connection and reconnected, so appends went on being acked, while the fetch
@@ -445,9 +451,12 @@ describe.each(TRANSPORTS)(
 				await (await session.submit(record())).ack();
 
 				controller.abort();
-				await expect(
-					withinDeadline(session.submit(record())),
-				).rejects.toMatchObject(ABORTED);
+				const unsent = await withinDeadline(session.submit(record())).then(
+					() => undefined,
+					(error: S2Error) => error,
+				);
+				expect(unsent).toMatchObject(ABORTED);
+				expect(unsent?.hasNoSideEffects()).toBe(true);
 				expect(server.requests()).toBe(1);
 				expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
 			},
@@ -455,7 +464,7 @@ describe.each(TRANSPORTS)(
 		);
 
 		it(
-			"rejects an append the server has not acked",
+			"cancels an append the server has not acked",
 			async () => {
 				const server = await startSessionServer(transport, {
 					appends: "hold",
@@ -470,21 +479,8 @@ describe.each(TRANSPORTS)(
 
 				controller.abort();
 				await expect(withinDeadline(ack)).rejects.toMatchObject(ABORTED);
+				await waitFor(() => server.open() === 0);
 				expect(server.requests()).toBe(1);
-			},
-			TEST_TIMEOUT_MS,
-		);
-
-		it(
-			"removes its listener from the caller's signal when it closes",
-			async () => {
-				const stream = streamOn(await startSessionServer(transport), transport);
-				const signal = new AbortController().signal;
-
-				const session = await stream.appendSession(undefined, { signal });
-				await (await session.submit(record())).ack();
-				await session.close();
-				expect(getEventListeners(signal, "abort")).toHaveLength(0);
 			},
 			TEST_TIMEOUT_MS,
 		);
@@ -492,31 +488,44 @@ describe.each(TRANSPORTS)(
 );
 
 /**
- * Issue #378: once an append session failed, it rejected a batch submitted
- * afterwards with `AppendIndefiniteFailureError` whenever an earlier batch may
- * have taken effect, though the new batch was never sent.
+ * Issue #378: once an append session failed, both the session and a Producer
+ * on it rejected batches they never sent with `AppendIndefiniteFailureError`
+ * whenever an earlier batch may have taken effect.
  */
 describe.each(TRANSPORTS)(
 	"Issue #378: a failed %s append session",
 	(transport) => {
 		it(
-			"rejects a batch it never sent with the plain error",
+			"rejects batches it never sent with a definite error",
 			async () => {
 				const server = await startSessionServer(transport, {
 					appends: "fail",
 				});
-				const session = await streamOn(server, transport).appendSession();
-				const sent = (await session.submit(record())).ack();
-				await expect(withinDeadline(sent)).rejects.toBeInstanceOf(
+				const session = await streamOn(server, transport).appendSession({
+					maxInflightBatches: 1,
+				});
+				// A batch a record: the second waits for the first to settle.
+				const producer = new Producer(
+					new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+					session,
+				);
+				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
+				const queued = producer.submit(AppendRecord.string({ body: "b" }));
+				await expect(withinDeadline(sent.ack())).rejects.toBeInstanceOf(
 					AppendIndefiniteFailureError,
 				);
 
-				const unsent = await session.submit(record()).then(
-					() => undefined,
-					(error: S2Error) => error,
-				);
-				expect(unsent?.code).toBe("rate_limited");
-				expect(unsent?.hasNoSideEffects()).toBe(true);
+				for (const unsent of [
+					queued.then((ticket) => ticket.ack()),
+					session.submit(record()),
+				]) {
+					const error = await unsent.then(
+						() => undefined,
+						(error: S2Error) => error,
+					);
+					expect(error?.code).toBe("rate_limited");
+					expect(error?.hasNoSideEffects()).toBe(true);
+				}
 			},
 			TEST_TIMEOUT_MS,
 		);

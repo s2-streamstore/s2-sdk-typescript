@@ -7,6 +7,7 @@ import {
 	RECONNECT_ADVISED_CODE,
 	S2Error,
 	s2Error,
+	unsentAppendError,
 	withPriorUncertainty,
 	withS2Error,
 } from "../error.js";
@@ -934,11 +935,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private pumpWakeup?: () => void;
 	private closed = false;
 	private fatalError?: S2Error;
-	// What batches submitted after the session failed are rejected with: the
-	// plain error, as they were never sent and cannot have taken effect.
+	// What batches the failed session never sent are rejected with.
 	private unsentError?: S2Error;
 	// Aborted with the session, to cut short a retry backoff.
-	private readonly stopped = new AbortController();
+	private readonly aborted = new AbortController();
 
 	private _lastAckedPosition?: Types.AppendAck;
 	private acksController?: ReadableStreamDefaultController<Types.AppendAck>;
@@ -951,8 +951,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private readonly streamName: string;
 
 	/**
-	 * If the session has failed, returns the original fatal error that caused
-	 * the pump to stop. Returns undefined when the session has not failed.
+	 * If the session has failed, returns the error it failed with, as the acks
+	 * stream and `close()` report it: an {@link AppendIndefiniteFailureError}
+	 * if an inflight append may have taken effect in an earlier attempt.
+	 * Returns undefined when the session has not failed.
 	 */
 	failureCause(): S2Error | undefined {
 		return this.fatalError;
@@ -1430,7 +1432,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					this.currentAttempt,
 					allowedRetries,
 				);
-				await sleep(delay, this.stopped.signal);
+				await sleep(delay, this.aborted.signal);
 				continue;
 			}
 
@@ -1748,7 +1750,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.retryConfig.maxBaseDelayMillis,
 			);
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
-		await sleep(delay, this.stopped.signal);
+		await sleep(delay, this.aborted.signal);
 
 		// Check if aborted during backoff sleep
 		if (this.pumpStopped) {
@@ -1864,9 +1866,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		);
 		const sessionError = withPriorUncertainty(error, anyUncertain);
 		this.fatalError = sessionError;
-		this.unsentError = error;
+		this.unsentError = unsentAppendError(error);
 		this.pumpStopped = true;
-		this.stopped.abort();
+		this.aborted.abort();
 
 		// Wake pump if it's sleeping so it can check the pumpStopped flag
 		if (this.pumpWakeup) {
@@ -1882,7 +1884,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		for (const entry of this.inflight) {
 			if (entry.maybeResolve) {
 				entry.maybeResolve(
-					err(withPriorUncertainty(error, entry.priorUncertainty ?? false)),
+					err(
+						entry.needsSubmit
+							? this.unsentError
+							: withPriorUncertainty(error, entry.priorUncertainty ?? false),
+					),
 				);
 			}
 		}

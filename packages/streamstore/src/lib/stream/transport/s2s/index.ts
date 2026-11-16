@@ -944,6 +944,14 @@ class S2SAppendSession implements TransportAppendSession {
 			body: bodyBytes,
 		});
 
+		// close() may have run while the stream was opening or the body was
+		// compressed; writing now would send a batch the caller gave up on.
+		if (this.closed) {
+			return err(
+				new S2Error({ message: "AppendSession is closed", status: 400 }),
+			);
+		}
+
 		// Track pending ack - this promise resolves when the ack is received (FIFO)
 		return new Promise((resolve) => {
 			this.pendingAcks.push({

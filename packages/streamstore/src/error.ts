@@ -345,6 +345,41 @@ export function withPriorUncertainty(
 	return error;
 }
 
+/** A cancellation of an append that was never sent. */
+class UnsentAbortError extends S2Error {
+	constructor(cause: S2Error) {
+		super({
+			message: cause.message,
+			code: cause.code,
+			status: cause.status,
+			data: cause.data,
+			origin: cause.origin,
+		});
+		this.cause = cause;
+	}
+
+	override hasNoSideEffects(): boolean {
+		return true;
+	}
+}
+
+/**
+ * The error for an append that failed before it was sent. An
+ * {@link AppendIndefiniteFailureError} is unwrapped, as its uncertainty
+ * belongs to appends that were sent. An `ABORTED` error is copied to report
+ * no side effects, which it cannot rule out for an append that was sent.
+ * Other errors are kept as they are, so their type is too.
+ */
+export function unsentAppendError(error: S2Error): S2Error {
+	const final =
+		error instanceof AppendIndefiniteFailureError
+			? error.finalAttemptError
+			: error;
+	return final.code === "ABORTED" && !final.hasNoSideEffects()
+		? new UnsentAbortError(final)
+		: final;
+}
+
 /** Helper: construct a non-retryable invariant violation error (status 0). */
 export function invariantViolation(
 	message: string,

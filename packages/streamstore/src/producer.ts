@@ -1,6 +1,6 @@
 import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
-import { S2Error } from "./error.js";
+import { S2Error, unsentAppendError } from "./error.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import { type AppendAck, AppendInput, type AppendRecord } from "./types.js";
 
@@ -56,6 +56,11 @@ type InflightRecord = {
 	ackPromise: Promise<IndexedAppendAck>;
 	resolveAck: (ack: IndexedAppendAck) => void;
 	rejectAck: (err: S2Error) => void;
+	/**
+	 * How far the record's batch got: being submitted, which settles it either
+	 * way, or sent, whose ack settles it.
+	 */
+	stage?: "submitting" | "sent";
 };
 
 /**
@@ -246,10 +251,19 @@ export class Producer implements AsyncDisposable {
 						fencingToken: batch.fencingToken,
 						matchSeqNum: batch.matchSeqNum,
 					});
+					for (const record of associatedRecords) {
+						record.stage = "submitting";
+					}
 					ticket = await this.appendSession.submit(input);
+					for (const record of associatedRecords) {
+						record.stage = "sent";
+					}
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
+					for (const record of associatedRecords) {
+						record.stage = undefined;
+					}
 					const error = this.fail(err);
 					debugProducer(
 						"[%s] pump submit error: %s",
@@ -285,6 +299,9 @@ export class Producer implements AsyncDisposable {
 						}
 					})
 					.catch((err) => {
+						for (const record of associatedRecords) {
+							record.rejectAck(toS2Error(err));
+						}
 						const error = this.fail(err);
 						debugProducer(
 							"[%s] pump ack error: %s",
@@ -312,7 +329,7 @@ export class Producer implements AsyncDisposable {
 						this.inflightRecords.length,
 					);
 					for (const record of this.inflightRecords.splice(0)) {
-						record.rejectAck(this.terminalError);
+						record.rejectAck(unsentAppendError(this.terminalError));
 					}
 				}
 			}
@@ -467,7 +484,7 @@ export class Producer implements AsyncDisposable {
 	 * further submissions. Submissions queued after this call are excluded, unless
 	 * earlier writes to `writable` were still queued in the stream, in which case
 	 * they may be included. If an append included in this flush fails, this
-	 * throws the same terminal error as its record ticket.
+	 * throws the error the Producer failed with.
 	 */
 	flush(): Promise<void> {
 		return this.enqueueAfterWritable(async () => {
@@ -543,7 +560,13 @@ export class Producer implements AsyncDisposable {
 		const error = this.terminalError;
 
 		for (const entry of this.pendingAckEntries) {
-			entry.rejectAck(error);
+			if (entry.stage === undefined) {
+				entry.rejectAck(unsentAppendError(error));
+			} else if (entry.stage === "sent" && !error.hasNoSideEffects()) {
+				entry.rejectAck(error);
+			}
+			// Otherwise the record's own batch settles it: `error` may say it
+			// had no side effects, which need not hold for that batch.
 		}
 		this.transformReader.cancel(error).catch(() => {});
 
