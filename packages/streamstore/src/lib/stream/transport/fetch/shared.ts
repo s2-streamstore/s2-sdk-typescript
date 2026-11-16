@@ -26,8 +26,14 @@ import type {
 const loadProtoCodec = async () => {
 	try {
 		return await import("../proto.js");
-	} catch (error) {
-		throw s2Error(error);
+	} catch (cause) {
+		// Not s2Error: a browser may word a failed import like a failed fetch,
+		// which s2Error would treat as a retryable network error.
+		const error = new S2Error({
+			message: `Failed to load the protobuf codec: ${cause instanceof Error ? cause.message : String(cause)}`,
+		});
+		error.cause = cause;
+		throw error;
 	}
 };
 
