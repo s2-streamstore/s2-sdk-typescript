@@ -102,7 +102,8 @@ export function s2Error(error: any): S2Error {
 		});
 	}
 
-	// Cancelled through a signal; `fetchWithAbortError` makes every abort an `AbortError`.
+	// Cancelled through a signal. `createApiClient` turns any abort before the
+	// response arrives into an `AbortError`, whatever reason was given.
 	if (error instanceof Error && error.name === "AbortError") {
 		return abortedError();
 	}
