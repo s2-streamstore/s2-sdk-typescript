@@ -70,8 +70,9 @@ export interface AcksStream
  */
 export interface TransportAppendSession {
 	/**
-	 * Send `input`, calling `onSend` once it may reach the server. A batch that
-	 * fails before `onSend` was never sent, so is safe to retry.
+	 * Send `input`, calling `onSend` before any of it can reach the server. A
+	 * batch that fails without calling `onSend` was never sent, so is safe to
+	 * retry.
 	 */
 	submit(
 		input: Types.AppendInput,

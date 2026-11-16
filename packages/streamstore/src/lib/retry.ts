@@ -911,7 +911,7 @@ type InflightEntry = {
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	settle: (result: AppendResult) => void; // Settles the submit() ticket's ack
 	sent: boolean; // May have reached the server in the current attempt
-	priorUncertainty?: boolean; // An earlier attempt may have taken effect
+	priorUncertainty: boolean; // An earlier attempt may have taken effect
 };
 
 const MIN_MAX_INFLIGHT_BYTES = 1 * 1024 * 1024; // 1 MiB minimum
@@ -1139,6 +1139,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				settle: (result) =>
 					result.ok ? resolve(result.value) : reject(result.error),
 				sent: false,
+				priorUncertainty: false,
 			};
 			this.inflight.push(entry);
 			this.toSubmit.push(entry);
@@ -1433,10 +1434,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					return;
 				}
 
-				// Check policy compliance: under noSideEffects, only retry when
-				// we can determine no mutation occurred. This is true if either:
-				// 1. The error itself guarantees no side effects (e.g. rate_limited, hot_server)
-				// 2. No inflight batch may have reached the server in this attempt
 				// Planned drain handoffs. Both errors guarantee no side effects: an
 				// advised session refuses new input without writing it, and a
 				// draining server acknowledges everything it accepted before ending
@@ -1447,6 +1444,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				const draining =
 					error.code === RECONNECT_ADVISED_CODE || isServerDraining(error);
 
+				// Check policy compliance: under noSideEffects, only retry when
+				// we can determine no mutation occurred. This is true if either:
+				// 1. The error itself guarantees no side effects (e.g. rate_limited, hot_server)
+				// 2. No inflight batch may have reached the server in this attempt
 				if (
 					this.retryConfig.appendRetryPolicy === "noSideEffects" &&
 					!error.hasNoSideEffects() &&
@@ -1709,9 +1710,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		debugSession("[%s] aborting session: %s", this.streamName, error.message);
 		this.release();
 
-		const anyUncertain = this.inflight.some(
-			(entry) => entry.priorUncertainty === true,
-		);
+		const anyUncertain = this.inflight.some((entry) => entry.priorUncertainty);
 		const sessionError = withPriorUncertainty(error, anyUncertain);
 		this.fatalError = sessionError;
 		this.stopped.abort();
@@ -1733,7 +1732,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			entry.settle(
 				err(
 					entry.sent || entry.priorUncertainty
-						? withPriorUncertainty(error, entry.priorUncertainty ?? false)
+						? withPriorUncertainty(error, entry.priorUncertainty)
 						: unsent,
 				),
 			);
