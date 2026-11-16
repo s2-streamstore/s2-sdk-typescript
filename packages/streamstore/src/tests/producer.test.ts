@@ -435,6 +435,8 @@ describe("Producer", () => {
 		},
 	);
 
+	// Detail bug_9237d4a1-1b52-42bc-861a-9362ee04b6e0: close() dropped records
+	// still queued in the writable and resolved successfully.
 	it("close appends records already written to the writable and rejects later writes", async () => {
 		const session = new MockAppendSession();
 		const producer = new Producer(
@@ -496,7 +498,7 @@ describe("Producer", () => {
 				}
 			},
 		},
-	])("operations after $name still settle", async ({ session, drop }) => {
+	])("close settles after $name", async ({ session, drop }) => {
 		const producer = new Producer(
 			new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
 			session(),
@@ -504,5 +506,19 @@ describe("Producer", () => {
 		drop(producer.writable.getWriter());
 
 		await expectSettles(producer.close());
+	});
+
+	it("close ends a pipe into the writable", async () => {
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 0 }),
+			new MockAppendSession(),
+		);
+		const piped = new ReadableStream<AppendRecordType>().pipeTo(
+			producer.writable,
+		);
+
+		await producer.close();
+		await expectSettles(piped);
+		await expect(piped).rejects.toThrow("Producer is closed");
 	});
 });

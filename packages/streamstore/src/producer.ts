@@ -15,6 +15,13 @@ const toS2Error = (err: unknown): S2Error =>
 				origin: "sdk",
 			});
 
+const producerClosedError = (): S2Error =>
+	new S2Error({
+		message: "Producer is closed",
+		status: 400,
+		origin: "sdk",
+	});
+
 export class IndexedAppendAck {
 	constructor(
 		readonly index: number,
@@ -49,16 +56,6 @@ type InflightRecord = {
 	ackPromise: Promise<IndexedAppendAck>;
 	resolveAck: (ack: IndexedAppendAck) => void;
 	rejectAck: (err: S2Error) => void;
-};
-
-/**
- * A place on the operation chain for a record written to `Producer.writable`,
- * filled with the record once the stream hands it to the sink, or with
- * `undefined` if the stream drops it.
- */
-type WritableSlot = {
-	fill: (record: AppendRecord | undefined) => void;
-	submitted: Promise<RecordSubmitTicket | undefined>;
 };
 
 /**
@@ -103,8 +100,13 @@ export class Producer implements AsyncDisposable {
 
 	private readonly inflightRecords: InflightRecord[] = [];
 	private readonly pendingAckEntries = new Set<InflightRecord>();
-	private readonly writableSlots: WritableSlot[] = [];
+	private writableController: WritableStreamDefaultController | null = null;
+	/** Records the writable has queued, counted when `writer.write()` is called. */
+	private writableAccepted = 0;
+	/** Records the writable has handed to its sink. */
+	private writableReceived = 0;
 	private writableEnded = false;
+	private onWritableProgress: (() => void) | null = null;
 
 	private terminalError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
@@ -114,7 +116,8 @@ export class Producer implements AsyncDisposable {
 	private submitCounter = 0;
 	private operationChain: Promise<void> = Promise.resolve();
 	private closePromise: Promise<void> | null = null;
-	private closed = false;
+	/** Writable records past this count were written after close() was called. */
+	private closeFence: number | null = null;
 
 	constructor(
 		batchTransform: BatchTransform,
@@ -144,34 +147,40 @@ export class Producer implements AsyncDisposable {
 		// Create writable stream that accepts individual records
 		this.writable = new WritableStream<AppendRecord>(
 			{
+				start: (controller) => {
+					this.writableController = controller;
+				},
 				write: async (record) => {
-					const slot = this.writableSlots.shift() ?? this.reserveWritableSlot();
-					slot.fill(record);
+					const index = ++this.writableReceived;
+					const afterClose =
+						this.closeFence !== null && index > this.closeFence;
+					const submitted = this.enqueueOperation(() =>
+						this.submitInternal(record, afterClose),
+					);
+					this.onWritableProgress?.();
 					try {
-						await slot.submitted;
+						await submitted;
 					} catch (err) {
-						this.releaseWritableSlots();
+						this.endWritable();
 						throw err;
 					}
 				},
 				close: async () => {
-					this.releaseWritableSlots();
+					this.endWritable();
 					await this.close();
 				},
 				abort: async (reason) => {
-					this.releaseWritableSlots();
+					this.endWritable();
 					this.fail(reason);
 					await this.close();
 				},
 			},
 			{
 				// writer.write() calls size() synchronously, but the sink sees queued
-				// records one at a time, later. Reserving each record's place here
-				// keeps it ahead of a close(), flush() or submit() called after the write.
+				// records one at a time, later. close() uses this count to wait for
+				// the records written before it.
 				size: () => {
-					if (!this.writableEnded) {
-						this.writableSlots.push(this.reserveWritableSlot());
-					}
+					this.writableAccepted += 1;
 					return 1;
 				},
 			},
@@ -331,31 +340,19 @@ export class Producer implements AsyncDisposable {
 	 * @throws S2Error if the Producer has failed, or close() was called before this
 	 */
 	submit(record: AppendRecord): Promise<RecordSubmitTicket> {
-		return this.enqueueOperation(() => this.submitInternal(record));
+		const afterClose = this.closePromise !== null;
+		return this.enqueueOperation(() => this.submitInternal(record, afterClose));
 	}
 
-	private reserveWritableSlot(): WritableSlot {
-		let fill!: (record: AppendRecord | undefined) => void;
-		const filled = new Promise<AppendRecord | undefined>((resolve) => {
-			fill = resolve;
-		});
-		const submitted = this.enqueueOperation(async () => {
-			const record = await filled;
-			return record === undefined ? undefined : this.submitInternal(record);
-		});
-		return { fill, submitted };
-	}
-
-	/** The writable has closed, aborted or errored, and will drop what it still queues. */
-	private releaseWritableSlots(): void {
+	/** The writable has closed, aborted or errored, and will hand over no more records. */
+	private endWritable(): void {
 		this.writableEnded = true;
-		for (const slot of this.writableSlots.splice(0)) {
-			slot.fill(undefined);
-		}
+		this.onWritableProgress?.();
 	}
 
 	private async submitInternal(
 		record: AppendRecord,
+		afterClose: boolean,
 	): Promise<RecordSubmitTicket> {
 		const submitId = ++this.submitCounter;
 
@@ -377,12 +374,8 @@ export class Producer implements AsyncDisposable {
 			throw this.terminalError;
 		}
 
-		if (this.closed) {
-			throw new S2Error({
-				message: "Producer is closed",
-				status: 400,
-				origin: "sdk",
-			});
+		if (afterClose) {
+			throw producerClosedError();
 		}
 
 		// Create the ack promise (resolved later by pump)
@@ -479,15 +472,42 @@ export class Producer implements AsyncDisposable {
 	 *
 	 * Waits for all pending records to be flushed, submitted, and acknowledged,
 	 * including records written to `writable` before this call. Records submitted
-	 * or written after it are rejected. If any error occurred during the
-	 * Producer's lifetime, this method throws it.
+	 * or written after it are rejected, and once closed, `writable` errors with
+	 * the same error this method throws, or "Producer is closed". If any error
+	 * occurred during the Producer's lifetime, this method throws it.
 	 */
 	async close(): Promise<void> {
-		if (this.closePromise) {
-			return this.closePromise;
+		if (!this.closePromise) {
+			const fence = this.writableAccepted;
+			this.closeFence = fence;
+			this.closePromise = this.writableReceivedThrough(fence)
+				.then(() => this.enqueueOperation(() => this.closeInternal()))
+				.finally(() => this.fenceWritable());
 		}
-		this.closePromise = this.enqueueOperation(() => this.closeInternal());
 		return this.closePromise;
+	}
+
+	private writableReceivedThrough(count: number): Promise<void> {
+		return new Promise((resolve) => {
+			const check = () => {
+				if (this.writableEnded || this.writableReceived >= count) {
+					this.onWritableProgress = null;
+					resolve();
+				}
+			};
+			this.onWritableProgress = check;
+			check();
+		});
+	}
+
+	/** Ends the writable once the Producer has closed, so writers and pipes into it stop. */
+	private fenceWritable(): void {
+		if (!this.writableEnded) {
+			this.writableEnded = true;
+			this.writableController?.error(
+				this.terminalError ?? producerClosedError(),
+			);
+		}
 	}
 
 	private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -522,7 +542,6 @@ export class Producer implements AsyncDisposable {
 
 	private async closeInternal(): Promise<void> {
 		debugProducer("[%s] close requested", this.debugName);
-		this.closed = true;
 
 		// Close the writer to signal no more records.
 		// May fail if the pump already errored and cancelled the transform.
