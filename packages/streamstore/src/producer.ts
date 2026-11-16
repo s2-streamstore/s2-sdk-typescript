@@ -252,11 +252,9 @@ export class Producer implements AsyncDisposable {
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
-					// The session never accepted the batch.
-					const unsentError = sessionClosedError();
-					for (const record of associatedRecords) {
-						record.rejectAck(unsentError);
-					}
+					// The session never accepted the batch, so its records are as
+					// unsent as those still waiting.
+					this.inflightRecords.unshift(...associatedRecords);
 					const error = this.fail(err);
 					debugProducer(
 						"[%s] pump submit error: %s",

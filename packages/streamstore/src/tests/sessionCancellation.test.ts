@@ -34,6 +34,8 @@ interface SessionServer extends LocalServer {
 	requests: () => number;
 	/** Requests not yet closed by either side. */
 	open: () => number;
+	/** Answers the append a "busy" server holds back. */
+	release?: () => void;
 }
 
 interface SessionServerOptions {
@@ -49,7 +51,7 @@ interface SessionServerOptions {
 	 * left open after the client ends its side, not at all, or failed, the
 	 * first with a 503 after which it may have taken effect, and the rest with
 	 * a 429 after which it has not. On fetch only, "busy" answers the first
-	 * two with a 429, the first after 100ms, and holds the rest.
+	 * two with a 429, the first once released, and holds the rest.
 	 */
 	appends?: "open" | "hold" | "fail" | "busy";
 }
@@ -230,30 +232,26 @@ async function startH1Server(
 	});
 
 	let failures = 0;
+	let held: (() => void) | undefined;
 	const server = await serveHttp1((req, res) => {
 		requests++;
 		if (req.method === "POST") {
 			req.resume();
 			req.on("end", () => {
+				const respond = ([status, body]: [number, string]) => {
+					res.writeHead(status, { "content-type": "application/json" });
+					res.end(body);
+				};
 				if (options?.appends === "hold") return;
 				if (options?.appends === "busy") {
 					const n = failures++;
-					if (n < 2) {
-						const [status, body] = appendFailure(1);
-						setTimeout(
-							() => {
-								res.writeHead(status, { "content-type": "application/json" });
-								res.end(body);
-							},
-							n === 0 ? 100 : 0,
-						);
-					}
+					if (n === 0) held = () => respond(appendFailure(1));
+					if (n === 1) respond(appendFailure(1));
 					return;
 				}
-				const [status, body] =
-					options?.appends === "fail" ? appendFailure(failures++) : [200, ack];
-				res.writeHead(status, { "content-type": "application/json" });
-				res.end(body);
+				respond(
+					options?.appends === "fail" ? appendFailure(failures++) : [200, ack],
+				);
 			});
 			return;
 		}
@@ -271,7 +269,7 @@ async function startH1Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests };
+	return { ...server, requests: () => requests, release: () => held?.() };
 }
 
 const CASES = [
@@ -621,6 +619,7 @@ describe("noSideEffects on fetch", () => {
 			await session.submit(record());
 			await waitFor(() => server.requests() === 1);
 			await session.submit(record());
+			server.release?.();
 			// The second 429 also fails the queued batch.
 			await waitFor(() => server.requests() === 3);
 			controller.abort();

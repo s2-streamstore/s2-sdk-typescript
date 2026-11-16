@@ -910,7 +910,6 @@ type InflightEntry = {
 	attemptStartedMonotonicMs?: number; // Monotonic timestamp (performance.now) for per-attempt ack timeout anchoring
 	innerPromise: Promise<AppendResult>; // Promise from transport session
 	maybeResolve?: (result: AppendResult) => void; // Resolver for submit() callers
-	needsSubmit?: boolean;
 	sent?: boolean; // May have reached the server, in any attempt
 	priorUncertainty?: boolean; // An earlier attempt may have taken effect
 };
@@ -946,13 +945,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private currentAttempt = 0;
 
 	private pumpPromise?: Promise<void>;
-	private pumpStopped = false;
+	// Aborted once the pump stops for good, which also cuts short a backoff.
+	private readonly stopped = new AbortController();
 	private closing = false;
 	private pumpWakeup?: () => void;
 	private closed = false;
 	private fatalError?: S2Error;
-	// Aborted with the session, to cut short a retry backoff.
-	private readonly aborted = new AbortController();
 
 	private _lastAckedPosition?: Types.AppendAck;
 	private acksController?: ReadableStreamDefaultController<Types.AppendAck>;
@@ -963,6 +961,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	public readonly writable: WritableStream<Types.AppendInput>;
 
 	private readonly streamName: string;
+
+	private get pumpStopped(): boolean {
+		return this.stopped.signal.aborted;
+	}
 
 	/**
 	 * If the session has failed, returns the error it failed with, as the acks
@@ -1020,10 +1022,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		this.writable = new WritableStream<Types.AppendInput>({
 			write: async (chunk) => {
-				if (this.closed || this.closing) {
-					throw sessionClosedError();
-				}
-
 				// chunk is already AppendInput with meteredBytes computed
 				// Reuse submit() to leverage shared backpressure/pump logic.
 				const ticket = await this.submit(chunk);
@@ -1101,19 +1099,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Check if we have capacity
 		while (true) {
-			// Check for fatal error before adding to pendingBytes
-			if (this.fatalError) {
+			// Reject if the session failed, or is closing or closed, before
+			// adding to pendingBytes, so blocked submits fail fast instead of
+			// producing tickets whose ack() can hang (#177)
+			if (this.fatalError || this.closing || this.closed) {
 				debugSession(
-					"[%s] [CAPACITY] fatal error detected, rejecting: %s",
+					"[%s] [CAPACITY] session failed or closed, rejecting",
 					this.streamName,
-					this.fatalError.message,
 				);
-				throw sessionClosedError();
-			}
-
-			// Reject if session is closing/closed so blocked submits fail fast
-			// instead of producing tickets whose ack() can hang (#177)
-			if (this.closing || this.closed) {
 				throw sessionClosedError();
 			}
 
@@ -1172,6 +1165,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
 		await this.waitForCapacity(batchMeteredSize, 1);
+		// The session may have failed since capacity was granted.
+		if (this.fatalError) {
+			throw sessionClosedError();
+		}
 
 		// Move reserved bytes and batches to queued accounting before submission
 		this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);
@@ -1207,16 +1204,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		input: Types.AppendInput,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
-		// Check for fatal error (e.g., from abort())
-		if (this.fatalError) {
-			debugSession(
-				"[%s] [SUBMIT] rejecting due to fatal error: %s",
-				this.streamName,
-				this.fatalError.message,
-			);
-			return Promise.resolve(err(sessionClosedError()));
-		}
-
 		// Create promise for submit() callers
 		return new Promise<AppendResult>((resolve) => {
 			// Create inflight entry (innerPromise will be set when pump processes it)
@@ -1225,7 +1212,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				expectedCount: input.records.length,
 				innerPromise: new Promise(() => {}), // Never-resolving placeholder
 				maybeResolve: resolve,
-				needsSubmit: true, // Mark for pump to submit
 			};
 
 			debugSession(
@@ -1369,7 +1355,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					"[%s] [PUMP] closing and queue empty, stopping",
 					this.streamName,
 				);
-				this.pumpStopped = true;
+				this.stopped.abort();
 				return;
 			}
 
@@ -1439,32 +1425,28 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					this.currentAttempt,
 					allowedRetries,
 				);
-				await sleep(delay, this.aborted.signal);
+				await sleep(delay, this.stopped.signal);
 				continue;
 			}
 
 			// Submit ALL entries that need submitting (enables HTTP/2 pipelining for S2S)
-			// Recovery may have already resubmitted an entry (needsSubmit cleared) - skip those.
 			for (
 				let entry = this.toSubmit.shift();
 				entry !== undefined;
 				entry = this.toSubmit.shift()
 			) {
-				if (entry.needsSubmit) {
-					debugSession(
-						"[%s] [PUMP] submitting entry to inner session (%d records, %d bytes, match_seq_num=%s)",
-						this.streamName,
-						entry.expectedCount,
-						entry.input.meteredBytes,
-						entry.input.matchSeqNum ?? "none",
-					);
-					const attemptStarted = performance.now();
-					entry.attemptStartedMonotonicMs = attemptStarted;
-					entry.innerPromise = this.session.submit(entry.input, () => {
-						entry.sent = true;
-					});
-					delete entry.needsSubmit;
-				}
+				debugSession(
+					"[%s] [PUMP] submitting entry to inner session (%d records, %d bytes, match_seq_num=%s)",
+					this.streamName,
+					entry.expectedCount,
+					entry.input.meteredBytes,
+					entry.input.matchSeqNum ?? "none",
+				);
+				const attemptStarted = performance.now();
+				entry.attemptStartedMonotonicMs = attemptStarted;
+				entry.innerPromise = this.session.submit(entry.input, () => {
+					entry.sent = true;
+				});
 			}
 
 			// Wait for head with timeout
@@ -1759,7 +1741,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.retryConfig.maxBaseDelayMillis,
 			);
 		debugSession("[%s] backing off for %dms", this.streamName, delay);
-		await sleep(delay, this.aborted.signal);
+		await sleep(delay, this.stopped.signal);
 
 		// Check if aborted during backoff sleep
 		if (this.pumpStopped) {
@@ -1825,7 +1807,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			entry.innerPromise = session.submit(entry.input, () => {
 				entry.sent = true;
 			});
-			delete entry.needsSubmit;
 			debugSession(
 				"[%s] resubmitted entry (%d records, %d bytes, match_seq_num=%s)",
 				this.streamName,
@@ -1834,6 +1815,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				entry.input.matchSeqNum ?? "none",
 			);
 		}
+		// Every entry waiting to be submitted is inflight, so was just submitted.
+		this.toSubmit.clear();
 
 		debugSession("[%s] recovery complete", this.streamName);
 	}
@@ -1877,8 +1860,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		);
 		const sessionError = withPriorUncertainty(error, anyUncertain);
 		this.fatalError = sessionError;
-		this.pumpStopped = true;
-		this.aborted.abort();
+		this.stopped.abort();
 
 		// Wake pump if it's sleeping so it can check the pumpStopped flag
 		if (this.pumpWakeup) {

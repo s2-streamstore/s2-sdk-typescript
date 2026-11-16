@@ -370,14 +370,14 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 }
 
 /**
- * An append to a session that has closed or failed. Only the appends the
- * session held when it failed get the error it failed with.
+ * An operation on a session that has closed or failed. A failed append session
+ * gives the error it failed with only to the appends it held, and this to the
+ * rest.
  */
-export function sessionClosedError(): S2Error {
-	return new S2Error({
-		message: "AppendSession is closed",
-		code: "SESSION_CLOSED",
-	});
+export function sessionClosedError(
+	message: string = "AppendSession is closed",
+): S2Error {
+	return new S2Error({ message, code: "SESSION_CLOSED" });
 }
 
 /** Error code for a session interrupted by server reconnect advice. */

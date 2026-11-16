@@ -1021,7 +1021,7 @@ class S2SAppendSession implements TransportAppendSession {
 			}
 
 			// Client doesn't send a terminal frame for a clean close; reset the
-			// stream instead if acks were abandoned.
+			// stream instead if acks were abandoned or the caller cancels.
 			if (this.http2Stream && !this.http2Stream.closed) {
 				if (abandoned || options?.cancel) {
 					this.http2Stream.close(NGHTTP2_CANCEL);

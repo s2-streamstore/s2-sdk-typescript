@@ -1,4 +1,4 @@
-import { S2Error } from "../../error.js";
+import { type S2Error, sessionClosedError } from "../../error.js";
 import type { StreamPosition } from "../../types.js";
 
 /**
@@ -41,14 +41,8 @@ function copyPosition(position: StreamPosition): StreamPosition {
 }
 
 /** Error a pending {@link CaughtUpTracker.caughtUp} call rejects with on a clean end. */
-function sessionClosedError(): S2Error {
-	return new S2Error({
-		message: "Read session ended before catching up",
-		code: "SESSION_CLOSED",
-		status: 0,
-		origin: "sdk",
-	});
-}
+const endedBeforeCaughtUp = () =>
+	sessionClosedError("Read session ended before catching up");
 
 class Boundary implements CaughtUpBoundary {
 	private readonly caughtUpTail: StreamPosition;
@@ -141,7 +135,7 @@ export class CaughtUpTracker {
 		}
 
 		const waiters = this.waiters.splice(0);
-		const rejection = error ?? sessionClosedError();
+		const rejection = error ?? endedBeforeCaughtUp();
 		for (const waiter of waiters) {
 			waiter.reject(rejection);
 		}
@@ -156,7 +150,7 @@ export class CaughtUpTracker {
 			return Promise.resolve(copyPosition(this.caughtUpTail));
 		}
 		if (this.terminal) {
-			return Promise.reject(this.terminal.error ?? sessionClosedError());
+			return Promise.reject(this.terminal.error ?? endedBeforeCaughtUp());
 		}
 
 		const promise = new Promise<StreamPosition>((resolve, reject) => {
