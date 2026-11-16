@@ -26,10 +26,12 @@ interface SessionServer {
 
 interface SessionServerOptions {
 	/**
-	 * How reads are answered: with one record (default), not at all, or with
-	 * a batch that cannot be parsed. The read is held open in every case.
+	 * How reads are answered: with one record and then held open at the tail
+	 * (default), not at all, with a batch that cannot be parsed and then held
+	 * open, or with two records well short of the tail and then ended, as a
+	 * read that reached its limit.
 	 */
-	reads?: "batch" | "hold" | "malformed";
+	reads?: "batch" | "hold" | "malformed" | "bounded";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
@@ -122,6 +124,21 @@ async function startH2Server(
 			}),
 		}),
 	);
+	const boundedFrames = Buffer.concat([
+		frameMessage({
+			terminal: false,
+			body: Proto.ReadBatch.toBinary({
+				records: ["a", "b"].map((body, seqNum) => ({
+					seqNum: BigInt(seqNum),
+					timestamp: 1n,
+					headers: [],
+					body: new TextEncoder().encode(body),
+				})),
+				tail: { seqNum: 100n, timestamp: 1n },
+			}),
+		}),
+		frameMessage({ terminal: true, statusCode: 200, body: new Uint8Array(0) }),
+	]);
 	const ackFrame = Buffer.from(
 		frameMessage({
 			terminal: false,
@@ -146,6 +163,11 @@ async function startH2Server(
 			stream.respond({ ":status": 200 });
 			stream.on("data", () => stream.write(ackFrame));
 			stream.on("end", () => stream.end());
+			return;
+		}
+		if (options?.reads === "bounded") {
+			stream.respond({ ":status": 200 });
+			stream.end(boundedFrames);
 			return;
 		}
 		if (options?.reads !== "hold") {
@@ -177,6 +199,15 @@ async function startH1Server(
 		records: [{ seq_num: 0, timestamp: 1, headers: [], body: "a" }],
 		tail: { seq_num: 1, timestamp: 1 },
 	})}\n\n`;
+	const boundedEvent = `event: batch\ndata: ${JSON.stringify({
+		records: ["a", "b"].map((body, seq_num) => ({
+			seq_num,
+			timestamp: 1,
+			headers: [],
+			body,
+		})),
+		tail: { seq_num: 100, timestamp: 1 },
+	})}\n\n`;
 	const ack = JSON.stringify({
 		start: { seq_num: 1, timestamp: 1 },
 		end: { seq_num: 2, timestamp: 1 },
@@ -193,6 +224,11 @@ async function startH1Server(
 				res.writeHead(200, { "content-type": "application/json" });
 				res.end(ack);
 			});
+			return;
+		}
+		if (options?.reads === "bounded") {
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			res.end(boundedEvent);
 			return;
 		}
 		if (options?.reads !== "hold") {
@@ -349,6 +385,33 @@ describe.each(TRANSPORTS)(
 					]);
 					expect(outcome).toBe("waiting");
 				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+
+		// A read that reached its limit has fetched every record, but the reader
+		// has not taken them all yet.
+		it(
+			"ends a read session whose records are fetched but not yet read",
+			async () => {
+				const server = await startSessionServer(transport, {
+					reads: "bounded",
+				});
+				const stream = streamOn(server, transport);
+				const records = (
+					await stream.readSession({
+						...FROM_START,
+						stop: { limits: { count: 2 } },
+					})
+				)[Symbol.asyncIterator]();
+				await records.next();
+				// Let the session fetch the second record and see the read end.
+				await new Promise((resolve) => setTimeout(resolve, 50));
+
+				await withinDeadline(stream.close());
+				await expect(withinDeadline(records.next())).rejects.toMatchObject({
+					code: "ABORTED",
+				});
 			},
 			TEST_TIMEOUT_MS,
 		);

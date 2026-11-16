@@ -452,6 +452,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			deliveries.clear();
 			resolvePendingDelivery?.();
 			wake();
+			release();
 		};
 		const handlePumpError = (error: unknown) => {
 			if (!cancelled) {
@@ -472,8 +473,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				}
 			}
 		};
+		// Also after the pump is done: records it fetched may still be unread.
 		abortSignal.addEventListener("abort", () => {
-			if (cancelled || pumpDone || pumpError) {
+			if (cancelled || pumpError) {
 				return;
 			}
 			failPump(abortedError());
@@ -724,9 +726,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		super(
 			{
 				start: () => {
-					queueMicrotask(
-						() => void pump().catch(handlePumpError).finally(release),
-					);
+					queueMicrotask(() => void pump().catch(handlePumpError));
 				},
 				pull: async (controller) => {
 					while (!cancelled) {
@@ -755,6 +755,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						}
 						if (pumpDone) {
 							controller.close();
+							release();
 							return;
 						}
 						await new Promise<void>((resolve) => {
@@ -770,6 +771,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					resolvePendingDelivery?.();
 					resolvePendingDelivery = undefined;
 					wake();
+					release();
 					await cancelTransport(reason);
 				},
 			},
