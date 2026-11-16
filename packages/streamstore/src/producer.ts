@@ -507,18 +507,24 @@ export class Producer implements AsyncDisposable {
 			this.closeFence = this.writableAccepted;
 			this.closePromise = this.enqueueAfterWritable(() =>
 				this.closeInternal(),
-			).finally(() => this.fenceWritable());
+			).then(
+				() => this.fenceWritable(producerClosedError()),
+				(err: unknown) => {
+					this.fenceWritable(err);
+					throw err;
+				},
+			);
 		}
 		return this.closePromise;
 	}
 
 	/** Ends the writable once the Producer has closed, so writers and pipes into it stop. */
-	private fenceWritable(): void {
+	private fenceWritable(error: unknown): void {
 		if (this.writableEnded) {
 			return;
 		}
 		this.endWritable();
-		this.writableController?.error(this.terminalError ?? producerClosedError());
+		this.writableController?.error(error);
 	}
 
 	private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
