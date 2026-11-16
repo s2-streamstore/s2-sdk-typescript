@@ -1043,14 +1043,12 @@ class S2SAppendSession implements TransportAppendSession {
 			return err(s2Error(initErr));
 		}
 
-		const recordsArray = Array.from(input.records);
-
 		// Validate batch size limits (non-retryable 400-level error)
 		// Note: This should already be validated by AppendInput.create(), but we check defensively
-		if (recordsArray.length > 1000) {
+		if (input.records.length > 1000) {
 			return err(
 				new S2Error({
-					message: `Batch of ${recordsArray.length} exceeds maximum batch size of 1000 records`,
+					message: `Batch of ${input.records.length} exceeds maximum batch size of 1000 records`,
 					status: 400,
 					code: "INVALID_ARGUMENT",
 				}),

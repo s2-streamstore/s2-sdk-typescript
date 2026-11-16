@@ -4,7 +4,6 @@ import {
 	type AppendRecord,
 	validateAppendRecord,
 } from "./types.js";
-import { meteredBytes } from "./utils.js";
 
 export interface BatchTransformOptions {
 	/** Duration in milliseconds to wait before flushing a batch (default: 5ms) */
@@ -140,7 +139,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	private handleRecord(record: AppendRecord): void {
 		// Reject an invalid record on its own write, not when its batch flushes.
 		validateAppendRecord(record);
-		const recordSize = meteredBytes(record);
+		const recordSize = record.meteredBytes;
 		if (recordSize > this.maxBatchBytes) {
 			throw new S2Error({
 				message: `Record size ${recordSize} bytes exceeds maximum batch size of ${this.maxBatchBytes} bytes`,
@@ -215,7 +214,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 		// Emit the batch downstream with optional fencing token and matchSeqNum
 		if (this.controller) {
-			const batch = AppendInput.create([...this.currentBatch], {
+			const batch = AppendInput.create(this.currentBatch, {
 				fencingToken: this.fencingToken,
 				matchSeqNum,
 			});

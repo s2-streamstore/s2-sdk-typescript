@@ -8,15 +8,12 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 import type { S2RequestOptions } from "../../../../common.js";
 import {
 	appendSessionClosedError,
-	makeServerError,
-	RangeNotSatisfiableError,
 	S2Error,
 	s2Error,
 } from "../../../../error.js";
 import type { Client } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
-import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
@@ -48,7 +45,7 @@ import type {
 	TransportReadEvent,
 	TransportReadSession,
 } from "../../types.js";
-import { streamAppend } from "./shared.js";
+import { readResponseError, streamAppend } from "./shared.js";
 
 const debug = createDebug("s2:fetch");
 
@@ -81,26 +78,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 			...options,
 		});
 		if (response.error) {
-			// Convert error to S2Error and throw - let caller handle connection errors
-			const status = response.response.status;
-			if (status === 416) {
-				const err =
-					typeof response.error === "object" && response.error !== null
-						? (response.error as {
-								code?: string;
-								tail?: API.StreamPosition;
-							})
-						: undefined;
-				throw new RangeNotSatisfiableError({
-					status,
-					code: err?.code,
-					tail: err?.tail ? fromAPIStreamPosition(err.tail) : undefined,
-				});
-			}
-			throw makeServerError(
-				{ status, statusText: response.response.statusText },
-				response.error,
-			);
+			throw readResponseError(response.response, response.error);
 		}
 		if (!response.response.body) {
 			throw new S2Error({

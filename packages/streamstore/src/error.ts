@@ -125,38 +125,10 @@ export async function withS2Error<T>(fn: () => Promise<T>): Promise<T> {
 		if (
 			result &&
 			typeof result === "object" &&
-			Object.prototype.hasOwnProperty.call(result, "error")
+			Object.prototype.hasOwnProperty.call(result, "error") &&
+			result.error
 		) {
-			const err = result.error;
-			if (err) {
-				const status = (result.response?.status as number | undefined) ?? 500;
-				const statusText = result.response?.statusText as string | undefined;
-
-				// If server provided structured error with message/code, use it
-				if (typeof err === "object" && "message" in err) {
-					const structured = err as {
-						message?: unknown;
-						code?: unknown;
-					};
-					throw new S2Error({
-						message:
-							typeof structured.message === "string"
-								? structured.message
-								: (statusText ?? "Error"),
-						code:
-							typeof structured.code === "string" ? structured.code : undefined,
-						status,
-						origin: "server",
-					});
-				}
-
-				// Fallback: synthesize from HTTP response metadata
-				throw new S2Error({
-					message: statusText ?? "Request failed",
-					status,
-					origin: "server",
-				});
-			}
+			throw makeServerError(result.response ?? {}, result.error);
 		}
 
 		return result as T;
@@ -191,30 +163,8 @@ export async function withS2Data<T>(
 				Object.prototype.hasOwnProperty.call(res, "response"))
 		) {
 			const status = (res.response?.status as number | undefined) ?? 500;
-			const statusText = res.response?.statusText as string | undefined;
 			if (res.error) {
-				const err = res.error;
-				if (typeof err === "object" && "message" in err) {
-					const structured = err as {
-						message?: unknown;
-						code?: unknown;
-					};
-					throw new S2Error({
-						message:
-							typeof structured.message === "string"
-								? structured.message
-								: (statusText ?? "Error"),
-						code:
-							typeof structured.code === "string" ? structured.code : undefined,
-						status,
-						origin: "server",
-					});
-				}
-				throw new S2Error({
-					message: statusText ?? "Request failed",
-					status,
-					origin: "server",
-				});
+				throw makeServerError(res.response ?? {}, res.error);
 			}
 			// No error
 			if (typeof res.data !== "undefined") return res.data as T;

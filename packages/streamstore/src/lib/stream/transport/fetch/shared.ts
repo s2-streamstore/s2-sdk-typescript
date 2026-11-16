@@ -48,6 +48,25 @@ function mergeHeaders(
 	return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+/** The error for a failed read response. A 416 carries the stream's tail. */
+export function readResponseError(
+	response: { status: number; statusText?: string },
+	payload: unknown,
+): S2Error {
+	if (response.status === 416) {
+		const err =
+			typeof payload === "object" && payload !== null
+				? (payload as { code?: string; tail?: API.StreamPosition })
+				: undefined;
+		return new RangeNotSatisfiableError({
+			status: response.status,
+			code: err?.code,
+			tail: err?.tail ? fromAPIStreamPosition(err.tail) : undefined,
+		});
+	}
+	return makeServerError(response, payload);
+}
+
 export async function streamRead<Format extends "string" | "bytes" = "string">(
 	stream: string,
 	client: Client,
@@ -78,22 +97,7 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 		throw s2Error(error);
 	}
 	if (response.error || !response.response.ok) {
-		const status = response.response.status;
-		if (status === 416) {
-			const err = response.error as {
-				tail?: { seq_num: number; timestamp: number };
-				code?: string;
-			};
-			throw new RangeNotSatisfiableError({
-				status,
-				tail: err?.tail ? fromAPIStreamPosition(err.tail) : undefined,
-				code: err?.code,
-			});
-		}
-		throw makeServerError(
-			{ status, statusText: response.response.statusText },
-			response.error,
-		);
+		throw readResponseError(response.response, response.error);
 	}
 
 	if (wantsBytes) {
