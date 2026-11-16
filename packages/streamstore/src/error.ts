@@ -370,9 +370,8 @@ export function abortedError(message: string = "Request cancelled"): S2Error {
 }
 
 /**
- * An operation on a session that has closed or failed. A failed append session
- * gives the error it failed with only to the appends it held, and this to the
- * rest.
+ * For an operation on a closed session. A failed append session is closed to
+ * all but the appends it held, which get its own error.
  */
 export function sessionClosedError(
 	message: string = "AppendSession is closed",

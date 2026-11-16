@@ -928,8 +928,7 @@ class S2SAppendSession implements TransportAppendSession {
 			body: bodyBytes,
 		});
 
-		// Checked at the write, as the stream can change while the body is
-		// compressed.
+		// Checked after compressing, as the stream may have changed meanwhile.
 		if (this.closed) {
 			return err(sessionClosedError());
 		}
@@ -972,8 +971,8 @@ class S2SAppendSession implements TransportAppendSession {
 	 * Close the append session.
 	 * Fails pending appends and cancels the stream, rather than waiting for
 	 * acks: the retry layer closes a session either once every append is
-	 * acknowledged, or to abandon a stalled attempt. `cancel` also resets a
-	 * stream with no pending acks, which the server could otherwise hold open.
+	 * acknowledged, or to abandon a stalled attempt. `cancel` resets the
+	 * stream even with no pending acks, so the server cannot hold it open.
 	 * Never throws - returns CloseResult.
 	 */
 	async close(options?: { cancel?: boolean }): Promise<CloseResult> {

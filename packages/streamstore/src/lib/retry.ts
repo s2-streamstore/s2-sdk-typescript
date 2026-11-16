@@ -263,13 +263,13 @@ export async function withRetries<T>(
 	throw lastError;
 }
 
-/** How a session ends early: its caller's signal, and its transport's sessions. */
+/** What ends a session early: its caller's signal, or its transport closing. */
 type SessionOptions = { signal?: AbortSignal; sessions?: OpenSessions };
 
 /**
- * Ties a session to `options`: throws {@link abortedError} if the signal has
- * already aborted, then calls `onAbort` once it aborts and `onClose` when the
- * transport's sessions close. Returns a function that detaches both.
+ * Calls `onAbort` when `options.signal` aborts, or throws {@link abortedError}
+ * if it already has, and `onClose` when `options.sessions` close. Returns a
+ * function that detaches both.
  */
 function attachSession(
 	options: SessionOptions | undefined,
@@ -945,7 +945,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private currentAttempt = 0;
 
 	private pumpPromise?: Promise<void>;
-	// Aborted once the pump stops for good, which also cuts short a backoff.
+	// Aborted when the pump stops for good, cutting any backoff short.
 	private readonly stopped = new AbortController();
 	private closing = false;
 	private pumpWakeup?: () => void;
@@ -967,10 +967,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	}
 
 	/**
-	 * If the session has failed, returns the error it failed with, as the acks
-	 * stream and `close()` report it: an {@link AppendIndefiniteFailureError}
-	 * if an inflight append may have taken effect in an earlier attempt.
-	 * Returns undefined when the session has not failed.
+	 * The error the session failed with, as the acks stream and `close()`
+	 * report it, or undefined. It is an {@link AppendIndefiniteFailureError} if
+	 * an earlier attempt may have applied an inflight append.
 	 */
 	failureCause(): S2Error | undefined {
 		return this.fatalError;
@@ -1049,13 +1048,10 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 	/**
 	 * Create an append session. Closing `options.sessions` closes it as
-	 * {@link RetryAppendSession.close} does.
-	 *
-	 * Once `options.signal` aborts, the session fails with
-	 * {@link abortedError}: `create` rejects with it if the signal has already
-	 * aborted, and otherwise its inflight appends do. An abort is never
-	 * retried. As after any failure, later appends reject with
-	 * {@link sessionClosedError}.
+	 * {@link RetryAppendSession.close} does. Aborting `options.signal` fails it
+	 * with {@link abortedError}, without retrying; `create` rejects if the
+	 * signal has already aborted. As after any failure, later appends reject
+	 * with {@link sessionClosedError}.
 	 */
 	static async create(
 		generator: (
@@ -1099,9 +1095,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Check if we have capacity
 		while (true) {
-			// Reject if the session failed, or is closing or closed, before
-			// adding to pendingBytes, so blocked submits fail fast instead of
-			// producing tickets whose ack() can hang (#177)
+			// Checked before adding to pendingBytes, so blocked submits fail fast
+			// instead of producing tickets whose ack() can hang (#177)
 			if (this.fatalError || this.closing || this.closed) {
 				debugSession(
 					"[%s] [CAPACITY] session failed or closed, rejecting",
@@ -1165,7 +1160,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
 		await this.waitForCapacity(batchMeteredSize, 1);
-		// The session may have failed since capacity was granted.
+		// It may have failed since granting capacity.
 		if (this.fatalError) {
 			throw sessionClosedError();
 		}
@@ -1801,7 +1796,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			// Create new promise from new session
 			const attemptStarted = performance.now();
 			entry.attemptStartedMonotonicMs = attemptStarted;
-			// What an earlier attempt may have done is kept in priorUncertainty.
+			// priorUncertainty keeps what earlier attempts may have done.
 			entry.sent = false;
 			entry.innerPromise = session.submit(entry.input, () => {
 				entry.sent = true;
@@ -1814,7 +1809,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				entry.input.matchSeqNum ?? "none",
 			);
 		}
-		// Every entry waiting to be submitted is inflight, so was just submitted.
+		// Every entry in toSubmit is inflight, so was just resubmitted.
 		this.toSubmit.clear();
 
 		debugSession("[%s] recovery complete", this.streamName);
@@ -1902,7 +1897,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 		this.capacityWaiters.clear();
 
-		// Close inner session, without waiting for the server to end it
+		// Close inner session, without waiting on the server
 		if (this.session) {
 			debugSession("[%s] closing inner session", this.streamName);
 			try {

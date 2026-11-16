@@ -63,8 +63,7 @@ describe("Issue #236: submit() preserves the pump error type", () => {
 		});
 		const producer = makeProducer(fencing);
 
-		// First submit is accepted, but the session rejects its batch, so its
-		// ack reports it was never sent.
+		// The session rejects the first batch, so its record was never sent.
 		const ticket = await producer.submit(AppendRecord.string({ body: "a" }));
 		await expect(ticket.ack()).rejects.toMatchObject({
 			code: "SESSION_CLOSED",

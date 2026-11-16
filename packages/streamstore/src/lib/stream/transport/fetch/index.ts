@@ -396,7 +396,7 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
  * No backpressure, no retry logic, no streams - just submit/close with value-encoded errors.
  */
 export class FetchAppendSession implements TransportAppendSession {
-	// Appends waiting to be sent, one at a time.
+	// Unsent appends, sent one at a time.
 	private readonly pending = new FifoQueue<{
 		input: Types.AppendInput;
 		resolve: (result: AppendResult) => void;
@@ -573,7 +573,6 @@ export class FetchAppendSession implements TransportAppendSession {
 				input.matchSeqNum ?? "none",
 			);
 
-			// Data is about to enter the network
 			onSend?.();
 
 			try {

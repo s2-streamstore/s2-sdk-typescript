@@ -68,18 +68,14 @@ export interface AcksStream
  */
 export interface TransportAppendSession {
 	/**
-	 * Send `input`, calling `onSend` once it may have reached the server. A
-	 * batch that fails before then was never sent, so cannot have taken
-	 * effect: the retry layer may resubmit it even under `noSideEffects`.
+	 * Send `input`, calling `onSend` once it may reach the server. A batch that
+	 * fails before `onSend` was never sent, so is safe to retry.
 	 */
 	submit(
 		input: Types.AppendInput,
 		onSend?: () => void,
 	): Promise<Result.AppendResult>;
-	/**
-	 * Close the session. `cancel` ends it at once, rather than letting the
-	 * server finish.
-	 */
+	/** Close the session. `cancel` ends it without letting the server finish. */
 	close(options?: { cancel?: boolean }): Promise<Result.CloseResult>;
 }
 
@@ -131,8 +127,7 @@ export interface AppendSession extends AsyncDisposable {
 	 * Returns a promise that resolves to a submit ticket once the batch is enqueued (has capacity).
 	 * Call ticket.ack() to get a promise for the AppendAck once the batch is durable.
 	 * This method applies backpressure and will block if capacity limits are reached.
-	 * Once the session has closed or failed, rejects with an `S2Error` with code
-	 * `SESSION_CLOSED`.
+	 * Rejects with code `SESSION_CLOSED` once the session has closed or failed.
 	 */
 	submit(input: Types.AppendInput): Promise<BatchSubmitTicket>;
 	/**

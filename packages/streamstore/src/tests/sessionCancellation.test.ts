@@ -47,11 +47,11 @@ interface SessionServerOptions {
 	 */
 	reads?: "batch" | "hold" | "malformed" | "bounded";
 	/**
-	 * How appends are answered: acked (default), acked with the s2s response
-	 * left open after the client ends its side, not at all, or failed, the
-	 * first with a 503 after which it may have taken effect, and the rest with
-	 * a 429 after which it has not. On fetch only, "busy" answers the first
-	 * two with a 429, the first once released, and holds the rest.
+	 * How appends are answered. By default, acked.
+	 * - "open": acked, leaving the s2s response open after the client ends.
+	 * - "hold": never.
+	 * - "fail": a 503 (may have taken effect), then 429s (did not).
+	 * - "busy" (fetch only): a 429 once released, a 429, then never.
 	 */
 	appends?: "open" | "hold" | "fail" | "busy";
 }
@@ -470,11 +470,10 @@ describe.each(TRANSPORTS)(
 );
 
 /**
- * Issue #410: an s2s append session took an abort of its signal for a dropped
- * connection and reconnected, so appends went on being acked, while the fetch
- * transport failed them with the cancellation error. Once the signal aborts,
- * inflight appends must fail with that error and later ones as closed,
- * without reconnecting, on both transports.
+ * Issue #410: an s2s append session mistook its signal's abort for a dropped
+ * connection, and reconnected. On both transports, an abort must fail inflight
+ * appends with `ABORTED` and later ones with `SESSION_CLOSED`, without
+ * reconnecting.
  */
 describe.each(TRANSPORTS)(
 	"Issue #410: aborting a %s append session",
@@ -542,12 +541,10 @@ describe.each(TRANSPORTS)(
 );
 
 /**
- * Issue #378: once an append session failed, it rejected a batch submitted
- * afterwards with `AppendIndefiniteFailureError` whenever an earlier batch may
- * have taken effect, though the new batch was never sent. As in the Go SDK,
- * only the batches a failed session held get its error: it is closed to the
- * rest. A Producer's records follow: the session's error means the record was
- * sent, `SESSION_CLOSED` that it was not.
+ * Issue #378: a failed append session rejected later batches with its own
+ * error, so a batch never sent could be reported as
+ * `AppendIndefiniteFailureError`. As in the Go SDK, only the batches it held
+ * get its error, and the rest `SESSION_CLOSED`. So do a Producer's records.
  */
 describe.each(TRANSPORTS)(
 	"Issue #378: a failed %s append session",
@@ -604,9 +601,9 @@ describe.each(TRANSPORTS)(
 );
 
 /**
- * Fetch sends one append at a time, so a retry that hands it two batches
- * leaves the second in its queue, never sent. When the first then fails, the
- * second must not count as possibly applied: noSideEffects still retries.
+ * Fetch sends one append at a time, so after a retry resubmits two batches,
+ * the second waits unsent. If the first then fails, noSideEffects must still
+ * retry: the second cannot have taken effect.
  */
 describe("noSideEffects on fetch", () => {
 	it(

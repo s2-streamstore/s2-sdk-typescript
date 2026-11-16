@@ -198,8 +198,7 @@ export class Producer implements AsyncDisposable {
 			while (true) {
 				const { value: batch, done } = await this.transformReader.read();
 
-				// After a failure, fail() has rejected the records of batches not
-				// yet submitted, including one this read may have returned.
+				// After a failure, fail() has already rejected this batch's records.
 				if (done || this.terminalError) {
 					debugProducer("[%s] pump done", this.debugName);
 					// Await all pending ack handlers before exiting
@@ -222,8 +221,8 @@ export class Producer implements AsyncDisposable {
 					this.inflightRecords.length,
 				);
 
-				// Associate records with this batch (FIFO correspondence). From
-				// here on, the batch's submit or its ack settles them.
+				// Records map to batches in order. This batch's outcome now settles
+				// these.
 				const recordCount = batch.records.length;
 				if (this.inflightRecords.length < recordCount) {
 					throw new S2Error({
@@ -252,8 +251,7 @@ export class Producer implements AsyncDisposable {
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
-					// The session never accepted the batch, so its records are as
-					// unsent as those still waiting.
+					// Never sent: fail() rejects these with the records still waiting.
 					this.inflightRecords.unshift(...associatedRecords);
 					const error = this.fail(err);
 					debugProducer(
@@ -433,7 +431,7 @@ export class Producer implements AsyncDisposable {
 				err,
 			);
 
-			// Rejects this record too, which is still inflight.
+			// Also rejects this record, still in inflightRecords.
 			const error = this.fail(err);
 			throw error;
 		}
@@ -521,16 +519,14 @@ export class Producer implements AsyncDisposable {
 
 	private fail(cause: unknown): S2Error {
 		if (!this.terminalError) {
-			// A failed session's own error, not the closed-session error a later
-			// batch gets from it.
+			// The session's own error, not the SESSION_CLOSED a later batch gets.
 			this.terminalError = toS2Error(
 				this.appendSession.failureCause() ?? cause,
 			);
 		}
 		const error = this.terminalError;
 
-		// Only records the session accepted get an error from it: their own
-		// batch's, from its ack. The rest were never sent.
+		// Sent records settle from their batch's ack. These were never sent.
 		if (this.inflightRecords.length > 0) {
 			const unsentError = sessionClosedError();
 			for (const record of this.inflightRecords.splice(0)) {

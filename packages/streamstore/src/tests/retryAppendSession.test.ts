@@ -422,8 +422,7 @@ describe("AppendSessionImpl (unit)", () => {
 					});
 				}
 				if (call === 2) {
-					// Errors before the batch reaches the server: what the first
-					// attempt sent must not count against this one.
+					// Fails unsent: the first attempt's send must not count.
 					return new FakeTransportAppendSession({
 						submitError: new S2Error({
 							message: "stream closed",
