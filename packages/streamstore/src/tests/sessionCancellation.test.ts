@@ -34,8 +34,6 @@ const TEST_TIMEOUT_MS = 15_000;
 interface SessionServer extends LocalServer {
 	/** Requests received so far, reads and appends. */
 	requests: () => number;
-	/** Read requests the client has not yet closed. */
-	openReads: () => number;
 	/** Answers the append a "busy" server holds back. */
 	release?: () => void;
 }
@@ -126,7 +124,6 @@ async function startH2Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
 	let requests = 0;
-	let openReads = 0;
 	const malformedFrame = Buffer.from(
 		frameMessage({ terminal: false, body: new Uint8Array([0x0a, 0x64]) }),
 	);
@@ -184,8 +181,6 @@ async function startH2Server(
 			}
 			return;
 		}
-		openReads++;
-		stream.once("close", () => openReads--);
 		if (options?.reads === "bounded") {
 			stream.respond({ ":status": 200 });
 			stream.end(boundedFrames);
@@ -198,14 +193,13 @@ async function startH2Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests, openReads: () => openReads };
+	return { ...server, requests: () => requests };
 }
 
 async function startH1Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
 	let requests = 0;
-	let openReads = 0;
 	const batchEvent = `event: batch\ndata: ${JSON.stringify({
 		records: [{ seq_num: 0, timestamp: 1, headers: [], body: "a" }],
 		tail: { seq_num: 1, timestamp: 1 },
@@ -251,8 +245,6 @@ async function startH1Server(
 			});
 			return;
 		}
-		openReads++;
-		res.once("close", () => openReads--);
 		if (options?.reads === "bounded") {
 			res.writeHead(200, { "content-type": "text/event-stream" });
 			res.end(boundedEvent);
@@ -267,12 +259,7 @@ async function startH1Server(
 			);
 		}
 	});
-	return {
-		...server,
-		requests: () => requests,
-		openReads: () => openReads,
-		release: () => held?.(),
-	};
+	return { ...server, requests: () => requests, release: () => held?.() };
 }
 
 const CASES = [
@@ -363,7 +350,7 @@ describe.each(TRANSPORTS)("disposing a %s read session", (transport) => {
 
 			await session[Symbol.asyncDispose]();
 			await expect(withinDeadline(pending)).rejects.toMatchObject(ABORTED);
-			await waitFor(() => server.openReads() === 0);
+			await waitFor(() => server.open() === 0);
 		},
 		TEST_TIMEOUT_MS,
 	);

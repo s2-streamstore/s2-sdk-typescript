@@ -276,7 +276,6 @@ describe("Producer", () => {
 		);
 	});
 
-	// Batched, an invalid record would fail the whole batch and the Producer.
 	it("rejects only the submit of an invalid hand-built record", async () => {
 		const session = new MockAppendSession();
 		const producer = new Producer(

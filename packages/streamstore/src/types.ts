@@ -80,17 +80,17 @@ export type AppendRecord = StringAppendRecord | BytesAppendRecord;
 
 const textEncoder = new TextEncoder();
 
-function validateTimestamp(timestamp: number | Date | null | undefined): void {
-	if (timestamp === undefined || timestamp === null) {
-		return;
-	}
-	let ms: number;
+function isValidTimestamp(timestamp: number | Date): boolean {
 	try {
-		ms = epochMillis(timestamp);
+		const ms = epochMillis(timestamp);
+		return ms >= 0 && ms <= Number.MAX_SAFE_INTEGER;
 	} catch {
-		ms = Number.NaN;
+		return false;
 	}
-	if (!(ms >= 0 && ms <= Number.MAX_SAFE_INTEGER)) {
+}
+
+function validateTimestamp(timestamp: number | Date | null | undefined): void {
+	if (timestamp != null && !isValidTimestamp(timestamp)) {
 		throw new S2Error({
 			message:
 				"timestamp must be a valid Date or a non-negative number of milliseconds, at most Number.MAX_SAFE_INTEGER",

@@ -1,5 +1,9 @@
 import { S2Error } from "./error.js";
-import { AppendInput, type AppendRecord } from "./types.js";
+import {
+	AppendInput,
+	type AppendRecord,
+	validateAppendRecord,
+} from "./types.js";
 import { meteredBytes } from "./utils.js";
 
 export interface BatchTransformOptions {
@@ -65,7 +69,13 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 				controller = c;
 			},
 			transform: (chunk) => {
-				this.handleRecord(chunk);
+				try {
+					this.handleRecord(chunk);
+				} catch (err) {
+					// The throw errors the stream, so the timer must not fire on it.
+					this.cancelLingerTimer();
+					throw err;
+				}
 			},
 			flush: () => {
 				this.flushCurrentBatch();
@@ -128,13 +138,10 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	}
 
 	private handleRecord(record: AppendRecord): void {
+		// Reject an invalid record on its own write, not when its batch flushes.
+		validateAppendRecord(record);
 		const recordSize = meteredBytes(record);
-
-		// Reject individual records that exceed the max batch size.
-		// Cancel the linger timer first — the throw will error the stream,
-		// and we don't want the timer to fire on an errored controller.
 		if (recordSize > this.maxBatchBytes) {
-			this.cancelLingerTimer();
 			throw new S2Error({
 				message: `Record size ${recordSize} bytes exceeds maximum batch size of ${this.maxBatchBytes} bytes`,
 				status: 400,

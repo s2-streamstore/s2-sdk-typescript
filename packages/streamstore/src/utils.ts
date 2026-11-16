@@ -43,10 +43,9 @@ export function utf8ByteLength(str: string): number {
 }
 
 /**
- * Milliseconds since the Unix epoch, floored. Reads a Date with
- * `Date.prototype.getTime`, so a Date from another realm works too.
+ * Milliseconds since the Unix epoch, floored.
  *
- * @throws {TypeError} If `timestamp` is neither a number nor a Date
+ * @throws {TypeError} If `timestamp` is neither a number nor a Date (from any realm)
  */
 export function epochMillis(timestamp: number | Date): number {
 	return typeof timestamp === "number"

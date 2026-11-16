@@ -8,6 +8,7 @@ type ReadableStreamWithAsyncIterator<T> = ReadableStream<T> & {
 import type { S2RequestOptions } from "../../../../common.js";
 import {
 	appendSessionClosedError,
+	makeServerError,
 	RangeNotSatisfiableError,
 	S2Error,
 	s2Error,
@@ -96,22 +97,10 @@ export class FetchReadSession<Format extends "string" | "bytes" = "string">
 					tail: err?.tail ? fromAPIStreamPosition(err.tail) : undefined,
 				});
 			}
-			const error =
-				typeof response.error === "object" &&
-				response.error !== null &&
-				"message" in response.error
-					? new S2Error({
-							message: response.error.message,
-							code: response.error.code ?? undefined,
-							status,
-							origin: "server",
-						})
-					: new S2Error({
-							message: response.response.statusText ?? "Request failed",
-							status,
-							origin: "server",
-						});
-			throw error;
+			throw makeServerError(
+				{ status, statusText: response.response.statusText },
+				response.error,
+			);
 		}
 		if (!response.response.body) {
 			throw new S2Error({

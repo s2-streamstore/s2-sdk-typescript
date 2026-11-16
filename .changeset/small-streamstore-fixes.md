@@ -4,7 +4,7 @@
 
 `AppendInput.create` rejects a record whose `meteredBytes` is not a non-negative integer, or whose `timestamp` is not a valid `Date` or a non-negative number of milliseconds up to `Number.MAX_SAFE_INTEGER`. Before, a hand-built record with a missing or `NaN` `meteredBytes` let an append session send only one batch at a time from then on, and an invalid timestamp was dropped on the fetch transport and threw a non-`S2Error` on s2s. A `null` timestamp still means no timestamp, now on s2s as well as fetch.
 
-`Producer.submit` rejects such a record on its own, rather than letting it fail the batch it would join. An append session rejects a hand-built `AppendInput` whose `meteredBytes` is not a non-negative integer.
+`Producer.submit` rejects such a record on its own, rather than letting it fail the batch it would join. `BatchTransform` rejects it when it is written, rather than when its batch flushes. An append session rejects a hand-built `AppendInput` whose `meteredBytes` is not a non-negative integer.
 
 s2s sessions build request paths without a double slash when the endpoint ends with `/`, such as `https://host/v1/`.
 

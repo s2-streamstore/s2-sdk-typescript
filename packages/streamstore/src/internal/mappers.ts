@@ -261,10 +261,7 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 	}
 
 	if (input.stop?.untilTimestamp !== undefined) {
-		query.until =
-			typeof input.stop.untilTimestamp === "number"
-				? Math.floor(input.stop.untilTimestamp)
-				: input.stop.untilTimestamp.getTime();
+		query.until = epochMillis(input.stop.untilTimestamp);
 	}
 
 	if (input.stop?.waitSecs !== undefined) {
