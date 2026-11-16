@@ -39,11 +39,7 @@ See it in action on the [playground](https://s2.dev/playground).
 ## Install
 
 ```bash
-npm add @s2-dev/streamstore
-# or
-yarn add @s2-dev/streamstore
-# or
-bun add @s2-dev/streamstore
+npm install @s2-dev/streamstore
 ```
 
 ## Quick start
