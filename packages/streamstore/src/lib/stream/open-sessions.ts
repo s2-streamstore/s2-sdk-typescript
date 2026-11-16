@@ -5,7 +5,7 @@ import { abortedError } from "../../error.js";
  * the transport can end them before it releases its connections.
  */
 export class OpenSessions {
-	private readonly closers = new Set<() => Promise<void>>();
+	private readonly closers = new Set<() => unknown>();
 	private closed = false;
 
 	/**
@@ -13,7 +13,7 @@ export class OpenSessions {
 	 * {@link closeAll} has been called, throws the error a closed session ends
 	 * with, since the session would be ended at once.
 	 */
-	register(close: () => Promise<void>): () => void {
+	register(close: () => unknown): () => void {
 		if (this.closed) {
 			throw abortedError("Transport is closed");
 		}
@@ -28,6 +28,6 @@ export class OpenSessions {
 		this.closed = true;
 		const closers = [...this.closers];
 		this.closers.clear();
-		await Promise.all(closers.map((close) => close().catch(() => {})));
+		await Promise.allSettled(closers.map(async (close) => close()));
 	}
 }

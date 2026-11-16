@@ -203,29 +203,19 @@ export class S2STransport implements SessionTransport {
 	 * connections. Sessions end first because a graceful HTTP/2 close waits
 	 * for open streams.
 	 */
-	async close(): Promise<void> {
-		if (this.closingPromise) {
-			return this.closingPromise;
-		}
-
-		this.closingPromise = (async () => {
+	close(): Promise<void> {
+		this.closingPromise ??= (async () => {
 			// Append sessions may still reconnect while they drain.
 			await this.sessions.closeAll();
 			this.closed = true;
 			if (this.attached) {
-				this.attached = false;
 				await sharedConnectionPool.detach(
 					this.endpointOrigin,
 					this.transportConfig.http2,
 				);
 			}
 		})();
-
-		try {
-			await this.closingPromise;
-		} finally {
-			this.closingPromise = undefined;
-		}
+		return this.closingPromise;
 	}
 }
 

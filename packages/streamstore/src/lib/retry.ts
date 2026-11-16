@@ -315,21 +315,54 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		// Ends this session. Transport attempts get its signal so an abort
 		// also cancels a request that is still connecting.
 		const abort = new AbortController();
-		const unregister = options?.sessions?.register(async () => abort.abort());
 		const onAbort = () => abort.abort();
+		const unregister = options?.sessions?.register(onAbort);
 		signal?.addEventListener("abort", onAbort);
 		const release = () => {
 			signal?.removeEventListener("abort", onAbort);
 			unregister?.();
 		};
 
-		let attempt = 0;
-		while (true) {
-			try {
+		try {
+			let attempt = 0;
+			while (true) {
 				if (abort.signal.aborted) {
 					throw abortedError();
 				}
-				const session = await generator(args, abort.signal);
+				let session: TransportReadSession<Format>;
+				try {
+					session = await generator(args, abort.signal);
+				} catch (err) {
+					if (abort.signal.aborted) {
+						throw abortedError();
+					}
+					const error = s2Error(err);
+					const draining = isServerDraining(error);
+
+					const effectiveMax = Math.max(1, retryConfig.maxAttempts);
+					if (isRetryable(error) && (draining || attempt < effectiveMax - 1)) {
+						const delay = draining
+							? 0
+							: calculateDelay(
+									attempt,
+									retryConfig.minBaseDelayMillis,
+									retryConfig.maxBaseDelayMillis,
+								);
+						debugRead(
+							"connection error in create, will retry after %dms, status=%s",
+							delay,
+							error.status,
+						);
+						await sleep(delay, abort.signal);
+						if (!draining) {
+							attempt++;
+						}
+						continue;
+					}
+
+					// Not retryable or attempts exhausted
+					throw error;
+				}
 				if (abort.signal.aborted) {
 					await session.cancel("aborted").catch(() => {});
 					throw abortedError();
@@ -342,39 +375,10 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					abort.signal,
 					release,
 				);
-			} catch (err) {
-				if (abort.signal.aborted) {
-					release();
-					throw abortedError();
-				}
-				const error = s2Error(err);
-				const draining = isServerDraining(error);
-
-				const effectiveMax = Math.max(1, retryConfig.maxAttempts);
-				if (isRetryable(error) && (draining || attempt < effectiveMax - 1)) {
-					const delay = draining
-						? 0
-						: calculateDelay(
-								attempt,
-								retryConfig.minBaseDelayMillis,
-								retryConfig.maxBaseDelayMillis,
-							);
-					debugRead(
-						"connection error in create, will retry after %dms, status=%s",
-						delay,
-						error.status,
-					);
-					await sleep(delay, abort.signal);
-					if (!draining) {
-						attempt++;
-					}
-					continue;
-				}
-
-				// Not retryable or attempts exhausted
-				release();
-				throw error;
 			}
+		} catch (err) {
+			release();
+			throw err;
 		}
 	}
 
@@ -446,6 +450,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			caughtUpTracker.end(error);
 			pumpError = error;
 			deliveries.clear();
+			resolvePendingDelivery?.();
 			wake();
 		};
 		const handlePumpError = (error: unknown) => {
@@ -472,8 +477,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				return;
 			}
 			failPump(abortedError());
-			resolvePendingDelivery?.();
-			resolvePendingDelivery = undefined;
 			void cancelTransport("aborted").catch(() => {});
 		});
 
@@ -525,9 +528,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								error.status,
 							);
 							await sleep(delay, abortSignal);
-							if (stopped()) {
-								return;
-							}
 							if (!draining) {
 								attempt++;
 							}
@@ -671,9 +671,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								);
 							}
 							await sleep(delay, abortSignal);
-							if (stopped()) {
-								return;
-							}
 							if (!draining) {
 								attempt++;
 							}
