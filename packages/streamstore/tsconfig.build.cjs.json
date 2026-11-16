@@ -10,6 +10,7 @@
   },
   "include": ["src/**/*"],
   "exclude": [
+    "src/tests",
     "src/**/*.test.ts",
     "**/*.test.ts",
     "examples",

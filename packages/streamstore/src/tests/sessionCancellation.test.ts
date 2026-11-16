@@ -1,8 +1,5 @@
 import { getEventListeners } from "node:events";
-import http, { type ServerResponse } from "node:http";
-import http2, { type ServerHttp2Session } from "node:http2";
-import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
@@ -10,6 +7,14 @@ import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import type { SessionTransports } from "../lib/stream/types.js";
 import type { S2Stream } from "../stream.js";
 import { AppendInput, AppendRecord } from "../types.js";
+import {
+	type LocalServer,
+	serveHttp1,
+	serveHttp2,
+	sleep,
+	waitFor,
+	withinDeadline,
+} from "./helpers.js";
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -17,11 +22,9 @@ const TEST_TIMEOUT_MS = 15_000;
  * Local server for one transport. A read session gets one record (seq 0,
  * tail 1) and is then held open at the tail. Appends are acked.
  */
-interface SessionServer {
-	origin: string;
+interface SessionServer extends LocalServer {
 	/** Requests received so far, reads and appends. */
 	requests: () => number;
-	close: () => Promise<void>;
 }
 
 interface SessionServerOptions {
@@ -37,20 +40,6 @@ interface SessionServerOptions {
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
 
 const FROM_START = { start: { from: { seqNum: 0 } } };
-
-const DEADLINE_MS = 2_000;
-
-/** Fails instead of hanging if `promise` doesn't settle in time. */
-function withinDeadline<T>(promise: Promise<T>): Promise<T> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const deadline = new Promise<never>((_, reject) => {
-		timer = setTimeout(
-			() => reject(new Error(`did not settle within ${DEADLINE_MS}ms`)),
-			DEADLINE_MS,
-		);
-	});
-	return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
-}
 
 // Run in order after each test: servers first, so a handle that cannot close
 // cleanly is not left waiting on a live server.
@@ -90,20 +79,9 @@ function streamOn(
 	return stream;
 }
 
-function listen(server: http.Server | http2.Http2Server): Promise<string> {
-	return new Promise((resolve) => {
-		server.listen(0, "127.0.0.1", () => {
-			const { port } = server.address() as AddressInfo;
-			resolve(`http://127.0.0.1:${port}`);
-		});
-	});
-}
-
 async function startH2Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
-	const server = http2.createServer();
-	const sessions = new Set<ServerHttp2Session>();
 	let requests = 0;
 	const malformedFrame = Buffer.from(
 		frameMessage({ terminal: false, body: new Uint8Array([0x0a, 0x64]) }),
@@ -150,15 +128,8 @@ async function startH2Server(
 		}),
 	);
 
-	server.on("sessionError", () => {});
-	server.on("session", (session) => {
-		sessions.add(session);
-		session.on("error", () => {});
-		session.on("close", () => sessions.delete(session));
-	});
-	server.on("stream", (stream, headers) => {
+	const server = await serveHttp2((stream, headers) => {
 		requests++;
-		stream.on("error", () => {});
 		if (headers[":method"] === "POST") {
 			stream.respond({ ":status": 200 });
 			stream.on("data", () => stream.write(ackFrame));
@@ -177,23 +148,12 @@ async function startH2Server(
 			);
 		}
 	});
-
-	const origin = await listen(server);
-	return {
-		origin,
-		requests: () => requests,
-		close: () =>
-			new Promise<void>((resolve) => {
-				for (const session of sessions) session.destroy();
-				server.close(() => resolve());
-			}),
-	};
+	return { ...server, requests: () => requests };
 }
 
 async function startH1Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
-	const responses = new Set<ServerResponse>();
 	let requests = 0;
 	const batchEvent = `event: batch\ndata: ${JSON.stringify({
 		records: [{ seq_num: 0, timestamp: 1, headers: [], body: "a" }],
@@ -214,10 +174,8 @@ async function startH1Server(
 		tail: { seq_num: 2, timestamp: 1 },
 	});
 
-	const server = http.createServer((req, res) => {
+	const server = await serveHttp1((req, res) => {
 		requests++;
-		responses.add(res);
-		res.on("close", () => responses.delete(res));
 		if (req.method === "POST") {
 			req.resume();
 			req.on("end", () => {
@@ -240,18 +198,7 @@ async function startH1Server(
 			);
 		}
 	});
-
-	const origin = await listen(server);
-	return {
-		origin,
-		requests: () => requests,
-		close: () =>
-			new Promise<void>((resolve) => {
-				for (const res of responses) res.destroy();
-				server.closeAllConnections();
-				server.close(() => resolve());
-			}),
-	};
+	return { ...server, requests: () => requests };
 }
 
 const CASES = [
@@ -286,7 +233,7 @@ describe.each(TRANSPORTS)(
 				});
 				if (when === "right after readSession() is called") controller.abort();
 				if (when === "while the server holds the response") {
-					await vi.waitFor(() => expect(server.requests()).toBe(1));
+					await waitFor(() => server.requests() === 1);
 					controller.abort();
 				}
 				const reading = opening.then(async (session) => {
@@ -322,10 +269,7 @@ describe.each(TRANSPORTS)("Issue #142: a %s read session", (transport) => {
 			expect(getEventListeners(signal, "abort")).toHaveLength(1);
 			for await (const _ of session) break;
 
-			await vi.waitFor(
-				() => expect(getEventListeners(signal, "abort")).toHaveLength(0),
-				{ timeout: 2_000 },
-			);
+			await waitFor(() => getEventListeners(signal, "abort").length === 0);
 		},
 		TEST_TIMEOUT_MS,
 	);
@@ -381,7 +325,7 @@ describe.each(TRANSPORTS)(
 							() => "delivered",
 							(error) => `failed: ${error}`,
 						),
-						new Promise((resolve) => setTimeout(resolve, 100, "waiting")),
+						sleep(100).then(() => "waiting"),
 					]);
 					expect(outcome).toBe("waiting");
 				}
@@ -406,7 +350,7 @@ describe.each(TRANSPORTS)(
 				)[Symbol.asyncIterator]();
 				await records.next();
 				// Let the session fetch the second record and see the read end.
-				await new Promise((resolve) => setTimeout(resolve, 50));
+				await sleep(50);
 
 				await withinDeadline(stream.close());
 				await expect(withinDeadline(records.next())).rejects.toMatchObject({
@@ -450,7 +394,7 @@ describe("aborting a one-shot request", () => {
 			const controller = new AbortController();
 
 			const tail = stream.checkTail({ signal: controller.signal });
-			await vi.waitFor(() => expect(server.requests()).toBe(1));
+			await waitFor(() => server.requests() === 1);
 			controller.abort("done");
 
 			await expect(withinDeadline(tail)).rejects.toMatchObject({
