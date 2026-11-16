@@ -10,6 +10,7 @@ import {
 } from "../lib/stream/types.js";
 import { Producer } from "../producer.js";
 import { type AppendAck, type AppendInput } from "../types.js";
+import { withinDeadline } from "./helpers.js";
 
 class MockAppendSession implements AppendSession {
 	readonly readable = new ReadableStream<AppendAck>();
@@ -418,4 +419,103 @@ describe("Producer", () => {
 			await expect(producer.close()).rejects.toBe(error);
 		},
 	);
+
+	// Detail bug_9237d4a1-1b52-42bc-861a-9362ee04b6e0: close() dropped records
+	// still queued in the writable and resolved successfully.
+	it("close appends records already written to the writable and rejects later writes", async () => {
+		const session = new MockAppendSession();
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 2 }),
+			session,
+		);
+		const writer = producer.writable.getWriter();
+
+		const writes = ["a", "b", "c"].map((body) =>
+			writer.write(AppendRecord.string({ body })),
+		);
+		const closePromise = producer.close();
+		const lateWrite = expect(
+			writer.write(AppendRecord.string({ body: "late" })),
+		).rejects.toMatchObject({ name: "S2Error", message: "Producer is closed" });
+
+		await closePromise;
+		expect(session.getValues()).toEqual(["a", "b", "c"]);
+		await Promise.all(writes);
+		await lateWrite;
+	});
+
+	it("flush covers records already written to the writable", async () => {
+		const session = new MockAppendSession();
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 60_000 }),
+			session,
+		);
+		const writer = producer.writable.getWriter();
+
+		const writes = ["a", "b"].map((body) =>
+			writer.write(AppendRecord.string({ body })),
+		);
+		await producer.flush();
+		expect(session.getValues()).toEqual(["a", "b"]);
+
+		await Promise.all(writes);
+		await producer.close();
+	});
+
+	it.each<{
+		name: string;
+		session?: AppendSession;
+		drop: (writer: WritableStreamDefaultWriter<AppendRecordType>) => void;
+	}>([
+		{
+			name: "a write rejected after writer.close()",
+			drop: (writer) => {
+				void writer.write(AppendRecord.string({ body: "a" }));
+				void writer.close();
+				void writer.write(AppendRecord.string({ body: "x" })).catch(() => {});
+			},
+		},
+		{
+			name: "an abort with writes queued",
+			drop: (writer) => {
+				for (const body of ["a", "b", "c"]) {
+					void writer.write(AppendRecord.string({ body })).catch(() => {});
+				}
+				void writer.abort("stop").catch(() => {});
+			},
+		},
+		{
+			name: "a failed sink write with writes queued",
+			session: new ControlledAppendSession({
+				submitNumber: 1,
+				error: new S2Error({ message: "append failed", status: 500 }),
+			}),
+			drop: (writer) => {
+				for (const body of ["a", "b", "c", "d", "e"]) {
+					void writer.write(AppendRecord.string({ body })).catch(() => {});
+				}
+			},
+		},
+	])("close settles after $name", async ({ session, drop }) => {
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+			session ?? new MockAppendSession(),
+		);
+		drop(producer.writable.getWriter());
+
+		await withinDeadline(producer.close().catch(() => {}));
+	});
+
+	it("close ends a pipe into the writable", async () => {
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 0 }),
+			new MockAppendSession(),
+		);
+		const piped = new ReadableStream<AppendRecordType>().pipeTo(
+			producer.writable,
+		);
+
+		await producer.close();
+		await expect(withinDeadline(piped)).rejects.toThrow("Producer is closed");
+	});
 });
