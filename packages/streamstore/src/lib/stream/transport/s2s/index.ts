@@ -655,6 +655,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
  */
 // Removed S2SAcksStream - transport sessions no longer expose streams
 
+const appendSessionClosedError = () =>
+	new S2Error({ message: "AppendSession is closed", status: 400 });
+
 /**
  * S2S-based transport session for appending records via HTTP/2.
  * Pipelined: multiple requests can be in-flight simultaneously.
@@ -947,9 +950,7 @@ class S2SAppendSession implements TransportAppendSession {
 		// close() may have run while the stream was opening or the body was
 		// compressed; writing now would send a batch the caller gave up on.
 		if (this.closed) {
-			return err(
-				new S2Error({ message: "AppendSession is closed", status: 400 }),
-			);
+			return err(appendSessionClosedError());
 		}
 
 		// Track pending ack - this promise resolves when the ack is received (FIFO)
@@ -1038,9 +1039,7 @@ class S2SAppendSession implements TransportAppendSession {
 	async submit(input: Types.AppendInput): Promise<AppendResult> {
 		// Validate closed state
 		if (this.closed) {
-			return err(
-				new S2Error({ message: "AppendSession is closed", status: 400 }),
-			);
+			return err(appendSessionClosedError());
 		}
 
 		// Lazy initialize HTTP/2 stream on first submit

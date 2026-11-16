@@ -44,12 +44,19 @@ interface SessionServerOptions {
 	 * first with a 503 after which it may have taken effect, and the rest with
 	 * a 429 after which it has not.
 	 */
-	appends?: "ack" | "hold" | "fail";
+	appends?: "hold" | "fail";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
 
 const ABORTED = { message: "Request cancelled", code: "ABORTED", status: 499 };
+
+/** The error `promise` rejects with, or undefined if it resolves. */
+const rejectionOf = (promise: Promise<unknown>) =>
+	promise.then(
+		() => undefined,
+		(error: S2Error) => error,
+	);
 
 /** The status and body of the `n`th append failure, from 0. */
 function appendFailure(n: number): [number, string] {
@@ -147,11 +154,8 @@ async function startH2Server(
 	);
 
 	let failures = 0;
-	let open = 0;
 	const server = await serveHttp2((stream, headers) => {
 		requests++;
-		open++;
-		stream.on("close", () => open--);
 		if (headers[":method"] === "POST") {
 			if (options?.appends === "fail") {
 				stream.once("data", () => {
@@ -180,7 +184,7 @@ async function startH2Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests, open: () => open };
+	return { ...server, requests: () => requests, open: server.openStreams };
 }
 
 async function startH1Server(
@@ -207,11 +211,8 @@ async function startH1Server(
 	});
 
 	let failures = 0;
-	let open = 0;
 	const server = await serveHttp1((req, res) => {
 		requests++;
-		open++;
-		res.on("close", () => open--);
 		if (req.method === "POST") {
 			req.resume();
 			req.on("end", () => {
@@ -237,7 +238,7 @@ async function startH1Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests, open: () => open };
+	return { ...server, requests: () => requests, open: server.openResponses };
 }
 
 const CASES = [
@@ -451,9 +452,8 @@ describe.each(TRANSPORTS)(
 				await (await session.submit(record())).ack();
 
 				controller.abort();
-				const unsent = await withinDeadline(session.submit(record())).then(
-					() => undefined,
-					(error: S2Error) => error,
+				const unsent = await rejectionOf(
+					withinDeadline(session.submit(record())),
 				);
 				expect(unsent).toMatchObject(ABORTED);
 				expect(unsent?.hasNoSideEffects()).toBe(true);
@@ -519,10 +519,7 @@ describe.each(TRANSPORTS)(
 					queued.then((ticket) => ticket.ack()),
 					session.submit(record()),
 				]) {
-					const error = await unsent.then(
-						() => undefined,
-						(error: S2Error) => error,
-					);
+					const error = await rejectionOf(unsent);
 					expect(error?.code).toBe("rate_limited");
 					expect(error?.hasNoSideEffects()).toBe(true);
 				}

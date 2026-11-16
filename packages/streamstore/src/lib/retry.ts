@@ -263,6 +263,31 @@ export async function withRetries<T>(
 	throw lastError;
 }
 
+/** How a session ends early: its caller's signal, and its transport's sessions. */
+type SessionOptions = { signal?: AbortSignal; sessions?: OpenSessions };
+
+/**
+ * Ties a session to `options`: throws {@link abortedError} if the signal has
+ * already aborted, then calls `onAbort` once it aborts and `onClose` when the
+ * transport's sessions close. Returns a function that detaches both.
+ */
+function attachSession(
+	options: SessionOptions | undefined,
+	onAbort: () => void,
+	onClose: () => unknown = onAbort,
+): () => void {
+	const signal = options?.signal;
+	if (signal?.aborted) {
+		throw abortedError();
+	}
+	const unregister = options?.sessions?.register(onClose);
+	signal?.addEventListener("abort", onAbort);
+	return () => {
+		signal?.removeEventListener("abort", onAbort);
+		unregister?.();
+	};
+}
+
 /** Opens a transport read session. `signal` aborts when the session ends early. */
 type ReadSessionGenerator<Format extends "string" | "bytes"> = (
 	args: ReadArgs<Format>,
@@ -302,27 +327,17 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		generator: ReadSessionGenerator<Format>,
 		args: ReadArgs<Format> = {},
 		config?: RetryConfig,
-		options?: { signal?: AbortSignal; sessions?: OpenSessions },
+		options?: SessionOptions,
 	) {
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
 		};
 
-		const signal = options?.signal;
-		if (signal?.aborted) {
-			throw abortedError();
-		}
 		// Ends this session. Transport attempts get its signal so an abort
 		// also cancels a request that is still connecting.
 		const abort = new AbortController();
-		const onAbort = () => abort.abort();
-		const unregister = options?.sessions?.register(onAbort);
-		signal?.addEventListener("abort", onAbort);
-		const release = () => {
-			signal?.removeEventListener("abort", onAbort);
-			unregister?.();
-		};
+		const release = attachSession(options, () => abort.abort());
 
 		try {
 			let attempt = 0;
@@ -935,8 +950,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private pumpWakeup?: () => void;
 	private closed = false;
 	private fatalError?: S2Error;
-	// What batches the failed session never sent are rejected with.
-	private unsentError?: S2Error;
 	// Aborted with the session, to cut short a retry backoff.
 	private readonly aborted = new AbortController();
 
@@ -967,7 +980,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		private readonly sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 		streamName?: string,
-		options?: { signal?: AbortSignal; sessions?: OpenSessions },
+		options?: SessionOptions,
 	) {
 		this.streamName = streamName ?? "unknown";
 		this.retryConfig = {
@@ -1028,17 +1041,11 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			},
 		});
 
-		const signal = options?.signal;
-		if (signal?.aborted) {
-			throw abortedError();
-		}
-		const unregister = options?.sessions?.register(() => this.close());
-		const onAbort = () => void this.abort(abortedError());
-		signal?.addEventListener("abort", onAbort);
-		this.release = () => {
-			signal?.removeEventListener("abort", onAbort);
-			unregister?.();
-		};
+		this.release = attachSession(
+			options,
+			() => void this.abort(abortedError()),
+			() => this.close(),
+		);
 	}
 
 	/**
@@ -1057,7 +1064,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 		streamName?: string,
-		options?: { signal?: AbortSignal; sessions?: OpenSessions },
+		options?: SessionOptions,
 	): Promise<RetryAppendSession> {
 		return new RetryAppendSession(
 			generator,
@@ -1092,14 +1099,15 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Check if we have capacity
 		while (true) {
-			// Check for fatal error before adding to pendingBytes
-			if (this.unsentError) {
+			// Check for fatal error before adding to pendingBytes. The batch
+			// is never sent.
+			if (this.fatalError) {
 				debugSession(
 					"[%s] [CAPACITY] fatal error detected, rejecting: %s",
 					this.streamName,
-					this.unsentError.message,
+					this.fatalError.message,
 				);
-				throw this.unsentError;
+				throw unsentAppendError(this.fatalError);
 			}
 
 			// Reject if session is closing/closed so blocked submits fail fast
@@ -1200,14 +1208,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		input: Types.AppendInput,
 		batchMeteredSize: number,
 	): Promise<AppendResult> {
-		// Check for fatal error (e.g., from abort())
-		if (this.unsentError) {
+		// Check for fatal error (e.g., from abort()). The batch is never sent.
+		if (this.fatalError) {
 			debugSession(
 				"[%s] [SUBMIT] rejecting due to fatal error: %s",
 				this.streamName,
-				this.unsentError.message,
+				this.fatalError.message,
 			);
-			return Promise.resolve(err(this.unsentError));
+			return Promise.resolve(err(unsentAppendError(this.fatalError)));
 		}
 
 		// Create promise for submit() callers
@@ -1866,7 +1874,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		);
 		const sessionError = withPriorUncertainty(error, anyUncertain);
 		this.fatalError = sessionError;
-		this.unsentError = unsentAppendError(error);
 		this.pumpStopped = true;
 		this.aborted.abort();
 
@@ -1881,12 +1888,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			this.streamName,
 			this.inflight.length,
 		);
+		const unsentError = unsentAppendError(error);
 		for (const entry of this.inflight) {
 			if (entry.maybeResolve) {
 				entry.maybeResolve(
 					err(
 						entry.needsSubmit
-							? this.unsentError
+							? unsentError
 							: withPriorUncertainty(error, entry.priorUncertainty ?? false),
 					),
 				);

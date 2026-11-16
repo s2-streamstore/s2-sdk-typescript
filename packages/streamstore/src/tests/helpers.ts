@@ -113,11 +113,14 @@ export async function serveHttp2(
 		/** Sessions opened so far, closed or not. */
 		sessionCount: () => number;
 		openSessions: Set<ServerHttp2Session>;
+		/** Streams not yet closed by either side. */
+		openStreams: () => number;
 	}
 > {
 	const server = createHttp2Server();
 	const openSessions = new Set<ServerHttp2Session>();
 	let sessionCount = 0;
+	let openStreams = 0;
 	server.on("sessionError", () => {});
 	server.on("session", (session) => {
 		sessionCount++;
@@ -126,6 +129,8 @@ export async function serveHttp2(
 		session.on("close", () => openSessions.delete(session));
 	});
 	server.on("stream", (stream, headers) => {
+		openStreams++;
+		stream.on("close", () => openStreams--);
 		stream.on("error", () => {});
 		onStream(stream, headers);
 	});
@@ -133,6 +138,7 @@ export async function serveHttp2(
 		origin: await listen(server),
 		sessionCount: () => sessionCount,
 		openSessions,
+		openStreams: () => openStreams,
 		close: () =>
 			new Promise<void>((resolve) => {
 				for (const session of openSessions) session.destroy();
@@ -148,7 +154,12 @@ export async function serveHttp2(
  */
 export async function serveHttp1(
 	onRequest: (req: IncomingMessage, res: ServerResponse) => void,
-): Promise<LocalServer> {
+): Promise<
+	LocalServer & {
+		/** Responses not yet closed by either side. */
+		openResponses: () => number;
+	}
+> {
 	const responses = new Set<ServerResponse>();
 	const server = createServer((req, res) => {
 		responses.add(res);
@@ -157,6 +168,7 @@ export async function serveHttp1(
 	});
 	return {
 		origin: await listen(server),
+		openResponses: () => responses.size,
 		close: () =>
 			new Promise<void>((resolve) => {
 				for (const res of responses) res.destroy();

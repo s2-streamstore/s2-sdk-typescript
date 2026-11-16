@@ -56,12 +56,15 @@ type InflightRecord = {
 	ackPromise: Promise<IndexedAppendAck>;
 	resolveAck: (ack: IndexedAppendAck) => void;
 	rejectAck: (err: S2Error) => void;
-	/**
-	 * How far the record's batch got: being submitted, which settles it either
-	 * way, or sent, whose ack settles it.
-	 */
-	stage?: "submitting" | "sent";
+	/** The record's batch, once the pump submits it. */
+	batch?: SubmittedBatch;
 };
+
+/**
+ * A batch the pump submits to the AppendSession. A pending submit settles its
+ * records, and so does the ack of a batch that was sent.
+ */
+type SubmittedBatch = { stage: "submitting" | "sent" | "unsent" };
 
 /**
  * Producer provides per-record append semantics on top of a batched AppendSession.
@@ -239,6 +242,7 @@ export class Producer implements AsyncDisposable {
 
 				// Submit to AppendSession (blocks on capacity)
 				let ticket: BatchSubmitTicket;
+				const submitted: SubmittedBatch = { stage: "submitting" };
 				try {
 					debugProducer(
 						"[%s] pump submitting to session: records=%d, match_seq_num=%s",
@@ -252,18 +256,14 @@ export class Producer implements AsyncDisposable {
 						matchSeqNum: batch.matchSeqNum,
 					});
 					for (const record of associatedRecords) {
-						record.stage = "submitting";
+						record.batch = submitted;
 					}
 					ticket = await this.appendSession.submit(input);
-					for (const record of associatedRecords) {
-						record.stage = "sent";
-					}
+					submitted.stage = "sent";
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
-					for (const record of associatedRecords) {
-						record.stage = undefined;
-					}
+					submitted.stage = "unsent";
 					const error = this.fail(err);
 					debugProducer(
 						"[%s] pump submit error: %s",
@@ -317,21 +317,11 @@ export class Producer implements AsyncDisposable {
 
 			// After the loop exits with an error, cancel the transform reader
 			// so pending transformWriter.write() calls are unblocked (they will
-			// reject, causing submit() to throw). Then reject any remaining
-			// inflight records whose ack promises would otherwise hang.
+			// reject, causing submit() to throw). fail() has already rejected
+			// the records that never joined a batch.
 			if (this.terminalError) {
 				this.transformReader.cancel(this.terminalError).catch(() => {});
-
-				if (this.inflightRecords.length > 0) {
-					debugProducer(
-						"[%s] pump exited with error, rejecting %d remaining inflight records",
-						this.debugName,
-						this.inflightRecords.length,
-					);
-					for (const record of this.inflightRecords.splice(0)) {
-						record.rejectAck(unsentAppendError(this.terminalError));
-					}
-				}
+				this.inflightRecords.splice(0);
 			}
 		} catch (err) {
 			const error = this.fail(err);
@@ -559,14 +549,17 @@ export class Producer implements AsyncDisposable {
 		}
 		const error = this.terminalError;
 
+		const unsentError = unsentAppendError(error);
+		const noSideEffects = error.hasNoSideEffects();
 		for (const entry of this.pendingAckEntries) {
-			if (entry.stage === undefined) {
-				entry.rejectAck(unsentAppendError(error));
-			} else if (entry.stage === "sent" && !error.hasNoSideEffects()) {
+			const stage = entry.batch?.stage ?? "unsent";
+			if (stage === "unsent") {
+				entry.rejectAck(unsentError);
+			} else if (stage === "sent" && !noSideEffects) {
 				entry.rejectAck(error);
 			}
-			// Otherwise the record's own batch settles it: `error` may say it
-			// had no side effects, which need not hold for that batch.
+			// Otherwise the record's own batch settles it: `error` says it had
+			// no side effects, which need not hold for that batch.
 		}
 		this.transformReader.cancel(error).catch(() => {});
 
