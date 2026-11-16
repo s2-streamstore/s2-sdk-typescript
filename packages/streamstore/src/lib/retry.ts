@@ -160,10 +160,22 @@ export function calculateDelay(
 }
 
 /**
- * Sleeps for the specified duration.
+ * Sleeps for the specified duration, or until `signal` aborts.
  */
-export function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal?.aborted) {
+			resolve();
+			return;
+		}
+		const wake = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", wake);
+			resolve();
+		};
+		const timer = setTimeout(wake, ms);
+		signal?.addEventListener("abort", wake);
+	});
 }
 
 /**
@@ -248,6 +260,13 @@ export async function withRetries<T>(
 	}
 	throw lastError;
 }
+
+/** Opens a transport read session. `signal` aborts when the session ends early. */
+type ReadSessionGenerator<Format extends "string" | "bytes"> = (
+	args: ReadArgs<Format>,
+	signal: AbortSignal,
+) => Promise<TransportReadSession<Format>>;
+
 type ReadDelivery<Format extends "string" | "bytes"> = {
 	records: Types.ReadRecord<Format>[];
 	next: number;
@@ -268,32 +287,63 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 
 	private readonly caughtUpTracker: CaughtUpTracker;
 
+	/**
+	 * Open a read session. The transport session is created eagerly, so
+	 * `create` rejects if it cannot connect.
+	 *
+	 * Once `options.signal` aborts, at any point, the session ends with
+	 * {@link abortedError}: `create` rejects with it, or reads throw it.
+	 * An abort is never retried.
+	 */
 	static async create<Format extends "string" | "bytes" = "string">(
-		generator: (
-			args: ReadArgs<Format>,
-		) => Promise<TransportReadSession<Format>>,
+		generator: ReadSessionGenerator<Format>,
 		args: ReadArgs<Format> = {},
 		config?: RetryConfig,
+		options?: { signal?: AbortSignal },
 	) {
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
 		};
 
-		// Establish connection eagerly to fail fast on connection errors
-		// This way readSession() throws if we can't connect, rather than
-		// returning a stream that immediately errors
-		let attempt = 0;
-		let lastError: S2Error | undefined;
+		const signal = options?.signal;
+		if (signal?.aborted) {
+			throw abortedError();
+		}
+		// Ends this session. Transport attempts get its signal so an abort
+		// also cancels a request that is still connecting.
+		const abort = new AbortController();
+		const onAbort = () => abort.abort();
+		signal?.addEventListener("abort", onAbort);
+		const release = () => {
+			signal?.removeEventListener("abort", onAbort);
+		};
 
+		let attempt = 0;
 		while (true) {
 			try {
-				const session = await generator(args);
-				// Connection succeeded - return the retry wrapper
-				return new RetryReadSession<Format>(args, generator, config, session);
+				if (abort.signal.aborted) {
+					throw abortedError();
+				}
+				const session = await generator(args, abort.signal);
+				if (abort.signal.aborted) {
+					await session.cancel("aborted").catch(() => {});
+					throw abortedError();
+				}
+				return new RetryReadSession<Format>(
+					args,
+					generator,
+					config,
+					session,
+					abort.signal,
+					release,
+				);
 			} catch (err) {
+				if (abort.signal.aborted) {
+					release();
+					throw abortedError();
+				}
 				const error = s2Error(err);
-				lastError = error;
 				const draining = isServerDraining(error);
 
 				const effectiveMax = Math.max(1, retryConfig.maxAttempts);
@@ -310,7 +360,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						delay,
 						error.status,
 					);
-					await sleep(delay);
+					await sleep(delay, abort.signal);
 					if (!draining) {
 						attempt++;
 					}
@@ -318,18 +368,19 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				}
 
 				// Not retryable or attempts exhausted
-				throw lastError;
+				release();
+				throw error;
 			}
 		}
 	}
 
 	private constructor(
 		args: ReadArgs<Format>,
-		generator: (
-			args: ReadArgs<Format>,
-		) => Promise<TransportReadSession<Format>>,
-		config?: RetryConfig,
-		initialSession?: TransportReadSession<Format>,
+		generator: ReadSessionGenerator<Format>,
+		config: RetryConfig | undefined,
+		initialSession: TransportReadSession<Format>,
+		abortSignal: AbortSignal,
+		release: () => void,
 	) {
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
@@ -347,6 +398,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		let resolvePendingDelivery: (() => void) | undefined;
 		let pumpDone = false;
 		let pumpError: S2Error | undefined;
+		// The pump stops quietly: a cancel needs no error, and an abort has
+		// already failed the pump.
+		const stopped = () => cancelled || abortSignal.aborted;
 
 		const wake = () => {
 			const resolve = wakePull;
@@ -382,6 +436,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			resolvePendingDelivery = undefined;
 		};
 		const failPump = (error: S2Error) => {
+			if (pumpError) {
+				return;
+			}
 			caughtUpTracker.end(error);
 			pumpError = error;
 			deliveries.clear();
@@ -392,6 +449,29 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				failPump(s2Error(error));
 			}
 		};
+		const cancelTransport = async (reason: unknown) => {
+			try {
+				// Cancel through the locked reader so the transport stream closes.
+				if (currentReader) {
+					await currentReader.cancel(reason);
+				} else {
+					await session?.cancel(reason);
+				}
+			} catch (err) {
+				if (!hasErrorCode(err, "ERR_INVALID_STATE")) {
+					throw err;
+				}
+			}
+		};
+		abortSignal.addEventListener("abort", () => {
+			if (cancelled || pumpDone || pumpError) {
+				return;
+			}
+			failPump(abortedError());
+			resolvePendingDelivery?.();
+			resolvePendingDelivery = undefined;
+			void cancelTransport("aborted").catch(() => {});
+		});
 
 		const pump = async () => {
 			let nextArgs = { ...args } as ReadArgs<Format>;
@@ -401,7 +481,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			let attempt = 0;
 
 			while (true) {
-				if (cancelled) {
+				if (stopped()) {
 					return;
 				}
 
@@ -409,14 +489,17 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					debugRead("starting read session with args: %o", nextArgs);
 
 					try {
-						session = await generator(nextArgs);
-						if (cancelled) {
+						session = await generator(nextArgs, abortSignal);
+						if (stopped()) {
 							try {
 								await session.cancel?.("cancelled");
 							} catch {}
 							return;
 						}
 					} catch (err) {
+						if (stopped()) {
+							return;
+						}
 						const error = s2Error(err);
 						const draining = isServerDraining(error);
 
@@ -437,8 +520,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								delay,
 								error.status,
 							);
-							await sleep(delay);
-							if (cancelled) {
+							await sleep(delay, abortSignal);
+							if (stopped()) {
 								return;
 							}
 							if (!draining) {
@@ -457,7 +540,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				currentReader = reader;
 
 				while (true) {
-					if (cancelled) {
+					if (stopped()) {
 						return;
 					}
 					let read: Awaited<ReturnType<typeof reader.read>>;
@@ -476,6 +559,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 							done: false,
 							value: { ok: false, error },
 						};
+					}
+					if (abortSignal.aborted) {
+						return;
 					}
 					const { done, value: result } = read;
 					try {
@@ -580,8 +666,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 									this._recordsRead,
 								);
 							}
-							await sleep(delay);
-							if (cancelled) {
+							await sleep(delay, abortSignal);
+							if (stopped()) {
 								return;
 							}
 							if (!draining) {
@@ -637,7 +723,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		super(
 			{
 				start: () => {
-					queueMicrotask(() => void pump().catch(handlePumpError));
+					queueMicrotask(
+						() => void pump().catch(handlePumpError).finally(release),
+					);
 				},
 				pull: async (controller) => {
 					while (!cancelled) {
@@ -681,18 +769,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					resolvePendingDelivery?.();
 					resolvePendingDelivery = undefined;
 					wake();
-					try {
-						// Cancel through the locked reader so the transport stream closes.
-						if (currentReader) {
-							await currentReader.cancel(reason);
-						} else {
-							await session?.cancel(reason);
-						}
-					} catch (err) {
-						if (!hasErrorCode(err, "ERR_INVALID_STATE")) {
-							throw err;
-						}
-					}
+					await cancelTransport(reason);
 				},
 			},
 			{ highWaterMark: 0 },

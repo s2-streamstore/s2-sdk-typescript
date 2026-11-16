@@ -234,6 +234,11 @@ export class S2Stream {
 	 * When `as: "bytes"` is provided, bodies and headers are decoded to `Uint8Array`.
 	 * `streamConfig` is sent whenever the session connects and is applied only if
 	 * the read auto-creates the stream.
+	 *
+	 * Once `options.signal` aborts, at any point, the session ends with an
+	 * `S2Error` with code `ABORTED` (status 499) on either transport: a pending
+	 * `readSession()` rejects with it, and reading the session throws it. An
+	 * abort is never retried.
 	 */
 	public async readSession<Format extends "string" | "bytes" = "string">(
 		input?: Types.ReadInput,

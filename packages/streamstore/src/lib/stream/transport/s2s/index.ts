@@ -159,7 +159,6 @@ export class S2STransport implements SessionTransport {
 					this.transportConfig.accessToken,
 					stream,
 					myArgs,
-					options,
 					(headers) => this.openH2Stream(headers),
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
@@ -169,6 +168,7 @@ export class S2STransport implements SessionTransport {
 			},
 			args,
 			this.transportConfig.retry,
+			{ signal: options?.signal },
 		);
 	}
 
@@ -230,7 +230,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		bearerToken: Redacted.Redacted,
 		streamName: string,
 		args: ReadArgs<Format> | undefined,
-		options: S2RequestOptions | undefined,
 		openH2Stream: OpenH2Stream,
 		basinName?: string,
 		encryptionKey?: Redacted.Redacted<string>,
@@ -243,7 +242,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			args,
 			bearerToken,
 			url,
-			options,
 			openH2Stream,
 			basinName,
 			encryptionKey,
@@ -257,7 +255,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private args: ReadArgs<Format> | undefined,
 		private authToken: Redacted.Redacted,
 		private url: URL,
-		private options: S2RequestOptions | undefined,
 		private openH2Stream: OpenH2Stream,
 		private basinName?: string,
 		private encryptionKey?: Redacted.Redacted<string>,
@@ -290,7 +287,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				let pendingChunks: Buffer[] | undefined;
 
 				// Listener references for cleanup (issue #142)
-				let abortHandler: (() => void) | undefined;
 				let goawayHandler:
 					| ((
 							errorCode: number,
@@ -301,11 +297,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				let sessionConnection: Http2Session | undefined;
 
 				cleanupListeners = () => {
-					if (abortHandler && options?.signal) {
-						options.signal.removeEventListener("abort", abortHandler);
-					}
-					abortHandler = undefined;
-
 					if (goawayHandler && sessionConnection) {
 						sessionConnection.removeListener("goaway", goawayHandler);
 					}
@@ -355,6 +346,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
 					const acceptEncoding = await acceptEncodingHeader(compression);
+					if (controllerClosed) {
+						return;
+					}
 					const { stream, poison } = await openH2Stream({
 						":method": "GET",
 						":path": path,
@@ -387,13 +381,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						stream.close();
 						return;
 					}
-
-					abortHandler = () => {
-						if (!stream.closed) {
-							stream.close();
-						}
-					};
-					options?.signal?.addEventListener("abort", abortHandler);
 
 					stream.on("response", (headers) => {
 						// Cache the status.

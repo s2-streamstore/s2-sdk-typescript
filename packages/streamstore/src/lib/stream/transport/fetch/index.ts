@@ -749,11 +749,15 @@ export class FetchTransport implements SessionTransport {
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
 		return ReadSessionImpl.create(
-			(myArgs) => {
-				return FetchReadSession.create(this.client, stream, myArgs, options);
+			(myArgs, signal) => {
+				return FetchReadSession.create(this.client, stream, myArgs, {
+					...options,
+					signal,
+				});
 			},
 			args,
 			this.transportConfig.retry,
+			{ signal: options?.signal },
 		);
 	}
 
