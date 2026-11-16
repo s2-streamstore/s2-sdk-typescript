@@ -6,8 +6,6 @@ Add-on patterns and higher-level helpers built on top of the [`@s2-dev/streamsto
 
 ```bash
 npm install @s2-dev/streamstore-patterns @s2-dev/streamstore
-# or: pnpm add @s2-dev/streamstore-patterns @s2-dev/streamstore
-# or: yarn add @s2-dev/streamstore-patterns @s2-dev/streamstore
 ```
 
 ## Structure
