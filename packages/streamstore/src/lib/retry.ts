@@ -1640,7 +1640,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					const hasNonIdempotentSent = this.inflight.some(
 						(entry, index) =>
 							index > 0 &&
-							!entry.needsSubmit &&
+							entry.sent === true &&
 							entry.input.matchSeqNum === undefined,
 					);
 					if (hasNonIdempotentSent) {
@@ -1693,7 +1693,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						(this.session?.effectSignalled() ?? true)
 					) {
 						for (const entry of this.inflight) {
-							if (!entry.needsSubmit) {
+							if (entry.sent) {
 								entry.priorUncertainty = true;
 							}
 						}

@@ -1,6 +1,7 @@
 import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { BatchTransform } from "../batch-transform.js";
+import type { RetryConfig } from "../common.js";
 import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
@@ -43,9 +44,10 @@ interface SessionServerOptions {
 	 * How appends are answered: acked (default), acked with the s2s response
 	 * left open after the client ends its side, not at all, or failed, the
 	 * first with a 503 after which it may have taken effect, and the rest with
-	 * a 429 after which it has not.
+	 * a 429 after which it has not. On fetch only, "busy" answers the first
+	 * two with a 429, the first after 100ms, and holds the rest.
 	 */
-	appends?: "open" | "hold" | "fail";
+	appends?: "open" | "hold" | "fail" | "busy";
 }
 
 const TRANSPORTS: SessionTransports[] = ["s2s", "fetch"];
@@ -93,11 +95,17 @@ async function startSessionServer(
 function streamOn(
 	server: SessionServer,
 	transport: SessionTransports,
+	retry?: RetryConfig,
 ): S2Stream {
 	const stream = new S2({
 		accessToken: "token",
 		endpoints: { account: server.origin, basin: server.origin },
-		retry: { maxAttempts: 3, minBaseDelayMillis: 1, maxBaseDelayMillis: 5 },
+		retry: {
+			maxAttempts: 3,
+			minBaseDelayMillis: 1,
+			maxBaseDelayMillis: 5,
+			...retry,
+		},
 	})
 		.basin("test-basin")
 		.stream("stream", { forceTransport: transport });
@@ -220,6 +228,20 @@ async function startH1Server(
 			req.resume();
 			req.on("end", () => {
 				if (options?.appends === "hold") return;
+				if (options?.appends === "busy") {
+					const n = failures++;
+					if (n < 2) {
+						const [status, body] = appendFailure(1);
+						setTimeout(
+							() => {
+								res.writeHead(status, { "content-type": "application/json" });
+								res.end(body);
+							},
+							n === 0 ? 100 : 0,
+						);
+					}
+					return;
+				}
 				const [status, body] =
 					options?.appends === "fail" ? appendFailure(failures++) : [200, ack];
 				res.writeHead(status, { "content-type": "application/json" });
@@ -320,11 +342,13 @@ const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
 async function abortableSession(
 	server: SessionServer,
 	transport: SessionTransports,
+	retry?: RetryConfig,
 ) {
 	const controller = new AbortController();
-	const session = await streamOn(server, transport).appendSession(undefined, {
-		signal: controller.signal,
-	});
+	const session = await streamOn(server, transport, retry).appendSession(
+		undefined,
+		{ signal: controller.signal },
+	);
 	return { controller, session };
 }
 
@@ -548,23 +572,25 @@ describe.each(TRANSPORTS)(
 			TEST_TIMEOUT_MS,
 		);
 
-		// Fetch sends one append at a time, so a batch can wait in its queue,
-		// handed over but never sent.
+		// Fetch sends one append at a time. A retry hands it both batches, so
+		// the second waits in its queue, handed over but never sent.
 		it.runIf(transport === "fetch")(
-			"rejects a batch its transport queued but never sent as never sent",
+			"treats a batch its transport queued but never sent as never sent",
 			async () => {
 				const server = await startSessionServer(transport, {
-					appends: "hold",
+					appends: "busy",
 				});
 				const { controller, session } = await abortableSession(
 					server,
 					transport,
+					{ appendRetryPolicy: "noSideEffects" },
 				);
-				const [first, second] = await Promise.all([
-					session.submit(record()),
-					session.submit(record()),
-				]);
+				const first = await session.submit(record());
 				await waitFor(() => server.requests() === 1);
+				const second = await session.submit(record());
+				// The second 429 fails the queued batch too. noSideEffects still
+				// retries, as that batch was never sent.
+				await waitFor(() => server.requests() === 3);
 
 				controller.abort();
 				const [sentError, queuedError] = await withinDeadline(
@@ -572,7 +598,7 @@ describe.each(TRANSPORTS)(
 				);
 				expect(sentError?.hasNoSideEffects()).toBe(false);
 				expect(queuedError?.hasNoSideEffects()).toBe(true);
-				expect(server.requests()).toBe(1);
+				expect(server.requests()).toBe(3);
 			},
 			TEST_TIMEOUT_MS,
 		);
