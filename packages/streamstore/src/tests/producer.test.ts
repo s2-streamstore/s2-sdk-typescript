@@ -418,4 +418,32 @@ describe("Producer", () => {
 			await expect(producer.close()).rejects.toBe(error);
 		},
 	);
+
+	it("close appends records already written to the writable and rejects later writes", async () => {
+		const session = new MockAppendSession();
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 2 }),
+			session,
+		);
+		const writer = producer.writable.getWriter();
+
+		const writes = ["a", "b", "c"].map((body) =>
+			writer.write(AppendRecord.string({ body })),
+		);
+		const closePromise = producer.close();
+		const lateWrite = writer.write(AppendRecord.string({ body: "late" }));
+		const lateWriteResult = lateWrite.then(
+			() => undefined,
+			(err: unknown) => err,
+		);
+
+		await closePromise;
+		expect(session.getValues()).toEqual(["a", "b", "c"]);
+		await Promise.all(writes);
+
+		const lateError = await lateWriteResult;
+		expect(lateError).toBeInstanceOf(S2Error);
+		expect((lateError as S2Error).message).toBe("Producer is closed");
+		expect(session.getValues()).toEqual(["a", "b", "c"]);
+	});
 });
