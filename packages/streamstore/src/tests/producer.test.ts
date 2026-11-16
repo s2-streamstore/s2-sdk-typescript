@@ -403,9 +403,11 @@ describe("Producer", () => {
 			const secondTicket = await producer.submit(
 				AppendRecord.string({ body: "second" }),
 			);
-			await session.nextSubmission();
+			const firstSubmission = await session.nextSubmission();
 			const failingSubmission = await session.nextSubmission();
 			const flushPromise = producer.flush();
+			// A failed session settles every batch it was given.
+			firstSubmission.ack.reject(error);
 			if (failurePhase === "ack") {
 				failingSubmission.ack.reject(error);
 			}

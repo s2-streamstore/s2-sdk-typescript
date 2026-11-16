@@ -526,6 +526,41 @@ describe.each(TRANSPORTS)(
 			},
 			TEST_TIMEOUT_MS,
 		);
+
+		it(
+			"rejects a Producer record queued behind an aborted append as never sent",
+			async () => {
+				const server = await startSessionServer(transport, {
+					appends: "hold",
+				});
+				const controller = new AbortController();
+				const session = await streamOn(server, transport).appendSession(
+					undefined,
+					{ signal: controller.signal },
+				);
+				const producer = new Producer(
+					new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+					session,
+				);
+				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
+				await waitFor(() => server.requests() === 1);
+				// The session holds it back until the first batch is acked.
+				const queued = await producer.submit(
+					AppendRecord.string({ body: "b" }),
+				);
+				await sleep(10);
+
+				controller.abort();
+				const [sentError, queuedError] = await Promise.all([
+					rejectionOf(sent.ack()),
+					rejectionOf(queued.ack()),
+				]);
+				expect(sentError?.hasNoSideEffects()).toBe(false);
+				expect(queuedError).toMatchObject(ABORTED);
+				expect(queuedError?.hasNoSideEffects()).toBe(true);
+			},
+			TEST_TIMEOUT_MS,
+		);
 	},
 );
 

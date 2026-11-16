@@ -56,15 +56,7 @@ type InflightRecord = {
 	ackPromise: Promise<IndexedAppendAck>;
 	resolveAck: (ack: IndexedAppendAck) => void;
 	rejectAck: (err: S2Error) => void;
-	/** The record's batch, once the pump submits it. */
-	batch?: SubmittedBatch;
 };
-
-/**
- * A batch the pump submits to the AppendSession. A pending submit settles its
- * records, and so does the ack of a batch that was sent.
- */
-type SubmittedBatch = { stage: "submitting" | "sent" | "unsent" };
 
 /**
  * Producer provides per-record append semantics on top of a batched AppendSession.
@@ -219,6 +211,10 @@ export class Producer implements AsyncDisposable {
 					}
 					break;
 				}
+				// fail() has rejected the records of batches not yet submitted.
+				if (this.terminalError) {
+					break;
+				}
 
 				debugProducer(
 					"[%s] pump got batch: records=%d, match_seq_num=%s, inflightRecords=%d",
@@ -228,21 +224,20 @@ export class Producer implements AsyncDisposable {
 					this.inflightRecords.length,
 				);
 
-				// Associate records with this batch (FIFO correspondence)
+				// Associate records with this batch (FIFO correspondence). From
+				// here on, the batch's submit or its ack settles them.
 				const recordCount = batch.records.length;
-				const associatedRecords = this.inflightRecords.splice(0, recordCount);
-
-				if (associatedRecords.length !== recordCount) {
+				if (this.inflightRecords.length < recordCount) {
 					throw new S2Error({
-						message: `Internal error: flushed ${recordCount} records but only ${associatedRecords.length} inflight entries`,
+						message: `Internal error: flushed ${recordCount} records but only ${this.inflightRecords.length} inflight entries`,
 						status: 500,
 						origin: "sdk",
 					});
 				}
+				const associatedRecords = this.inflightRecords.splice(0, recordCount);
 
 				// Submit to AppendSession (blocks on capacity)
 				let ticket: BatchSubmitTicket;
-				const submitted: SubmittedBatch = { stage: "submitting" };
 				try {
 					debugProducer(
 						"[%s] pump submitting to session: records=%d, match_seq_num=%s",
@@ -255,16 +250,17 @@ export class Producer implements AsyncDisposable {
 						fencingToken: batch.fencingToken,
 						matchSeqNum: batch.matchSeqNum,
 					});
-					for (const record of associatedRecords) {
-						record.batch = submitted;
-					}
 					ticket = await this.appendSession.submit(input);
-					submitted.stage = "sent";
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
-					submitted.stage = "unsent";
-					const error = this.fail(err);
+					const unsentError = unsentAppendError(toS2Error(err));
+					for (const record of associatedRecords) {
+						record.rejectAck(unsentError);
+					}
+					// The session's own failure, not this batch's copy of it, which
+					// says nothing of batches the session did send.
+					const error = this.fail(this.appendSession.failureCause() ?? err);
 					debugProducer(
 						"[%s] pump submit error: %s",
 						this.debugName,
@@ -317,11 +313,9 @@ export class Producer implements AsyncDisposable {
 
 			// After the loop exits with an error, cancel the transform reader
 			// so pending transformWriter.write() calls are unblocked (they will
-			// reject, causing submit() to throw). fail() has already rejected
-			// the records that never joined a batch.
+			// reject, causing submit() to throw).
 			if (this.terminalError) {
 				this.transformReader.cancel(this.terminalError).catch(() => {});
-				this.inflightRecords.splice(0);
 			}
 		} catch (err) {
 			const error = this.fail(err);
@@ -330,8 +324,6 @@ export class Producer implements AsyncDisposable {
 				this.debugName,
 				error.message,
 			);
-
-			this.inflightRecords.splice(0);
 		}
 	}
 
@@ -452,12 +444,7 @@ export class Producer implements AsyncDisposable {
 				err,
 			);
 
-			// Remove from inflight if the write failed
-			const idx = this.inflightRecords.indexOf(entry);
-			if (idx >= 0) {
-				this.inflightRecords.splice(idx, 1);
-			}
-
+			// Rejects this record too, which is still inflight.
 			const error = this.fail(err);
 			throw error;
 		}
@@ -549,17 +536,11 @@ export class Producer implements AsyncDisposable {
 		}
 		const error = this.terminalError;
 
+		// Records not yet in a submitted batch are never sent. Those that are
+		// get their own batch's outcome, from its submit or its ack.
 		const unsentError = unsentAppendError(error);
-		const noSideEffects = error.hasNoSideEffects();
-		for (const entry of this.pendingAckEntries) {
-			const stage = entry.batch?.stage ?? "unsent";
-			if (stage === "unsent") {
-				entry.rejectAck(unsentError);
-			} else if (stage === "sent" && !noSideEffects) {
-				entry.rejectAck(error);
-			}
-			// Otherwise the record's own batch settles it: `error` says it had
-			// no side effects, which need not hold for that batch.
+		for (const record of this.inflightRecords.splice(0)) {
+			record.rejectAck(unsentError);
 		}
 		this.transformReader.cancel(error).catch(() => {});
 
@@ -599,7 +580,6 @@ export class Producer implements AsyncDisposable {
 					origin: "sdk",
 				}),
 			);
-			this.inflightRecords.splice(0);
 		}
 
 		// Close the readable stream
