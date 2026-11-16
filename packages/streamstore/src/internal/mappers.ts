@@ -9,6 +9,7 @@ import * as API from "../generated/types.gen.js";
 import { decodeFromBase64, encodeToBase64 } from "../lib/base64.js";
 import type * as InternalTypes from "../lib/stream/types.js";
 import * as Types from "../types.js";
+import { epochMillis } from "../utils.js";
 
 // =============================================================================
 // Utilities
@@ -37,8 +38,7 @@ function toDate(ms: number): Date {
 function toEpochMs(
 	value: number | Date | undefined | null,
 ): number | undefined {
-	if (value === undefined || value === null) return undefined;
-	return typeof value === "number" ? Math.floor(value) : value.getTime();
+	return value == null ? undefined : epochMillis(value);
 }
 
 // =============================================================================
@@ -241,11 +241,7 @@ export function toAPIReadQuery(input?: Types.ReadInput): {
 		if ("seqNum" in from) {
 			query.seq_num = Math.floor(from.seqNum);
 		} else if ("timestamp" in from) {
-			// Convert Date to milliseconds if needed
-			query.timestamp =
-				typeof from.timestamp === "number"
-					? Math.floor(from.timestamp)
-					: from.timestamp.getTime();
+			query.timestamp = epochMillis(from.timestamp);
 		} else if ("tailOffset" in from) {
 			query.tail_offset = Math.floor(from.tailOffset);
 		}

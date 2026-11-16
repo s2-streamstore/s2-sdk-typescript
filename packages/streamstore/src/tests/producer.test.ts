@@ -276,6 +276,24 @@ describe("Producer", () => {
 		);
 	});
 
+	// Batched, an invalid record would fail the whole batch and the Producer.
+	it("rejects only the submit of an invalid hand-built record", async () => {
+		const session = new MockAppendSession();
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 10, maxBatchRecords: 3 }),
+			session,
+		);
+
+		await producer.submit(AppendRecord.string({ body: "a" }));
+		await expect(
+			producer.submit({ body: "bad" } as AppendRecordType),
+		).rejects.toBeInstanceOf(S2Error);
+		await producer.submit(AppendRecord.string({ body: "b" }));
+		await withinDeadline(producer.close());
+
+		expect(session.getValues()).toEqual(["a", "b"]);
+	});
+
 	it("waits for appendSession submissions to preserve ordering", async () => {
 		const session = new AsyncMockAppendSession();
 		const producer = new Producer(

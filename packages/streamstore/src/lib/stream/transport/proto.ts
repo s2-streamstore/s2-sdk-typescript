@@ -2,6 +2,7 @@ import { S2Error } from "../../../error.js";
 import type * as API from "../../../generated/index.js";
 import * as Proto from "../../../generated/proto/s2.js";
 import type * as Types from "../../../types.js";
+import { epochMillis } from "../../../utils.js";
 import type { AppendRecord, ReadBatch, ReadRecord } from "../types.js";
 
 const textEncoder = new TextEncoder();
@@ -42,17 +43,11 @@ const toProtoHeaders = (
 };
 
 const toProtoAppendRecord = (record: AppendRecord): Proto.AppendRecord => {
-	let timestamp: bigint | undefined;
-	if (record.timestamp !== undefined) {
-		const ms =
-			typeof record.timestamp === "number"
-				? record.timestamp
-				: record.timestamp.getTime();
-		// Floor like the JSON path; BigInt() throws on fractional numbers.
-		timestamp = BigInt(Math.floor(ms));
-	}
 	return {
-		timestamp,
+		timestamp:
+			record.timestamp == null
+				? undefined
+				: BigInt(epochMillis(record.timestamp)),
 		headers: toProtoHeaders(record.headers),
 		body: toBytes(record.body),
 	};

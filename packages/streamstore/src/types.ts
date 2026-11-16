@@ -14,6 +14,7 @@ import type { EncryptionAlgorithm } from "./lib/encryption.js";
 import type { ListAllArgs } from "./lib/paginate.js";
 import {
 	meteredBytes as calculateMeteredBytes,
+	epochMillis,
 	utf8ByteLength,
 } from "./utils.js";
 
@@ -79,27 +80,41 @@ export type AppendRecord = StringAppendRecord | BytesAppendRecord;
 
 const textEncoder = new TextEncoder();
 
-function validateTimestamp(timestamp: number | Date | undefined): void {
-	if (timestamp === undefined) {
+function validateTimestamp(timestamp: number | Date | null | undefined): void {
+	if (timestamp === undefined || timestamp === null) {
 		return;
 	}
 	let ms: number;
 	try {
-		// Works for a Date from another realm, where `instanceof Date` is false.
-		ms =
-			typeof timestamp === "number"
-				? timestamp
-				: Date.prototype.getTime.call(timestamp);
+		ms = epochMillis(timestamp);
 	} catch {
 		ms = Number.NaN;
 	}
-	if (!Number.isFinite(ms) || ms < 0) {
+	if (!(ms >= 0 && ms <= Number.MAX_SAFE_INTEGER)) {
 		throw new S2Error({
 			message:
-				"timestamp must be a valid Date or a finite, non-negative number of milliseconds",
+				"timestamp must be a valid Date or a non-negative number of milliseconds, at most Number.MAX_SAFE_INTEGER",
 			origin: "sdk",
 		});
 	}
+}
+
+/**
+ * Check a record that may have been built by hand rather than with
+ * {@link AppendRecord.string} or {@link AppendRecord.bytes}.
+ *
+ * @internal
+ * @throws {S2Error} If `meteredBytes` is not a non-negative safe integer, or `timestamp` is invalid
+ */
+export function validateAppendRecord(record: AppendRecord): void {
+	if (!Number.isSafeInteger(record.meteredBytes) || record.meteredBytes < 0) {
+		throw new S2Error({
+			message:
+				"record meteredBytes must be a non-negative safe integer; create records with AppendRecord.string() or AppendRecord.bytes()",
+			origin: "sdk",
+		});
+	}
+	validateTimestamp(record.timestamp);
 }
 
 /**
@@ -307,17 +322,7 @@ export namespace AppendInput {
 
 		let totalBytes = 0;
 		for (const record of records) {
-			if (
-				!Number.isSafeInteger(record.meteredBytes) ||
-				record.meteredBytes < 0
-			) {
-				throw new S2Error({
-					message:
-						"record meteredBytes must be a non-negative safe integer; create records with AppendRecord.string() or AppendRecord.bytes()",
-					origin: "sdk",
-				});
-			}
-			validateTimestamp(record.timestamp);
+			validateAppendRecord(record);
 			totalBytes += record.meteredBytes;
 		}
 		if (totalBytes > MAX_APPEND_BYTES) {

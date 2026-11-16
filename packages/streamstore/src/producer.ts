@@ -2,7 +2,11 @@ import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
 import { appendSessionClosedError, S2Error } from "./error.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
-import { type AppendAck, AppendInput, type AppendRecord } from "./types.js";
+import {
+	type AppendAck,
+	type AppendRecord,
+	validateAppendRecord,
+} from "./types.js";
 
 const debugProducer = createDebug("s2:producer");
 
@@ -243,11 +247,7 @@ export class Producer implements AsyncDisposable {
 						batch.matchSeqNum ?? "none",
 					);
 
-					const input = AppendInput.create(batch.records, {
-						fencingToken: batch.fencingToken,
-						matchSeqNum: batch.matchSeqNum,
-					});
-					ticket = await this.appendSession.submit(input);
+					ticket = await this.appendSession.submit(batch);
 
 					debugProducer("[%s] pump submit returned ticket", this.debugName);
 				} catch (err) {
@@ -321,7 +321,7 @@ export class Producer implements AsyncDisposable {
 	 * accepted. The promise blocks if the underlying AppendSession is at capacity
 	 * (backpressure is applied via the transform stream).
 	 *
-	 * @throws S2Error if the Producer has failed, or close() was called before this
+	 * @throws S2Error if the Producer has failed, close() was called before this, or `record` has an invalid `meteredBytes` or `timestamp` (only this record is rejected)
 	 */
 	submit(record: AppendRecord): Promise<RecordSubmitTicket> {
 		const afterClose = this.closePromise !== null;
@@ -388,6 +388,9 @@ export class Producer implements AsyncDisposable {
 		if (afterClose) {
 			throw producerClosedError();
 		}
+
+		// Fails only this record: once batched, it would fail the whole batch.
+		validateAppendRecord(record);
 
 		// Create the ack promise (resolved later by pump)
 		let resolveAck!: (ack: IndexedAppendAck) => void;

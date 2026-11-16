@@ -1093,6 +1093,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		if (this.fatalError || this.closing) {
 			throw appendSessionClosedError(this.fatalError);
 		}
+		// A NaN here would stick in queuedBytes and stall capacity for good.
+		if (!Number.isSafeInteger(input.meteredBytes) || input.meteredBytes < 0) {
+			throw new S2Error({
+				message:
+					"AppendInput meteredBytes must be a non-negative safe integer; create inputs with AppendInput.create()",
+				origin: "sdk",
+			});
+		}
 
 		// This needs to happen in the sync path.
 		this.ensurePump();

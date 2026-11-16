@@ -34,6 +34,8 @@ const TEST_TIMEOUT_MS = 15_000;
 interface SessionServer extends LocalServer {
 	/** Requests received so far, reads and appends. */
 	requests: () => number;
+	/** Read requests the client has not yet closed. */
+	openReads: () => number;
 	/** Answers the append a "busy" server holds back. */
 	release?: () => void;
 }
@@ -124,6 +126,7 @@ async function startH2Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
 	let requests = 0;
+	let openReads = 0;
 	const malformedFrame = Buffer.from(
 		frameMessage({ terminal: false, body: new Uint8Array([0x0a, 0x64]) }),
 	);
@@ -181,6 +184,8 @@ async function startH2Server(
 			}
 			return;
 		}
+		openReads++;
+		stream.once("close", () => openReads--);
 		if (options?.reads === "bounded") {
 			stream.respond({ ":status": 200 });
 			stream.end(boundedFrames);
@@ -193,13 +198,14 @@ async function startH2Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests };
+	return { ...server, requests: () => requests, openReads: () => openReads };
 }
 
 async function startH1Server(
 	options?: SessionServerOptions,
 ): Promise<SessionServer> {
 	let requests = 0;
+	let openReads = 0;
 	const batchEvent = `event: batch\ndata: ${JSON.stringify({
 		records: [{ seq_num: 0, timestamp: 1, headers: [], body: "a" }],
 		tail: { seq_num: 1, timestamp: 1 },
@@ -245,6 +251,8 @@ async function startH1Server(
 			});
 			return;
 		}
+		openReads++;
+		res.once("close", () => openReads--);
 		if (options?.reads === "bounded") {
 			res.writeHead(200, { "content-type": "text/event-stream" });
 			res.end(boundedEvent);
@@ -259,7 +267,12 @@ async function startH1Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests, release: () => held?.() };
+	return {
+		...server,
+		requests: () => requests,
+		openReads: () => openReads,
+		release: () => held?.(),
+	};
 }
 
 const CASES = [
@@ -335,13 +348,14 @@ describe.each(TRANSPORTS)("Issue #142: a %s read session", (transport) => {
 /**
  * Disposing a read session while a reader held it threw "ReadableStream is
  * locked" and left the session open. It must end the session, failing the
- * held reader's pending read.
+ * held reader's pending read and closing the request.
  */
 describe.each(TRANSPORTS)("disposing a %s read session", (transport) => {
 	it(
 		"ends it while a reader holds it",
 		async () => {
-			const stream = streamOn(await startSessionServer(transport), transport);
+			const server = await startSessionServer(transport);
+			const stream = streamOn(server, transport);
 			const session = await stream.readSession(FROM_START);
 			const reader = session.getReader();
 			await reader.read();
@@ -349,6 +363,7 @@ describe.each(TRANSPORTS)("disposing a %s read session", (transport) => {
 
 			await session[Symbol.asyncDispose]();
 			await expect(withinDeadline(pending)).rejects.toMatchObject(ABORTED);
+			await waitFor(() => server.openReads() === 0);
 		},
 		TEST_TIMEOUT_MS,
 	);
