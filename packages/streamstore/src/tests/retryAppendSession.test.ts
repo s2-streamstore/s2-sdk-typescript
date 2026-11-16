@@ -9,6 +9,7 @@ import type {
 	TransportAppendSession,
 } from "../lib/stream/types.js";
 import type { AppendAck, StreamPosition } from "../types.js";
+import { withinDeadline } from "./helpers.js";
 
 /**
  * Minimal controllable AppendSession for testing AppendSessionImpl.
@@ -297,6 +298,33 @@ describe("AppendSessionImpl (unit)", () => {
 			message: "Max attempts (1) exhausted: boom",
 			status: 500,
 		});
+	});
+
+	// Detail bug_54158d21: a rejected transport submit() crashed the pump, so
+	// the session hung with no error.
+	it("fails the session when the transport's submit() rejects", async () => {
+		vi.useRealTimers();
+		const session = await AppendSessionImpl.create(
+			async () => ({
+				submit: async () => {
+					throw new Error("Message too large");
+				},
+				close: async () => okClose(),
+			}),
+			undefined,
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
+		);
+
+		const ticket = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "x" })]),
+		);
+		await expect(withinDeadline(ticket.ack())).rejects.toMatchObject({
+			code: "SESSION_CLOSED",
+		});
+		expect(session.failureCause()?.message).toContain("Message too large");
+		await expect(withinDeadline(session.close())).rejects.toThrow(
+			"Message too large",
+		);
 	});
 
 	it("does not retry under noSideEffects policy when error may have side effects", async () => {

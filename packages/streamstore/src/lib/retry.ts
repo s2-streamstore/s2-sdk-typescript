@@ -1312,7 +1312,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		this.pumpPromise = this.runPump().catch((e) => {
 			debugSession("[%s] pump crashed unexpectedly: %s", this.streamName, e);
-			// This should never happen - pump handles all errors internally
+			// Should never happen, but a session must fail rather than hang.
+			return this.abort(s2Error(e));
 		});
 	}
 
@@ -1807,8 +1808,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			this.inflight.length,
 		);
 		for (const entry of this.inflight) {
-			// Attach .catch to superseded promise to avoid unhandled rejection
-			entry.innerPromise.catch(() => {});
 			this.send(session, entry);
 		}
 		// Every entry in toSubmit is inflight, so was just resubmitted.
@@ -1827,9 +1826,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			entry.input.matchSeqNum ?? "none",
 		);
 		entry.attemptStartedMonotonicMs = performance.now();
-		entry.innerPromise = session.submit(entry.input, () => {
-			entry.sent = true;
-		});
+		entry.innerPromise = session
+			.submit(entry.input, () => {
+				entry.sent = true;
+			})
+			// A transport should return errors, but one that rejects must not
+			// crash the pump.
+			.catch((e) => err(s2Error(e)));
 	}
 
 	/**
