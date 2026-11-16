@@ -71,15 +71,8 @@ const readLoop = async () => {
 			console.log("tailing read:", record.seqNum, record.body);
 		}
 	} catch (error: unknown) {
-		if (
-			error instanceof S2Error &&
-			(error.code === "ABORTED" || error.status === 499)
-		) {
+		if (error instanceof S2Error && error.code === "ABORTED") {
 			console.log("Read aborted:", error.message);
-			return;
-		}
-		if (error instanceof DOMException && error.name === "AbortError") {
-			console.log("DOMException", error.message);
 			return;
 		}
 		throw error;

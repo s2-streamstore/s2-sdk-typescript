@@ -6,7 +6,7 @@
  */
 
 import type { OutgoingHttpHeaders } from "node:http";
-import type { ClientHttp2Stream, Http2Session } from "node:http2";
+import type { ClientHttp2Stream } from "node:http2";
 import createDebug from "debug";
 
 /** Type for ReadableStream with optional async iterator support. */
@@ -40,6 +40,7 @@ import {
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
 import { streamConfigHeaders } from "../../../stream-config.js";
+import { OpenSessions } from "../../open-sessions.js";
 import { DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendRecord,
@@ -107,6 +108,7 @@ export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
 	private readonly compression: CompressionType;
 	private readonly endpointOrigin: string;
+	private readonly sessions = new OpenSessions();
 	private attached = false;
 	private closed = false;
 	private closingPromise?: Promise<void>;
@@ -142,6 +144,7 @@ export class S2STransport implements SessionTransport {
 			sessionOptions,
 			this.transportConfig.retry,
 			stream, // Pass stream name for debug context
+			this.sessions,
 		);
 	}
 
@@ -159,7 +162,6 @@ export class S2STransport implements SessionTransport {
 					this.transportConfig.accessToken,
 					stream,
 					myArgs,
-					options,
 					(headers) => this.openH2Stream(headers),
 					this.transportConfig.basinName,
 					this.transportConfig.encryptionKey,
@@ -169,6 +171,7 @@ export class S2STransport implements SessionTransport {
 			},
 			args,
 			this.transportConfig.retry,
+			{ signal: options?.signal, sessions: this.sessions },
 		);
 	}
 
@@ -195,27 +198,24 @@ export class S2STransport implements SessionTransport {
 		});
 	}
 
-	async close(): Promise<void> {
-		this.closed = true;
-		if (this.closingPromise) {
-			return this.closingPromise;
-		}
-
-		this.closingPromise = (async () => {
+	/**
+	 * End the sessions opened from this transport, then release its pooled
+	 * connections. Sessions end first because a graceful HTTP/2 close waits
+	 * for open streams.
+	 */
+	close(): Promise<void> {
+		this.closingPromise ??= (async () => {
+			// Append sessions may still reconnect while they drain.
+			await this.sessions.closeAll();
+			this.closed = true;
 			if (this.attached) {
-				this.attached = false;
 				await sharedConnectionPool.detach(
 					this.endpointOrigin,
 					this.transportConfig.http2,
 				);
 			}
 		})();
-
-		try {
-			await this.closingPromise;
-		} finally {
-			this.closingPromise = undefined;
-		}
+		return this.closingPromise;
 	}
 }
 
@@ -230,7 +230,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		bearerToken: Redacted.Redacted,
 		streamName: string,
 		args: ReadArgs<Format> | undefined,
-		options: S2RequestOptions | undefined,
 		openH2Stream: OpenH2Stream,
 		basinName?: string,
 		encryptionKey?: Redacted.Redacted<string>,
@@ -243,7 +242,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			args,
 			bearerToken,
 			url,
-			options,
 			openH2Stream,
 			basinName,
 			encryptionKey,
@@ -257,7 +255,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		private args: ReadArgs<Format> | undefined,
 		private authToken: Redacted.Redacted,
 		private url: URL,
-		private options: S2RequestOptions | undefined,
 		private openH2Stream: OpenH2Stream,
 		private basinName?: string,
 		private encryptionKey?: Redacted.Redacted<string>,
@@ -268,18 +265,20 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 		const textDecoder = new TextDecoder();
 		let http2Stream: ClientHttp2Stream | undefined;
 		let controllerClosed = false;
-		let cleanupListeners: (() => void) | undefined;
 		// Track timeout for detecting when server stops sending data
 		const TAIL_TIMEOUT_MS = 20000; // 20 seconds
 		let timeoutTimer: NodeJS.Timeout | undefined;
 		const markControllerClosed = () => {
 			if (controllerClosed) return false;
 			controllerClosed = true;
-			cleanupListeners?.();
-			cleanupListeners = undefined;
 			if (timeoutTimer) {
 				clearTimeout(timeoutTimer);
 				timeoutTimer = undefined;
+			}
+			// An ended session can't be cancelled later, so release the stream
+			// now: a graceful close of its connection waits for it.
+			if (http2Stream && !http2Stream.closed) {
+				http2Stream.close();
 			}
 			return true;
 		};
@@ -289,29 +288,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 				let responseCode: number | undefined;
 				let pendingChunks: Buffer[] | undefined;
 
-				// Listener references for cleanup (issue #142)
-				let abortHandler: (() => void) | undefined;
-				let goawayHandler:
-					| ((
-							errorCode: number,
-							lastStreamID: number,
-							opaqueData: Buffer,
-					  ) => void)
-					| undefined;
-				let sessionConnection: Http2Session | undefined;
-
-				cleanupListeners = () => {
-					if (abortHandler && options?.signal) {
-						options.signal.removeEventListener("abort", abortHandler);
-					}
-					abortHandler = undefined;
-
-					if (goawayHandler && sessionConnection) {
-						sessionConnection.removeListener("goaway", goawayHandler);
-					}
-					goawayHandler = undefined;
-					sessionConnection = undefined;
-				};
 				const safeClose = () => {
 					if (markControllerClosed()) {
 						try {
@@ -355,6 +331,9 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 					const path = `${url.pathname}/streams/${encodeURIComponent(streamName)}/records${queryString ? `?${queryString}` : ""}`;
 
 					const acceptEncoding = await acceptEncodingHeader(compression);
+					if (controllerClosed) {
+						return;
+					}
 					const { stream, poison } = await openH2Stream({
 						":method": "GET",
 						":path": path,
@@ -388,13 +367,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						return;
 					}
 
-					abortHandler = () => {
-						if (!stream.closed) {
-							stream.close();
-						}
-					};
-					options?.signal?.addEventListener("abort", abortHandler);
-
 					stream.on("response", (headers) => {
 						// Cache the status.
 						// This informs whether we should attempt to parse s2s frames in the "data" handler.
@@ -407,12 +379,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 							}
 						}
 					});
-
-					sessionConnection = stream.session;
-					goawayHandler = (errorCode, lastStreamID, opaqueData) => {
-						debug("received GOAWAY from server");
-					};
-					sessionConnection?.on("goaway", goawayHandler);
 
 					stream.on("error", (err) => {
 						safeError(err);
@@ -508,7 +474,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 									} else {
 										safeClose();
 									}
-									stream.close();
 								} else {
 									try {
 										const batchBytes =
@@ -551,7 +516,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 												this.advisedReconnects.record();
 												debug("reconnect advised, ending read session");
 												safeError(reconnectAdvisedError());
-												stream.close();
 												return;
 											}
 											declinedAdvice = true;
@@ -626,9 +590,6 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 			},
 			cancel: async () => {
 				markControllerClosed();
-				if (http2Stream && !http2Stream.closed) {
-					http2Stream.close();
-				}
 			},
 		});
 	}

@@ -234,6 +234,11 @@ export class S2Stream {
 	 * When `as: "bytes"` is provided, bodies and headers are decoded to `Uint8Array`.
 	 * `streamConfig` is sent whenever the session connects and is applied only if
 	 * the read auto-creates the stream.
+	 *
+	 * Once `options.signal` aborts, at any point, the session ends with an
+	 * `S2Error` with code `ABORTED` (status 499) on either transport: a pending
+	 * `readSession()` rejects with it, and reading the session throws it. An
+	 * abort is never retried.
 	 */
 	public async readSession<Format extends "string" | "bytes" = "string">(
 		input?: Types.ReadInput,
@@ -276,6 +281,16 @@ export class S2Stream {
 			requestOptions,
 		);
 	}
+	/**
+	 * Close the stream handle and every session opened from it.
+	 *
+	 * Read sessions end with an `S2Error` with code `ABORTED`, as when their
+	 * `signal` aborts. Append sessions close as {@link AppendSession.close}
+	 * does, waiting for inflight appends to settle; their errors surface on
+	 * the sessions, not here. The transport is then released, and `close()`
+	 * resolves whether or not other handles share its connection. Later calls
+	 * on the handle throw.
+	 */
 	public async close(): Promise<void> {
 		if (this.closePromise) {
 			return this.closePromise;

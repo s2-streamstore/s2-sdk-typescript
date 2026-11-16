@@ -102,13 +102,10 @@ export function s2Error(error: any): S2Error {
 		});
 	}
 
-	// Abort error?
+	// Cancelled through a signal. `createApiClient` turns any abort before the
+	// response arrives into an `AbortError`, whatever reason was given.
 	if (error instanceof Error && error.name === "AbortError") {
-		return new S2Error({
-			message: "Request cancelled",
-			status: 499, // Client Closed Request (nginx non-standard)
-			origin: "sdk",
-		});
+		return abortedError();
 	}
 
 	// Other unknown errors

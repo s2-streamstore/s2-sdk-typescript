@@ -11,17 +11,14 @@ import {
 	S2Error,
 	s2Error,
 } from "../../../../error.js";
-import {
-	type Client,
-	createClient,
-	createConfig,
-} from "../../../../generated/client/index.js";
+import type { Client } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
 import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
 import { computeAppendRecordFormat } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
+import { createApiClient } from "../../../client.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import { EventStream } from "../../../event-stream.js";
 import { FifoQueue } from "../../../queue.js";
@@ -33,6 +30,7 @@ import {
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
 import { streamConfigHeaders } from "../../../stream-config.js";
+import { OpenSessions } from "../../open-sessions.js";
 import { canSetUserAgentHeader, DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendRecord,
@@ -401,7 +399,6 @@ export class FetchAppendSession implements TransportAppendSession {
 	private pendingResolvers = new FifoQueue<{
 		resolve: (result: AppendResult) => void;
 	}>();
-	private inFlight = false;
 	private _effectSignalled = false;
 	private readonly options?: S2RequestOptions;
 	private readonly stream: string;
@@ -448,12 +445,10 @@ export class FetchAppendSession implements TransportAppendSession {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
-		this.client = createClient(
-			createConfig({
-				baseUrl: transportConfig.baseUrl,
-				auth: () => Redacted.value(transportConfig.accessToken),
-				headers: headers,
-			}),
+		this.client = createApiClient(
+			transportConfig.baseUrl,
+			() => Redacted.value(transportConfig.accessToken),
+			headers,
 		);
 
 		const signal = requestOptions?.signal;
@@ -491,8 +486,9 @@ export class FetchAppendSession implements TransportAppendSession {
 				this.options?.signal?.removeEventListener("abort", this.abortHandler);
 				this.abortHandler = undefined;
 			}
+			// Fails the append in flight; the loop then fails the queued ones.
 			this.abortController.abort();
-			await this.waitForDrain();
+			await this.processingPromise;
 			debug("[%s] FetchAppendSession close complete", this.stream);
 			return okClose();
 		} catch (error) {
@@ -594,7 +590,6 @@ export class FetchAppendSession implements TransportAppendSession {
 	private async processLoop(): Promise<void> {
 		debug("[%s] FetchAppendSession.processLoop: starting", this.stream);
 		while (this.queue.length > 0) {
-			this.inFlight = true;
 			const input = this.queue.shift()!;
 			const resolver = this.pendingResolvers.shift()!;
 
@@ -668,30 +663,15 @@ export class FetchAppendSession implements TransportAppendSession {
 				// Clear the queue
 				this.queue.clear();
 
-				this.inFlight = false;
 				this.processingPromise = null;
 				return;
 			}
-
-			this.inFlight = false;
 		}
 
 		// Queue fully drained with no errors — session is dormant
 		this._effectSignalled = false;
 		debug("[%s] FetchAppendSession.processLoop: done", this.stream);
 		this.processingPromise = null;
-	}
-
-	private async waitForDrain(): Promise<void> {
-		// Wait for processing to complete
-		if (this.processingPromise) {
-			await this.processingPromise;
-		}
-
-		// Wait until queue is empty and nothing is in flight
-		while (this.queue.length > 0 || this.inFlight) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
 	}
 }
 
@@ -702,6 +682,7 @@ export class FetchAppendSession implements TransportAppendSession {
 export class FetchTransport implements SessionTransport {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
+	private readonly sessions = new OpenSessions();
 	constructor(config: TransportConfig) {
 		const headers: Record<string, string> = {};
 		if (config.basinName) {
@@ -713,12 +694,10 @@ export class FetchTransport implements SessionTransport {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
-		this.client = createClient(
-			createConfig({
-				baseUrl: config.baseUrl,
-				auth: () => Redacted.value(config.accessToken),
-				headers: headers,
-			}),
+		this.client = createApiClient(
+			config.baseUrl,
+			() => Redacted.value(config.accessToken),
+			headers,
 		);
 		this.transportConfig = config;
 	}
@@ -740,6 +719,7 @@ export class FetchTransport implements SessionTransport {
 			sessionOptions,
 			this.transportConfig.retry,
 			stream, // Pass stream name for debug context
+			this.sessions,
 		);
 	}
 
@@ -749,16 +729,20 @@ export class FetchTransport implements SessionTransport {
 		options?: S2RequestOptions,
 	): Promise<ReadSession<Format>> {
 		return ReadSessionImpl.create(
-			(myArgs) => {
-				return FetchReadSession.create(this.client, stream, myArgs, options);
+			(myArgs, signal) => {
+				return FetchReadSession.create(this.client, stream, myArgs, {
+					...options,
+					signal,
+				});
 			},
 			args,
 			this.transportConfig.retry,
+			{ signal: options?.signal, sessions: this.sessions },
 		);
 	}
 
+	/** End the sessions opened from this transport. */
 	async close(): Promise<void> {
-		// Fetch transport holds no long-lived resources beyond the client.
-		// Provided for API symmetry; nothing to tear down.
+		await this.sessions.closeAll();
 	}
 }

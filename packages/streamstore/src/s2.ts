@@ -4,8 +4,8 @@ import { S2Basins } from "./basins.js";
 import type { RetryConfig, S2ClientOptions, S2Compression } from "./common.js";
 import { S2Endpoints } from "./endpoints.js";
 import { makeServerError, S2Error } from "./error.js";
-import { createClient, createConfig } from "./generated/client/index.js";
 import type { Client } from "./generated/client/types.gen.js";
+import { createApiClient } from "./lib/client.js";
 import * as Redacted from "./lib/redacted.js";
 import {
 	canSetUserAgentHeader,
@@ -75,12 +75,10 @@ export class S2 {
 		if (canSetUserAgentHeader()) {
 			headers["user-agent"] = DEFAULT_USER_AGENT;
 		}
-		this.client = createClient(
-			createConfig({
-				baseUrl: this.endpoints.accountBaseUrl(),
-				auth: () => Redacted.value(this.accessToken),
-				headers: headers,
-			}),
+		this.client = createApiClient(
+			this.endpoints.accountBaseUrl(),
+			() => Redacted.value(this.accessToken),
+			headers,
 		);
 
 		this.client.interceptors.error.use((err, res) => {

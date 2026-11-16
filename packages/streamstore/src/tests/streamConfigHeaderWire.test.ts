@@ -1,10 +1,3 @@
-import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import http2, {
-	type IncomingHttpHeaders,
-	type ServerHttp2Session,
-	type ServerHttp2Stream,
-} from "node:http2";
-import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import * as Proto from "../generated/proto/s2.js";
 import * as Redacted from "../lib/redacted.js";
@@ -14,6 +7,7 @@ import { S2STransport } from "../lib/stream/transport/s2s/index.js";
 import type { SessionTransport } from "../lib/stream/types.js";
 import { S2_STREAM_CONFIG_HEADER } from "../lib/stream-config.js";
 import { AppendInput, AppendRecord, type StreamConfig } from "../types.js";
+import { serveHttp1, serveHttp2, waitFor } from "./helpers.js";
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -47,31 +41,11 @@ interface TestServer {
 	close: () => Promise<void>;
 }
 
-async function waitFor(condition: () => boolean): Promise<void> {
-	const deadline = Date.now() + 5_000;
-	while (!condition()) {
-		if (Date.now() > deadline) throw new Error("timed out waiting");
-		await new Promise((resolve) => setTimeout(resolve, 10));
-	}
-}
-
-function listen(server: http.Server | http2.Http2Server): Promise<string> {
-	return new Promise((resolve) => {
-		server.listen(0, "127.0.0.1", () => {
-			const { port } = server.address() as AddressInfo;
-			resolve(`http://127.0.0.1:${port}`);
-		});
-	});
-}
-
 /**
  * HTTP/2 server: fails the first GET and POST with a 500, then holds GETs open
  * and acks every POST frame with an s2s AppendAck.
  */
 async function startH2Server(): Promise<TestServer> {
-	const server = http2.createServer();
-	const sessions = new Set<ServerHttp2Session>();
-	const streams = new Set<ServerHttp2Stream>();
 	const requests: Captured[] = [];
 	const shouldFail = firstAttemptFails();
 	const ackFrame = Buffer.from(
@@ -85,21 +59,12 @@ async function startH2Server(): Promise<TestServer> {
 		}),
 	);
 
-	server.on("sessionError", () => {});
-	server.on("session", (session) => {
-		sessions.add(session);
-		session.on("error", () => {});
-		session.on("close", () => sessions.delete(session));
-	});
-	server.on("stream", (stream, headers: IncomingHttpHeaders) => {
+	const server = await serveHttp2((stream, headers) => {
 		requests.push({
 			method: headers[":method"] ?? "",
 			path: headers[":path"] ?? "",
 			header: headers[S2_STREAM_CONFIG_HEADER] as string | undefined,
 		});
-		streams.add(stream);
-		stream.on("error", () => {});
-		stream.on("close", () => streams.delete(stream));
 		if (shouldFail(headers[":method"] ?? "")) {
 			stream.respond({ ":status": 500, "content-type": "application/json" });
 			stream.end(failure);
@@ -110,18 +75,7 @@ async function startH2Server(): Promise<TestServer> {
 			stream.on("data", () => stream.write(ackFrame));
 		}
 	});
-
-	const origin = await listen(server);
-	return {
-		origin,
-		requests,
-		close: () =>
-			new Promise<void>((resolve) => {
-				for (const stream of streams) stream.destroy();
-				for (const session of sessions) session.destroy();
-				server.close(() => resolve());
-			}),
-	};
+	return { ...server, requests };
 }
 
 /**
@@ -130,54 +84,39 @@ async function startH2Server(): Promise<TestServer> {
  */
 async function startH1Server(): Promise<TestServer> {
 	const requests: Captured[] = [];
-	const responses = new Set<ServerResponse>();
 	const shouldFail = firstAttemptFails();
-	const server = http.createServer(
-		(req: IncomingMessage, res: ServerResponse) => {
-			requests.push({
-				method: req.method ?? "",
-				path: req.url ?? "",
-				header: req.headers[S2_STREAM_CONFIG_HEADER] as string | undefined,
+	const server = await serveHttp1((req, res) => {
+		requests.push({
+			method: req.method ?? "",
+			path: req.url ?? "",
+			header: req.headers[S2_STREAM_CONFIG_HEADER] as string | undefined,
+		});
+		if (shouldFail(req.method ?? "")) {
+			req.on("data", () => {});
+			req.on("end", () => {
+				res.writeHead(500, { "content-type": "application/json" });
+				res.end(failure);
 			});
-			responses.add(res);
-			res.on("close", () => responses.delete(res));
-			if (shouldFail(req.method ?? "")) {
-				req.on("data", () => {});
-				req.on("end", () => {
-					res.writeHead(500, { "content-type": "application/json" });
-					res.end(failure);
-				});
-				return;
-			}
-			if (req.method === "POST") {
-				req.on("data", () => {});
-				req.on("end", () => {
-					res.writeHead(200, { "content-type": "application/json" });
-					res.end(
-						JSON.stringify({
-							start: { seq_num: 0, timestamp: 1 },
-							end: { seq_num: 1, timestamp: 1 },
-							tail: { seq_num: 1, timestamp: 1 },
-						}),
-					);
-				});
-				return;
-			}
-			res.writeHead(200, { "content-type": "text/event-stream" });
-			res.flushHeaders();
-		},
-	);
-	const origin = await listen(server);
-	return {
-		origin,
-		requests,
-		close: () =>
-			new Promise<void>((resolve) => {
-				for (const res of responses) res.destroy();
-				server.closeAllConnections();
-				server.close(() => resolve());
-			}),
-	};
+			return;
+		}
+		if (req.method === "POST") {
+			req.on("data", () => {});
+			req.on("end", () => {
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						start: { seq_num: 0, timestamp: 1 },
+						end: { seq_num: 1, timestamp: 1 },
+						tail: { seq_num: 1, timestamp: 1 },
+					}),
+				);
+			});
+			return;
+		}
+		res.writeHead(200, { "content-type": "text/event-stream" });
+		res.flushHeaders();
+	});
+	return { ...server, requests };
 }
 
 async function exercise(transport: SessionTransport, server: TestServer) {

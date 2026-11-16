@@ -1,14 +1,11 @@
-import http2, {
-	type ServerHttp2Session,
-	type ServerHttp2Stream,
-} from "node:http2";
+import type { ServerHttp2Session, ServerHttp2Stream } from "node:http2";
 import net, { type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Redacted from "../lib/redacted.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import { S2STransport } from "../lib/stream/transport/s2s/index.js";
 import { Http2ConnectionPool } from "../lib/stream/transport/s2s/pool.js";
-import { sleep } from "./helpers.js";
+import { serveHttp2, sleep, waitFor } from "./helpers.js";
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -28,20 +25,8 @@ interface TestServer {
 async function startServer(
 	onStream?: (stream: ServerHttp2Stream) => void,
 ): Promise<TestServer> {
-	const server = http2.createServer();
-	const sessions = new Set<ServerHttp2Session>();
-	let sessionCount = 0;
 	const heldStreams: ServerHttp2Stream[] = [];
-
-	server.on("sessionError", () => {});
-	server.on("session", (session) => {
-		sessionCount += 1;
-		sessions.add(session);
-		session.on("error", () => {});
-		session.on("close", () => sessions.delete(session));
-	});
-	server.on("stream", (stream) => {
-		stream.on("error", () => {});
+	const server = await serveHttp2((stream) => {
 		stream.respond({ ":status": 200 });
 		if (onStream) {
 			onStream(stream);
@@ -49,16 +34,9 @@ async function startServer(
 			heldStreams.push(stream);
 		}
 	});
-
-	await new Promise<void>((resolve) => {
-		server.listen(0, "127.0.0.1", resolve);
-	});
-	const port = (server.address() as AddressInfo).port;
-
 	return {
-		origin: `http://127.0.0.1:${port}`,
-		sessionCount: () => sessionCount,
-		openSessions: () => sessions,
+		...server,
+		openSessions: () => server.openSessions,
 		heldStreams,
 		endAllStreams: () => {
 			for (const stream of heldStreams.splice(0)) {
@@ -67,27 +45,7 @@ async function startServer(
 				} catch {}
 			}
 		},
-		close: () =>
-			new Promise<void>((resolve) => {
-				for (const session of sessions) {
-					session.destroy();
-				}
-				server.close(() => resolve());
-			}),
 	};
-}
-
-async function waitFor(
-	condition: () => boolean,
-	timeoutMs = 5000,
-): Promise<void> {
-	const start = Date.now();
-	while (!condition()) {
-		if (Date.now() - start > timeoutMs) {
-			throw new Error("condition not met in time");
-		}
-		await new Promise((resolve) => setTimeout(resolve, 10));
-	}
 }
 
 const GET_HEADERS = { ":method": "GET", ":path": "/" };
