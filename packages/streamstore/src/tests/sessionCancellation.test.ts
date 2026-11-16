@@ -5,7 +5,7 @@ import { AppendIndefiniteFailureError, S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
-import type { SessionTransports } from "../lib/stream/types.js";
+import type { AppendSession, SessionTransports } from "../lib/stream/types.js";
 import { Producer } from "../producer.js";
 import type { S2Stream } from "../stream.js";
 import { AppendInput, AppendRecord } from "../types.js";
@@ -184,7 +184,7 @@ async function startH2Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests, open: server.openStreams };
+	return { ...server, requests: () => requests };
 }
 
 async function startH1Server(
@@ -238,7 +238,7 @@ async function startH1Server(
 			);
 		}
 	});
-	return { ...server, requests: () => requests, open: server.openResponses };
+	return { ...server, requests: () => requests };
 }
 
 const CASES = [
@@ -312,6 +312,25 @@ describe.each(TRANSPORTS)("Issue #142: a %s read session", (transport) => {
 });
 
 const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
+
+/** An append session on `server` that aborts with the returned controller. */
+async function abortableSession(
+	server: SessionServer,
+	transport: SessionTransports,
+) {
+	const controller = new AbortController();
+	const session = await streamOn(server, transport).appendSession(undefined, {
+		signal: controller.signal,
+	});
+	return { controller, session };
+}
+
+/** A Producer that appends a batch a record. */
+const producerOn = (session: AppendSession) =>
+	new Producer(
+		new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+		session,
+	);
 
 /**
  * Issue #406: `S2Stream.close()` with sessions open never settled on s2s when
@@ -444,10 +463,9 @@ describe.each(TRANSPORTS)(
 			"rejects later appends when the signal aborts after an ack",
 			async () => {
 				const server = await startSessionServer(transport);
-				const controller = new AbortController();
-				const session = await streamOn(server, transport).appendSession(
-					undefined,
-					{ signal: controller.signal },
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
 				);
 				await (await session.submit(record())).ack();
 
@@ -469,10 +487,9 @@ describe.each(TRANSPORTS)(
 				const server = await startSessionServer(transport, {
 					appends: "hold",
 				});
-				const controller = new AbortController();
-				const session = await streamOn(server, transport).appendSession(
-					undefined,
-					{ signal: controller.signal },
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
 				);
 				const ack = (await session.submit(record())).ack();
 				await waitFor(() => server.requests() === 1);
@@ -504,11 +521,8 @@ describe.each(TRANSPORTS)(
 				const session = await streamOn(server, transport).appendSession({
 					maxInflightBatches: 1,
 				});
-				// A batch a record: the second waits for the first to settle.
-				const producer = new Producer(
-					new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
-					session,
-				);
+				// The second batch waits for the first to settle.
+				const producer = producerOn(session);
 				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
 				const queued = producer.submit(AppendRecord.string({ body: "b" }));
 				await expect(withinDeadline(sent.ack())).rejects.toBeInstanceOf(
@@ -533,15 +547,11 @@ describe.each(TRANSPORTS)(
 				const server = await startSessionServer(transport, {
 					appends: "hold",
 				});
-				const controller = new AbortController();
-				const session = await streamOn(server, transport).appendSession(
-					undefined,
-					{ signal: controller.signal },
+				const { controller, session } = await abortableSession(
+					server,
+					transport,
 				);
-				const producer = new Producer(
-					new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
-					session,
-				);
+				const producer = producerOn(session);
 				const sent = await producer.submit(AppendRecord.string({ body: "a" }));
 				await waitFor(() => server.requests() === 1);
 				// The session holds it back until the first batch is acked.
@@ -551,10 +561,9 @@ describe.each(TRANSPORTS)(
 				await sleep(10);
 
 				controller.abort();
-				const [sentError, queuedError] = await Promise.all([
-					rejectionOf(sent.ack()),
-					rejectionOf(queued.ack()),
-				]);
+				const [sentError, queuedError] = await withinDeadline(
+					Promise.all([rejectionOf(sent.ack()), rejectionOf(queued.ack())]),
+				);
 				expect(sentError?.hasNoSideEffects()).toBe(false);
 				expect(queuedError).toMatchObject(ABORTED);
 				expect(queuedError?.hasNoSideEffects()).toBe(true);

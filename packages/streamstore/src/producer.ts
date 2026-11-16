@@ -198,8 +198,10 @@ export class Producer implements AsyncDisposable {
 			while (true) {
 				const { value: batch, done } = await this.transformReader.read();
 
-				if (done) {
-					debugProducer("[%s] pump done (transform closed)", this.debugName);
+				// After a failure, fail() has rejected the records of batches not
+				// yet submitted, including one this read may have returned.
+				if (done || this.terminalError) {
+					debugProducer("[%s] pump done", this.debugName);
 					// Await all pending ack handlers before exiting
 					if (!this.terminalError && pendingAckHandlers.size > 0) {
 						debugProducer(
@@ -209,10 +211,6 @@ export class Producer implements AsyncDisposable {
 						);
 						await Promise.all(pendingAckHandlers);
 					}
-					break;
-				}
-				// fail() has rejected the records of batches not yet submitted.
-				if (this.terminalError) {
 					break;
 				}
 
@@ -258,9 +256,7 @@ export class Producer implements AsyncDisposable {
 					for (const record of associatedRecords) {
 						record.rejectAck(unsentError);
 					}
-					// The session's own failure, not this batch's copy of it, which
-					// says nothing of batches the session did send.
-					const error = this.fail(this.appendSession.failureCause() ?? err);
+					const error = this.fail(err);
 					debugProducer(
 						"[%s] pump submit error: %s",
 						this.debugName,
@@ -295,10 +291,11 @@ export class Producer implements AsyncDisposable {
 						}
 					})
 					.catch((err) => {
+						const error = toS2Error(err);
 						for (const record of associatedRecords) {
-							record.rejectAck(toS2Error(err));
+							record.rejectAck(error);
 						}
-						const error = this.fail(err);
+						this.fail(error);
 						debugProducer(
 							"[%s] pump ack error: %s",
 							this.debugName,
@@ -309,13 +306,6 @@ export class Producer implements AsyncDisposable {
 						pendingAckHandlers.delete(ackHandler);
 					});
 				pendingAckHandlers.add(ackHandler);
-			}
-
-			// After the loop exits with an error, cancel the transform reader
-			// so pending transformWriter.write() calls are unblocked (they will
-			// reject, causing submit() to throw).
-			if (this.terminalError) {
-				this.transformReader.cancel(this.terminalError).catch(() => {});
 			}
 		} catch (err) {
 			const error = this.fail(err);
@@ -532,15 +522,21 @@ export class Producer implements AsyncDisposable {
 
 	private fail(cause: unknown): S2Error {
 		if (!this.terminalError) {
-			this.terminalError = toS2Error(cause);
+			// A failed session's own error, as its close() throws, rather than
+			// what one batch was told.
+			this.terminalError = toS2Error(
+				this.appendSession.failureCause?.() ?? cause,
+			);
 		}
 		const error = this.terminalError;
 
 		// Records not yet in a submitted batch are never sent. Those that are
 		// get their own batch's outcome, from its submit or its ack.
-		const unsentError = unsentAppendError(error);
-		for (const record of this.inflightRecords.splice(0)) {
-			record.rejectAck(unsentError);
+		if (this.inflightRecords.length > 0) {
+			const unsentError = unsentAppendError(error);
+			for (const record of this.inflightRecords.splice(0)) {
+				record.rejectAck(unsentError);
+			}
 		}
 		this.transformReader.cancel(error).catch(() => {});
 

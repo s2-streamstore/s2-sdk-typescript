@@ -66,13 +66,12 @@ describe("Issue #236: submit() preserves the pump error type", () => {
 		// First submit is accepted but never sent: its ack rejects with a copy of
 		// the pump error, of the same class, that rules out side effects.
 		const ticket = await producer.submit(AppendRecord.string({ body: "a" }));
-		const ackError = await ticket
-			.ack()
-			.catch((err: FencingTokenMismatchError) => err);
-		expect(ackError).toBeInstanceOf(FencingTokenMismatchError);
-		expect((ackError as FencingTokenMismatchError).hasNoSideEffects()).toBe(
-			true,
+		const ackError = await ticket.ack().then(
+			() => undefined,
+			(err: FencingTokenMismatchError) => err,
 		);
+		expect(ackError).toBeInstanceOf(FencingTokenMismatchError);
+		expect(ackError?.hasNoSideEffects()).toBe(true);
 
 		// Later submits must surface the same error, not a generic wrapper.
 		await expect(

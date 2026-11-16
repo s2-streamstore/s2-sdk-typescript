@@ -1099,15 +1099,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 		// Check if we have capacity
 		while (true) {
-			// Check for fatal error before adding to pendingBytes. The batch
-			// is never sent.
+			// Check for fatal error before adding to pendingBytes
 			if (this.fatalError) {
 				debugSession(
 					"[%s] [CAPACITY] fatal error detected, rejecting: %s",
 					this.streamName,
 					this.fatalError.message,
 				);
-				throw unsentAppendError(this.fatalError);
+				throw this.fatalError;
 			}
 
 			// Reject if session is closing/closed so blocked submits fail fast
@@ -1159,20 +1158,23 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * This method applies backpressure and will block if capacity limits are reached.
 	 */
 	async submit(input: Types.AppendInput): Promise<BatchSubmitTicket> {
-		if (this.closed || this.closing) {
-			return Promise.reject(
-				new S2Error({ message: "AppendSession is closed" }),
-			);
-		}
-
 		// Use cached metered size from AppendInput
 		const batchMeteredSize = input.meteredBytes;
 
-		// This needs to happen in the sync path.
-		this.ensurePump();
+		try {
+			if (this.closed || this.closing) {
+				throw new S2Error({ message: "AppendSession is closed" });
+			}
 
-		// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
-		await this.waitForCapacity(batchMeteredSize, 1);
+			// This needs to happen in the sync path.
+			this.ensurePump();
+
+			// Wait for capacity (this is where backpressure is applied - outer promise resolves when enqueued)
+			await this.waitForCapacity(batchMeteredSize, 1);
+		} catch (error) {
+			// Rejected before it was enqueued, so the batch is never sent.
+			throw unsentAppendError(s2Error(error));
+		}
 
 		// Move reserved bytes and batches to queued accounting before submission
 		this.pendingBytes = Math.max(0, this.pendingBytes - batchMeteredSize);

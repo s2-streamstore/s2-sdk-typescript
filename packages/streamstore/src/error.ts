@@ -233,9 +233,6 @@ export async function withS2Data<T>(
 	}
 }
 
-/** Copies of errors made by {@link unsentAppendError}. */
-const unsentAppendErrors = new WeakSet<S2Error>();
-
 /**
  * Rich error type used by the SDK to surface HTTP and protocol errors.
  *
@@ -284,14 +281,8 @@ export class S2Error extends Error {
 	 * A draining server acknowledges every input it accepted before ending the
 	 * session with `server_draining`, so anything still unacknowledged was never
 	 * registered and can be resubmitted.
-	 *
-	 * An append that failed before it was sent has no side effects, whatever
-	 * the error.
 	 */
 	hasNoSideEffects(): boolean {
-		if (unsentAppendErrors.has(this)) {
-			return true;
-		}
 		if (this.origin === "server") {
 			return (
 				(this.status === 429 && this.code === "rate_limited") ||
@@ -371,16 +362,15 @@ export function unsentAppendError(error: S2Error): S2Error {
 		return final;
 	}
 	// Built on a native Error, so the copy is still one to `Error.isError()`.
-	const copy: S2Error = Object.defineProperties(
+	return Object.defineProperties(
 		Object.setPrototypeOf(new Error(), Object.getPrototypeOf(final)),
 		{
 			...Object.getOwnPropertyDescriptors(final),
 			// V8 keeps `stack` behind an accessor that only works on the original.
 			stack: { value: final.stack, writable: true, configurable: true },
+			hasNoSideEffects: { value: () => true },
 		},
 	);
-	unsentAppendErrors.add(copy);
-	return copy;
 }
 
 /** Helper: construct a non-retryable invariant violation error (status 0). */
