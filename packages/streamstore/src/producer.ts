@@ -106,7 +106,7 @@ export class Producer implements AsyncDisposable {
 	/** Records the writable has handed to its sink. */
 	private writableReceived = 0;
 	private writableEnded = false;
-	private onWritableProgress: (() => void) | null = null;
+	private readonly writableWaiters = new Set<() => void>();
 
 	private terminalError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
@@ -157,7 +157,7 @@ export class Producer implements AsyncDisposable {
 					const submitted = this.enqueueOperation(() =>
 						this.submitInternal(record, afterClose),
 					);
-					this.onWritableProgress?.();
+					this.notifyWritableWaiters();
 					try {
 						await submitted;
 					} catch (err) {
@@ -347,7 +347,34 @@ export class Producer implements AsyncDisposable {
 	/** The writable has closed, aborted or errored, and will hand over no more records. */
 	private endWritable(): void {
 		this.writableEnded = true;
-		this.onWritableProgress?.();
+		this.notifyWritableWaiters();
+	}
+
+	private notifyWritableWaiters(): void {
+		for (const waiter of this.writableWaiters) {
+			waiter();
+		}
+	}
+
+	/**
+	 * Enqueues `operation` once the sink has received every record written to
+	 * `writable` before this call, or the writable has ended.
+	 */
+	private enqueueAfterWritable<T>(operation: () => Promise<T>): Promise<T> {
+		const count = this.writableAccepted;
+		const received = () => this.writableEnded || this.writableReceived >= count;
+		if (received()) {
+			return this.enqueueOperation(operation);
+		}
+		return new Promise<void>((resolve) => {
+			const waiter = () => {
+				if (received()) {
+					this.writableWaiters.delete(waiter);
+					resolve();
+				}
+			};
+			this.writableWaiters.add(waiter);
+		}).then(() => this.enqueueOperation(operation));
 	}
 
 	private async submitInternal(
@@ -436,15 +463,16 @@ export class Producer implements AsyncDisposable {
 
 	/**
 	 * Force the current partial batch to be emitted and wait for every record
-	 * submitted before this call to become durable.
+	 * submitted, or written to `writable`, before this call to become durable.
 	 *
-	 * An empty flush does not append a batch. Submissions queued after this call
-	 * are excluded, and the Producer remains open for further submissions. If a
-	 * append included in this flush fails, this throws the same terminal error as
-	 * its record ticket.
+	 * An empty flush does not append a batch, and the Producer remains open for
+	 * further submissions. Submissions queued after this call are excluded, unless
+	 * earlier writes to `writable` were still queued in the stream, in which case
+	 * they may be included. If an append included in this flush fails, this
+	 * throws the same terminal error as its record ticket.
 	 */
 	flush(): Promise<void> {
-		return this.enqueueOperation(async () => {
+		return this.enqueueAfterWritable(async () => {
 			if (this.terminalError) {
 				throw this.terminalError;
 			}
@@ -478,26 +506,12 @@ export class Producer implements AsyncDisposable {
 	 */
 	async close(): Promise<void> {
 		if (!this.closePromise) {
-			const fence = this.writableAccepted;
-			this.closeFence = fence;
-			this.closePromise = this.writableReceivedThrough(fence)
-				.then(() => this.enqueueOperation(() => this.closeInternal()))
-				.finally(() => this.fenceWritable());
+			this.closeFence = this.writableAccepted;
+			this.closePromise = this.enqueueAfterWritable(() =>
+				this.closeInternal(),
+			).finally(() => this.fenceWritable());
 		}
 		return this.closePromise;
-	}
-
-	private writableReceivedThrough(count: number): Promise<void> {
-		return new Promise((resolve) => {
-			const check = () => {
-				if (this.writableEnded || this.writableReceived >= count) {
-					this.onWritableProgress = null;
-					resolve();
-				}
-			};
-			this.onWritableProgress = check;
-			check();
-		});
 	}
 
 	/** Ends the writable once the Producer has closed, so writers and pipes into it stop. */

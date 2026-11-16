@@ -465,6 +465,24 @@ describe("Producer", () => {
 		expect(session.getValues()).toEqual(["a", "b", "c"]);
 	});
 
+	it("flush covers records already written to the writable", async () => {
+		const session = new MockAppendSession();
+		const producer = new Producer(
+			new BatchTransform({ lingerDurationMillis: 60_000 }),
+			session,
+		);
+		const writer = producer.writable.getWriter();
+
+		const writes = ["a", "b"].map((body) =>
+			writer.write(AppendRecord.string({ body })),
+		);
+		await producer.flush();
+		expect(session.getValues()).toEqual(["a", "b"]);
+
+		await Promise.all(writes);
+		await producer.close();
+	});
+
 	it.each([
 		{
 			name: "a write rejected after writer.close()",
