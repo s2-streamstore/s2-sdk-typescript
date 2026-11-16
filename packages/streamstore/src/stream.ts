@@ -281,6 +281,16 @@ export class S2Stream {
 			requestOptions,
 		);
 	}
+	/**
+	 * Close the stream handle and every session opened from it.
+	 *
+	 * Read sessions end with an `S2Error` with code `ABORTED`, as when their
+	 * `signal` aborts. Append sessions close as {@link AppendSession.close}
+	 * does, waiting for inflight appends to settle; their errors surface on
+	 * the sessions, not here. The transport is then released, and `close()`
+	 * resolves whether or not other handles share its connection. Later calls
+	 * on the handle throw.
+	 */
 	public async close(): Promise<void> {
 		if (this.closePromise) {
 			return this.closePromise;

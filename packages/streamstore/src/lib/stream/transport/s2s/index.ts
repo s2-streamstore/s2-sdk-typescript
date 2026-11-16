@@ -40,6 +40,7 @@ import {
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
 import { streamConfigHeaders } from "../../../stream-config.js";
+import { OpenSessions } from "../../open-sessions.js";
 import { DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendRecord,
@@ -107,6 +108,7 @@ export class S2STransport implements SessionTransport {
 	private readonly transportConfig: TransportConfig;
 	private readonly compression: CompressionType;
 	private readonly endpointOrigin: string;
+	private readonly sessions = new OpenSessions();
 	private attached = false;
 	private closed = false;
 	private closingPromise?: Promise<void>;
@@ -142,6 +144,7 @@ export class S2STransport implements SessionTransport {
 			sessionOptions,
 			this.transportConfig.retry,
 			stream, // Pass stream name for debug context
+			this.sessions,
 		);
 	}
 
@@ -168,7 +171,7 @@ export class S2STransport implements SessionTransport {
 			},
 			args,
 			this.transportConfig.retry,
-			{ signal: options?.signal },
+			{ signal: options?.signal, sessions: this.sessions },
 		);
 	}
 
@@ -195,13 +198,20 @@ export class S2STransport implements SessionTransport {
 		});
 	}
 
+	/**
+	 * End the sessions opened from this transport, then release its pooled
+	 * connections. Sessions end first because a graceful HTTP/2 close waits
+	 * for open streams.
+	 */
 	async close(): Promise<void> {
-		this.closed = true;
 		if (this.closingPromise) {
 			return this.closingPromise;
 		}
 
 		this.closingPromise = (async () => {
+			// Append sessions may still reconnect while they drain.
+			await this.sessions.closeAll();
+			this.closed = true;
 			if (this.attached) {
 				this.attached = false;
 				await sharedConnectionPool.detach(

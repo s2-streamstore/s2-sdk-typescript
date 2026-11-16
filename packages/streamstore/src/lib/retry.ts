@@ -20,6 +20,7 @@ import {
 	type CaughtUpBoundary,
 	CaughtUpTracker,
 } from "./stream/caught-up-tracker.js";
+import type { OpenSessions } from "./stream/open-sessions.js";
 import type {
 	AcksStream,
 	AppendRecord,
@@ -293,13 +294,14 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 	 *
 	 * Once `options.signal` aborts, at any point, the session ends with
 	 * {@link abortedError}: `create` rejects with it, or reads throw it.
-	 * An abort is never retried.
+	 * An abort is never retried. Closing `options.sessions` aborts the
+	 * session the same way.
 	 */
 	static async create<Format extends "string" | "bytes" = "string">(
 		generator: ReadSessionGenerator<Format>,
 		args: ReadArgs<Format> = {},
 		config?: RetryConfig,
-		options?: { signal?: AbortSignal },
+		options?: { signal?: AbortSignal; sessions?: OpenSessions },
 	) {
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
@@ -313,10 +315,12 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		// Ends this session. Transport attempts get its signal so an abort
 		// also cancels a request that is still connecting.
 		const abort = new AbortController();
+		const unregister = options?.sessions?.register(async () => abort.abort());
 		const onAbort = () => abort.abort();
 		signal?.addEventListener("abort", onAbort);
 		const release = () => {
 			signal?.removeEventListener("abort", onAbort);
+			unregister?.();
 		};
 
 		let attempt = 0;
@@ -934,6 +938,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 
 	private _lastAckedPosition?: Types.AppendAck;
 	private acksController?: ReadableStreamDefaultController<Types.AppendAck>;
+	private unregister?: () => void;
 
 	public readonly readable: ReadableStream<Types.AppendAck>;
 	public readonly writable: WritableStream<Types.AppendInput>;
@@ -955,6 +960,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		private readonly sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 		streamName?: string,
+		sessions?: OpenSessions,
 	) {
 		this.streamName = streamName ?? "unknown";
 		this.retryConfig = {
@@ -1014,8 +1020,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				await this.abort(error);
 			},
 		});
+
+		this.unregister = sessions?.register(() => this.close());
 	}
 
+	/**
+	 * Create an append session. Closing `sessions` closes it as
+	 * {@link RetryAppendSession.close} does.
+	 */
 	static async create(
 		generator: (
 			options?: AppendSessionOptions,
@@ -1023,12 +1035,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 		streamName?: string,
+		sessions?: OpenSessions,
 	): Promise<RetryAppendSession> {
 		return new RetryAppendSession(
 			generator,
 			sessionOptions,
 			config,
 			streamName,
+			sessions,
 		);
 	}
 
@@ -1823,6 +1837,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 
 		debugSession("[%s] aborting session: %s", this.streamName, error.message);
+		this.unregister?.();
 
 		const anyUncertain = this.inflight.some(
 			(entry) => entry.priorUncertainty === true,
@@ -1958,6 +1973,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 
 		this.closed = true;
+		this.unregister?.();
 
 		// If fatal error occurred, throw it
 		if (this.fatalError) {

@@ -33,6 +33,7 @@ import {
 	RetryReadSession as ReadSessionImpl,
 } from "../../../retry.js";
 import { streamConfigHeaders } from "../../../stream-config.js";
+import { OpenSessions } from "../../open-sessions.js";
 import { canSetUserAgentHeader, DEFAULT_USER_AGENT } from "../../runtime.js";
 import type {
 	AppendRecord,
@@ -702,6 +703,7 @@ export class FetchAppendSession implements TransportAppendSession {
 export class FetchTransport implements SessionTransport {
 	private readonly client: Client;
 	private readonly transportConfig: TransportConfig;
+	private readonly sessions = new OpenSessions();
 	constructor(config: TransportConfig) {
 		const headers: Record<string, string> = {};
 		if (config.basinName) {
@@ -740,6 +742,7 @@ export class FetchTransport implements SessionTransport {
 			sessionOptions,
 			this.transportConfig.retry,
 			stream, // Pass stream name for debug context
+			this.sessions,
 		);
 	}
 
@@ -757,12 +760,12 @@ export class FetchTransport implements SessionTransport {
 			},
 			args,
 			this.transportConfig.retry,
-			{ signal: options?.signal },
+			{ signal: options?.signal, sessions: this.sessions },
 		);
 	}
 
+	/** End the sessions opened from this transport. */
 	async close(): Promise<void> {
-		// Fetch transport holds no long-lived resources beyond the client.
-		// Provided for API symmetry; nothing to tear down.
+		await this.sessions.closeAll();
 	}
 }

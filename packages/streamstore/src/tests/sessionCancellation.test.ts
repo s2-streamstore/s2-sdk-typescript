@@ -6,6 +6,7 @@ import * as Proto from "../generated/proto/s2.js";
 import { S2 } from "../index.js";
 import { frameMessage } from "../lib/stream/transport/s2s/framing.js";
 import type { SessionTransports } from "../lib/stream/types.js";
+import { AppendInput, AppendRecord } from "../types.js";
 
 const TEST_TIMEOUT_MS = 15_000;
 
@@ -255,6 +256,59 @@ describe.each(TRANSPORTS)(
 					expect(server.requests()).toBe(requests);
 				} finally {
 					await server.close();
+					await withinDeadline(stream.close()).catch(() => {});
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+	},
+);
+
+const FROM_START = { start: { from: { seqNum: 0 } } };
+
+const record = () => AppendInput.create([AppendRecord.string({ body: "b" })]);
+
+/**
+ * Issue #406: `S2Stream.close()` with sessions open never settled on s2s when
+ * the handle was the endpoint's last pool user, since a graceful HTTP/2 close
+ * waits for open streams, and resolved at once otherwise. No transport ended
+ * the sessions opened from the handle. It must end them, then settle, whether
+ * or not another handle shares the connection.
+ */
+describe.each(TRANSPORTS)(
+	"Issue #406: closing a %s stream handle",
+	(transport) => {
+		it.each([
+			{ others: "no other handle on the endpoint", otherHandle: false },
+			{ others: "another handle reading on the endpoint", otherHandle: true },
+		])(
+			"ends its sessions and settles with $others",
+			async ({ otherHandle }) => {
+				const server = await startSessionServer(transport);
+				const basin = clientFor(server).basin("test-basin");
+				const other = basin.stream("stream", { forceTransport: transport });
+				const stream = basin.stream("stream", { forceTransport: transport });
+				try {
+					if (otherHandle) {
+						const session = await other.readSession(FROM_START);
+						await session[Symbol.asyncIterator]().next();
+					}
+					const session = await stream.readSession(FROM_START);
+					const records = session[Symbol.asyncIterator]();
+					await records.next();
+					const appends = await stream.appendSession();
+					await (await appends.submit(record())).ack();
+
+					await withinDeadline(stream.close());
+					await expect(withinDeadline(records.next())).rejects.toMatchObject({
+						code: "ABORTED",
+					});
+					await expect(appends.submit(record())).rejects.toThrow(
+						"AppendSession is closed",
+					);
+				} finally {
+					await server.close();
+					await withinDeadline(other.close()).catch(() => {});
 					await withinDeadline(stream.close()).catch(() => {});
 				}
 			},
