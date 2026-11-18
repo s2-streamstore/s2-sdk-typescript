@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.32.1
+
+### Patch Changes
+
+- acf260b: Expose `privateNet` on `LocationInfo`: the account's private networking details in a location, such as the AWS PrivateLink endpoint service name. It is absent until the account has a basin in the location.
+
 ## 0.32.0
 
 ### Minor Changes
