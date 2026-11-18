@@ -134,6 +134,13 @@ export type AppendRecord = {
     timestamp?: null | U64;
 };
 
+export type AwsPrivateNet = {
+    /**
+     * AWS PrivateLink endpoint service name, for creating a VPC endpoint.
+     */
+    service_name: string;
+};
+
 export type AwsPrivateNetPolicy = {
     /**
      * AWS VPC endpoint IDs through which the token may be used.
@@ -385,6 +392,7 @@ export type LocationInfo = {
      * Location name.
      */
     name: LocationName;
+    private_net?: null | PrivateNet;
     /**
      * [Storage classes](https://s2.dev/docs/storage-classes) available to the account in this location.
      */
@@ -486,6 +494,16 @@ export type PingEventData = {
      * Time the ping was emitted, as Unix epoch milliseconds.
      */
     timestamp: number;
+};
+
+/**
+ * AWS PrivateLink.
+ */
+export type PrivateNet = {
+    /**
+     * AWS PrivateLink.
+     */
+    aws: AwsPrivateNet;
 };
 
 /**
