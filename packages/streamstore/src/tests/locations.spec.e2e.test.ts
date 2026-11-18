@@ -32,6 +32,21 @@ describeIf("Locations spec parity", () => {
 	);
 
 	it(
+		"exposes private networking details",
+		async () => {
+			// Only present for locations where the account has a basin and that can be
+			// reached privately, so this checks the shape wherever the service returns it.
+			for (const location of await s2.locations.list()) {
+				if (location.privateNet == null) continue;
+				expect(location.privateNet.aws?.serviceName).toMatch(
+					/^com\.amazonaws\.vpce\./,
+				);
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
 		"gets the default location",
 		async () => {
 			const location = await s2.locations.getDefault();

@@ -11,5 +11,6 @@ for (const location of await s2.locations.list()) {
 	console.log(location.name, {
 		storageClasses: location.storageClasses,
 		defaultStorageClass: location.defaultStorageClass,
+		privateLinkServiceName: location.privateNet?.aws?.serviceName,
 	});
 }

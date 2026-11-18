@@ -668,6 +668,22 @@ export type ReconfigureStreamResponse = StreamConfig;
 // =============================================================================
 
 /**
+ * AWS PrivateLink details.
+ */
+export interface AwsPrivateNet {
+	/** Endpoint service name, for creating a VPC endpoint. */
+	serviceName: string;
+}
+
+/**
+ * How the account can reach a location over a private network. Exactly one kind applies.
+ */
+export interface PrivateNet {
+	/** AWS PrivateLink. Absent for a kind this SDK version does not know. */
+	aws?: AwsPrivateNet;
+}
+
+/**
  * Information about a location.
  */
 export interface LocationInfo {
@@ -679,6 +695,13 @@ export interface LocationInfo {
 	storageClasses?: string[] | null;
 	/** Default storage class for this location. */
 	defaultStorageClass?: string | null;
+	/**
+	 * [Private networking](https://s2.dev/docs/platform/private-networking) details for the
+	 * account in this location, which can differ between accounts.
+	 * Absent until the account has a basin in this location, and when the location cannot be
+	 * reached over a private network.
+	 */
+	privateNet?: PrivateNet | null;
 }
 
 /**
