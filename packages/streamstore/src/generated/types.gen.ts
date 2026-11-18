@@ -19,6 +19,7 @@ export type AccessTokenInfo = {
      * Access token ID.
      */
     id: AccessTokenIdStr;
+    network_policy?: null | NetworkPolicyRef;
     /**
      * Access token scope.
      */
@@ -42,7 +43,7 @@ export type AccessTokenScope = {
  * `estimated-billable-usage` returns estimated USD by billing dimension and as a `total` series.
  * Supports hour (default) and day intervals, aggregating finalized hours. Daily points may be partial.
  */
-export type AccountMetricSet = 'active-basins' | 'account-ops' | 'estimated-billable-usage';
+export type AccountMetricSet = 'active-basins' | 'account-ops' | 'estimated-billable-usage' | 'token-activity';
 
 export type AccumulationMetric = {
     /**
@@ -133,6 +134,13 @@ export type AppendRecord = {
     timestamp?: null | U64;
 };
 
+export type AwsPrivateNetPolicy = {
+    /**
+     * AWS VPC endpoint IDs through which the token may be used.
+     */
+    vpce_ids: Array<VpcEndpointId>;
+};
+
 export type BasinConfig = {
     /**
      * Create stream on append if it doesn't exist, using the default stream configuration.
@@ -181,6 +189,11 @@ export type BasinReconfiguration = {
 
 export type BasinState = 'active' | 'deleting';
 
+/**
+ * IP network in CIDR notation, e.g. `203.0.113.0/24`.
+ */
+export type Cidr = string;
+
 export type CreateBasinRequest = {
     /**
      * Basin name which must be globally unique.
@@ -190,6 +203,17 @@ export type CreateBasinRequest = {
     basin: BasinNameStr;
     config?: null | BasinConfig;
     location?: null | LocationName;
+};
+
+export type CreateNetworkPolicyRequest = {
+    /**
+     * The restriction. Policies are immutable; create a new one to change it.
+     */
+    policy: NetworkPolicy;
+    /**
+     * Slug, unique to the account. Up to 96 characters of letters, digits, `-` and `_`.
+     */
+    slug: NetworkPolicySlugStr;
 };
 
 export type CreateStreamRequest = {
@@ -279,6 +303,7 @@ export type IssueAccessTokenRequest = {
      * contain NUL bytes.
      */
     id: AccessTokenIdStr;
+    network_policy?: null | NetworkPolicySelector;
     /**
      * Access token scope.
      */
@@ -323,6 +348,17 @@ export type ListBasinsResponse = {
      * Indicates that there are more basins that match the criteria.
      */
     has_more: boolean;
+};
+
+export type ListNetworkPoliciesResponse = {
+    /**
+     * Indicates that there are more network policies that match the criteria.
+     */
+    has_more: boolean;
+    /**
+     * Matching network policies.
+     */
+    network_policies: Array<NetworkPolicyInfo>;
 };
 
 export type ListStreamsResponse = {
@@ -377,6 +413,11 @@ export type Metric = {
      * Set of string labels.
      */
     label: LabelMetric;
+} | {
+    /**
+     * Named set of string attributes observed at a point in time.
+     */
+    record: RecordMetric;
 };
 
 export type MetricSetResponse = {
@@ -388,7 +429,47 @@ export type MetricSetResponse = {
 
 export type MetricUnit = 'bytes' | 'operations' | 'usd';
 
-export type Operation = 'list-basins' | 'create-basin' | 'delete-basin' | 'reconfigure-basin' | 'get-basin-config' | 'issue-access-token' | 'revoke-access-token' | 'list-access-tokens' | 'list-streams' | 'create-stream' | 'delete-stream' | 'get-stream-config' | 'reconfigure-stream' | 'check-tail' | 'append' | 'read' | 'trim' | 'fence' | 'account-metrics' | 'basin-metrics' | 'stream-metrics' | 'list-locations' | 'get-default-location' | 'set-default-location';
+/**
+ * What a token may be used from, per path. At least one of `public_net` and `private_net` must
+ * be set.
+ */
+export type NetworkPolicy = {
+    private_net?: null | PrivateNetPolicy;
+    public_net?: null | PublicNetPolicy;
+};
+
+export type NetworkPolicyInfo = {
+    /**
+     * Creation time in RFC 3339 format.
+     */
+    created_at: string;
+    /**
+     * Full reference, `<slug>.<nonce>`, which access tokens are bound to.
+     */
+    id: NetworkPolicyRef;
+    /**
+     * The restriction.
+     */
+    policy: NetworkPolicy;
+    /**
+     * Slug chosen at creation.
+     */
+    slug: NetworkPolicySlugStr;
+};
+
+/**
+ * Network policy reference, `<slug>.<nonce>`.
+ */
+export type NetworkPolicyRef = string;
+
+/**
+ * Network policy slug, or full `<slug>.<nonce>` reference.
+ */
+export type NetworkPolicySelector = string;
+
+export type NetworkPolicySlugStr = string;
+
+export type Operation = 'list-basins' | 'create-basin' | 'delete-basin' | 'reconfigure-basin' | 'get-basin-config' | 'issue-access-token' | 'revoke-access-token' | 'list-access-tokens' | 'list-streams' | 'create-stream' | 'delete-stream' | 'get-stream-config' | 'reconfigure-stream' | 'check-tail' | 'append' | 'read' | 'trim' | 'fence' | 'account-metrics' | 'basin-metrics' | 'stream-metrics' | 'list-locations' | 'get-default-location' | 'set-default-location' | 'list-network-policies' | 'create-network-policy' | 'get-network-policy' | 'delete-network-policy';
 
 export type PermittedOperationGroups = {
     account?: null | ReadWritePermissions;
@@ -405,6 +486,26 @@ export type PingEventData = {
      * Time the ping was emitted, as Unix epoch milliseconds.
      */
     timestamp: number;
+};
+
+/**
+ * AWS PrivateLink.
+ */
+export type PrivateNetPolicy = {
+    /**
+     * AWS PrivateLink.
+     */
+    aws: AwsPrivateNetPolicy;
+};
+
+/**
+ * Source addresses that may use the token. Between 1 and 32.
+ */
+export type PublicNetPolicy = {
+    /**
+     * Source addresses that may use the token. Between 1 and 32.
+     */
+    cidrs: Array<Cidr>;
 };
 
 export type ReadBatch = {
@@ -437,6 +538,23 @@ export type ReadWritePermissions = {
      * Write permission.
      */
     write?: boolean;
+};
+
+export type RecordMetric = {
+    /**
+     * Named string attributes of the record.
+     */
+    fields: {
+        [key: string]: string;
+    };
+    /**
+     * Record name.
+     */
+    name: string;
+    /**
+     * Timestamp of the record in Unix epoch seconds.
+     */
+    timestamp: number;
 };
 
 export type RequestToken = string;
@@ -587,6 +705,11 @@ export type TimestampingReconfiguration = {
      */
     uncapped?: boolean | null;
 };
+
+/**
+ * AWS VPC endpoint ID, e.g. `vpce-0a1b2c3d4e5f67890`.
+ */
+export type VpcEndpointId = string;
 
 export type U64 = number;
 
@@ -927,6 +1050,10 @@ export type AccountMetricsData = {
          * Interval to aggregate over for timeseries metric sets.
          */
         interval?: TimeseriesInterval;
+        /**
+         * Access token IDs, as a repeated parameter. Between 1 and 50 are required for the `token-activity` metric set.
+         */
+        token_id?: Array<string>;
     };
     url: '/metrics';
 };
@@ -1034,6 +1161,117 @@ export type StreamMetricsResponses = {
 };
 
 export type StreamMetricsResponse = StreamMetricsResponses[keyof StreamMetricsResponses];
+
+export type ListNetworkPoliciesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Filter to policies whose slugs begin with this prefix.
+         */
+        prefix?: string;
+        /**
+         * Filter to policies whose slugs lexicographically start after this string.
+         */
+        start_after?: string;
+        /**
+         * Number of results, up to a maximum of 1000.
+         */
+        limit?: number;
+    };
+    url: '/network-policies';
+};
+
+export type ListNetworkPoliciesErrors = {
+    400: ErrorInfo;
+    403: ErrorInfo;
+    408: ErrorInfo;
+};
+
+export type ListNetworkPoliciesError = ListNetworkPoliciesErrors[keyof ListNetworkPoliciesErrors];
+
+export type ListNetworkPoliciesResponses = {
+    200: ListNetworkPoliciesResponse;
+};
+
+export type ListNetworkPoliciesResponse2 = ListNetworkPoliciesResponses[keyof ListNetworkPoliciesResponses];
+
+export type CreateNetworkPolicyData = {
+    body: CreateNetworkPolicyRequest;
+    path?: never;
+    query?: never;
+    url: '/network-policies';
+};
+
+export type CreateNetworkPolicyErrors = {
+    400: ErrorInfo;
+    403: ErrorInfo;
+    408: ErrorInfo;
+    409: ErrorInfo;
+};
+
+export type CreateNetworkPolicyError = CreateNetworkPolicyErrors[keyof CreateNetworkPolicyErrors];
+
+export type CreateNetworkPolicyResponses = {
+    201: NetworkPolicyInfo;
+};
+
+export type CreateNetworkPolicyResponse = CreateNetworkPolicyResponses[keyof CreateNetworkPolicyResponses];
+
+export type DeleteNetworkPolicyData = {
+    body?: never;
+    path: {
+        /**
+         * Network policy slug, or full `<slug>.<nonce>` reference.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/network-policies/{id}';
+};
+
+export type DeleteNetworkPolicyErrors = {
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    408: ErrorInfo;
+    409: ErrorInfo;
+};
+
+export type DeleteNetworkPolicyError = DeleteNetworkPolicyErrors[keyof DeleteNetworkPolicyErrors];
+
+export type DeleteNetworkPolicyResponses = {
+    204: void;
+};
+
+export type DeleteNetworkPolicyResponse = DeleteNetworkPolicyResponses[keyof DeleteNetworkPolicyResponses];
+
+export type GetNetworkPolicyData = {
+    body?: never;
+    path: {
+        /**
+         * Network policy slug, or full `<slug>.<nonce>` reference.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/network-policies/{id}';
+};
+
+export type GetNetworkPolicyErrors = {
+    400: ErrorInfo;
+    403: ErrorInfo;
+    404: ErrorInfo;
+    408: ErrorInfo;
+};
+
+export type GetNetworkPolicyError = GetNetworkPolicyErrors[keyof GetNetworkPolicyErrors];
+
+export type GetNetworkPolicyResponses = {
+    200: NetworkPolicyInfo;
+};
+
+export type GetNetworkPolicyResponse = GetNetworkPolicyResponses[keyof GetNetworkPolicyResponses];
 
 export type ListStreamsData = {
     body?: never;
