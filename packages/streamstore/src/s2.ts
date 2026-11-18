@@ -14,6 +14,7 @@ import {
 import type { Http2Settings } from "./lib/stream/types.js";
 import { S2Locations } from "./locations.js";
 import { S2Metrics } from "./metrics.js";
+import { S2NetworkPolicies } from "./networkPolicies.js";
 
 /**
  * Basin names must be 8-48 characters, lowercase alphanumeric and hyphens,
@@ -42,6 +43,8 @@ export class S2 {
 	public readonly basins: S2Basins;
 	/** Manage access tokens for the account (list, issue, revoke). */
 	public readonly accessTokens: S2AccessTokens;
+	/** Manage network policies for the account (list, create, get, delete). */
+	public readonly networkPolicies: S2NetworkPolicies;
 	/** Account location operations. */
 	public readonly locations: S2Locations;
 	/** Account, basin and stream level metrics. */
@@ -87,6 +90,7 @@ export class S2 {
 
 		this.basins = new S2Basins(this.client, this.retryConfig);
 		this.accessTokens = new S2AccessTokens(this.client, this.retryConfig);
+		this.networkPolicies = new S2NetworkPolicies(this.client, this.retryConfig);
 		this.locations = new S2Locations(this.client, this.retryConfig);
 		this.metrics = new S2Metrics(this.client, this.retryConfig);
 	}

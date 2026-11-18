@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, Options as Options2, TDataShape } from './client/index.js';
-import type { AccountMetricsData, AccountMetricsErrors, AccountMetricsResponses, AppendData, AppendErrors, AppendResponses, BasinMetricsData, BasinMetricsErrors, BasinMetricsResponses, CheckTailData, CheckTailErrors, CheckTailResponses, CreateBasinData, CreateBasinErrors, CreateBasinResponses, CreateStreamData, CreateStreamErrors, CreateStreamResponses, DeleteBasinData, DeleteBasinErrors, DeleteBasinResponses, DeleteStreamData, DeleteStreamErrors, DeleteStreamResponses, EnsureBasinData, EnsureBasinErrors, EnsureBasinResponses, EnsureStreamData, EnsureStreamErrors, EnsureStreamResponses, GetBasinConfigData, GetBasinConfigErrors, GetBasinConfigResponses, GetDefaultLocationData, GetDefaultLocationErrors, GetDefaultLocationResponses, GetStreamConfigData, GetStreamConfigErrors, GetStreamConfigResponses, IssueAccessTokenData, IssueAccessTokenErrors, IssueAccessTokenResponses, ListAccessTokensData, ListAccessTokensErrors, ListAccessTokensResponses, ListBasinsData, ListBasinsErrors, ListBasinsResponses, ListLocationsData, ListLocationsErrors, ListLocationsResponses, ListStreamsData, ListStreamsErrors, ListStreamsResponses, ReadData, ReadErrors, ReadResponses, ReconfigureBasinData, ReconfigureBasinErrors, ReconfigureBasinResponses, ReconfigureStreamData, ReconfigureStreamErrors, ReconfigureStreamResponses, RevokeAccessTokenData, RevokeAccessTokenErrors, RevokeAccessTokenResponses, SetDefaultLocationData, SetDefaultLocationErrors, SetDefaultLocationResponses, StreamMetricsData, StreamMetricsErrors, StreamMetricsResponses } from './types.gen.js';
+import type { AccountMetricsData, AccountMetricsErrors, AccountMetricsResponses, AppendData, AppendErrors, AppendResponses, BasinMetricsData, BasinMetricsErrors, BasinMetricsResponses, CheckTailData, CheckTailErrors, CheckTailResponses, CreateBasinData, CreateBasinErrors, CreateBasinResponses, CreateNetworkPolicyData, CreateNetworkPolicyErrors, CreateNetworkPolicyResponses, CreateStreamData, CreateStreamErrors, CreateStreamResponses, DeleteBasinData, DeleteBasinErrors, DeleteBasinResponses, DeleteNetworkPolicyData, DeleteNetworkPolicyErrors, DeleteNetworkPolicyResponses, DeleteStreamData, DeleteStreamErrors, DeleteStreamResponses, EnsureBasinData, EnsureBasinErrors, EnsureBasinResponses, EnsureStreamData, EnsureStreamErrors, EnsureStreamResponses, GetBasinConfigData, GetBasinConfigErrors, GetBasinConfigResponses, GetDefaultLocationData, GetDefaultLocationErrors, GetDefaultLocationResponses, GetNetworkPolicyData, GetNetworkPolicyErrors, GetNetworkPolicyResponses, GetStreamConfigData, GetStreamConfigErrors, GetStreamConfigResponses, IssueAccessTokenData, IssueAccessTokenErrors, IssueAccessTokenResponses, ListAccessTokensData, ListAccessTokensErrors, ListAccessTokensResponses, ListBasinsData, ListBasinsErrors, ListBasinsResponses, ListLocationsData, ListLocationsErrors, ListLocationsResponses, ListNetworkPoliciesData, ListNetworkPoliciesErrors, ListNetworkPoliciesResponses, ListStreamsData, ListStreamsErrors, ListStreamsResponses, ReadData, ReadErrors, ReadResponses, ReconfigureBasinData, ReconfigureBasinErrors, ReconfigureBasinResponses, ReconfigureStreamData, ReconfigureStreamErrors, ReconfigureStreamResponses, RevokeAccessTokenData, RevokeAccessTokenErrors, RevokeAccessTokenResponses, SetDefaultLocationData, SetDefaultLocationErrors, SetDefaultLocationResponses, StreamMetricsData, StreamMetricsErrors, StreamMetricsResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<TData, ThrowOnError> & {
     /**
@@ -274,6 +274,74 @@ export const streamMetrics = <ThrowOnError extends boolean = false>(options: Opt
             }
         ],
         url: '/metrics/{basin}/{stream}',
+        ...options
+    });
+};
+
+/**
+ * List network policies.
+ */
+export const listNetworkPolicies = <ThrowOnError extends boolean = false>(options?: Options<ListNetworkPoliciesData, ThrowOnError>) => {
+    return (options?.client ?? client).get<ListNetworkPoliciesResponses, ListNetworkPoliciesErrors, ThrowOnError>({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/network-policies',
+        ...options
+    });
+};
+
+/**
+ * Create a network policy.
+ */
+export const createNetworkPolicy = <ThrowOnError extends boolean = false>(options: Options<CreateNetworkPolicyData, ThrowOnError>) => {
+    return (options.client ?? client).post<CreateNetworkPolicyResponses, CreateNetworkPolicyErrors, ThrowOnError>({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/network-policies',
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers
+        }
+    });
+};
+
+/**
+ * Delete a network policy by slug or full reference. It must not be bound to any access token.
+ */
+export const deleteNetworkPolicy = <ThrowOnError extends boolean = false>(options: Options<DeleteNetworkPolicyData, ThrowOnError>) => {
+    return (options.client ?? client).delete<DeleteNetworkPolicyResponses, DeleteNetworkPolicyErrors, ThrowOnError>({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/network-policies/{id}',
+        ...options
+    });
+};
+
+/**
+ * Get a network policy by slug or full reference.
+ */
+export const getNetworkPolicy = <ThrowOnError extends boolean = false>(options: Options<GetNetworkPolicyData, ThrowOnError>) => {
+    return (options.client ?? client).get<GetNetworkPolicyResponses, GetNetworkPolicyErrors, ThrowOnError>({
+        security: [
+            {
+                scheme: 'bearer',
+                type: 'http'
+            }
+        ],
+        url: '/network-policies/{id}',
         ...options
     });
 };

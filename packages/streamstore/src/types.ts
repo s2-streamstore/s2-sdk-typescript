@@ -917,6 +917,12 @@ export interface IssueAccessTokenInput {
 	 * If not set, the expiration will be set to that of the requestor's token.
 	 */
 	expiresAt?: Date | number | string | null;
+	/**
+	 * Slug or full `<slug>.<nonce>` reference of a network policy to restrict the token by.
+	 * A slug binds the token to the policy that currently holds it.
+	 * If the requestor's token is itself restricted, this must be omitted or name the same policy, which the new token inherits.
+	 */
+	networkPolicy?: string | null;
 }
 
 /**
@@ -941,6 +947,8 @@ export interface AccessTokenInfo {
 	autoPrefixStreams: boolean;
 	/** Expiration time. */
 	expiresAt?: Date | null;
+	/** Full `<slug>.<nonce>` reference of the network policy the token is restricted by, if any. */
+	networkPolicy?: string | null;
 }
 
 /**
@@ -962,6 +970,118 @@ export interface IssueAccessTokenResponse {
 }
 
 // =============================================================================
+// Network Policy Types
+// =============================================================================
+
+/**
+ * What a token may be used from over the public path.
+ */
+export interface PublicNetPolicy {
+	/** Source addresses that may use the token, in CIDR notation, e.g. `203.0.113.0/24`. Between 1 and 32. */
+	cidrs: string[];
+}
+
+/**
+ * AWS PrivateLink restriction.
+ */
+export interface AwsPrivateNetPolicy {
+	/** AWS VPC endpoint IDs through which the token may be used, e.g. `vpce-0a1b2c3d4e5f67890`. Between 1 and 32. */
+	vpceIds: string[];
+}
+
+/**
+ * Private networks a token may be used through.
+ */
+export interface PrivateNetPolicy {
+	/** AWS PrivateLink. */
+	aws: AwsPrivateNetPolicy;
+}
+
+/**
+ * What a token may be used from, per path.
+ * At least one of `publicNet` and `privateNet` must be set.
+ */
+export interface NetworkPolicy {
+	/**
+	 * Governs requests arriving over the public path.
+	 * When omitted, the token cannot be used over the public path.
+	 */
+	publicNet?: PublicNetPolicy | null;
+	/**
+	 * Governs requests arriving through a private network.
+	 * When omitted, the token cannot be used through a private network.
+	 */
+	privateNet?: PrivateNetPolicy | null;
+}
+
+/**
+ * Input for listing network policies.
+ */
+export interface ListNetworkPoliciesInput {
+	/** Filter to policies whose slugs begin with this prefix. */
+	prefix?: string;
+	/** Filter to policies whose slugs lexicographically start after this string. */
+	startAfter?: string;
+	/** Number of results, up to a maximum of 1000. */
+	limit?: number;
+}
+
+export type ListAllNetworkPoliciesInput = Omit<
+	ListNetworkPoliciesInput,
+	"startAfter"
+>;
+
+/**
+ * Input for creating a network policy.
+ */
+export interface CreateNetworkPolicyInput {
+	/** Slug, unique to the account. Up to 96 characters of letters, digits, `-` and `_`. */
+	slug: string;
+	/** The restriction. Policies are immutable; create a new one to change it. */
+	policy: NetworkPolicy;
+}
+
+/**
+ * Input for getting a network policy.
+ */
+export interface GetNetworkPolicyInput {
+	/** Network policy slug, or full `<slug>.<nonce>` reference. */
+	id: string;
+}
+
+/**
+ * Input for deleting a network policy.
+ */
+export interface DeleteNetworkPolicyInput {
+	/** Network policy slug, or full `<slug>.<nonce>` reference. */
+	id: string;
+}
+
+/**
+ * Information about a network policy.
+ */
+export interface NetworkPolicyInfo {
+	/** Full reference, `<slug>.<nonce>`, which access tokens are bound to. */
+	id: string;
+	/** Slug chosen at creation. */
+	slug: string;
+	/** Creation time. */
+	createdAt: Date;
+	/** The restriction. */
+	policy: NetworkPolicy;
+}
+
+/**
+ * Response from listing network policies.
+ */
+export interface ListNetworkPoliciesResponse {
+	/** Matching network policies. */
+	networkPolicies: NetworkPolicyInfo[];
+	/** Whether there are more results. */
+	hasMore: boolean;
+}
+
+// =============================================================================
 // Metrics Types
 // =============================================================================
 
@@ -975,6 +1095,8 @@ export interface AccountMetricsInput {
 	 * Metric set to return.
 	 * `estimated-billable-usage` returns estimated USD by billing dimension and as a `total` series.
 	 * Supports hour (default) and day intervals, aggregating finalized hours. Daily points may be partial.
+	 * `token-activity` returns one record per given access token, outcome and source address, describing
+	 * the most recent such use. It requires `tokenIds`, and may lag by a couple of minutes.
 	 */
 	set: API.AccountMetricSet;
 	/** Start timestamp (Date, or milliseconds since Unix epoch), if applicable for the metric set. */
@@ -983,6 +1105,11 @@ export interface AccountMetricsInput {
 	end?: number | Date;
 	/** Interval to aggregate over for timeseries metric sets. */
 	interval?: API.TimeseriesInterval;
+	/**
+	 * Access token IDs. Between 1 and 50 are required for the `token-activity` metric set.
+	 * Tokens with no recorded use are omitted from the response.
+	 */
+	tokenIds?: string[];
 }
 
 /**
@@ -1079,14 +1206,27 @@ export interface LabelMetric {
 }
 
 /**
+ * A record metric: a named set of string attributes observed at a point in time.
+ */
+export interface RecordMetric {
+	/** Record name. */
+	name: string;
+	/** Timestamp of the record. */
+	timestamp: Date;
+	/** Named string attributes of the record, keyed as returned by the service. */
+	fields: Record<string, string>;
+}
+
+/**
  * A metric in a metric set response.
- * Can be a scalar, accumulation, gauge, or label metric.
+ * Can be a scalar, accumulation, gauge, label, or record metric.
  */
 export type Metric =
 	| { scalar: ScalarMetric }
 	| { accumulation: AccumulationMetric }
 	| { gauge: GaugeMetric }
-	| { label: LabelMetric };
+	| { label: LabelMetric }
+	| { record: RecordMetric };
 
 /**
  * Response from a metrics query.

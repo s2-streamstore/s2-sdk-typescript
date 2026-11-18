@@ -60,3 +60,47 @@ describe("estimated billable usage metrics", () => {
 		},
 	);
 });
+
+describe("token activity metrics", () => {
+	it("repeats token_id and keeps record field names as sent", async () => {
+		const response = {
+			values: [
+				{
+					record: {
+						name: "tok-a",
+						timestamp: 1790000000,
+						fields: { outcome: "success", user_agent: "s2-cli" },
+					},
+				},
+			],
+		} satisfies API.MetricSetResponse;
+		const fetchMock = vi.fn(async (_request: Request) =>
+			Response.json(response),
+		);
+		const s2 = new S2({ accessToken: "test-token" });
+		s2.metrics.client.setConfig({
+			fetch: fetchMock as unknown as typeof fetch,
+		});
+
+		const result = await s2.metrics.account({
+			set: "token-activity",
+			tokenIds: ["tok-a", "tok-b"],
+		});
+
+		const url = new URL(fetchMock.mock.calls[0]![0].url);
+		expect(url.search).toBe(
+			"?set=token-activity&token_id=tok-a&token_id=tok-b",
+		);
+		expect(result).toEqual({
+			values: [
+				{
+					record: {
+						name: "tok-a",
+						timestamp: new Date(1790000000 * 1000),
+						fields: { outcome: "success", user_agent: "s2-cli" },
+					},
+				},
+			],
+		} satisfies MetricSetResponse);
+	});
+});
