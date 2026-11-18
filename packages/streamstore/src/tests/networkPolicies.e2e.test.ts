@@ -3,7 +3,8 @@ import { type S2ClientOptions, S2Environment } from "../common.js";
 import { S2 } from "../index.js";
 import { TEST_TIMEOUT_MS } from "./helpers.js";
 
-const hasEnv = !!process.env.S2_ACCESS_TOKEN;
+// s2-lite does not implement network policies.
+const hasEnv = !!process.env.S2_ACCESS_TOKEN && !process.env.S2_LITE;
 const describeIf = hasEnv ? describe : describe.skip;
 
 describeIf("Network policies", () => {
