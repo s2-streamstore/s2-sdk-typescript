@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.32.0
+
+### Minor Changes
+
+- 9be5680: Add network policies (`s2.networkPolicies`, and `networkPolicy` when issuing access tokens) and the `token-activity` account metric set, which returns the new `record` metrics.
+
 ## 0.31.0
 
 ### Minor Changes
