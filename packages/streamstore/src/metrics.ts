@@ -23,10 +23,11 @@ export function fromAPIMetricSetResponse(
 	response: unknown,
 ): Types.MetricSetResponse {
 	const camelCased = toCamelCase<Types.MetricSetResponse>(response);
+	const raw = (response as { values: unknown[] }).values;
 
 	// Convert timeseries timestamps from seconds to Date
 	return {
-		values: camelCased.values.map((metric) => {
+		values: camelCased.values.map((metric, i) => {
 			if ("accumulation" in metric) {
 				return {
 					accumulation: {
@@ -52,6 +53,19 @@ export function fromAPIMetricSetResponse(
 									number,
 								],
 						),
+					},
+				};
+			}
+			if ("record" in metric) {
+				return {
+					record: {
+						...metric.record,
+						timestamp: new Date(
+							(metric.record.timestamp as unknown as number) * 1000,
+						),
+						// Field names are data, not SDK property names: keep them as sent.
+						fields: (raw[i] as { record: { fields: Record<string, string> } })
+							.record.fields,
 					},
 				};
 			}
@@ -81,6 +95,7 @@ export class S2Metrics {
 	 * @param args.start Optional start timestamp (milliseconds since Unix epoch)
 	 * @param args.end Optional end timestamp (milliseconds since Unix epoch)
 	 * @param args.interval Optional aggregation interval for timeseries sets
+	 * @param args.tokenIds Access token IDs, required for the `token-activity` set
 	 */
 	public async account(
 		args: Types.AccountMetricsInput,
@@ -90,11 +105,13 @@ export class S2Metrics {
 			return await withS2Data(() =>
 				accountMetrics({
 					client: this.client,
-					query: toSnakeCase({
-						...args,
+					query: {
+						set: args.set,
 						start: toEpochSeconds(args.start),
 						end: toEpochSeconds(args.end),
-					}),
+						interval: args.interval,
+						token_id: args.tokenIds,
+					},
 					...options,
 				}),
 			);

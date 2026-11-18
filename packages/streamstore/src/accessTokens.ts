@@ -129,6 +129,7 @@ export class S2AccessTokens {
 	 * @param args.scope Token scope (operations and resource sets)
 	 * @param args.autoPrefixStreams Namespace stream names by configured prefix scope
 	 * @param args.expiresAt Expiration time (Date or RFC 3339 string); defaults to requestor's token expiry
+	 * @param args.networkPolicy Slug or full reference of a network policy to restrict the token by
 	 */
 	public async issue(
 		args: Types.IssueAccessTokenInput,
