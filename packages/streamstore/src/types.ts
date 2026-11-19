@@ -673,6 +673,12 @@ export type ReconfigureStreamResponse = StreamConfig;
 export interface AwsPrivateNet {
 	/** Endpoint service name, for creating a VPC endpoint. */
 	serviceName: string;
+	/**
+	 * Private DNS name of the endpoint service. With private DNS enabled on the VPC endpoint,
+	 * it resolves to the endpoint, and can be used as the account endpoint so that account
+	 * requests also go over PrivateLink.
+	 */
+	privateDnsName?: string | null;
 }
 
 /**

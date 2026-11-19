@@ -136,6 +136,12 @@ export type AppendRecord = {
 
 export type AwsPrivateNet = {
     /**
+     * Private DNS name of the endpoint service. With private DNS enabled on the VPC endpoint,
+     * it resolves to the endpoint, and can be used as the account endpoint so that account
+     * requests also go over PrivateLink.
+     */
+    private_dns_name?: string | null;
+    /**
      * AWS PrivateLink endpoint service name, for creating a VPC endpoint.
      */
     service_name: string;
