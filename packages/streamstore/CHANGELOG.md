@@ -1,5 +1,11 @@
 # @s2-dev/streamstore
 
+## 0.32.2
+
+### Patch Changes
+
+- 6ead3ad: Expose `privateDnsName` on `AwsPrivateNet`: the hostname to use as the account endpoint so that account requests also go over PrivateLink.
+
 ## 0.32.1
 
 ### Patch Changes
