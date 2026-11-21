@@ -160,6 +160,8 @@ export const reconfigureBasin = <ThrowOnError extends boolean = false>(options: 
 
 /**
  * Ensure a basin.
+ *
+ * Creates the basin if it does not exist. If it already exists, sets its configuration to match the request, with omitted fields taking their default values (unlike reconfigure, which leaves omitted fields unchanged).
  */
 export const ensureBasin = <ThrowOnError extends boolean = false>(options: Options<EnsureBasinData, ThrowOnError>) => {
     return (options.client ?? client).put<EnsureBasinResponses, EnsureBasinErrors, ThrowOnError>({
@@ -436,6 +438,8 @@ export const reconfigureStream = <ThrowOnError extends boolean = false>(options:
 
 /**
  * Ensure a stream.
+ *
+ * Creates the stream if it does not exist. If it already exists, sets its configuration to match the request, with omitted fields inheriting the basin's default stream configuration (unlike reconfigure, which leaves omitted fields unchanged).
  */
 export const ensureStream = <ThrowOnError extends boolean = false>(options: Options<EnsureStreamData, ThrowOnError>) => {
     return (options.client ?? client).put<EnsureStreamResponses, EnsureStreamErrors, ThrowOnError>({
@@ -456,6 +460,8 @@ export const ensureStream = <ThrowOnError extends boolean = false>(options: Opti
 
 /**
  * Read records.
+ *
+ * Starts at the tail when `seq_num`, `timestamp`, and `tail_offset` are all omitted.
  */
 export const read = <ThrowOnError extends boolean = false>(options: Options<ReadData, ThrowOnError>) => {
     return (options.client ?? client).get<ReadResponses, ReadErrors, ThrowOnError>({

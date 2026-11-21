@@ -233,7 +233,7 @@ export type CreateStreamRequest = {
     config?: null | StreamConfig;
     /**
      * Stream name that is unique to the basin.
-     * It can be between 1 and 512 bytes in length, and must not contain NUL bytes.
+     * It can be between 1 and 253 bytes in length, and must not contain NUL bytes.
      */
     stream: StreamNameStr;
 };
@@ -259,6 +259,16 @@ export type EncryptionAlgorithm = 'aegis-256' | 'aes-256-gcm';
 export type EnsureBasinRequest = {
     config?: null | BasinConfig;
     location?: null | LocationName;
+};
+
+/**
+ * Payload of an SSE `error` event emitted when a streaming read terminates with an error, carrying the HTTP status code alongside the error details.
+ */
+export type ErrorEventData = ErrorInfo & {
+    /**
+     * HTTP status code of the error.
+     */
+    status: number;
 };
 
 export type ErrorInfo = {
@@ -491,6 +501,9 @@ export type PermittedOperationGroups = {
     stream?: null | ReadWritePermissions;
 };
 
+/**
+ * Heartbeat emitted while waiting at the tail for new records, sent only once all records before `tail` have been delivered.
+ */
 export type PingEventData = {
     /**
      * Sequence number that will be assigned to the next record on the stream, and timestamp of the last record.
@@ -523,6 +536,11 @@ export type PrivateNetPolicy = {
 };
 
 /**
+ * Outcome of a create or ensure operation, reported in the `s2-provision-result` response header.
+ */
+export type ProvisionResult = 'created' | 'updated' | 'noop';
+
+/**
  * Source addresses that may use the token. Between 1 and 32.
  */
 export type PublicNetPolicy = {
@@ -546,7 +564,7 @@ export type ReadEvent = {
     event: 'batch';
     id: string;
 } | {
-    data: string;
+    data: ErrorEventData;
     event: 'error';
 } | {
     data: PingEventData;
@@ -810,6 +828,10 @@ export type RevokeAccessTokenData = {
 export type RevokeAccessTokenErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
+    /**
+     * No access token exists with this ID (`access_token_not_found`).
+     */
+    404: ErrorInfo;
     408: ErrorInfo;
 };
 
@@ -878,7 +900,9 @@ export type CreateBasinErrors = {
 export type CreateBasinError = CreateBasinErrors[keyof CreateBasinErrors];
 
 export type CreateBasinResponses = {
-    200: BasinInfo;
+    /**
+     * The basin was created, or matched an earlier creation with the same `s2-request-token` and configuration.
+     */
     201: BasinInfo;
 };
 
@@ -907,6 +931,9 @@ export type DeleteBasinErrors = {
 export type DeleteBasinError = DeleteBasinErrors[keyof DeleteBasinErrors];
 
 export type DeleteBasinResponses = {
+    /**
+     * Basin deletion has been initiated, or was already in progress.
+     */
     202: unknown;
 };
 
@@ -979,6 +1006,7 @@ export type EnsureBasinData = {
 
 export type EnsureBasinErrors = {
     400: ErrorInfo;
+    403: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
 };
@@ -986,7 +1014,13 @@ export type EnsureBasinErrors = {
 export type EnsureBasinError = EnsureBasinErrors[keyof EnsureBasinErrors];
 
 export type EnsureBasinResponses = {
+    /**
+     * The basin already existed and now matches the requested configuration.
+     */
     200: BasinInfo;
+    /**
+     * The basin was created.
+     */
     201: BasinInfo;
 };
 
@@ -1358,6 +1392,9 @@ export type CreateStreamErrors = {
 export type CreateStreamError = CreateStreamErrors[keyof CreateStreamErrors];
 
 export type CreateStreamResponses = {
+    /**
+     * The stream was created, or matched an earlier creation with the same `s2-request-token` and configuration.
+     */
     201: StreamInfo;
 };
 
@@ -1386,6 +1423,9 @@ export type DeleteStreamErrors = {
 export type DeleteStreamError = DeleteStreamErrors[keyof DeleteStreamErrors];
 
 export type DeleteStreamResponses = {
+    /**
+     * Stream deletion has been initiated, or was already in progress.
+     */
     202: unknown;
 };
 
@@ -1468,7 +1508,13 @@ export type EnsureStreamErrors = {
 export type EnsureStreamError = EnsureStreamErrors[keyof EnsureStreamErrors];
 
 export type EnsureStreamResponses = {
+    /**
+     * The stream already existed and now matches the requested configuration.
+     */
     200: StreamInfo;
+    /**
+     * The stream was created.
+     */
     201: StreamInfo;
 };
 
@@ -1601,6 +1647,10 @@ export type AppendErrors = {
     408: ErrorInfo;
     409: ErrorInfo;
     412: AppendConditionFailed;
+    /**
+     * Append rate limit exceeded (`rate_limited`). No records were appended.
+     */
+    429: ErrorInfo;
 };
 
 export type AppendError = AppendErrors[keyof AppendErrors];
