@@ -58,6 +58,7 @@ import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 export const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
+  mode: "shared",
 });
 ```
 
@@ -108,3 +109,5 @@ export default function Chat() {
 ```
 
 `resume: true` makes `useChat` call `reconnectToStream` on mount. `DefaultChatTransport`'s default reconnect URL is `${api}/${chatId}/stream`, which matches the GET route above. If your URL shape differs, pass `prepareReconnectToStreamRequest`.
+
+`useChat`'s `stop()` only disconnects; call `chat.stop()` from a route to end the generation ([package README](../../packages/resumable-stream/README.md#ai-sdk)).

@@ -12,13 +12,21 @@ export default defineConfig(({ mode }) => ({
         __dirname,
         'packages/streamstore/src/index.ts',
       ),
-      '@s2-dev/resumable-stream': resolve(
+      '@s2-dev/resumable-stream/tanstack-ai': resolve(
         __dirname,
-        'packages/resumable-stream/src/index.ts',
+        'packages/resumable-stream/src/tanstack-ai/index.ts',
+      ),
+      '@s2-dev/resumable-stream/anthropic': resolve(
+        __dirname,
+        'packages/resumable-stream/src/anthropic/index.ts',
       ),
       '@s2-dev/resumable-stream/aisdk': resolve(
         __dirname,
         'packages/resumable-stream/src/aisdk/index.ts',
+      ),
+      '@s2-dev/resumable-stream': resolve(
+        __dirname,
+        'packages/resumable-stream/src/index.ts',
       ),
     },
   },
