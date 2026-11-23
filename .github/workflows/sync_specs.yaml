@@ -9,6 +9,10 @@ on:
     types: [s2-specs-update]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   update-specs:
     runs-on: ubuntu-latest
@@ -42,14 +46,14 @@ jobs:
           git add packages/streamstore/src/generated
 
       - name: Create Pull Request
-        if: ${{ steps.submodules.outputs['s2-specs--updated'] }}
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8.1.0
         with:
           committer: s2-helper[bot] <194906454+s2-helper[bot]@users.noreply.github.com>
           author: s2-helper[bot] <194906454+s2-helper[bot]@users.noreply.github.com>
           sign-commits: true
           title: "chore: update s2-specs to ${{ steps.submodules.outputs['s2-specs--latestShortCommitSha'] }}"
-          branch: "specs/update-s2-specs-${{ steps.submodules.outputs['s2-specs--latestShortCommitSha'] }}"
+          branch: "specs/update-s2-specs"
+          delete-branch: true
           body: |
             ## s2-specs Update
 
