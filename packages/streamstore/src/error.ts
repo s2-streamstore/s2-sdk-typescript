@@ -330,6 +330,26 @@ export function abortedError(
 }
 
 /**
+ * Construct an `ABORTED` error from an arbitrary abort reason without throwing
+ * on values that fail string coercion (e.g. a Symbol in a template literal or
+ * a null-prototype object).
+ */
+export function abortedFromReason(prefix: string, reason: unknown): S2Error {
+	if (reason instanceof S2Error && reason.code === "ABORTED") {
+		return reason;
+	}
+	let detail: string | undefined;
+	if (reason !== undefined) {
+		try {
+			detail = String(reason);
+		} catch {
+			detail = undefined;
+		}
+	}
+	return abortedError(detail ? `${prefix}: ${detail}` : prefix, reason);
+}
+
+/**
  * For an append on a closed append session. A failed session is closed to all
  * but the appends that may have reached the server, which get its own error.
  * `cause` is that error.

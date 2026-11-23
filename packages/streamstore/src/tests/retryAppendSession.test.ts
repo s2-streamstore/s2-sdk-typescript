@@ -714,7 +714,8 @@ describe("AppendSessionImpl (unit)", () => {
 			);
 		await new Promise((r) => setTimeout(r, 10));
 
-		await withinDeadline(writer.abort("stop"));
+		const reason = Symbol("stop");
+		await withinDeadline(writer.abort(reason));
 		resolveFirst(
 			ok({
 				start: { seqNum: 0, timestamp: new Date(0) },
@@ -727,14 +728,14 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(sent).toEqual(["first"]);
 		await expect(withinDeadline(t1.ack())).rejects.toMatchObject({
 			code: "ABORTED",
-			cause: "stop",
+			cause: reason,
 		});
 		expect(await withinDeadline(write2)).toMatchObject({
 			code: "SESSION_CLOSED",
 		});
 		await expect(withinDeadline(session.close())).rejects.toMatchObject({
 			code: "ABORTED",
-			cause: "stop",
+			cause: reason,
 		});
 	});
 });

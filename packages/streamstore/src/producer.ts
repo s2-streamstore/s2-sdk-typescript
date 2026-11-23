@@ -1,6 +1,10 @@
 import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
-import { abortedError, appendSessionClosedError, S2Error } from "./error.js";
+import {
+	abortedFromReason,
+	appendSessionClosedError,
+	S2Error,
+} from "./error.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import {
 	type AppendAck,
@@ -10,14 +14,22 @@ import {
 
 const debugProducer = createDebug("s2:producer");
 
-const toS2Error = (err: unknown): S2Error =>
-	err instanceof S2Error
-		? err
-		: new S2Error({
-				message: String(err),
-				status: 500,
-				origin: "sdk",
-			});
+const toS2Error = (err: unknown): S2Error => {
+	if (err instanceof S2Error) {
+		return err;
+	}
+	let message = "Unknown error";
+	try {
+		message = String(err);
+	} catch {
+		// Keep fallback if err has no string coercion (e.g. null-prototype object).
+	}
+	return new S2Error({
+		message,
+		status: 500,
+		origin: "sdk",
+	});
+};
 
 const producerClosedError = (): S2Error =>
 	new S2Error({
@@ -540,16 +552,8 @@ export class Producer implements AsyncDisposable {
 		if (this.aborted || this.closed) {
 			return;
 		}
+		const abortError = abortedFromReason("Producer aborted", reason);
 		this.aborted = true;
-		const abortError =
-			reason instanceof S2Error && reason.code === "ABORTED"
-				? reason
-				: abortedError(
-						reason !== undefined
-							? `Producer aborted: ${reason}`
-							: "Producer aborted",
-						reason,
-					);
 		this.fail(abortError, { abort: true });
 	}
 

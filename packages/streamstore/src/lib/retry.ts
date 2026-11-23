@@ -2,6 +2,7 @@ import createDebug from "debug";
 import type { RetryConfig } from "../common.js";
 import {
 	abortedError,
+	abortedFromReason,
 	appendSessionClosedError,
 	invariantViolation,
 	isServerDraining,
@@ -1028,28 +1029,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.acksController = controller;
 			},
 			cancel: async (reason) => {
-				const error = abortedError(
-					reason !== undefined
-						? `AppendSession acks cancelled: ${reason}`
-						: "AppendSession acks cancelled",
-					reason,
+				await this.abort(
+					abortedFromReason("AppendSession acks cancelled", reason),
 				);
-				await this.abort(error);
 			},
 		});
 
-		const abortFromWritable = (reason: unknown) => {
-			const error =
-				reason instanceof S2Error && reason.code === "ABORTED"
-					? reason
-					: abortedError(
-							reason !== undefined
-								? `AppendSession aborted: ${reason}`
-								: "AppendSession aborted",
-							reason,
-						);
-			return this.abort(error);
-		};
+		const abortFromWritable = (reason: unknown) =>
+			this.abort(abortedFromReason("AppendSession aborted", reason));
 
 		this.writable = new WritableStream<Types.AppendInput>({
 			start: (controller) => {

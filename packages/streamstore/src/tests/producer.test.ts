@@ -615,9 +615,10 @@ describe("Producer", () => {
 				(err: unknown) => err,
 			);
 
-			// Abort while r1 is held open (would stall 30s if retried) and r3 is
-			// mid-write.
-			await withinDeadline(writer.abort("stop"));
+			// Abort with a Symbol reason while r1 is held open (would stall 30s if
+			// retried) and r3 is mid-write.
+			const reason = Symbol("stop");
+			await withinDeadline(writer.abort(reason));
 
 			// Even if the transport later resolves r1, neither r2 nor r3 may be sent.
 			ackNext(0);
@@ -628,20 +629,20 @@ describe("Producer", () => {
 			await expect(withinDeadline(r1.ack())).rejects.toMatchObject({
 				code: "ABORTED",
 				status: 499,
-				cause: "stop",
+				cause: reason,
 			});
 			await expect(withinDeadline(r2.ack())).rejects.toMatchObject({
 				code: "SESSION_CLOSED",
-				cause: expect.objectContaining({ code: "ABORTED", cause: "stop" }),
+				cause: expect.objectContaining({ code: "ABORTED", cause: reason }),
 			});
 			expect(await withinDeadline(r3Write)).toMatchObject({
 				code: "ABORTED",
-				cause: "stop",
+				cause: reason,
 			});
 			await expect(withinDeadline(producer.close())).rejects.toMatchObject({
 				code: "ABORTED",
 				status: 499,
-				cause: "stop",
+				cause: reason,
 			});
 		});
 
