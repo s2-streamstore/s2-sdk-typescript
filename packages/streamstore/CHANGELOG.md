@@ -1,5 +1,35 @@
 # @s2-dev/streamstore
 
+## 0.33.0
+
+### Minor Changes
+
+- 2eaa828: Aborting `Producer.writable` now aborts the underlying `AppendSession` immediately, including while a write or batch submission is blocked on backpressure. Queued batches waiting for session capacity are rejected with `SESSION_CLOSED` instead of being appended once capacity frees up, and in-flight retries are cancelled rather than stalling teardown.
+
+  Non-abort `Producer` failures (such as a `BatchTransform` error during `flush()`) also close the underlying session right away so capacity-parked batches reject without appending while already-accepted batches still settle.
+
+  Aborting `AppendSession.writable` while a `write()` is blocked on capacity now aborts the session immediately instead of waiting for capacity to release.
+
+  **Breaking:** aborting `Producer.writable` now matches `AppendSession.writable.abort()`:
+
+  - In-flight batches already sent to the server are cancelled and their tickets reject with `ABORTED` (carrying the abort reason as `cause`) instead of draining to an ack.
+  - `writer.abort(reason)` resolves once teardown completes instead of rejecting, so `ReadableStream.pipeTo(producer.writable)` preserves the upstream source error (note: per the Streams standard, `pipeTo` waits for an already in-flight `write()` before calling `abort`; pass an `AbortSignal` to `stream.appendSession()` to cancel mid-write under sustained backpressure).
+  - `Producer.close()` after `writer.abort(reason)` rejects with an `S2Error` with code `ABORTED` (status 499, `cause: reason`) instead of rethrowing the raw reason or wrapping it as status 500.
+
+### Patch Changes
+
+- 4aa08b5: Fix transient DNS retry classification on Bun and protobuf decode error wrapping on unary fetch calls:
+
+  - Classify `EAI_AGAIN` as a retryable, side-effect-free connection error so transient DNS resolver failures on Bun are retried instead of failing immediately with status 0.
+  - Wrap protobuf decoding errors on HTTP 200 unary `read()` and `append()` responses in a non-retryable `S2Error` (with code `INVALID_RESPONSE` and the decode error as `cause`) instead of throwing raw protobuf-ts exceptions.
+
+- 596676e: Fix session recovery, read delivery, and hand-built append input validation bugs:
+
+  - Reset abandoned s2s HTTP/2 append streams during retry recovery so a stalled server on a failed attempt cannot hold a connection pool slot open and hang `S2Stream.close()`.
+  - Validate hand-built `AppendInput` batches (batch size/count limits, record `timestamp` and `meteredBytes`, `fencingToken`, and `matchSeqNum`) in `S2Stream.append()` and `AppendSession.submit()` before queueing or encoding, rejecting invalid inputs with `S2Error` while leaving open sessions usable.
+  - Drain already-buffered records in `ReadSession` before surfacing a terminal transport error (while still dropping buffered records immediately on abort), so reconnecting from `nextReadPosition()` after a failed read session does not skip records that were already fetched.
+  - Reset the `ReadSession` retry budget on empty heartbeat batches so long-lived tail-following reads on quiet streams survive non-consecutive transient errors.
+
 ## 0.32.2
 
 ### Patch Changes
