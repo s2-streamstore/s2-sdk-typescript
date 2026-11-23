@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { AppendInput, AppendRecord, MAX_APPEND_BYTES } from "../types.js";
+import { S2Error } from "../error.js";
+import { S2 } from "../index.js";
+import type { SessionTransports } from "../lib/stream/types.js";
+import {
+	AppendInput,
+	AppendRecord,
+	MAX_APPEND_BYTES,
+	type StringAppendRecord,
+} from "../types.js";
+import {
+	cleanupAfterEach,
+	s2sAckFrame,
+	serveHttp1,
+	serveHttp2,
+	withinDeadline,
+} from "./helpers.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -82,4 +97,87 @@ describe("AppendRecord.maxBodyBytes", () => {
 		});
 		expect(() => AppendInput.create([oversized])).toThrow();
 	});
+});
+
+/**
+ * Detail bug_b68786e2: hand-built AppendInput with an invalid timestamp (e.g.
+ * NaN) bypassed validation on S2Stream.append() and AppendSession.submit(),
+ * silently dropping the timestamp on fetch or aborting the session on s2s.
+ */
+describe("hand-built AppendInput validation (bug_b68786e2)", () => {
+	const cleanup = cleanupAfterEach();
+
+	it.each(["s2s", "fetch"] as SessionTransports[])(
+		"rejects invalid hand-built inputs on append() and submit() without aborting the %s session",
+		async (transport) => {
+			let requests = 0;
+			const ackJson = JSON.stringify({
+				start: { seq_num: 0, timestamp: 1 },
+				end: { seq_num: 1, timestamp: 1 },
+				tail: { seq_num: 1, timestamp: 1 },
+			});
+			const server =
+				transport === "s2s"
+					? await serveHttp2((stream) => {
+							requests++;
+							stream.respond({ ":status": 200 });
+							stream.on("data", () => stream.write(s2sAckFrame(0, 1)));
+							stream.on("end", () => stream.end());
+						})
+					: await serveHttp1((req, res) => {
+							requests++;
+							req.resume();
+							req.on("end", () => {
+								res.writeHead(200, { "content-type": "application/json" });
+								res.end(ackJson);
+							});
+						});
+			cleanup(server.close);
+
+			const stream = new S2({
+				accessToken: "token",
+				endpoints: { account: server.origin, basin: server.origin },
+			})
+				.basin("test-basin")
+				.stream("events", { forceTransport: transport });
+			cleanup(() => withinDeadline(stream.close()));
+
+			const badRecord: StringAppendRecord = {
+				body: "bad",
+				timestamp: Number.NaN,
+				meteredBytes: 11,
+			};
+			const badInput: AppendInput = {
+				records: [badRecord],
+				meteredBytes: 11,
+			};
+
+			await expect(stream.append(badInput)).rejects.toBeInstanceOf(S2Error);
+			expect(requests).toBe(0);
+
+			const session = await stream.appendSession();
+			await expect(session.submit(badInput)).rejects.toBeInstanceOf(S2Error);
+			await expect(
+				session.submit({ records: [], meteredBytes: 0 }),
+			).rejects.toBeInstanceOf(S2Error);
+			await expect(
+				session.submit({
+					records: [AppendRecord.string({ body: "ok" })],
+					meteredBytes: MAX_APPEND_BYTES + 1,
+				}),
+			).rejects.toBeInstanceOf(S2Error);
+			expect(requests).toBe(0);
+			expect(session.failureCause()).toBeUndefined();
+
+			const valid = await session.submit(
+				AppendInput.create([AppendRecord.string({ body: "good" })]),
+			);
+			await expect(withinDeadline(valid.ack())).resolves.toMatchObject({
+				start: { seqNum: 0 },
+				end: { seqNum: 1 },
+			});
+			expect(requests).toBe(1);
+			await withinDeadline(session.close());
+		},
+	);
 });

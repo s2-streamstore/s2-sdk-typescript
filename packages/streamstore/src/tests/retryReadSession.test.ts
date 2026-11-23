@@ -611,6 +611,127 @@ describe("ReadSession drain handoff (unit)", () => {
 	});
 });
 
+describe("ReadSession buffered delivery and heartbeat retries", () => {
+	const record = (seq_num: number): InternalReadRecord<"string"> => ({
+		seq_num,
+		timestamp: 1000,
+		body: `r-${seq_num}`,
+	});
+	const tailAt = (seq_num: number): StreamPosition => ({
+		seq_num,
+		timestamp: 1000,
+	});
+
+	/**
+	 * Detail bug_72210593: a terminal transport error arriving while earlier
+	 * batches are still buffered must deliver those records first before
+	 * surfacing the error, so nextReadPosition() does not skip undelivered data.
+	 */
+	it("drains buffered records before surfacing a terminal transport error", async () => {
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+		);
+
+		const caughtUp = session.caughtUp();
+		transport.push(readBatch([record(0), record(1)], tailAt(10)));
+		transport.push(
+			readError(new S2Error({ message: "bad request", status: 400 })),
+		);
+
+		// Wait until the pump has processed the terminal error while records stay buffered.
+		await expect(caughtUp).rejects.toMatchObject({ status: 400 });
+
+		const delivered: number[] = [];
+		let thrown: unknown;
+		try {
+			for await (const r of session) {
+				delivered.push(r.seqNum);
+			}
+		} catch (err) {
+			thrown = err;
+		}
+
+		expect(delivered).toEqual([0, 1]);
+		expect(thrown).toMatchObject({ status: 400 });
+		expect(session.nextReadPosition()?.seqNum).toBe(2);
+	});
+
+	it("drops buffered records immediately when aborted after a transport error", async () => {
+		const controller = new AbortController();
+		const transport = new ManualReadSession();
+		const session = await RetryReadSession.create(
+			async () => transport,
+			{},
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 1 },
+			{ signal: controller.signal },
+		);
+
+		const caughtUp = session.caughtUp();
+		transport.push(readBatch([record(0), record(1)], tailAt(10)));
+		transport.push(
+			readError(new S2Error({ message: "bad request", status: 400 })),
+		);
+		await expect(caughtUp).rejects.toMatchObject({ status: 400 });
+
+		controller.abort();
+		const reader = session.getReader();
+		await expect(reader.read()).rejects.toMatchObject({ code: "ABORTED" });
+		reader.releaseLock();
+	});
+
+	/**
+	 * Detail bug_1a908821: empty heartbeat batches on a quiet stream prove
+	 * health and must reset the retry budget so non-consecutive transient
+	 * errors do not exhaust maxAttempts.
+	 */
+	it("resets the retry budget on heartbeat batches", async () => {
+		const transports: ManualReadSession[] = [];
+		const session = await RetryReadSession.create(
+			async () => {
+				const t = new ManualReadSession();
+				transports.push(t);
+				return t;
+			},
+			{ tail_offset: 0 },
+			// maxAttempts: 2 allows only 1 consecutive retry without a budget reset.
+			{ minBaseDelayMillis: 1, maxBaseDelayMillis: 1, maxAttempts: 2 },
+		);
+
+		const reader = session.getReader();
+		const nextRecord = reader.read();
+		// Suppress unhandled rejection if an earlier assertion fails before awaiting nextRecord.
+		void nextRecord.catch(() => {});
+
+		transports[0]!.push(readBatch([], tailAt(10)));
+		transports[0]!.push(
+			readError(new S2Error({ message: "transient 1", status: 503 })),
+		);
+
+		await vi.waitFor(() => {
+			expect(transports.length).toBe(2);
+		});
+
+		transports[1]!.push(readBatch([], tailAt(10)));
+		transports[1]!.push(
+			readError(new S2Error({ message: "transient 2", status: 503 })),
+		);
+
+		await vi.waitFor(() => {
+			expect(transports.length).toBe(3);
+		});
+
+		transports[2]!.push(readBatch([record(10)], tailAt(11)));
+		expect((await nextRecord).value?.seqNum).toBe(10);
+
+		transports[2]!.push("close");
+		expect((await reader.read()).done).toBe(true);
+		reader.releaseLock();
+	});
+});
+
 describe("ReadSession (unit)", () => {
 	// Note: Not using fake timers here because they don't play well with async iteration
 	// Instead, we use very short backoff times (1ms) to make tests run fast
