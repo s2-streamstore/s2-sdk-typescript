@@ -1,16 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BatchTransform } from "../batch-transform.js";
 import { S2Error } from "../error.js";
 import { AppendRecord } from "../index.js";
+import type { AppendResult, CloseResult } from "../lib/result.js";
+import { ok, okClose } from "../lib/result.js";
+import { RetryAppendSession } from "../lib/retry.js";
 import {
 	type AcksStream,
 	type AppendRecord as AppendRecordType,
 	type AppendSession,
 	BatchSubmitTicket,
+	type TransportAppendSession,
 } from "../lib/stream/types.js";
 import { Producer } from "../producer.js";
 import { type AppendAck, type AppendInput } from "../types.js";
-import { withinDeadline } from "./helpers.js";
+import { waitFor, withinDeadline } from "./helpers.js";
 
 class MockAppendSession implements AppendSession {
 	readonly readable = new ReadableStream<AppendAck>();
@@ -541,5 +545,297 @@ describe("Producer", () => {
 
 		await producer.close();
 		await expect(withinDeadline(piped)).rejects.toThrow("Producer is closed");
+	});
+
+	// Detail bug_5cd32435-2401-46c3-8ea3-ac956ef8d9cf: aborting or failing a
+	// Producer while the pump is parked in a capacity-blocked session.submit()
+	// let the parked batch append once capacity freed up and stalled close() for
+	// the session's retry budget.
+	describe("backpressure teardown with RetryAppendSession", () => {
+		function createControllableTransport() {
+			const sent: Array<{
+				bodies: string[];
+				ack: Deferred<AppendResult>;
+			}> = [];
+			const closeCalls: Array<{ cancel?: boolean } | undefined> = [];
+			let seq = 0;
+
+			const transport: TransportAppendSession = {
+				submit(input, onSend) {
+					onSend();
+					const bodies = input.records.map((r) => String(r.body));
+					const ack = deferred<AppendResult>();
+					sent.push({ bodies, ack });
+					return ack.promise;
+				},
+				async close(options): Promise<CloseResult> {
+					closeCalls.push(options);
+					return okClose();
+				},
+			};
+
+			const ackNext = (index: number) => {
+				const entry = sent[index];
+				if (!entry) return;
+				const start = seq;
+				seq += entry.bodies.length;
+				entry.ack.resolve(ok(makeAck(start, entry.bodies.length)));
+			};
+
+			return { transport, sent, closeCalls, ackNext };
+		}
+
+		it("writer.abort() under backpressure drops parked and blocked records and cancels inflight retries", async () => {
+			const { transport, sent, closeCalls, ackNext } =
+				createControllableTransport();
+			const session = await RetryAppendSession.create(
+				async () => transport,
+				{ maxInflightBatches: 1 },
+				{
+					maxAttempts: 3,
+					requestTimeoutMillis: 10_000,
+					minBaseDelayMillis: 1,
+					maxBaseDelayMillis: 1,
+				},
+			);
+			const producer = new Producer(
+				new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+				session,
+			);
+			const writer = producer.writable.getWriter();
+
+			// r1 occupies the single inflight slot; r2 parks in session.submit()'s
+			// capacityWaiters; r3 blocks inside writable's write() on backpressure.
+			const r1 = await producer.submit(AppendRecord.string({ body: "r1" }));
+			await waitFor(() => sent.length === 1);
+			const r2 = await producer.submit(AppendRecord.string({ body: "r2" }));
+			await waitFor(() => (session as any).capacityWaiters.length === 1);
+			const r3Write = writer.write(AppendRecord.string({ body: "r3" })).then(
+				() => undefined,
+				(err: unknown) => err,
+			);
+			// Wait until r3 has entered submitInternal() and is parked on transform
+			// backpressure before aborting.
+			await waitFor(() => (producer as any).inflightRecords.length === 1);
+
+			// Abort with a Symbol reason while r1 is held open (would stall 30s if
+			// retried) and r3 is mid-write.
+			const reason = Symbol("stop");
+			await withinDeadline(writer.abort(reason));
+
+			// Even if the transport later resolves r1, neither r2 nor r3 may be sent.
+			ackNext(0);
+			await new Promise((r) => setTimeout(r, 20));
+			expect(sent.map((entry) => entry.bodies)).toEqual([["r1"]]);
+			expect(closeCalls).toContainEqual({ cancel: true });
+
+			await expect(withinDeadline(r1.ack())).rejects.toMatchObject({
+				code: "ABORTED",
+				status: 499,
+				cause: reason,
+			});
+			await expect(withinDeadline(r2.ack())).rejects.toMatchObject({
+				code: "SESSION_CLOSED",
+				cause: expect.objectContaining({ code: "ABORTED", cause: reason }),
+			});
+			expect(await withinDeadline(r3Write)).toMatchObject({
+				code: "ABORTED",
+				cause: reason,
+			});
+			await expect(withinDeadline(producer.close())).rejects.toMatchObject({
+				code: "ABORTED",
+				status: 499,
+				cause: reason,
+			});
+		});
+
+		it("pipeTo source error between writes aborts without appending a capacity-parked batch or masking the source error", async () => {
+			const { transport, sent, ackNext } = createControllableTransport();
+			const session = await RetryAppendSession.create(
+				async () => transport,
+				{ maxInflightBatches: 1 },
+				{
+					maxAttempts: 3,
+					requestTimeoutMillis: 10_000,
+					minBaseDelayMillis: 1,
+					maxBaseDelayMillis: 1,
+				},
+			);
+			const producer = new Producer(
+				new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+				session,
+			);
+
+			const sourceError = new Error("upstream failed");
+			let step = 0;
+			const source = new ReadableStream<AppendRecordType>({
+				async pull(controller) {
+					step += 1;
+					if (step === 1) {
+						controller.enqueue(AppendRecord.string({ body: "r1" }));
+						return;
+					}
+					if (step === 2) {
+						await waitFor(() => sent.length === 1);
+						controller.enqueue(AppendRecord.string({ body: "r2" }));
+						return;
+					}
+					// Wait until r2 is parked in capacityWaiters before failing upstream.
+					await waitFor(() => (session as any).capacityWaiters.length === 1);
+					controller.error(sourceError);
+				},
+			});
+
+			const piped = source.pipeTo(producer.writable);
+			await expect(withinDeadline(piped)).rejects.toBe(sourceError);
+
+			ackNext(0);
+			await new Promise((r) => setTimeout(r, 20));
+			expect(sent.map((entry) => entry.bodies)).toEqual([["r1"]]);
+			await expect(withinDeadline(producer.close())).rejects.toMatchObject({
+				code: "ABORTED",
+				cause: sourceError,
+			});
+		});
+
+		it("flush failure rejects a capacity-parked batch without appending it while draining already-accepted batches", async () => {
+			const { transport, sent, ackNext } = createControllableTransport();
+			const session = await RetryAppendSession.create(
+				async () => transport,
+				{ maxInflightBatches: 1 },
+				{ maxAttempts: 1, requestTimeoutMillis: 10_000 },
+			);
+			const batchTransform = new BatchTransform({
+				lingerDurationMillis: 60_000,
+				maxBatchRecords: 10,
+				maxBatchBytes: 60,
+			});
+			const producer = new Producer(batchTransform, session);
+
+			// Each 30-byte string has 38 metered bytes: two exceed maxBatchBytes (60),
+			// flushing the prior record while keeping the current one in currentBatch.
+			const r1 = await producer.submit(
+				AppendRecord.string({ body: "a".repeat(30) }),
+			);
+			const r2 = await producer.submit(
+				AppendRecord.string({ body: "b".repeat(30) }),
+			);
+			await waitFor(() => sent.length === 1);
+			// r3 flushes r2 into the pump (parked in capacityWaiters) and stays in
+			// currentBatch.
+			const r3 = await producer.submit(
+				AppendRecord.string({ body: "c".repeat(30) }),
+			);
+			await waitFor(() => (session as any).capacityWaiters.length === 1);
+
+			const flushError = new S2Error({
+				message: "batch flush failed",
+				status: 500,
+				origin: "sdk",
+			});
+			vi.spyOn(batchTransform, "flush").mockImplementationOnce(() => {
+				throw flushError;
+			});
+
+			// flush() fails: r2 and r3 must reject as never sent immediately, and r2
+			// must never be sent once r1 acks.
+			const flushPromise = producer.flush();
+			await Promise.all([
+				expect(withinDeadline(r2.ack())).rejects.toMatchObject({
+					code: "SESSION_CLOSED",
+				}),
+				expect(withinDeadline(r3.ack())).rejects.toMatchObject({
+					code: "SESSION_CLOSED",
+				}),
+			]);
+
+			// Already-accepted r1 still drains cleanly.
+			ackNext(0);
+			await expect(withinDeadline(r1.ack())).resolves.toMatchObject({
+				index: 0,
+			});
+			await expect(withinDeadline(flushPromise)).rejects.toBe(flushError);
+			await expect(withinDeadline(producer.close())).rejects.toBe(flushError);
+			expect(sent.map((entry) => entry.bodies)).toEqual([["a".repeat(30)]]);
+		});
+
+		it("writer.abort() after a local failure cancels draining batches with the abort reason", async () => {
+			const { transport, sent } = createControllableTransport();
+			const session = await RetryAppendSession.create(
+				async () => transport,
+				{ maxInflightBatches: 1 },
+				{ maxAttempts: 3, requestTimeoutMillis: 10_000 },
+			);
+			const batchTransform = new BatchTransform({
+				lingerDurationMillis: 60_000,
+				maxBatchRecords: 1,
+			});
+			const producer = new Producer(batchTransform, session);
+
+			const r1 = await producer.submit(AppendRecord.string({ body: "r1" }));
+			await waitFor(() => sent.length === 1);
+
+			const flushError = new S2Error({
+				message: "batch flush failed",
+				status: 500,
+				origin: "sdk",
+			});
+			vi.spyOn(batchTransform, "flush").mockImplementationOnce(() => {
+				throw flushError;
+			});
+			const flushPromise = producer.flush();
+			await waitFor(() => (session as any).closing === true);
+
+			// Escalate the stalled drain with writer.abort(): r1 must reject with the
+			// caller's abort reason, while flush()/close() still report flushError.
+			const abortReason = new Error("stop draining");
+			const writer = producer.writable.getWriter();
+			await withinDeadline(writer.abort(abortReason));
+
+			await expect(withinDeadline(r1.ack())).rejects.toMatchObject({
+				code: "ABORTED",
+				cause: abortReason,
+			});
+			await expect(withinDeadline(flushPromise)).rejects.toBe(flushError);
+			await expect(withinDeadline(producer.close())).rejects.toBe(flushError);
+		});
+
+		it("writer.abort() falls back to closing a custom AppendSession without a writable abort handler", async () => {
+			const parkedSubmit = deferred<BatchSubmitTicket>();
+			const customSession: AppendSession = {
+				readable: new ReadableStream<AppendAck>(),
+				writable: new WritableStream<AppendInput>(),
+				submit: () => parkedSubmit.promise,
+				close: async () => {
+					parkedSubmit.reject(
+						new S2Error({
+							message: "AppendSession is closed",
+							code: "SESSION_CLOSED",
+						}),
+					);
+				},
+				acks: () => new ReadableStream<AppendAck>() as AcksStream,
+				lastAckedPosition: () => undefined,
+				failureCause: () => undefined,
+				[Symbol.asyncDispose]: async () => {},
+			};
+			const producer = new Producer(
+				new BatchTransform({ lingerDurationMillis: 0, maxBatchRecords: 1 }),
+				customSession,
+			);
+
+			const r1 = await producer.submit(AppendRecord.string({ body: "r1" }));
+			await waitFor(() => (producer as any).inflightRecords.length === 0);
+
+			const writer = producer.writable.getWriter();
+			await withinDeadline(writer.abort("stop"));
+			await expect(withinDeadline(r1.ack())).rejects.toMatchObject({
+				code: "SESSION_CLOSED",
+			});
+			await expect(withinDeadline(producer.close())).rejects.toMatchObject({
+				code: "ABORTED",
+				cause: "stop",
+			});
+		});
 	});
 });

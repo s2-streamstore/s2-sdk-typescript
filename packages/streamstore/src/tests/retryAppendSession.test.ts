@@ -675,4 +675,67 @@ describe("AppendSessionImpl (unit)", () => {
 		expect(error.message).toContain("current=10");
 		expect(error.status).toBe(0);
 	});
+
+	it("writable.abort() aborts immediately while write() is blocked on capacity", async () => {
+		vi.useRealTimers();
+		const sent: string[] = [];
+		let resolveFirst!: (result: AppendResult) => void;
+		const session = await AppendSessionImpl.create(
+			async () => ({
+				submit: (input, onSend) => {
+					onSend();
+					sent.push(String(input.records[0]!.body));
+					return new Promise<AppendResult>((resolve) => {
+						if (sent.length === 1) {
+							resolveFirst = resolve;
+						}
+					});
+				},
+				close: async () => okClose(),
+			}),
+			{ maxInflightBatches: 1 },
+			{
+				maxAttempts: 3,
+				requestTimeoutMillis: 10_000,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 1,
+			},
+		);
+
+		const writer = session.writable.getWriter();
+		const t1 = await session.submit(
+			AppendInput.create([AppendRecord.string({ body: "first" })]),
+		);
+		const write2 = writer
+			.write(AppendInput.create([AppendRecord.string({ body: "second" })]))
+			.then(
+				() => undefined,
+				(err: unknown) => err,
+			);
+		await new Promise((r) => setTimeout(r, 10));
+
+		const reason = Symbol("stop");
+		await withinDeadline(writer.abort(reason));
+		resolveFirst(
+			ok({
+				start: { seqNum: 0, timestamp: new Date(0) },
+				end: { seqNum: 1, timestamp: new Date(0) },
+				tail: { seqNum: 1, timestamp: new Date(0) },
+			}),
+		);
+		await new Promise((r) => setTimeout(r, 20));
+
+		expect(sent).toEqual(["first"]);
+		await expect(withinDeadline(t1.ack())).rejects.toMatchObject({
+			code: "ABORTED",
+			cause: reason,
+		});
+		expect(await withinDeadline(write2)).toMatchObject({
+			code: "SESSION_CLOSED",
+		});
+		await expect(withinDeadline(session.close())).rejects.toMatchObject({
+			code: "ABORTED",
+			cause: reason,
+		});
+	});
 });

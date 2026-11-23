@@ -313,13 +313,40 @@ export function invariantViolation(
 }
 
 /** Helper: construct an aborted/cancelled error (499). */
-export function abortedError(message: string = "Request cancelled"): S2Error {
-	return new S2Error({
+export function abortedError(
+	message: string = "Request cancelled",
+	cause?: unknown,
+): S2Error {
+	const error = new S2Error({
 		message,
 		code: "ABORTED",
 		status: 499,
 		origin: "sdk",
 	});
+	if (cause !== undefined) {
+		error.cause = cause;
+	}
+	return error;
+}
+
+/**
+ * Construct an `ABORTED` error from an arbitrary abort reason without throwing
+ * on values that fail string coercion (e.g. a Symbol in a template literal or
+ * a null-prototype object).
+ */
+export function abortedFromReason(prefix: string, reason: unknown): S2Error {
+	if (reason instanceof S2Error && reason.code === "ABORTED") {
+		return reason;
+	}
+	let detail: string | undefined;
+	if (reason !== undefined) {
+		try {
+			detail = String(reason);
+		} catch {
+			detail = undefined;
+		}
+	}
+	return abortedError(detail ? `${prefix}: ${detail}` : prefix, reason);
 }
 
 /**
