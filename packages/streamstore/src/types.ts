@@ -118,6 +118,67 @@ export function validateAppendRecord(record: AppendRecord): void {
 }
 
 /**
+ * Check a hand-built {@link AppendInput}'s batch limits, records, and
+ * conditions before queueing or encoding. Returns the summed record metered
+ * bytes.
+ *
+ * @internal
+ * @throws {S2Error} If the batch is empty, exceeds record/byte limits, has an invalid record, or has an invalid `fencingToken` / `matchSeqNum`
+ */
+export function validateAppendInput(input: {
+	readonly records: ReadonlyArray<AppendRecord>;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
+}): number {
+	const { records } = input;
+	if (records.length === 0) {
+		throw new S2Error({
+			message: "AppendInput must contain at least one record",
+			origin: "sdk",
+		});
+	}
+
+	if (records.length > MAX_APPEND_RECORDS) {
+		throw new S2Error({
+			message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${records.length})`,
+			origin: "sdk",
+		});
+	}
+
+	let totalBytes = 0;
+	for (const record of records) {
+		validateAppendRecord(record);
+		totalBytes += record.meteredBytes;
+	}
+	if (totalBytes > MAX_APPEND_BYTES) {
+		throw new S2Error({
+			message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
+			origin: "sdk",
+		});
+	}
+
+	if (input.fencingToken != null && utf8ByteLength(input.fencingToken) > 36) {
+		throw new S2Error({
+			message: "fencing token must not exceed 36 bytes in length",
+			origin: "sdk",
+			status: 422,
+		});
+	}
+
+	if (
+		input.matchSeqNum !== undefined &&
+		(!Number.isSafeInteger(input.matchSeqNum) || input.matchSeqNum < 0)
+	) {
+		throw new S2Error({
+			message: "matchSeqNum must be a non-negative safe integer",
+			origin: "sdk",
+		});
+	}
+
+	return totalBytes;
+}
+
+/**
  * Factory functions for creating AppendRecord instances.
  */
 export namespace AppendRecord {
@@ -306,52 +367,11 @@ export namespace AppendInput {
 			readonly streamConfig?: StreamConfig;
 		},
 	): AppendInput {
-		if (records.length === 0) {
-			throw new S2Error({
-				message: "AppendInput must contain at least one record",
-				origin: "sdk",
-			});
-		}
-
-		if (records.length > MAX_APPEND_RECORDS) {
-			throw new S2Error({
-				message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${records.length})`,
-				origin: "sdk",
-			});
-		}
-
-		let totalBytes = 0;
-		for (const record of records) {
-			validateAppendRecord(record);
-			totalBytes += record.meteredBytes;
-		}
-		if (totalBytes > MAX_APPEND_BYTES) {
-			throw new S2Error({
-				message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
-				origin: "sdk",
-			});
-		}
-
-		if (options?.fencingToken !== undefined) {
-			const tokenBytes = utf8ByteLength(options.fencingToken);
-			if (tokenBytes > 36) {
-				throw new S2Error({
-					message: "fencing token must not exceed 36 bytes in length",
-					origin: "sdk",
-					status: 422,
-				});
-			}
-		}
-
-		if (
-			options?.matchSeqNum !== undefined &&
-			(!Number.isSafeInteger(options.matchSeqNum) || options.matchSeqNum < 0)
-		) {
-			throw new S2Error({
-				message: "matchSeqNum must be a non-negative safe integer",
-				origin: "sdk",
-			});
-		}
+		const totalBytes = validateAppendInput({
+			records,
+			matchSeqNum: options?.matchSeqNum,
+			fencingToken: options?.fencingToken,
+		});
 
 		return {
 			records,

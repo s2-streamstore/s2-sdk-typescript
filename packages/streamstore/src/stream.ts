@@ -28,7 +28,7 @@ import type {
 	TransportConfig,
 } from "./lib/stream/types.js";
 import { streamConfigHeaders } from "./lib/stream-config.js";
-import type * as Types from "./types.js";
+import * as Types from "./types.js";
 import { isCommandRecord } from "./utils.js";
 
 type RequestOptionsWithHeaders = S2RequestOptions & {
@@ -208,6 +208,7 @@ export class S2Stream {
 		options?: S2RequestOptions,
 	): Promise<Types.AppendAck> {
 		this.ensureOpen();
+		Types.validateAppendInput(input);
 		return await withRetries(
 			this.retryConfig,
 			async () => {

@@ -462,16 +462,23 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 			});
 			resolvePendingDelivery = undefined;
 		};
-		const failPump = (error: S2Error) => {
-			if (pumpError) {
+		const failPump = (
+			error: S2Error,
+			options?: { discardBuffered?: boolean },
+		) => {
+			if (!options?.discardBuffered && pumpError) {
 				return;
+			}
+			if (options?.discardBuffered) {
+				deliveries.clear();
 			}
 			caughtUpTracker.end(error);
 			pumpError = error;
-			deliveries.clear();
 			resolvePendingDelivery?.();
 			wake();
-			release();
+			if (options?.discardBuffered) {
+				release();
+			}
 		};
 		const handlePumpError = (error: unknown) => {
 			if (!cancelled) {
@@ -492,12 +499,12 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				}
 			}
 		};
-		// Also after the pump is done: records it fetched may still be unread.
+		// Also after the pump is done or failed: records it fetched may still be unread.
 		abortSignal.addEventListener("abort", () => {
-			if (cancelled || pumpError) {
+			if (cancelled) {
 				return;
 			}
-			failPump(abortedError());
+			failPump(abortedError(), { discardBuffered: true });
 			void cancelTransport("aborted").catch(() => {});
 		});
 
@@ -704,6 +711,9 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					}
 
 					const { records, tail } = result.batch;
+					// Any batch — records or an empty heartbeat tail — proves the
+					// session is healthy and restores the retry budget.
+					attempt = 0;
 					const lastRecord = records.at(-1);
 					const boundary = caughtUpTracker.observeBatch({
 						recordCount: records.length,
@@ -728,7 +738,6 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 						};
 						this._recordsRead++;
 						this._bytesRead += meteredBytes(record);
-						attempt = 0;
 						if (!(args?.ignore_command_records && isCommandRecord(record))) {
 							visibleRecords.push(toSDKReadRecord(record, format));
 						}
@@ -749,8 +758,8 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				},
 				pull: async (controller) => {
 					while (!cancelled) {
-						if (pumpError) {
-							controller.error(pumpError);
+						if (abortSignal.aborted) {
+							controller.error(pumpError ?? abortedError());
 							return;
 						}
 						const delivery = deliveries.peek();
@@ -771,6 +780,11 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 								return;
 							}
 							continue;
+						}
+						if (pumpError) {
+							controller.error(pumpError);
+							release();
+							return;
 						}
 						if (pumpDone) {
 							controller.close();
@@ -1121,6 +1135,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				origin: "sdk",
 			});
 		}
+		if (input.meteredBytes > Types.MAX_APPEND_BYTES) {
+			throw new S2Error({
+				message: `AppendInput exceeds maximum of ${Types.MAX_APPEND_BYTES} bytes (got ${input.meteredBytes} bytes)`,
+				origin: "sdk",
+			});
+		}
+		Types.validateAppendInput(input);
 
 		// This needs to happen in the sync path.
 		this.ensurePump();
@@ -1630,7 +1651,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		// have done in priorUncertainty.
 		if (this.session) {
 			try {
-				const closeResult = await this.session.close();
+				const closeResult = await this.session.close({ cancel: true });
 				if (!closeResult.ok) {
 					debugSession(
 						"[%s] error closing old session during recovery: %s",

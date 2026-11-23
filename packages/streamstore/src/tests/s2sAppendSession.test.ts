@@ -150,4 +150,55 @@ describe("s2s append session", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+
+	/**
+	 * Detail bug_499af59d: when an s2s append attempt fails and clears its
+	 * pending acks while the server leaves the HTTP/2 stream open, recover()
+	 * must reset the abandoned stream (`cancel: true`) instead of half-closing
+	 * it, so transport.close() does not hang waiting for the stalled server.
+	 */
+	it(
+		"resets a failed HTTP/2 append stream during retry recovery so close settles",
+		async () => {
+			let attempts = 0;
+			const server = await serveHttp2((stream) => {
+				attempts++;
+				if (attempts === 1) {
+					// Send a retryable HTTP error without ending the response stream
+					// (stalled server): S2SAppendSession.safeError() clears pendingAcks
+					// while leaving the HTTP/2 stream open.
+					stream.respond({ ":status": 503 });
+					stream.write(
+						JSON.stringify({ code: "unavailable", message: "try again" }),
+					);
+					return;
+				}
+				stream.respond({ ":status": 200 });
+				stream.on("data", () => stream.write(s2sAckFrame(0, 1)));
+				stream.on("end", () => stream.end());
+			});
+			cleanup(server.close);
+
+			const transport = new S2STransport({
+				baseUrl: `${server.origin}/v1`,
+				accessToken: Redacted.make("token"),
+				retry: {
+					maxAttempts: 2,
+					minBaseDelayMillis: 1,
+					maxBaseDelayMillis: 5,
+					requestTimeoutMillis: 10_000,
+				},
+			});
+			cleanup(() => withinDeadline(transport.close()));
+
+			const session = await transport.makeAppendSession("events");
+			const ticket = await session.submit(batch("a"));
+			await withinDeadline(ticket.ack(), 5_000);
+			expect(attempts).toBe(2);
+
+			await withinDeadline(transport.close());
+			expect(server.open()).toBe(0);
+		},
+		TEST_TIMEOUT_MS,
+	);
 });
