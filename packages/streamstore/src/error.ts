@@ -313,13 +313,20 @@ export function invariantViolation(
 }
 
 /** Helper: construct an aborted/cancelled error (499). */
-export function abortedError(message: string = "Request cancelled"): S2Error {
-	return new S2Error({
+export function abortedError(
+	message: string = "Request cancelled",
+	cause?: unknown,
+): S2Error {
+	const error = new S2Error({
 		message,
 		code: "ABORTED",
 		status: 499,
 		origin: "sdk",
 	});
+	if (cause !== undefined) {
+		error.cause = cause;
+	}
+	return error;
 }
 
 /**

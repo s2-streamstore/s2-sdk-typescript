@@ -1,6 +1,6 @@
 import createDebug from "debug";
 import { type BatchOutput, BatchTransform } from "./batch-transform.js";
-import { appendSessionClosedError, S2Error } from "./error.js";
+import { abortedError, appendSessionClosedError, S2Error } from "./error.js";
 import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import {
 	type AppendAck,
@@ -120,6 +120,10 @@ export class Producer implements AsyncDisposable {
 	private submitCounter = 0;
 	private operationChain: Promise<void> = Promise.resolve();
 	private closePromise: Promise<void> | null = null;
+	private closed = false;
+	private aborted = false;
+	private sessionAbortPromise: Promise<void> | null = null;
+	private sessionClosePromise: Promise<void> | null = null;
 	/** Writable records past this count were written after close() was called. */
 	private closeFence = Number.POSITIVE_INFINITY;
 
@@ -153,6 +157,16 @@ export class Producer implements AsyncDisposable {
 			{
 				start: (controller) => {
 					this.writableController = controller;
+					// controller.signal aborts immediately even while sink.write() is
+					// blocked on backpressure, whereas sink.abort() waits for it.
+					controller.signal?.addEventListener(
+						"abort",
+						() => {
+							this.endWritable();
+							this.abortInternal(controller.signal.reason);
+						},
+						{ once: true },
+					);
 				},
 				write: async (record) => {
 					const afterClose = ++this.writableReceived > this.closeFence;
@@ -173,8 +187,10 @@ export class Producer implements AsyncDisposable {
 				},
 				abort: async (reason) => {
 					this.endWritable();
-					this.fail(reason);
-					await this.close();
+					this.abortInternal(reason);
+					// Wait for teardown without replacing the abort reason (such as a
+					// pipeTo source error) with Producer's terminal error.
+					await this.close().catch(() => {});
 				},
 			},
 			{
@@ -520,7 +536,47 @@ export class Producer implements AsyncDisposable {
 		return operationPromise;
 	}
 
-	private fail(cause: unknown): S2Error {
+	private abortInternal(reason: unknown): void {
+		if (this.aborted || this.closed) {
+			return;
+		}
+		this.aborted = true;
+		const abortError =
+			reason instanceof S2Error && reason.code === "ABORTED"
+				? reason
+				: abortedError(
+						reason !== undefined
+							? `Producer aborted: ${reason}`
+							: "Producer aborted",
+						reason,
+					);
+		this.fail(abortError, { abort: true });
+	}
+
+	private abortSession(error: S2Error): void {
+		if (!this.sessionAbortPromise && !this.appendSession.writable.locked) {
+			this.sessionAbortPromise = this.appendSession.writable
+				.abort(error)
+				.catch(() => {});
+		}
+		// If the session did not abort synchronously via writable.abort() (e.g.
+		// locked writable or a custom AppendSession without a writable abort
+		// handler), close it now so a parked submit() cannot block the pump.
+		if (!this.appendSession.failureCause()) {
+			this.closeSession();
+		}
+	}
+
+	private closeSession(): Promise<void> {
+		if (!this.sessionClosePromise) {
+			this.sessionClosePromise = this.appendSession.close();
+			// Avoid unhandled rejections when fail() kicks off shutdown ahead of close().
+			this.sessionClosePromise.catch(() => {});
+		}
+		return this.sessionClosePromise;
+	}
+
+	private fail(cause: unknown, options?: { abort?: boolean }): S2Error {
 		if (!this.terminalError) {
 			// The session's own error, not the SESSION_CLOSED a later batch gets.
 			this.terminalError = toS2Error(
@@ -545,6 +601,16 @@ export class Producer implements AsyncDisposable {
 		}
 		this.readableController = null;
 
+		// Unblock any pump parked in appendSession.submit(). On abort, cancel
+		// in-flight appends and retries immediately; on a local failure, close
+		// the session so parked capacity waiters reject while accepted batches
+		// still settle with their own outcome.
+		if (options?.abort) {
+			this.abortSession(error);
+		} else if (!this.appendSession.failureCause()) {
+			this.closeSession();
+		}
+
 		return error;
 	}
 
@@ -562,8 +628,23 @@ export class Producer implements AsyncDisposable {
 		// Wait for the pump to finish processing all batches
 		await this.pump;
 
-		// Close the underlying session
-		await this.appendSession.close();
+		// Close the underlying session. If the Producer already failed, keep its
+		// terminalError rather than letting a secondary session error clobber it
+		// or skip cleanup below.
+		if (this.sessionAbortPromise) {
+			await this.sessionAbortPromise;
+		}
+		try {
+			await this.closeSession();
+		} catch (err) {
+			if (!this.terminalError) {
+				this.fail(err);
+			}
+		}
+		// An abort may also have started while awaiting closeSession() above.
+		if (this.sessionAbortPromise) {
+			await this.sessionAbortPromise;
+		}
 
 		// Reject any remaining inflight records (shouldn't happen in normal operation)
 		if (this.inflightRecords.length > 0) {
@@ -586,6 +667,7 @@ export class Producer implements AsyncDisposable {
 			this.readableController = null;
 		}
 
+		this.closed = true;
 		debugProducer("[%s] close complete", this.debugName);
 
 		// If an error occurred, throw it

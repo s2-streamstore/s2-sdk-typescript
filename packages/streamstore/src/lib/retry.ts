@@ -962,6 +962,8 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	private closing = false;
 	private pumpWakeup?: () => void;
 	private closed = false;
+	private abortPromise?: Promise<void>;
+	private closePromise?: Promise<void>;
 	private fatalError?: S2Error;
 
 	private _lastAckedPosition?: Types.AppendAck;
@@ -1026,12 +1028,41 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				this.acksController = controller;
 			},
 			cancel: async (reason) => {
-				const error = abortedError(`AppendSession acks cancelled: ${reason}`);
+				const error = abortedError(
+					reason !== undefined
+						? `AppendSession acks cancelled: ${reason}`
+						: "AppendSession acks cancelled",
+					reason,
+				);
 				await this.abort(error);
 			},
 		});
 
+		const abortFromWritable = (reason: unknown) => {
+			const error =
+				reason instanceof S2Error && reason.code === "ABORTED"
+					? reason
+					: abortedError(
+							reason !== undefined
+								? `AppendSession aborted: ${reason}`
+								: "AppendSession aborted",
+							reason,
+						);
+			return this.abort(error);
+		};
+
 		this.writable = new WritableStream<Types.AppendInput>({
+			start: (controller) => {
+				// controller.signal aborts immediately even while sink.write() is
+				// blocked on submit() capacity, whereas sink.abort() waits for it.
+				controller.signal?.addEventListener(
+					"abort",
+					() => {
+						void abortFromWritable(controller.signal.reason);
+					},
+					{ once: true },
+				);
+			},
 			write: async (chunk) => {
 				// chunk is already AppendInput with meteredBytes computed
 				// Reuse submit() to leverage shared backpressure/pump logic.
@@ -1046,14 +1077,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				await this.close();
 			},
 			abort: async (reason) => {
-				const error = abortedError(`AppendSession aborted: ${reason}`);
-				await this.abort(error);
+				await abortFromWritable(reason);
 			},
 		});
 
 		this.release = attachSession(
 			options,
-			() => void this.abort(abortedError()),
+			() =>
+				void this.abort(
+					abortedError("Request cancelled", options?.signal?.reason),
+				),
 			() => this.close(),
 		);
 	}
@@ -1718,9 +1751,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	/**
 	 * Abort the session with a fatal error.
 	 */
-	private async abort(error: S2Error): Promise<void> {
-		if (this.pumpStopped) {
-			return; // Already aborted
+	private abort(error: S2Error): Promise<void> {
+		if (this.abortPromise) {
+			return this.abortPromise;
+		}
+		if (this.pumpStopped || this.closed) {
+			return Promise.resolve(); // Already closed or aborted
 		}
 
 		debugSession("[%s] aborting session: %s", this.streamName, error.message);
@@ -1771,19 +1807,23 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		this.rejectCapacityWaiters();
 
 		// Close inner session, without waiting on the server
-		if (this.session) {
-			debugSession("[%s] closing inner session", this.streamName);
-			try {
-				await this.session.close({ cancel: true });
-			} catch (e) {
-				debugSession(
-					"[%s] error closing session during abort: %s",
-					this.streamName,
-					e,
-				);
+		const session = this.session;
+		this.session = undefined;
+		this.abortPromise = (async () => {
+			if (session) {
+				debugSession("[%s] closing inner session", this.streamName);
+				try {
+					await session.close({ cancel: true });
+				} catch (e) {
+					debugSession(
+						"[%s] error closing session during abort: %s",
+						this.streamName,
+						e,
+					);
+				}
 			}
-			this.session = undefined;
-		}
+		})();
+		return this.abortPromise;
 	}
 
 	/**
@@ -1791,14 +1831,14 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 	 * Waits for all pending appends to complete before resolving.
 	 * Does not interrupt recovery - allows it to complete.
 	 */
-	async close(): Promise<void> {
-		if (this.closed) {
-			if (this.fatalError) {
-				throw this.fatalError;
-			}
-			return;
+	close(): Promise<void> {
+		if (!this.closePromise) {
+			this.closePromise = this.closeInternal();
 		}
+		return this.closePromise;
+	}
 
+	private async closeInternal(): Promise<void> {
 		debugSession("[%s] close requested", this.streamName);
 		this.closing = true;
 
@@ -1818,10 +1858,16 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			await this.pumpPromise;
 		}
 
+		if (this.abortPromise) {
+			await this.abortPromise;
+		}
+
 		// Close inner session
-		if (this.session) {
+		const session = this.session;
+		this.session = undefined;
+		if (session) {
 			try {
-				const result = await this.session.close();
+				const result = await session.close();
 				if (!result.ok) {
 					debugSession(
 						"[%s] error closing inner session: %s",
@@ -1836,7 +1882,6 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					e,
 				);
 			}
-			this.session = undefined;
 		}
 
 		// Close readable stream
@@ -1851,6 +1896,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 
 		this.closed = true;
+		this.stopped.abort();
 		this.release();
 
 		// If fatal error occurred, throw it
