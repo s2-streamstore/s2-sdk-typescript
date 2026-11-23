@@ -37,6 +37,25 @@ const loadProtoCodec = async () => {
 	}
 };
 
+function decodeProto<T>(label: string, decode: () => T): T {
+	try {
+		return decode();
+	} catch (cause) {
+		if (cause instanceof S2Error) {
+			throw cause;
+		}
+		// A complete HTTP 200 body that cannot be decoded is a non-retryable
+		// protocol error; don't pass through s2Error() message matching.
+		const error = new S2Error({
+			message: `Failed to decode ${label} protobuf response: ${cause instanceof Error ? cause.message : String(cause)}`,
+			code: "INVALID_RESPONSE",
+			origin: "sdk",
+		});
+		error.cause = cause;
+		throw error;
+	}
+}
+
 type RequestOptionsWithHeaders = S2RequestOptions & {
 	headers?: Record<string, string>;
 };
@@ -108,7 +127,9 @@ export async function streamRead<Format extends "string" | "bytes" = "string">(
 
 	if (wantsBytes) {
 		const { decodeProtoReadBatch } = await loadProtoCodec();
-		const batch = decodeProtoReadBatch(response.data as ArrayBuffer);
+		const batch = decodeProto("ReadBatch", () =>
+			decodeProtoReadBatch(response.data as ArrayBuffer),
+		);
 		return batch as ReadBatch<Format>;
 	}
 
@@ -185,8 +206,10 @@ export async function streamAppend(
 			);
 		}
 
-		const ack = decodeProtoAppendAck(response.data as ArrayBuffer);
-		return protoAppendAckToJson(ack);
+		return decodeProto("AppendAck", () => {
+			const ack = decodeProtoAppendAck(response.data as ArrayBuffer);
+			return protoAppendAckToJson(ack);
+		});
 	}
 
 	const encodedRecords: API.AppendRecord[] = [...input.records].map(

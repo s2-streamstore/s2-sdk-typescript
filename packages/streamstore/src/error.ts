@@ -60,6 +60,7 @@ function isConnectionError(error: unknown): boolean {
 	const connectionErrorCodes = [
 		"ECONNREFUSED", // Connection refused
 		"ENOTFOUND", // DNS lookup failed
+		"EAI_AGAIN", // Temporary DNS resolution failure
 		"ETIMEDOUT", // Connection timeout
 		"ENETUNREACH", // Network unreachable
 		"EHOSTUNREACH", // Host unreachable
@@ -225,9 +226,9 @@ export class S2Error extends Error {
 	 * Returns true if the error guarantees that no mutation occurred.
 	 *
 	 * Certain server errors (`rate_limited`, `hot_server`, `server_draining`),
-	 * pre-connection client errors (`ECONNREFUSED`, `UND_ERR_CONNECT_TIMEOUT`)
-	 * and `SESSION_CLOSED`, for an append a session never sent, are safe to
-	 * retry since they guarantee no side effects.
+	 * pre-connection client errors (`ECONNREFUSED`, `EAI_AGAIN`,
+	 * `UND_ERR_CONNECT_TIMEOUT`) and `SESSION_CLOSED`, for an append a session
+	 * never sent, are safe to retry since they guarantee no side effects.
 	 *
 	 * A draining server acknowledges every input it accepted before ending the
 	 * session with `server_draining`, so anything still unacknowledged was never
@@ -247,6 +248,7 @@ export class S2Error extends Error {
 			// request bytes could have been written and no mutation occurred.
 			return [
 				"ECONNREFUSED",
+				"EAI_AGAIN",
 				"UND_ERR_CONNECT_TIMEOUT",
 				"SESSION_CLOSED",
 			].includes(this.code as string);

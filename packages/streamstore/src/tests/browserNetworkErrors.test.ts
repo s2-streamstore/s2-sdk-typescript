@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { S2Error, s2Error } from "../error.js";
+import { withRetries } from "../lib/retry.js";
 
 /**
  * Regression tests for issue #117:
@@ -136,5 +137,37 @@ describe("browser network error classification (#117)", () => {
 		expect(err).toBeInstanceOf(S2Error);
 		expect(err.status).toBe(502);
 		expect(err.code).toBe(code);
+	});
+
+	/**
+	 * Detail bug_3e6109ec: Bun surfaces transient DNS resolver failures directly
+	 * with `code: "EAI_AGAIN"` (without undici's "fetch failed" wrapper). It must
+	 * be classified as a retryable, side-effect-free connection error.
+	 */
+	it("retries Bun-style EAI_AGAIN failures including under noSideEffects", async () => {
+		let attempts = 0;
+		const result = await withRetries(
+			{
+				maxAttempts: 2,
+				minBaseDelayMillis: 1,
+				maxBaseDelayMillis: 5,
+				appendRetryPolicy: "noSideEffects",
+			},
+			async () => {
+				attempts++;
+				if (attempts === 1) {
+					const dnsErr = new TypeError("getaddrinfo EAI_AGAIN test.b.s2.dev");
+					(dnsErr as any).code = "EAI_AGAIN";
+					throw s2Error(dnsErr);
+				}
+				return "ok";
+			},
+			(config, error) =>
+				config.appendRetryPolicy !== "noSideEffects" ||
+				error.hasNoSideEffects(),
+		);
+
+		expect(result).toBe("ok");
+		expect(attempts).toBe(2);
 	});
 });
