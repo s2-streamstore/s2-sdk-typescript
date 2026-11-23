@@ -554,14 +554,20 @@ export class Producer implements AsyncDisposable {
 		}
 		const abortError = abortedFromReason("Producer aborted", reason);
 		this.aborted = true;
-		this.fail(abortError, { abort: true });
+		this.fail(abortError, abortError);
 	}
 
 	private abortSession(error: S2Error): void {
-		if (!this.sessionAbortPromise && !this.appendSession.writable.locked) {
-			this.sessionAbortPromise = this.appendSession.writable
-				.abort(error)
-				.catch(() => {});
+		if (!this.sessionAbortPromise) {
+			try {
+				if (!this.appendSession.writable.locked) {
+					this.sessionAbortPromise = this.appendSession.writable
+						.abort(error)
+						.catch(() => {});
+				}
+			} catch {
+				// Fall through to closeSession() below.
+			}
 		}
 		// If the session did not abort synchronously via writable.abort() (e.g.
 		// locked writable or a custom AppendSession without a writable abort
@@ -573,14 +579,18 @@ export class Producer implements AsyncDisposable {
 
 	private closeSession(): Promise<void> {
 		if (!this.sessionClosePromise) {
-			this.sessionClosePromise = this.appendSession.close();
+			try {
+				this.sessionClosePromise = this.appendSession.close();
+			} catch (err) {
+				this.sessionClosePromise = Promise.reject(err);
+			}
 			// Avoid unhandled rejections when fail() kicks off shutdown ahead of close().
 			this.sessionClosePromise.catch(() => {});
 		}
 		return this.sessionClosePromise;
 	}
 
-	private fail(cause: unknown, options?: { abort?: boolean }): S2Error {
+	private fail(cause: unknown, abortError?: S2Error): S2Error {
 		if (!this.terminalError) {
 			// The session's own error, not the SESSION_CLOSED a later batch gets.
 			this.terminalError = toS2Error(
@@ -606,11 +616,11 @@ export class Producer implements AsyncDisposable {
 		this.readableController = null;
 
 		// Unblock any pump parked in appendSession.submit(). On abort, cancel
-		// in-flight appends and retries immediately; on a local failure, close
-		// the session so parked capacity waiters reject while accepted batches
-		// still settle with their own outcome.
-		if (options?.abort) {
-			this.abortSession(error);
+		// in-flight appends and retries immediately with the caller's abortError
+		// (not a prior local terminalError); on a local failure, close the session
+		// so parked capacity waiters reject while accepted batches still settle.
+		if (abortError) {
+			this.abortSession(abortError);
 		} else if (!this.appendSession.failureCause()) {
 			this.closeSession();
 		}
