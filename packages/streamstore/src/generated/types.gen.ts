@@ -553,7 +553,7 @@ export type PublicNetPolicy = {
 export type ReadBatch = {
     /**
      * Records that are durably sequenced on the stream, retrieved based on the requested criteria.
-     * This can only be empty in response to a unary read (i.e. not SSE), if the request cannot be satisfied without violating an explicit bound (`count`, `bytes`, or `until`).
+     * This can only be empty in response to a unary read (i.e. not SSE), if the request cannot be satisfied without violating an explicit bound (`count`, `bytes`, `until`, or `wait`).
      */
     records: Array<SequencedRecord>;
     tail?: null | StreamPosition;
