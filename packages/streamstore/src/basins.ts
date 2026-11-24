@@ -1,5 +1,5 @@
 import type { RetryConfig, S2RequestOptions } from "./common.js";
-import { withS2Data } from "./error.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	createBasin,
@@ -104,6 +104,29 @@ function toSDKBasinConfig(config: any): Types.BasinConfig {
 }
 
 /**
+ * Basin names must be 8-48 characters, lowercase alphanumeric and hyphens,
+ * cannot start or end with a hyphen.
+ */
+const BASIN_NAME_REGEX = /^[a-z0-9][a-z0-9-]{6,46}[a-z0-9]$/;
+
+/**
+ * Validate a basin name against `BasinNameStr` (8-48 lowercase alphanumeric
+ * characters and hyphens, no leading or trailing hyphen).
+ *
+ * @throws {S2Error} If the basin name is invalid.
+ */
+export function validateBasinName(name: string): void {
+	if (typeof name !== "string" || !BASIN_NAME_REGEX.test(name)) {
+		throw new S2Error({
+			message:
+				`Invalid basin name: ${typeof name === "string" ? JSON.stringify(name) : String(name)}. Basin names must be 8-48 characters, ` +
+				`contain only lowercase letters, numbers, and hyphens, and cannot start or end with a hyphen.`,
+			origin: "sdk",
+		});
+	}
+}
+
+/**
  * Account-scoped helper for listing, creating, ensuring, deleting, and reconfiguring basins.
  *
  * Retrieve this via {@link S2.basins}. Each method retries according to the client-level retry config.
@@ -128,12 +151,14 @@ export class S2Basins {
 		args?: Types.ListBasinsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListBasinsResponse> {
+		const query = toSnakeCase<any>(args);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listBasins({
 					client: this.client,
-					query: toSnakeCase(args),
-					...options,
+					query,
+					...requestOptions,
 				}),
 			);
 		});
@@ -162,9 +187,10 @@ export class S2Basins {
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.BasinInfo> {
 		const { includeDeleted, ...listArgs } = args ?? {};
+		const requestOptions = options ? { ...options } : undefined;
 		const allItems = paginate(
 			(a) =>
-				this.list(a, options).then((r) => ({
+				this.list(a, requestOptions).then((r) => ({
 					items: r.basins,
 					hasMore: r.hasMore,
 				})),
@@ -188,19 +214,21 @@ export class S2Basins {
 		args: Types.CreateBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.CreateBasinResponse> {
+		validateBasinName(args?.basin);
 		const requestToken = randomToken();
-		// Convert SDK config to API format (ageSecs → age)
-		const apiArgs = {
+		// Convert SDK config to API format (ageSecs → age) and snapshot before retries
+		const body = toSnakeCase<any>({
 			...args,
 			config: toAPIBasinConfig(args.config),
-		};
+		});
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createBasin({
 					client: this.client,
-					body: toSnakeCase(apiArgs),
+					body,
 					headers: { "s2-request-token": requestToken },
-					...options,
+					...requestOptions,
 				}),
 			);
 		});
@@ -216,12 +244,15 @@ export class S2Basins {
 		args: Types.GetBasinConfigInput,
 		options?: S2RequestOptions,
 	): Promise<Types.BasinConfig> {
+		const basin = args?.basin;
+		validateBasinName(basin);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getBasinConfig({
 					client: this.client,
-					path: args,
-					...options,
+					path: { basin },
+					...requestOptions,
 				}),
 			);
 		});
@@ -238,12 +269,15 @@ export class S2Basins {
 		args: Types.DeleteBasinInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
+		const basin = args?.basin;
+		validateBasinName(basin);
+		const requestOptions = options ? { ...options } : undefined;
 		await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				deleteBasin({
 					client: this.client,
-					path: args,
-					...options,
+					path: { basin },
+					...requestOptions,
 				}),
 			);
 		});
@@ -263,20 +297,24 @@ export class S2Basins {
 		args: Types.EnsureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.EnsureBasinResponse> {
-		const { basin, ...ensureArgs } = args;
+		const basin = args?.basin;
+		validateBasinName(basin);
+		const { basin: _basin, ...ensureArgs } = args;
 		const apiArgs = {
 			...ensureArgs,
 			config: toAPIBasinConfig(args.config),
 		};
 		const hasBody =
 			apiArgs.config !== undefined || apiArgs.location !== undefined;
+		const body = hasBody ? toSnakeCase<any>(apiArgs) : undefined;
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2DataAndResponse<API.BasinInfo>(() =>
 				ensureBasin({
 					client: this.client,
 					path: { basin },
-					body: hasBody ? toSnakeCase(apiArgs) : undefined,
-					...options,
+					body,
+					...requestOptions,
 				}),
 			);
 		});
@@ -295,19 +333,22 @@ export class S2Basins {
 		args: Types.ReconfigureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureBasinResponse> {
-		// Convert SDK config to API format (ageSecs → age)
-		const { basin, ...reconfigArgs } = args;
-		const apiArgs = {
+		const basin = args?.basin;
+		validateBasinName(basin);
+		// Convert SDK config to API format (ageSecs → age) and snapshot before retries
+		const { basin: _basin, ...reconfigArgs } = args;
+		const body = toSnakeCase<any>({
 			...reconfigArgs,
 			defaultStreamConfig: toAPIStreamConfig(args.defaultStreamConfig),
-		};
+		});
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureBasin({
 					client: this.client,
 					path: { basin },
-					body: toSnakeCase(apiArgs),
-					...options,
+					body,
+					...requestOptions,
 				}),
 			);
 		});

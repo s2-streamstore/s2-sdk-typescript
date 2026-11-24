@@ -44,12 +44,19 @@ if (!basin) throw new Error("Set S2_BASIN");
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
 if (!anthropicKey) throw new Error("Set ANTHROPIC_API_KEY");
 
-const endpointsInit = {
-	account: process.env.S2_ACCOUNT_ENDPOINT || undefined,
-	basin: process.env.S2_BASIN_ENDPOINT || undefined,
-};
+const accountEndpoint = process.env.S2_ACCOUNT_ENDPOINT || undefined;
+const basinEndpoint = process.env.S2_BASIN_ENDPOINT || undefined;
 const endpoints =
-	endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined;
+	accountEndpoint || basinEndpoint
+		? (() => {
+				if (!accountEndpoint || !basinEndpoint) {
+					throw new Error(
+						"Set both S2_ACCOUNT_ENDPOINT and S2_BASIN_ENDPOINT together",
+					);
+				}
+				return { account: accountEndpoint, basin: basinEndpoint };
+			})()
+		: undefined;
 
 const s2 = new S2({ accessToken, endpoints });
 const basinClient = s2.basin(basin);

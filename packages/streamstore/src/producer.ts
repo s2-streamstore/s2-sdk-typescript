@@ -9,7 +9,8 @@ import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import {
 	type AppendAck,
 	type AppendRecord,
-	validateAppendRecord,
+	cloneAppendRecord,
+	snapshotAppendRecord,
 } from "./types.js";
 
 const debugProducer = createDebug("s2:producer");
@@ -181,9 +182,10 @@ export class Producer implements AsyncDisposable {
 					);
 				},
 				write: async (record) => {
+					const copied = cloneAppendRecord(record);
 					const afterClose = ++this.writableReceived > this.closeFence;
 					const submitted = this.enqueueOperation(() =>
-						this.submitInternal(record, afterClose),
+						this.submitInternal(copied, afterClose),
 					);
 					this.notifyWritableWaiters();
 					try {
@@ -349,11 +351,12 @@ export class Producer implements AsyncDisposable {
 	 * accepted. The promise blocks if the underlying AppendSession is at capacity
 	 * (backpressure is applied via the transform stream).
 	 *
-	 * @throws S2Error if the Producer has failed, close() was called before this, or `record` has an invalid `meteredBytes` or `timestamp` (only this record is rejected)
+	 * @throws S2Error if the Producer has failed, close() was called before this, or `record` is invalid or exceeds 1 MiB (only this record is rejected)
 	 */
 	submit(record: AppendRecord): Promise<RecordSubmitTicket> {
+		const copied = cloneAppendRecord(record);
 		const afterClose = this.closePromise !== null;
-		return this.enqueueOperation(() => this.submitInternal(record, afterClose));
+		return this.enqueueOperation(() => this.submitInternal(copied, afterClose));
 	}
 
 	/** The writable has closed, aborted or errored, and will hand over no more records. */
@@ -418,7 +421,7 @@ export class Producer implements AsyncDisposable {
 		}
 
 		// Fails only this record: once batched, it would fail the whole batch.
-		validateAppendRecord(record);
+		const validated = snapshotAppendRecord(record);
 
 		// Create the ack promise (resolved later by pump)
 		let resolveAck!: (ack: IndexedAppendAck) => void;
@@ -447,7 +450,7 @@ export class Producer implements AsyncDisposable {
 
 		try {
 			// Write to transform - BLOCKS on backpressure
-			await this.transformWriter.write(record);
+			await this.transformWriter.write(validated);
 
 			debugProducer(
 				"[%s] submit #%d: write completed",

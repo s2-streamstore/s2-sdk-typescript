@@ -33,15 +33,16 @@ if (!accessToken) throw new Error("Set S2_ACCESS_TOKEN");
 const basin = process.env.S2_BASIN;
 if (!basin) throw new Error("Set S2_BASIN");
 
-const endpointsInit = {
-	account: process.env.S2_ACCOUNT_ENDPOINT || undefined,
-	basin: process.env.S2_BASIN_ENDPOINT || undefined,
-};
+const accountEndpoint = process.env.S2_ACCOUNT_ENDPOINT || undefined;
+const basinEndpoint = process.env.S2_BASIN_ENDPOINT || undefined;
+const endpoints =
+	accountEndpoint && basinEndpoint
+		? { account: accountEndpoint, basin: basinEndpoint }
+		: undefined;
 
 const s2 = new S2({
 	accessToken,
-	endpoints:
-		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
+	endpoints,
 });
 
 const basinClient = s2.basin(basin);
@@ -49,8 +50,7 @@ const basinClient = s2.basin(basin);
 const chat = createResumableChat({
 	accessToken,
 	basin,
-	endpoints:
-		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
+	endpoints,
 	mode: STREAM_MODE,
 });
 

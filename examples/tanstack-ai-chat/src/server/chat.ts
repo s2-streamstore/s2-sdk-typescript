@@ -39,9 +39,13 @@ function requireEnv(name: string): string {
 function endpointsFromEnv() {
 	const account = process.env.S2_ACCOUNT_ENDPOINT;
 	const basin = process.env.S2_BASIN_ENDPOINT;
-	return account || basin
-		? { account: account || undefined, basin: basin || undefined }
-		: undefined;
+	if (!account && !basin) return undefined;
+	if (!account || !basin) {
+		throw new Error(
+			"Set both S2_ACCOUNT_ENDPOINT and S2_BASIN_ENDPOINT together.",
+		);
+	}
+	return { account, basin };
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {

@@ -2,7 +2,7 @@ import { S2Error } from "./error.js";
 import {
 	AppendInput,
 	type AppendRecord,
-	validateAppendRecord,
+	snapshotAppendRecord,
 } from "./types.js";
 
 export interface BatchTransformOptions {
@@ -137,9 +137,10 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 	}
 
 	private handleRecord(record: AppendRecord): void {
-		// Reject an invalid record on its own write, not when its batch flushes.
-		validateAppendRecord(record);
-		const recordSize = record.meteredBytes;
+		// Reject an invalid record on its own write, not when its batch flushes,
+		// copying mutable inputs and computing meteredBytes from the actual payload.
+		const snapshot = snapshotAppendRecord(record);
+		const recordSize = snapshot.meteredBytes;
 		if (recordSize > this.maxBatchBytes) {
 			throw new S2Error({
 				message: `Record size ${recordSize} bytes exceeds maximum batch size of ${this.maxBatchBytes} bytes`,
@@ -168,7 +169,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		}
 
 		// Add record to current batch
-		this.currentBatch.push(record);
+		this.currentBatch.push(snapshot);
 		this.currentBatchSize += recordSize;
 
 		// Check if we've now reached the limits

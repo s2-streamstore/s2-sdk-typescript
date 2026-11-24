@@ -331,6 +331,10 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		config?: RetryConfig,
 		options?: SessionOptions,
 	) {
+		const snapshotArgs: ReadArgs<Format> = {
+			...args,
+			stream_config: Types.cloneStreamConfig(args.stream_config),
+		};
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
@@ -349,7 +353,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				}
 				let session: TransportReadSession<Format>;
 				try {
-					session = await generator(args, abort.signal);
+					session = await generator(snapshotArgs, abort.signal);
 				} catch (err) {
 					if (abort.signal.aborted) {
 						throw abortedError();
@@ -386,7 +390,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					throw abortedError();
 				}
 				return new RetryReadSession<Format>(
-					args,
+					snapshotArgs,
 					generator,
 					config,
 					session,
@@ -1004,15 +1008,18 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		return this.fatalError;
 	}
 
+	private readonly sessionOptions?: AppendSessionOptions;
+
 	constructor(
 		private readonly generator: (
 			options?: AppendSessionOptions,
 		) => Promise<TransportAppendSession>,
-		private readonly sessionOptions?: AppendSessionOptions,
+		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 		streamName?: string,
 		options?: SessionOptions,
 	) {
+		this.sessionOptions = Types.cloneAppendSessionOptions(sessionOptions);
 		this.streamName = streamName ?? "unknown";
 		this.retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
@@ -1127,35 +1134,22 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		if (this.fatalError || this.closing) {
 			throw appendSessionClosedError(this.fatalError);
 		}
-		// A NaN here would stick in queuedBytes and stall capacity for good.
-		if (!Number.isSafeInteger(input.meteredBytes) || input.meteredBytes < 0) {
-			throw new S2Error({
-				message:
-					"AppendInput meteredBytes must be a non-negative safe integer; create inputs with AppendInput.create()",
-				origin: "sdk",
-			});
-		}
-		if (input.meteredBytes > Types.MAX_APPEND_BYTES) {
-			throw new S2Error({
-				message: `AppendInput exceeds maximum of ${Types.MAX_APPEND_BYTES} bytes (got ${input.meteredBytes} bytes)`,
-				origin: "sdk",
-			});
-		}
-		Types.validateAppendInput(input);
+		// Validate, compute real meteredBytes, and copy mutable Uint8Array/Date inputs.
+		const snapshot = Types.snapshotAppendInput(input);
 
 		// This needs to happen in the sync path.
 		this.ensurePump();
 
 		// Behind any earlier submit still waiting, so batches keep their order.
-		if (this.capacityWaiters.length === 0 && this.hasCapacity(input)) {
-			return this.enqueue(input);
+		if (this.capacityWaiters.length === 0 && this.hasCapacity(snapshot)) {
+			return this.enqueue(snapshot);
 		}
 		debugSession(
 			"[%s] [CAPACITY] no capacity, waiting for release",
 			this.streamName,
 		);
 		return new Promise((resolve, reject) => {
-			this.capacityWaiters.push({ input, resolve, reject });
+			this.capacityWaiters.push({ input: snapshot, resolve, reject });
 		});
 	}
 

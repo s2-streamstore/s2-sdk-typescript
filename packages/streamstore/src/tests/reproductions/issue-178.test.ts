@@ -47,15 +47,15 @@ describe("Issue #178: endpoints with query/hash should be rejected", () => {
 		);
 	});
 
-	it("allows normal endpoints without query/hash", () => {
-		// These should all still work fine
-		const a = new EndpointTemplate({ endpoint: "https://host/api" });
-		expect(a.baseUrl()).toBe("https://host/api");
+	it("allows normal endpoints without query/hash and rejects paths (C3)", () => {
+		expect(
+			() => new EndpointTemplate({ endpoint: "https://host/api" }),
+		).toThrow(/path/);
 
 		const b = new EndpointTemplate({ endpoint: "host:8080" });
 		expect(b.baseUrl()).toBe("https://host:8080/v1");
 
 		const c = new EndpointTemplate({ endpoint: "https://host/" });
-		expect(c.baseUrl()).toBe("https://host/");
+		expect(c.baseUrl()).toBe("https://host/v1");
 	});
 });

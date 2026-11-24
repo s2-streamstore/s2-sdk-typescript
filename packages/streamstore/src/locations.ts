@@ -34,11 +34,12 @@ export class S2Locations {
 	public async list(
 		options?: S2RequestOptions,
 	): Promise<Types.ListLocationsResponse> {
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listLocations({
 					client: this.client,
-					...options,
+					...requestOptions,
 				}),
 			);
 		});
@@ -51,11 +52,12 @@ export class S2Locations {
 	public async getDefault(
 		options?: S2RequestOptions,
 	): Promise<Types.GetDefaultLocationResponse> {
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getDefaultLocation({
 					client: this.client,
-					...options,
+					...requestOptions,
 				}),
 			);
 		});
@@ -71,12 +73,14 @@ export class S2Locations {
 		args: Types.SetDefaultLocationInput,
 		options?: S2RequestOptions,
 	): Promise<Types.SetDefaultLocationResponse> {
+		const { location } = args;
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				setDefaultLocation({
 					client: this.client,
-					body: args.location,
-					...options,
+					body: location,
+					...requestOptions,
 				}),
 			);
 		});

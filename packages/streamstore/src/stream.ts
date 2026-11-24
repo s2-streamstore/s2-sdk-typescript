@@ -90,7 +90,7 @@ export class S2Stream {
 	): RequestOptionsWithHeaders | undefined {
 		const encryptionKey = this.transportConfig.encryptionKey;
 		if (!encryptionKey && !streamConfig) {
-			return options;
+			return options ? { ...options } : undefined;
 		}
 
 		const requestOptions = (options ?? {}) as RequestOptionsWithHeaders;
@@ -130,6 +130,7 @@ export class S2Stream {
 		options?: S2RequestOptions,
 	): Promise<Types.TailResponse> {
 		this.ensureOpen();
+		const requestOptions = options ? { ...options } : undefined;
 		return await withRetries(this.retryConfig, async () => {
 			const response = await withS2Data(() =>
 				checkTail({
@@ -137,7 +138,7 @@ export class S2Stream {
 					path: {
 						stream: this.name,
 					},
-					...options,
+					...requestOptions,
 				}),
 			);
 			return fromAPITailResponse(response);
@@ -161,18 +162,23 @@ export class S2Stream {
 	): Promise<Types.ReadBatch<Format>> {
 		this.ensureOpen();
 		const { as, ...requestOptions } = options ?? {};
+		const ignoreCommandRecords = input?.ignoreCommandRecords;
+		// Snapshot query params and headers synchronously before retries.
+		const readArgs: ReadArgs<Format> = {
+			...toAPIReadQuery(input),
+			as,
+			ignore_command_records: ignoreCommandRecords,
+		} as ReadArgs<Format>;
+		const dataPlaneOptions = this.withDataPlaneHeaders(
+			requestOptions,
+			input?.streamConfig,
+		);
 		return await withRetries(this.retryConfig, async () => {
-			// Convert ReadInput to ReadArgs using mapper
-			const readArgs: ReadArgs<Format> = {
-				...toAPIReadQuery(input),
-				as,
-				ignore_command_records: input?.ignoreCommandRecords,
-			} as ReadArgs<Format>;
 			const genBatch = await streamRead(
 				this.name,
 				this.client,
 				readArgs,
-				this.withDataPlaneHeaders(requestOptions, input?.streamConfig),
+				dataPlaneOptions,
 			);
 			// Convert from API to SDK ReadBatch
 			const batch = (
@@ -180,7 +186,7 @@ export class S2Stream {
 					? fromAPIReadBatchBytes(genBatch)
 					: fromAPIReadBatchString(genBatch)
 			) as Types.ReadBatch<Format>;
-			if (!input?.ignoreCommandRecords) {
+			if (!ignoreCommandRecords) {
 				return batch;
 			}
 			return {
@@ -208,15 +214,19 @@ export class S2Stream {
 		options?: S2RequestOptions,
 	): Promise<Types.AppendAck> {
 		this.ensureOpen();
-		Types.validateAppendInput(input);
+		const snapshot = Types.snapshotAppendInput(input);
+		const requestOptions = this.withDataPlaneHeaders(
+			options,
+			snapshot.streamConfig,
+		);
 		return await withRetries(
 			this.retryConfig,
 			async () => {
 				return await streamAppend(
 					this.name,
 					this.client,
-					input,
-					this.withDataPlaneHeaders(options, input.streamConfig),
+					snapshot,
+					requestOptions,
 				);
 			},
 			(config, error) => {
@@ -246,16 +256,17 @@ export class S2Stream {
 		options?: S2RequestOptions & { as?: Format },
 	): Promise<ReadSession<Format>> {
 		this.ensureOpen();
-		const { as, ...requestOptions } = options ?? {};
-		const transport = await this.getTransport();
-		this.ensureOpen(); // Re-check after async gap
-		// Convert ReadInput to ReadArgs using mapper
+		const { as, ...restOptions } = options ?? {};
+		const requestOptions: S2RequestOptions = { ...restOptions };
+		// Snapshot read args and streamConfig synchronously before awaiting transport.
 		const readArgs: ReadArgs<Format> = {
 			...toAPIReadQuery(input),
 			as,
 			ignore_command_records: input?.ignoreCommandRecords,
-			stream_config: input?.streamConfig,
+			stream_config: Types.cloneStreamConfig(input?.streamConfig),
 		} as ReadArgs<Format>;
+		const transport = await this.getTransport();
+		this.ensureOpen(); // Re-check after async gap
 		return await transport.makeReadSession(this.name, readArgs, requestOptions);
 	}
 	/**
@@ -279,12 +290,16 @@ export class S2Stream {
 		requestOptions?: S2RequestOptions,
 	): Promise<AppendSession> {
 		this.ensureOpen();
+		const snapshotOptions = Types.cloneAppendSessionOptions(sessionOptions);
+		const snapshotRequestOptions = requestOptions
+			? { ...requestOptions }
+			: undefined;
 		const transport = await this.getTransport();
 		this.ensureOpen(); // Re-check after async gap
 		return await transport.makeAppendSession(
 			this.name,
-			sessionOptions,
-			requestOptions,
+			snapshotOptions,
+			snapshotRequestOptions,
 		);
 	}
 	/**
