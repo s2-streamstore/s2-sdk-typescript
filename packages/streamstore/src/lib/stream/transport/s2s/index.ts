@@ -81,6 +81,17 @@ const COMPRESSION_THRESHOLD_BYTES = 1024;
 // `http2.constants.NGHTTP2_CANCEL`; node:http2 is only imported for types here.
 const NGHTTP2_CANCEL = 0x8;
 
+/** S2 never redirects, so a 3xx response fails the attempt. */
+function redirectError(status: number): S2Error | undefined {
+	if (status >= 300 && status < 400) {
+		return new S2Error({
+			message: "unexpected HTTP redirect",
+			status,
+			origin: "server",
+		});
+	}
+}
+
 function recordsPath(baseUrl: URL, streamName: string): string {
 	const prefix = baseUrl.pathname.replace(/\/+$/, "");
 	return `${prefix}/streams/${encodeURIComponent(streamName)}/records`;
@@ -375,6 +386,11 @@ class S2SReadSession<Format extends "string" | "bytes" = "string">
 						// Cache the status.
 						// This informs whether we should attempt to parse s2s frames in the "data" handler.
 						responseCode = headers[":status"] ?? 500;
+						const redirect = redirectError(responseCode);
+						if (redirect) {
+							safeError(redirect);
+							stream.close(NGHTTP2_CANCEL);
+						}
 					});
 
 					stream.on("error", (err) => {
@@ -770,6 +786,11 @@ class S2SAppendSession implements TransportAppendSession {
 		// Capture HTTP response status
 		stream.on("response", (headers) => {
 			responseCode = headers[":status"] ?? 500;
+			const redirect = redirectError(responseCode);
+			if (redirect) {
+				safeError(redirect);
+				stream.close(NGHTTP2_CANCEL);
+			}
 		});
 
 		// Handle incoming data (acks or error response)

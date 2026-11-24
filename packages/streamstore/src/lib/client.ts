@@ -1,3 +1,4 @@
+import { S2Error } from "../error.js";
 import {
 	type Client,
 	createClient,
@@ -14,8 +15,11 @@ async function fetchReportingAborts(
 	input: RequestInfo | URL,
 	init?: RequestInit,
 ): Promise<Response> {
+	let response: Response;
 	try {
-		return await fetch(input, init);
+		// S2 never redirects, and following one would forward headers such as
+		// `s2-encryption-key` to another host.
+		response = await fetch(input, { ...init, redirect: "manual" });
 	} catch (error) {
 		const signal =
 			init?.signal ?? (input instanceof Request ? input.signal : undefined);
@@ -24,6 +28,20 @@ async function fetchReportingAborts(
 		}
 		throw error;
 	}
+	// Fail on the headers, so reading the body can't turn it into a retryable
+	// error. Browsers hide a redirect's status, leaving it 0.
+	if (
+		response.type === "opaqueredirect" ||
+		(response.status >= 300 && response.status < 400)
+	) {
+		void response.body?.cancel().catch(() => {});
+		throw new S2Error({
+			message: "unexpected HTTP redirect",
+			status: response.status,
+			origin: "server",
+		});
+	}
+	return response;
 }
 
 /** A client for the generated API whose aborted requests fail with `ABORTED`. */
