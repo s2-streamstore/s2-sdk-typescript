@@ -4,6 +4,7 @@ import { AppendInput, AppendRecord, S2 } from "../index.js";
 import {
 	DEFAULT_RETRY_CONFIG,
 	isRetryable,
+	sleep,
 	withRetries,
 } from "../lib/retry.js";
 
@@ -244,39 +245,86 @@ describe("Retry Logic", () => {
 describe("retry-after-ms", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.useRealTimers();
 	});
 
-	// The header has to survive from the HTTP response to the retry delay.
-	it("delays the retry of a rate-limited call past maxBaseDelayMillis", async () => {
-		const attemptTimes: number[] = [];
-		vi.stubGlobal("fetch", async () => {
-			attemptTimes.push(performance.now());
-			if (attemptTimes.length === 1) {
-				return new Response(
-					JSON.stringify({ code: "rate_limited", message: "slow down" }),
-					{
-						status: 429,
-						headers: {
-							"content-type": "application/json",
-							"retry-after-ms": "200",
-						},
-					},
-				);
-			}
-			return new Response("[]", {
-				status: 200,
-				headers: { "content-type": "application/json" },
-			});
-		});
-
-		const s2 = new S2({
+	const newS2 = () =>
+		new S2({
 			accessToken: "token",
 			retry: { maxAttempts: 2, minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
 		});
-		await s2.locations.list();
+
+	/** Answers the first request with a 429 carrying `retryAfterMs`, then `ok`. */
+	const stubRateLimitedOnce = (retryAfterMs: string, ok: unknown) => {
+		const attemptTimes: number[] = [];
+		vi.stubGlobal("fetch", async () => {
+			attemptTimes.push(performance.now());
+			const [status, body, headers] =
+				attemptTimes.length === 1
+					? [
+							429,
+							{ code: "rate_limited", message: "slow down" },
+							{ "retry-after-ms": retryAfterMs },
+						]
+					: [200, ok, {}];
+			return new Response(JSON.stringify(body), {
+				status,
+				headers: { "content-type": "application/json", ...headers },
+			});
+		});
+		return attemptTimes;
+	};
+
+	// The header has to survive from the HTTP response to the retry delay, on
+	// both the account and the unary append paths.
+	it.each([
+		["an account call", [], (s2: S2) => s2.locations.list()],
+		[
+			"a unary append",
+			{
+				start: { seq_num: 0, timestamp: 0 },
+				end: { seq_num: 1, timestamp: 0 },
+				tail: { seq_num: 1, timestamp: 0 },
+			},
+			(s2: S2) =>
+				s2
+					.basin("test-basin")
+					.stream("s")
+					.append(AppendInput.create([AppendRecord.string({ body: "x" })])),
+		],
+	])("delays the retry of %s past maxBaseDelayMillis", async (_, ok, call) => {
+		const attemptTimes = stubRateLimitedOnce("200", ok);
+
+		await call(newS2());
 
 		expect(attemptTimes).toHaveLength(2);
 		// Timers may fire a hair early.
 		expect(attemptTimes[1]! - attemptTimes[0]!).toBeGreaterThanOrEqual(190);
+	});
+
+	it("stops waiting when the caller aborts", async () => {
+		const attemptTimes = stubRateLimitedOnce("60000", []);
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 20);
+
+		await expect(
+			newS2().locations.list({ signal: controller.signal }),
+		).rejects.toMatchObject({ code: "ABORTED" });
+		expect(attemptTimes).toHaveLength(1);
+	}, 2000);
+
+	// setTimeout fires after 1ms for a delay over 2^31-1 ms.
+	it("waits out a delay too long for one timer", async () => {
+		vi.useFakeTimers();
+		const millis = 2 ** 31 + 1000;
+		let done = false;
+		void sleep(millis).then(() => {
+			done = true;
+		});
+
+		await vi.advanceTimersByTimeAsync(millis - 1);
+		expect(done).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(done).toBe(true);
 	});
 });

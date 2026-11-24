@@ -130,18 +130,22 @@ export class S2Stream {
 		options?: S2RequestOptions,
 	): Promise<Types.TailResponse> {
 		this.ensureOpen();
-		return await withRetries(this.retryConfig, async () => {
-			const response = await withS2Data(() =>
-				checkTail({
-					client: this.client,
-					path: {
-						stream: this.name,
-					},
-					...options,
-				}),
-			);
-			return fromAPITailResponse(response);
-		});
+		return await withRetries(
+			this.retryConfig,
+			async () => {
+				const response = await withS2Data(() =>
+					checkTail({
+						client: this.client,
+						path: {
+							stream: this.name,
+						},
+						...options,
+					}),
+				);
+				return fromAPITailResponse(response);
+			},
+			options?.signal,
+		);
 	}
 
 	/**
@@ -161,33 +165,37 @@ export class S2Stream {
 	): Promise<Types.ReadBatch<Format>> {
 		this.ensureOpen();
 		const { as, ...requestOptions } = options ?? {};
-		return await withRetries(this.retryConfig, async () => {
-			// Convert ReadInput to ReadArgs using mapper
-			const readArgs: ReadArgs<Format> = {
-				...toAPIReadQuery(input),
-				as,
-				ignore_command_records: input?.ignoreCommandRecords,
-			} as ReadArgs<Format>;
-			const genBatch = await streamRead(
-				this.name,
-				this.client,
-				readArgs,
-				this.withDataPlaneHeaders(requestOptions, input?.streamConfig),
-			);
-			// Convert from API to SDK ReadBatch
-			const batch = (
-				as === "bytes"
-					? fromAPIReadBatchBytes(genBatch)
-					: fromAPIReadBatchString(genBatch)
-			) as Types.ReadBatch<Format>;
-			if (!input?.ignoreCommandRecords) {
-				return batch;
-			}
-			return {
-				...batch,
-				records: batch.records.filter((r) => !isCommandRecord(r)),
-			};
-		});
+		return await withRetries(
+			this.retryConfig,
+			async () => {
+				// Convert ReadInput to ReadArgs using mapper
+				const readArgs: ReadArgs<Format> = {
+					...toAPIReadQuery(input),
+					as,
+					ignore_command_records: input?.ignoreCommandRecords,
+				} as ReadArgs<Format>;
+				const genBatch = await streamRead(
+					this.name,
+					this.client,
+					readArgs,
+					this.withDataPlaneHeaders(requestOptions, input?.streamConfig),
+				);
+				// Convert from API to SDK ReadBatch
+				const batch = (
+					as === "bytes"
+						? fromAPIReadBatchBytes(genBatch)
+						: fromAPIReadBatchString(genBatch)
+				) as Types.ReadBatch<Format>;
+				if (!input?.ignoreCommandRecords) {
+					return batch;
+				}
+				return {
+					...batch,
+					records: batch.records.filter((r) => !isCommandRecord(r)),
+				};
+			},
+			options?.signal,
+		);
 	}
 	/**
 	 * Append a batch of records to the stream.
@@ -219,6 +227,7 @@ export class S2Stream {
 					this.withDataPlaneHeaders(options, input.streamConfig),
 				);
 			},
+			options?.signal,
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "all") === "noSideEffects") {
 					return error.hasNoSideEffects();
