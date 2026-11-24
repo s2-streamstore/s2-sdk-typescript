@@ -22,8 +22,11 @@ import { S2NetworkPolicies } from "./networkPolicies.js";
  */
 const BASIN_NAME_REGEX = /^[a-z0-9][a-z0-9-]{6,46}[a-z0-9]$/;
 
-/** Characters valid in an HTTP header value, which the token is sent in. */
-const ACCESS_TOKEN_REGEX = /^[\t\x20-\x7e\x80-\xff]+$/;
+/**
+ * Characters valid in an HTTP header value, which the token is sent in,
+ * with no trailing space or tab (invalid in HTTP/2 per RFC 9113 §8.2.1).
+ */
+const ACCESS_TOKEN_REGEX = /^[\t\x20-\x7e\x80-\xff]*[\x21-\x7e\x80-\xff]$/;
 
 /**
  * Top-level S2 SDK client.
@@ -60,14 +63,18 @@ export class S2 {
 	 * @throws {S2Error} If the access token is empty or not valid in an HTTP header.
 	 */
 	constructor(options: S2ClientOptions) {
-		if (!ACCESS_TOKEN_REGEX.test(options.accessToken ?? "")) {
+		const { accessToken } = options;
+		if (
+			typeof accessToken !== "string" ||
+			!ACCESS_TOKEN_REGEX.test(accessToken)
+		) {
 			throw new S2Error({
 				message:
 					"Invalid access token: it must be non-empty and valid in an HTTP header.",
 				origin: "sdk",
 			});
 		}
-		this.accessToken = Redacted.make(options.accessToken);
+		this.accessToken = Redacted.make(accessToken);
 		// Merge timeout config: top-level options take precedence over retry.* for backwards compatibility
 		this.retryConfig = {
 			...options.retry,
