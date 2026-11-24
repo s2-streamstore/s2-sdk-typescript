@@ -182,7 +182,8 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 		// setTimeout fires after 1ms for a delay over 2^31-1 ms, so a longer
 		// wait is taken in chunks.
 		const tick = () => {
-			if (ms <= MAX_TIMEOUT_MILLIS) {
+			// Written so that a NaN delay still ends in a timer.
+			if (!(ms > MAX_TIMEOUT_MILLIS)) {
 				timer = setTimeout(wake, ms);
 				return;
 			}
