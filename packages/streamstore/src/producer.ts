@@ -9,9 +9,20 @@ import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import {
 	type AppendAck,
 	type AppendRecord,
-	cloneAppendRecord,
 	snapshotAppendRecord,
 } from "./types.js";
+
+type SnapshotResult =
+	| { ok: true; record: AppendRecord }
+	| { ok: false; error: unknown };
+
+function trySnapshotRecord(record: AppendRecord | undefined): SnapshotResult {
+	try {
+		return { ok: true, record: snapshotAppendRecord(record as AppendRecord) };
+	} catch (error) {
+		return { ok: false, error };
+	}
+}
 
 const debugProducer = createDebug("s2:producer");
 
@@ -124,6 +135,8 @@ export class Producer implements AsyncDisposable {
 	private writableReceived = 0;
 	private writableEnded = false;
 	private readonly writableWaiters = new Set<() => void>();
+	/** Snapshots captured synchronously in `size()` at `writer.write()` queue entry. */
+	private readonly writableSnapshots: SnapshotResult[] = [];
 
 	private terminalError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
@@ -182,10 +195,11 @@ export class Producer implements AsyncDisposable {
 					);
 				},
 				write: async (record) => {
-					const copied = cloneAppendRecord(record);
+					const queued =
+						this.writableSnapshots.shift() ?? trySnapshotRecord(record);
 					const afterClose = ++this.writableReceived > this.closeFence;
 					const submitted = this.enqueueOperation(() =>
-						this.submitInternal(copied, afterClose),
+						this.submitInternal(queued, afterClose),
 					);
 					this.notifyWritableWaiters();
 					try {
@@ -208,10 +222,12 @@ export class Producer implements AsyncDisposable {
 				},
 			},
 			{
-				// writer.write() calls size() synchronously, but the sink sees queued
-				// records one at a time, later. close() uses this count to wait for
-				// the records written before it.
-				size: () => {
+				// writer.write() calls size() synchronously, before the chunk waits in
+				// the stream queue behind an earlier write. Snapshot mutable buffers
+				// here so caller mutations before sink.write() runs cannot alter the
+				// queued record, and capture copy errors so sink.write() ends cleanly.
+				size: (record) => {
+					this.writableSnapshots.push(trySnapshotRecord(record));
 					this.writableAccepted += 1;
 					return 1;
 				},
@@ -354,14 +370,17 @@ export class Producer implements AsyncDisposable {
 	 * @throws S2Error if the Producer has failed, close() was called before this, or `record` is invalid or exceeds 1 MiB (only this record is rejected)
 	 */
 	submit(record: AppendRecord): Promise<RecordSubmitTicket> {
-		const copied = cloneAppendRecord(record);
+		const snapshot = trySnapshotRecord(record);
 		const afterClose = this.closePromise !== null;
-		return this.enqueueOperation(() => this.submitInternal(copied, afterClose));
+		return this.enqueueOperation(() =>
+			this.submitInternal(snapshot, afterClose),
+		);
 	}
 
 	/** The writable has closed, aborted or errored, and will hand over no more records. */
 	private endWritable(): void {
 		this.writableEnded = true;
+		this.writableSnapshots.length = 0;
 		this.notifyWritableWaiters();
 	}
 
@@ -393,7 +412,7 @@ export class Producer implements AsyncDisposable {
 	}
 
 	private async submitInternal(
-		record: AppendRecord,
+		snapshot: SnapshotResult,
 		afterClose: boolean,
 	): Promise<RecordSubmitTicket> {
 		const submitId = ++this.submitCounter;
@@ -421,7 +440,10 @@ export class Producer implements AsyncDisposable {
 		}
 
 		// Fails only this record: once batched, it would fail the whole batch.
-		const validated = snapshotAppendRecord(record);
+		if (!snapshot.ok) {
+			throw snapshot.error;
+		}
+		const validated = snapshot.record;
 
 		// Create the ack promise (resolved later by pump)
 		let resolveAck!: (ack: IndexedAppendAck) => void;

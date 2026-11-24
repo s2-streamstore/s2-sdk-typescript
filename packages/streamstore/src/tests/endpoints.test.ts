@@ -159,6 +159,8 @@ describe("S2Endpoints (C1, C3)", () => {
 				{ account: "example%20.com", basin: "example.com" },
 			],
 			["empty DNS label", { account: "a..example.com", basin: "example.com" }],
+			["bare 0x TLD", { account: "example.0x", basin: "example.0x" }],
+			["bare 0X TLD", { account: "example.0X", basin: "example.0X" }],
 			["port zero", { account: "example.com:0", basin: "example.com:0" }],
 			[
 				"port out of range",
@@ -179,6 +181,26 @@ describe("S2Endpoints (C1, C3)", () => {
 			}
 			expect(error, name).toBeInstanceOf(S2Error);
 			expect((error as S2Error).origin, name).toBe("sdk");
+		}
+
+		// Errors for endpoints carrying credentials must not echo passwords or user info.
+		for (const bad of [
+			"https://alice:s3cr3t@example.com",
+			"https://alice:s3cr3t@example.com/v1",
+			"https://alice:s3cr3t@example.com?token=s3cr3t",
+		]) {
+			let error: unknown;
+			try {
+				new S2({
+					accessToken: "token",
+					endpoints: { account: bad, basin: "https://example.com" },
+				});
+			} catch (e) {
+				error = e;
+			}
+			expect(error, bad).toBeInstanceOf(S2Error);
+			expect((error as S2Error).message, bad).not.toContain("s3cr3t");
+			expect((error as S2Error).message, bad).not.toContain("alice");
 		}
 	});
 

@@ -63,26 +63,60 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 	constructor(args?: BatchTransformOptions) {
 		let controller!: TransformStreamDefaultController<BatchOutput>;
-		super({
-			start: (c) => {
-				controller = c;
-			},
-			transform: (chunk) => {
-				try {
-					this.handleRecord(chunk);
-				} catch (err) {
-					// The throw errors the stream, so the timer must not fire on it.
+		const queuedSnapshots: Array<
+			{ ok: true; record: AppendRecord } | { ok: false; error: unknown }
+		> = [];
+		const trySnapshot = (
+			record: AppendRecord | undefined,
+		): { ok: true; record: AppendRecord } | { ok: false; error: unknown } => {
+			try {
+				return {
+					ok: true,
+					record: snapshotAppendRecord(record as AppendRecord),
+				};
+			} catch (error) {
+				return { ok: false, error };
+			}
+		};
+		super(
+			{
+				start: (c) => {
+					controller = c;
+				},
+				transform: (chunk) => {
+					const queued = queuedSnapshots.shift() ?? trySnapshot(chunk);
+					try {
+						if (!queued.ok) {
+							throw queued.error;
+						}
+						this.handleRecord(queued.record);
+					} catch (err) {
+						queuedSnapshots.length = 0;
+						// The throw errors the stream, so the timer must not fire on it.
+						this.cancelLingerTimer();
+						throw err;
+					}
+				},
+				flush: () => {
+					queuedSnapshots.length = 0;
+					this.flushCurrentBatch();
+				},
+				cancel: () => {
+					queuedSnapshots.length = 0;
 					this.cancelLingerTimer();
-					throw err;
-				}
+				},
+			} as Transformer<AppendRecord, BatchOutput> & { cancel: () => void },
+			{
+				// Snapshot mutable buffers synchronously at writer.write() queue entry
+				// so caller mutations while an earlier transform is blocked cannot alter
+				// queued records.
+				highWaterMark: 1,
+				size: (chunk) => {
+					queuedSnapshots.push(trySnapshot(chunk));
+					return 1;
+				},
 			},
-			flush: () => {
-				this.flushCurrentBatch();
-			},
-			cancel: () => {
-				this.cancelLingerTimer();
-			},
-		} as Transformer<AppendRecord, BatchOutput> & { cancel: () => void });
+		);
 
 		// Set controller reference captured during start
 		this.controller = controller;
@@ -136,10 +170,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		this.nextMatchSeqNum = args?.matchSeqNum;
 	}
 
-	private handleRecord(record: AppendRecord): void {
-		// Reject an invalid record on its own write, not when its batch flushes,
-		// copying mutable inputs and computing meteredBytes from the actual payload.
-		const snapshot = snapshotAppendRecord(record);
+	private handleRecord(snapshot: AppendRecord): void {
 		const recordSize = snapshot.meteredBytes;
 		if (recordSize > this.maxBatchBytes) {
 			throw new S2Error({

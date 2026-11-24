@@ -13,6 +13,7 @@ import {
 	s2sAckFrame,
 	serveHttp1,
 	serveHttp2,
+	waitFor,
 	withinDeadline,
 } from "./helpers.js";
 
@@ -38,10 +39,12 @@ describe("input snapshotting on acceptance (C10)", () => {
 		const readQueries: string[] = [];
 		const readConfigs: Array<string | string[] | undefined> = [];
 		const mgmtBodies: string[] = [];
+		const policyBodies: string[] = [];
 
 		let appendAttempts = 0;
 		let readAttempts = 0;
 		let mgmtAttempts = 0;
+		let policyAttempts = 0;
 
 		const server = await serveHttp1((req, res) => {
 			const chunks: Buffer[] = [];
@@ -85,6 +88,25 @@ describe("input snapshotting on acceptance (C10)", () => {
 					}
 					res.writeHead(200, { "content-type": "application/json" });
 					res.end(JSON.stringify({}));
+					return;
+				}
+				if (req.method === "POST" && url.includes("/network-policies")) {
+					policyAttempts++;
+					policyBodies.push(body.toString("utf8"));
+					if (policyAttempts === 1) {
+						res.writeHead(500, { "content-type": "application/json" });
+						res.end(JSON.stringify({ message: "boom" }));
+						return;
+					}
+					res.writeHead(200, { "content-type": "application/json" });
+					res.end(
+						JSON.stringify({
+							slug: "office",
+							id: "office.1",
+							created_at: "2026-01-01T00:00:00Z",
+							policy: { public_net: { cidrs: ["10.0.0.0/8"] } },
+						}),
+					);
 					return;
 				}
 				res.writeHead(404);
@@ -179,6 +201,28 @@ describe("input snapshotting on acceptance (C10)", () => {
 		for (const raw of mgmtBodies) {
 			expect(JSON.parse(raw)).toMatchObject({
 				default_stream_config: { retention_policy: { age: 333 } },
+			});
+		}
+
+		// 4. Class-instance NetworkPolicy: mutate cidrs after calling.
+		class CustomPublicNet {
+			constructor(public cidrs: string[]) {}
+		}
+		class CustomNetworkPolicy {
+			constructor(public publicNet: CustomPublicNet) {}
+		}
+		const publicNet = new CustomPublicNet(["10.0.0.0/8"]);
+		const policyPromise = client.networkPolicies.create({
+			slug: "office",
+			policy: new CustomNetworkPolicy(publicNet),
+		});
+		publicNet.cidrs.push("0.0.0.0/0");
+		await withinDeadline(policyPromise);
+		expect(policyBodies).toHaveLength(2);
+		for (const raw of policyBodies) {
+			expect(JSON.parse(raw)).toEqual({
+				slug: "office",
+				policy: { public_net: { cidrs: ["10.0.0.0/8"] } },
 			});
 		}
 	});
@@ -375,5 +419,172 @@ describe("input snapshotting on acceptance (C10)", () => {
 			'{"retention_policy":{"age":444}}',
 			'{"retention_policy":{"age":444}}',
 		]);
+	});
+
+	it("snapshots queued writable chunks before sink/transform runs across AppendSession, BatchTransform, and Producer, and closes cleanly on copy failure", async () => {
+		// 1. AppendSession.writable: block first batch on capacity, queue second, mutate before sink runs.
+		const sessionBodies: string[] = [];
+		const releaseFirst: Array<() => void> = [];
+		let reqNum = 0;
+
+		const server = await serveHttp1((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (c) => chunks.push(c));
+			req.on("end", () => {
+				reqNum++;
+				const decoded = Proto.AppendInput.fromBinary(
+					new Uint8Array(Buffer.concat(chunks)),
+				);
+				for (const r of decoded.records) {
+					sessionBodies.push(dec.decode(r.body));
+				}
+				const reply = () => {
+					res.writeHead(200, { "content-type": "application/protobuf" });
+					res.end(protoAckBytes(reqNum - 1, reqNum));
+				};
+				if (reqNum === 1) {
+					releaseFirst.push(reply);
+				} else {
+					reply();
+				}
+			});
+		});
+		cleanup(server.close);
+
+		const stream = new S2({
+			accessToken: "token",
+			endpoints: { account: server.origin, basin: server.origin },
+		})
+			.basin("my-basin-1")
+			.stream("events", { forceTransport: "fetch" });
+		cleanup(() => withinDeadline(stream.close()));
+
+		const session = await stream.appendSession({ maxInflightBatches: 1 });
+		cleanup(() => withinDeadline(session.close()).catch(() => {}));
+
+		const sWriter = session.writable.getWriter();
+		const sBody1 = enc.encode("FIRST");
+		const sBody2 = enc.encode("SECOND");
+		const sBody3 = enc.encode("THIRD");
+		// Batch 1 fills capacity (maxInflightBatches: 1); Batch 2 blocks in sink.write();
+		// Batch 3 sits in the WritableStream queue before sink.write() runs.
+		const sw1 = sWriter.write({
+			records: [{ body: sBody1, meteredBytes: 13 }],
+			meteredBytes: 13,
+		});
+		const sw2 = sWriter.write({
+			records: [{ body: sBody2, meteredBytes: 14 }],
+			meteredBytes: 14,
+		});
+		const sw3 = sWriter.write({
+			records: [{ body: sBody3, meteredBytes: 13 }],
+			meteredBytes: 13,
+		});
+		sBody1.set(enc.encode("XXXXX"));
+		sBody2.set(enc.encode("YYYYYY"));
+		sBody3.set(enc.encode("ZZZZZ"));
+
+		await withinDeadline(sw1);
+		await waitFor(() => releaseFirst.length === 1);
+		releaseFirst[0]!();
+		await withinDeadline(Promise.all([sw2, sw3, sWriter.close()]));
+		expect(sessionBodies).toEqual(["FIRST", "SECOND", "THIRD"]);
+
+		// 2. BatchTransform.writable: pause readable side (backpressure), queue writes, mutate before transform runs.
+		const batcher = new BatchTransform({
+			maxBatchRecords: 1,
+			lingerDurationMillis: 0,
+		});
+		const bWriter = batcher.writable.getWriter();
+		const bReader = batcher.readable.getReader();
+		const bBody1 = enc.encode("B1");
+		const bBody2 = enc.encode("B2");
+		const bBody3 = enc.encode("B3");
+		const bw1 = bWriter.write({ body: bBody1, meteredBytes: 10 });
+		const bw2 = bWriter.write({ body: bBody2, meteredBytes: 10 });
+		const bw3 = bWriter.write({ body: bBody3, meteredBytes: 10 });
+		bBody1.set(enc.encode("XX"));
+		bBody2.set(enc.encode("YY"));
+		bBody3.set(enc.encode("ZZ"));
+
+		const out: string[] = [];
+		const closePromise = bWriter.close();
+		while (true) {
+			const { value, done } = await withinDeadline(bReader.read());
+			if (done) break;
+			out.push(dec.decode(value.records[0]!.body as Uint8Array));
+		}
+		await withinDeadline(Promise.all([bw1, bw2, bw3, closePromise]));
+		expect(out).toEqual(["B1", "B2", "B3"]);
+
+		// 3. Producer.writable: block first batch so later writes wait in the writable queue before
+		// sink.write() runs, mutate queued bytes, and verify a detached buffer rejects without hanging close().
+		const producerBodies: string[] = [];
+		const releaseProducerFirst: Array<() => void> = [];
+		let pReqNum = 0;
+		const pServer = await serveHttp1((req, res) => {
+			const chunks: Buffer[] = [];
+			req.on("data", (c) => chunks.push(c));
+			req.on("end", () => {
+				pReqNum++;
+				const decoded = Proto.AppendInput.fromBinary(
+					new Uint8Array(Buffer.concat(chunks)),
+				);
+				for (const r of decoded.records) {
+					producerBodies.push(dec.decode(r.body));
+				}
+				const reply = () => {
+					res.writeHead(200, { "content-type": "application/protobuf" });
+					res.end(protoAckBytes(pReqNum - 1, pReqNum));
+				};
+				if (pReqNum === 1) {
+					releaseProducerFirst.push(reply);
+				} else {
+					reply();
+				}
+			});
+		});
+		cleanup(pServer.close);
+
+		const pStream = new S2({
+			accessToken: "token",
+			endpoints: { account: pServer.origin, basin: pServer.origin },
+		})
+			.basin("my-basin-1")
+			.stream("events", { forceTransport: "fetch" });
+		cleanup(() => withinDeadline(pStream.close()));
+
+		const pSession = await pStream.appendSession({ maxInflightBatches: 1 });
+		const producer = new Producer(
+			new BatchTransform({ maxBatchRecords: 1, lingerDurationMillis: 0 }),
+			pSession,
+		);
+		cleanup(() => withinDeadline(producer.close()).catch(() => {}));
+
+		const pWriter = producer.writable.getWriter();
+		const pBody1 = enc.encode("P-ONE");
+		const pBody2 = enc.encode("P-TWO");
+		const pBody3 = enc.encode("P-THR");
+		const pw1 = pWriter.write({ body: pBody1, meteredBytes: 13 });
+		const pw2 = pWriter.write({ body: pBody2, meteredBytes: 13 });
+		const pw3 = pWriter.write({ body: pBody3, meteredBytes: 13 });
+		pBody1.set(enc.encode("XXXXX"));
+		pBody2.set(enc.encode("YYYYY"));
+		pBody3.set(enc.encode("ZZZZZ"));
+
+		// A detached ArrayBuffer fails the copy on its write, and flush()/close() must settle instead of hanging.
+		const detachedBuf = new ArrayBuffer(4);
+		const detachedView = new Uint8Array(detachedBuf);
+		structuredClone(detachedBuf, { transfer: [detachedBuf] });
+		const pwBad = pWriter.write({ body: detachedView, meteredBytes: 12 });
+
+		await withinDeadline(pw1);
+		await waitFor(() => releaseProducerFirst.length === 1);
+		releaseProducerFirst[0]!();
+		await withinDeadline(Promise.all([pw2, pw3]));
+		await expect(withinDeadline(pwBad)).rejects.toThrow(TypeError);
+		await withinDeadline(producer.flush());
+		await withinDeadline(producer.close());
+		expect(producerBodies).toEqual(["P-ONE", "P-TWO", "P-THR"]);
 	});
 });

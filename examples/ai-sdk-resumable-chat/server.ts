@@ -36,8 +36,15 @@ if (!basin) throw new Error("Set S2_BASIN");
 const accountEndpoint = process.env.S2_ACCOUNT_ENDPOINT || undefined;
 const basinEndpoint = process.env.S2_BASIN_ENDPOINT || undefined;
 const endpoints =
-	accountEndpoint && basinEndpoint
-		? { account: accountEndpoint, basin: basinEndpoint }
+	accountEndpoint || basinEndpoint
+		? (() => {
+				if (!accountEndpoint || !basinEndpoint) {
+					throw new Error(
+						"Set both S2_ACCOUNT_ENDPOINT and S2_BASIN_ENDPOINT together",
+					);
+				}
+				return { account: accountEndpoint, basin: basinEndpoint };
+			})()
 		: undefined;
 
 const s2 = new S2({

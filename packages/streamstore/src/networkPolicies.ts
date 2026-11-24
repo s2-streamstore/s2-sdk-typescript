@@ -96,7 +96,34 @@ export class S2NetworkPolicies {
 		args: Types.CreateNetworkPolicyInput,
 		options?: S2RequestOptions,
 	): Promise<Types.NetworkPolicyInfo> {
-		const body = toSnakeCase<any>(args);
+		const { slug, policy } = args;
+		const publicNet = policy?.publicNet;
+		const privateNet = policy?.privateNet;
+		const body = toSnakeCase<any>({
+			slug,
+			policy: policy
+				? {
+						...(publicNet !== undefined
+							? {
+									publicNet:
+										publicNet === null ? null : { cidrs: [...publicNet.cidrs] },
+								}
+							: {}),
+						...(privateNet !== undefined
+							? {
+									privateNet:
+										privateNet === null
+											? null
+											: {
+													aws: privateNet.aws
+														? { vpceIds: [...privateNet.aws.vpceIds] }
+														: privateNet.aws,
+												},
+								}
+							: {}),
+					}
+				: policy,
+		});
 		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>

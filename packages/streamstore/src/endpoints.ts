@@ -10,12 +10,19 @@ const IPV4_OCTET_REGEX = /^(?:0|[1-9][0-9]{0,2})$/;
 const IPV6_GROUP_REGEX = /^[0-9a-fA-F]{1,4}$/;
 const DNS_LABEL_REGEX = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
 const ALL_DIGITS_REGEX = /^[0-9]+$/;
-const HEX_LITERAL_REGEX = /^0[xX][0-9a-fA-F]+$/;
+const HEX_LITERAL_REGEX = /^0[xX][0-9a-fA-F]*$/;
 const PORT_REGEX = /^[1-9][0-9]{0,4}$/;
 const WHITESPACE_OR_CONTROL_REGEX = /[\s\x00-\x1f\x7f]/;
 
 function validationError(message: string): S2Error {
 	return new S2Error({ message, origin: "sdk" });
+}
+
+function formatEndpointForError(endpoint: string): string {
+	// Never echo URLs containing `@` (may contain credentials) or query strings.
+	return endpoint.includes("@") || endpoint.includes("?")
+		? ""
+		: `: "${endpoint}"`;
 }
 
 function isValidIpv4(host: string): boolean {
@@ -138,7 +145,7 @@ export class EndpointTemplate {
 		// 2. Reject query string, hash fragment, non-trailing path, and user info.
 		if (rest.includes("?") || rest.includes("#")) {
 			throw validationError(
-				`Endpoint cannot include query string or hash fragment: "${endpoint}"`,
+				"Endpoint cannot include query string or hash fragment",
 			);
 		}
 
@@ -146,16 +153,20 @@ export class EndpointTemplate {
 		const slashIdx = rest.indexOf("/");
 		if (slashIdx !== -1) {
 			if (slashIdx !== rest.length - 1) {
-				throw validationError(`Endpoint cannot include a path: "${endpoint}"`);
+				throw validationError(
+					`Endpoint cannot include a path${formatEndpointForError(endpoint)}`,
+				);
 			}
 			authority = rest.slice(0, slashIdx);
 		}
 
 		if (authority.includes("@")) {
-			throw validationError(`Endpoint cannot include user info: "${endpoint}"`);
+			throw validationError("Endpoint cannot include user info");
 		}
 		if (!authority) {
-			throw validationError(`Endpoint host cannot be empty: "${endpoint}"`);
+			throw validationError(
+				`Endpoint host cannot be empty${formatEndpointForError(endpoint)}`,
+			);
 		}
 
 		// 3. Split authority into host and optional port.

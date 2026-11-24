@@ -226,35 +226,24 @@ function validateAppendRecordFields(
 	return bytes;
 }
 
-/**
- * Defensively copy mutable fields (`Uint8Array` body/headers, header arrays,
- * `Date` timestamp) of an {@link AppendRecord} without throwing on invalid input.
- *
- * @internal
- */
-export function cloneAppendRecord(record: AppendRecord): AppendRecord {
-	if (record == null || typeof record !== "object") {
-		return record;
-	}
-	const body = isUint8Array(record.body) ? copyBytes(record.body) : record.body;
-	let headers: AppendRecord["headers"] = record.headers;
-	if (Array.isArray(record.headers)) {
-		headers = record.headers.map((entry) => {
-			if (!Array.isArray(entry) || entry.length !== 2) {
-				return entry;
-			}
-			const [name, value] = entry;
-			return [
+function copyValidatedAppendRecord(
+	record: AppendRecord,
+	meteredBytes: number,
+): AppendRecord {
+	const { body, headers, timestamp } = record;
+	const copiedBody = isUint8Array(body) ? copyBytes(body) : body;
+	const copiedHeaders = headers?.map(
+		([name, value]) =>
+			[
 				isUint8Array(name) ? copyBytes(name) : name,
 				isUint8Array(value) ? copyBytes(value) : value,
-			] as const;
-		}) as AppendRecord["headers"];
-	}
+			] as const,
+	);
 	return {
-		body,
-		headers,
-		timestamp: cloneTimestamp(record.timestamp),
-		meteredBytes: record.meteredBytes,
+		body: copiedBody,
+		headers: copiedHeaders,
+		timestamp: cloneTimestamp(timestamp),
+		meteredBytes,
 	} as AppendRecord;
 }
 
@@ -287,28 +276,8 @@ export function validateAppendRecord(record: AppendRecord): number {
  * @internal
  */
 export function snapshotAppendRecord(record: AppendRecord): AppendRecord {
-	if (record == null || typeof record !== "object") {
-		throw new S2Error({
-			message: "record must be an object",
-			origin: "sdk",
-		});
-	}
-	const { body, headers, timestamp } = record;
-	const bytes = validateAppendRecordFields(body, headers, timestamp);
-	const copiedBody = isUint8Array(body) ? copyBytes(body) : body;
-	const copiedHeaders = headers?.map(
-		([name, value]) =>
-			[
-				isUint8Array(name) ? copyBytes(name) : name,
-				isUint8Array(value) ? copyBytes(value) : value,
-			] as const,
-	);
-	return {
-		body: copiedBody,
-		headers: copiedHeaders,
-		timestamp: cloneTimestamp(timestamp),
-		meteredBytes: bytes,
-	} as AppendRecord;
+	const bytes = validateAppendRecord(record);
+	return copyValidatedAppendRecord(record, bytes);
 }
 
 /**
@@ -444,12 +413,14 @@ export function snapshotAppendInput(input: {
 		});
 	}
 
+	// Validate every record and check the 1 MiB batch budget before copying any
+	// binary payloads so rejected oversized batches do not allocate memory.
 	let totalBytes = 0;
-	const copiedRecords: AppendRecord[] = [];
-	for (const record of records) {
-		const snapped = snapshotAppendRecord(record);
-		totalBytes += snapped.meteredBytes;
-		copiedRecords.push(snapped);
+	const recordSizes: number[] = new Array(records.length);
+	for (let i = 0; i < records.length; i++) {
+		const size = validateAppendRecord(records[i]!);
+		totalBytes += size;
+		recordSizes[i] = size;
 	}
 
 	if (totalBytes > MAX_APPEND_BYTES) {
@@ -457,6 +428,11 @@ export function snapshotAppendInput(input: {
 			message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
 			origin: "sdk",
 		});
+	}
+
+	const copiedRecords: AppendRecord[] = new Array(records.length);
+	for (let i = 0; i < records.length; i++) {
+		copiedRecords[i] = copyValidatedAppendRecord(records[i]!, recordSizes[i]!);
 	}
 
 	return {

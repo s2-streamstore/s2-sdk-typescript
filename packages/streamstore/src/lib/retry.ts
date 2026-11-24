@@ -1059,35 +1059,81 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		const abortFromWritable = (reason: unknown) =>
 			this.abort(abortedFromReason("AppendSession aborted", reason));
 
-		this.writable = new WritableStream<Types.AppendInput>({
-			start: (controller) => {
-				// controller.signal aborts immediately even while sink.write() is
-				// blocked on submit() capacity, whereas sink.abort() waits for it.
-				controller.signal?.addEventListener(
-					"abort",
-					() => {
-						void abortFromWritable(controller.signal.reason);
-					},
-					{ once: true },
-				);
+		const queuedInputs: Array<
+			{ ok: true; input: Types.AppendInput } | { ok: false; error: unknown }
+		> = [];
+		const trySnapshotInput = (
+			chunk: Types.AppendInput | undefined,
+		):
+			| { ok: true; input: Types.AppendInput }
+			| { ok: false; error: unknown } => {
+			try {
+				return {
+					ok: true,
+					input: Types.snapshotAppendInput(chunk as Types.AppendInput),
+				};
+			} catch (error) {
+				return { ok: false, error };
+			}
+		};
+
+		this.writable = new WritableStream<Types.AppendInput>(
+			{
+				start: (controller) => {
+					// controller.signal aborts immediately even while sink.write() is
+					// blocked on submit() capacity, whereas sink.abort() waits for it.
+					controller.signal?.addEventListener(
+						"abort",
+						() => {
+							queuedInputs.length = 0;
+							void abortFromWritable(controller.signal.reason);
+						},
+						{ once: true },
+					);
+				},
+				write: async (chunk) => {
+					const queued = queuedInputs.shift() ?? trySnapshotInput(chunk);
+					if (this.fatalError || this.closing) {
+						queuedInputs.length = 0;
+						throw appendSessionClosedError(this.fatalError);
+					}
+					if (!queued.ok) {
+						queuedInputs.length = 0;
+						throw queued.error;
+					}
+					// Reuse submitSnapshot() to leverage shared backpressure/pump logic
+					// without re-copying the snapshot taken at queue entry.
+					try {
+						const ticket = await this.submitSnapshot(queued.input);
+						// Writable stream API only needs enqueue semantics, so drop ack but
+						// suppress rejection noise (pump surfaces fatal errors elsewhere).
+						ticket.ack().catch(() => {
+							// Intentionally ignored.
+						});
+					} catch (err) {
+						queuedInputs.length = 0;
+						throw err;
+					}
+				},
+				close: async () => {
+					queuedInputs.length = 0;
+					await this.close();
+				},
+				abort: async (reason) => {
+					queuedInputs.length = 0;
+					await abortFromWritable(reason);
+				},
 			},
-			write: async (chunk) => {
-				// chunk is already AppendInput with meteredBytes computed
-				// Reuse submit() to leverage shared backpressure/pump logic.
-				const ticket = await this.submit(chunk);
-				// Writable stream API only needs enqueue semantics, so drop ack but
-				// suppress rejection noise (pump surfaces fatal errors elsewhere).
-				ticket.ack().catch(() => {
-					// Intentionally ignored.
-				});
+			{
+				// Snapshot mutable buffers synchronously at writer.write() queue entry
+				// so caller mutations while an earlier write is blocked on capacity
+				// cannot alter queued batches.
+				size: (chunk) => {
+					queuedInputs.push(trySnapshotInput(chunk));
+					return 1;
+				},
 			},
-			close: async () => {
-				await this.close();
-			},
-			abort: async (reason) => {
-				await abortFromWritable(reason);
-			},
-		});
+		);
 
 		this.release = attachSession(
 			options,
@@ -1136,13 +1182,18 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		}
 		// Validate, compute real meteredBytes, and copy mutable Uint8Array/Date inputs.
 		const snapshot = Types.snapshotAppendInput(input);
+		return this.submitSnapshot(snapshot);
+	}
 
+	private submitSnapshot(
+		snapshot: Types.AppendInput,
+	): Promise<BatchSubmitTicket> {
 		// This needs to happen in the sync path.
 		this.ensurePump();
 
 		// Behind any earlier submit still waiting, so batches keep their order.
 		if (this.capacityWaiters.length === 0 && this.hasCapacity(snapshot)) {
-			return this.enqueue(snapshot);
+			return Promise.resolve(this.enqueue(snapshot));
 		}
 		debugSession(
 			"[%s] [CAPACITY] no capacity, waiting for release",

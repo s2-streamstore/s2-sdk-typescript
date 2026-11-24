@@ -493,6 +493,11 @@ function s2EndpointsFromEnv(): {
 } {
 	const account = process.env.S2_ACCOUNT_ENDPOINT || undefined;
 	const basin = process.env.S2_BASIN_ENDPOINT || undefined;
-	if (account && basin) return { endpoints: { account, basin } };
-	return {};
+	if (!account && !basin) return {};
+	if (!account || !basin) {
+		throw new Error(
+			"Set both S2_ACCOUNT_ENDPOINT and S2_BASIN_ENDPOINT together",
+		);
+	}
+	return { endpoints: { account, basin } };
 }
