@@ -199,6 +199,11 @@ export class S2Error extends Error {
 	public readonly data?: unknown;
 	/** Origin of the error: server (HTTP response) or sdk (local). */
 	public readonly origin: "server" | "sdk";
+	/**
+	 * The server's `retry-after-ms` hint, when the response carried one.
+	 * @internal
+	 */
+	public readonly retryAfterMillis?: number;
 
 	constructor({
 		message,
@@ -206,12 +211,14 @@ export class S2Error extends Error {
 		status,
 		data,
 		origin,
+		retryAfterMillis,
 	}: {
 		message: string;
 		code?: string;
 		status?: number;
 		data?: unknown;
 		origin?: "server" | "sdk";
+		retryAfterMillis?: number;
 	}) {
 		super(message);
 		this.code = code;
@@ -219,6 +226,7 @@ export class S2Error extends Error {
 		this.status = typeof status === "number" ? status : 0;
 		this.data = data;
 		this.origin = origin ?? "sdk";
+		this.retryAfterMillis = retryAfterMillis;
 		this.name = "S2Error";
 	}
 
@@ -502,10 +510,17 @@ export class RangeNotSatisfiableError extends S2Error {
  * If the payload contains a structured { message, code }, those are preferred.
  */
 export function makeServerError(
-	response: { status?: number; statusText?: string },
+	response: {
+		status?: number;
+		statusText?: string;
+		headers?: { get(name: string): string | null };
+	},
 	payload?: unknown,
 ): S2Error {
 	const status = typeof response.status === "number" ? response.status : 500;
+	const retryAfterMillis = parseRetryAfterMillis(
+		response.headers?.get("retry-after-ms"),
+	);
 	// Pull message/code from structured payload when present
 	if (payload && typeof payload === "object" && "message" in payload) {
 		const structured = payload as {
@@ -520,6 +535,7 @@ export function makeServerError(
 			code: typeof structured.code === "string" ? structured.code : undefined,
 			status,
 			origin: "server",
+			retryAfterMillis,
 		});
 	}
 	// Fallbacks
@@ -531,7 +547,17 @@ export function makeServerError(
 		message: message ?? response.statusText ?? "Request failed",
 		status,
 		origin: "server",
+		retryAfterMillis,
 	});
+}
+
+/** A malformed `retry-after-ms` value is ignored (spec T3). */
+function parseRetryAfterMillis(
+	value: string | null | undefined,
+): number | undefined {
+	if (!value || !/^\d+$/.test(value)) return undefined;
+	const millis = Number(value);
+	return Number.isSafeInteger(millis) ? millis : undefined;
 }
 
 /** Map 412 Precondition Failed append errors to rich error types. */

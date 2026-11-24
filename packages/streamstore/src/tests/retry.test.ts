@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { S2Error } from "../error.js";
-import { AppendInput, AppendRecord } from "../index.js";
+import { AppendInput, AppendRecord, S2 } from "../index.js";
 import {
 	DEFAULT_RETRY_CONFIG,
 	isRetryable,
@@ -238,5 +238,45 @@ describe("Retry Logic", () => {
 			expect(DEFAULT_RETRY_CONFIG.requestTimeoutMillis).toBe(5000);
 			expect(DEFAULT_RETRY_CONFIG.connectionTimeoutMillis).toBe(3000);
 		});
+	});
+});
+
+describe("retry-after-ms", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	// The header has to survive from the HTTP response to the retry delay.
+	it("delays the retry of a rate-limited call past maxBaseDelayMillis", async () => {
+		const attemptTimes: number[] = [];
+		vi.stubGlobal("fetch", async () => {
+			attemptTimes.push(performance.now());
+			if (attemptTimes.length === 1) {
+				return new Response(
+					JSON.stringify({ code: "rate_limited", message: "slow down" }),
+					{
+						status: 429,
+						headers: {
+							"content-type": "application/json",
+							"retry-after-ms": "200",
+						},
+					},
+				);
+			}
+			return new Response("[]", {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		});
+
+		const s2 = new S2({
+			accessToken: "token",
+			retry: { maxAttempts: 2, minBaseDelayMillis: 1, maxBaseDelayMillis: 1 },
+		});
+		await s2.locations.list();
+
+		expect(attemptTimes).toHaveLength(2);
+		// Timers may fire a hair early.
+		expect(attemptTimes[1]! - attemptTimes[0]!).toBeGreaterThanOrEqual(190);
 	});
 });

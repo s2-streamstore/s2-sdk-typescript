@@ -75,7 +75,7 @@ function mergeHeaders(
 
 /** The error for a failed read response. A 416 carries the stream's tail. */
 export function readResponseError(
-	response: { status: number; statusText?: string },
+	response: Parameters<typeof makeServerError>[0] & { status: number },
 	payload: unknown,
 ): S2Error {
 	if (response.status === 416) {
@@ -200,10 +200,7 @@ export async function streamAppend(
 			if (status === 412) {
 				throw makeAppendPreconditionError(status, response.error);
 			}
-			throw makeServerError(
-				{ status, statusText: response.response.statusText },
-				response.error,
-			);
+			throw makeServerError(response.response, response.error);
 		}
 
 		return decodeProto("AppendAck", () => {
@@ -238,10 +235,7 @@ export async function streamAppend(
 		if (status === 412) {
 			throw makeAppendPreconditionError(status, response.error);
 		}
-		throw makeServerError(
-			{ status, statusText: response.response.statusText },
-			response.error,
-		);
+		throw makeServerError(response.response, response.error);
 	}
 	return fromAPIAppendAck(response.data);
 }

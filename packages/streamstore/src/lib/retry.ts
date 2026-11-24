@@ -243,11 +243,15 @@ export async function withRetries<T>(
 				priorUncertainty = true;
 			}
 
-			// Calculate delay and wait before retrying
-			const delay = calculateDelay(
-				attemptNo - 1,
-				config.minBaseDelayMillis,
-				config.maxBaseDelayMillis,
+			// Calculate delay and wait before retrying. A server retry-after-ms
+			// hint raises it, and is not capped by maxBaseDelayMillis (spec T3).
+			const delay = Math.max(
+				calculateDelay(
+					attemptNo - 1,
+					config.minBaseDelayMillis,
+					config.maxBaseDelayMillis,
+				),
+				error.retryAfterMillis ?? 0,
 			);
 			debugWith(
 				"retryable error, backing off for %dms, status=%s",
