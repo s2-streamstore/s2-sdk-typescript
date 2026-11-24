@@ -234,13 +234,8 @@ export async function* subscribeSse<T>(
 			for await (const frame of pipeSseFrames(response.body, signal)) {
 				if (frame.id) {
 					const parsed = Number.parseInt(frame.id, 10);
-					if (
-						Number.isSafeInteger(parsed) &&
-						parsed >= 0 &&
-						(cursor === undefined || parsed > cursor)
-					) {
-						cursor = parsed;
-					}
+					// Not only forward: the server restarts a stale cursor from 0.
+					if (Number.isSafeInteger(parsed) && parsed >= 0) cursor = parsed;
 				}
 				if (!frame.data) continue;
 				attempt = 0;

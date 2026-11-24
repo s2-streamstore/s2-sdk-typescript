@@ -191,14 +191,19 @@ async function handleChat(req: Request): Promise<Response> {
 
 	const history = await readHistory(id);
 	const streamName = liveStreamName(id, turnIndexForNewTurn(history));
-	const result = streamText({
-		model: openai("gpt-4o-mini"),
-		messages: [...history, message],
-	});
 
 	return chat.makeResumable(
 		streamName,
-		persistCompletedAssistantMessage(id, message, result.toUIMessageStream()),
+		(abortSignal) =>
+			persistCompletedAssistantMessage(
+				id,
+				message,
+				streamText({
+					model: openai("gpt-4o-mini"),
+					messages: [...history, message],
+					abortSignal,
+				}).toUIMessageStream(),
+			),
 		{
 			waitUntil: (promise) => {
 				promise.catch((err) => {

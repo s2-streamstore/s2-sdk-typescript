@@ -209,6 +209,7 @@ function ChatConversation({
 	);
 
 	const [input, setInput] = useState("");
+	const [stopError, setStopError] = useState<string | null>(null);
 
 	const shareUrl = useMemo(() => chatUrl(chatId).toString(), [chatId]);
 
@@ -224,6 +225,7 @@ function ChatConversation({
 		const content = input.trim();
 		if (!content || isStreaming) return;
 		setInput("");
+		setStopError(null);
 		sendMessage(content);
 	}
 
@@ -231,14 +233,21 @@ function ChatConversation({
 		await navigator.clipboard.writeText(shareUrl).catch(() => {});
 	}
 
-	function onStop() {
-		stop();
-		// Server-side cancel lives in user code now (DELETE to activeGenerations map).
-		void fetch(API, {
-			method: "DELETE",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ id: chatId }),
-		}).catch(() => {});
+	async function onStop() {
+		setStopError(null);
+		try {
+			const response = await fetch(API, {
+				method: "DELETE",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ id: chatId }),
+			});
+			if (!response.ok) {
+				throw new Error((await response.text()) || "Stop request failed");
+			}
+			stop();
+		} catch (error) {
+			setStopError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	return (
@@ -265,6 +274,9 @@ function ChatConversation({
 			</header>
 
 			<section className="messages" aria-live="polite">
+				{stopError && (
+					<p role="alert">Could not stop generation: {stopError}</p>
+				)}
 				{messages.length === 0 ? (
 					<div className="empty-state">
 						<h2>New chat</h2>

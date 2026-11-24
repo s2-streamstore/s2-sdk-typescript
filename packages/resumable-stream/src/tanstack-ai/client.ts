@@ -86,13 +86,8 @@ function advanceCursor(
 ): void {
 	if (!id) return;
 	const parsed = Number.parseInt(id, 10);
-	if (
-		Number.isSafeInteger(parsed) &&
-		parsed >= 0 &&
-		(state.cursor === undefined || parsed > state.cursor)
-	) {
-		state.cursor = parsed;
-	}
+	// Not only forward: the server restarts a stale cursor from 0.
+	if (Number.isSafeInteger(parsed) && parsed >= 0) state.cursor = parsed;
 }
 
 async function* subscribeChunks(

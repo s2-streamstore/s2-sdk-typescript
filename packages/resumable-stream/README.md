@@ -91,11 +91,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ stre
    - Data records are enqueued to the output stream controller for consumption.
    - If a sentinel fence command is encountered, the stream is closed.
 
+## Production notes
+
+- **Retention:** chat adapters keep each stream in `single-use`, the last two generations in `shared`, and all generations in `session`. Set basin retention to bound storage.
+- **Auth:** check that the caller owns the chat before `replay` or `stop`.
+- **Leases:** a generation idle longer than `leaseDurationMs` can be taken over. Raise it for long tool calls.
+- **Failures:** persistence errors go to `onPersistError` (default: `console.error`).
+
 ## AI SDK
 
 The `./aisdk` subpath makes AI SDK `useChat` streams resumable via S2. `makeResumable` writes `UIMessageChunk`s to S2 and streams the response by reading those records. The wire format matches the AI SDK's `createUIMessageStreamResponse`, so the stock `DefaultChatTransport` works out of the box.
 
 Demo (Bun server + vanilla-JS client): [`examples/ai-sdk-resumable-chat`](../../examples/ai-sdk-resumable-chat/).
+
+Use `mode: "shared"` to reuse one stream per chat across turns.
 
 ```ts
 // lib/s2.ts
@@ -104,33 +113,41 @@ import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 export const chat = createResumableChat({
   accessToken: process.env.S2_ACCESS_TOKEN!,
   basin: process.env.S2_BASIN!,
+  mode: "shared",
 });
 ```
 
 ```ts
 // app/api/chat/route.ts
 import { after } from "next/server";
-import { convertToModelMessages, streamText, type UISnapshotMessage } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { chat } from "@/lib/s2";
 
 export async function POST(req: Request) {
-  const { id, messages } = (await req.json()) as { id: string; messages: UISnapshotMessage[] };
-  const streamName = `chat-${id}`;
-  const result = streamText({
-    model: openai("gpt-4o-mini"),
-    messages: await convertToModelMessages(messages),
-  });
+  const { id, messages } = (await req.json()) as { id: string; messages: UIMessage[] };
 
-  return chat.makeResumable(streamName, result.toUIMessageStream(), {
-    waitUntil: (promise) => {
-      after(async () => {
-        await promise;
-      });
+  return chat.makeResumable(
+    `chat-${id}`,
+    async (abortSignal) =>
+      streamText({
+        model: openai("gpt-4o-mini"),
+        messages: await convertToModelMessages(messages),
+        abortSignal,
+      }).toUIMessageStream(),
+    {
+      requestId: messages.at(-1)?.id,
+      waitUntil: (promise) => {
+        after(async () => {
+          await promise;
+        });
+      },
     },
-  });
+  );
 }
 ```
+
+A function source starts the model only after the claim; `abortSignal` fires on stop or takeover. `requestId` lets a retry rejoin the running generation instead of getting 409.
 
 ```ts
 // app/api/chat/[id]/stream/route.ts
@@ -143,6 +160,13 @@ export async function GET(
   const { id } = await params;
   return chat.replay(`chat-${id}`);
 }
+```
+
+With `resume: true`, `useChat`'s `stop()` only disconnects. To end the generation, add a `POST /api/chat/[id]/stop` route with this handler body, using `id` from the route params:
+
+```ts
+await chat.stop(`chat-${id}`);
+return new Response(null, { status: 204 });
 ```
 
 ```tsx
@@ -159,6 +183,12 @@ const transport = new DefaultChatTransport({
 
 export default function Chat() {
   const chat = useChat({ transport, resume: true });
+
+  async function stop() {
+    await fetch(`/api/chat/${chat.id}/stop`, { method: "POST" });
+    chat.stop();
+  }
+
   return null;
 }
 ```
@@ -186,11 +216,11 @@ const chat = createResumableChat({
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-  const source = anthropic.messages.stream({
+  const source = (signal: AbortSignal) => anthropic.messages.stream({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 1024,
     messages,
-  });
+  }, { signal });
 
   return chat.makeResumable(`chat-${id}`, source, {
     delivery: "replay",
@@ -246,7 +276,7 @@ Server fields:
 | `mode` | Storage layout: `single-use`, `shared`, or `session`. Use `session` for multi-turn chats and multi-tab replay. |
 | `batchSize` | Maximum number of chunks to append to S2 at once. Defaults to `10`. |
 | `lingerDuration` | Maximum batching delay in milliseconds. Defaults to `50`. |
-| `leaseDurationMs` | `shared` mode takeover window for stale active generations. Defaults to `5000`. |
+| `leaseDurationMs` | `shared` and `session` mode takeover window for stale active generations. Defaults to `5000`. |
 | `onError` | Maps upstream errors to the stored/rendered error message. |
 
 `makeResumable` fields:
@@ -292,10 +322,18 @@ const chat = createResumableChat({
 
 export async function POST(req: Request) {
   const { id, messages } = await req.json();
-  const source = tanstackChat({
-    adapter: openaiText("gpt-4o-mini"),
-    messages: convertMessagesToModelMessages(messages),
-  });
+  const source = (signal: AbortSignal) => {
+    const abortController = new AbortController();
+    const abort = () => abortController.abort(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    return tanstackChat({
+      adapter: openaiText("gpt-4o-mini"),
+      messages: convertMessagesToModelMessages(messages),
+      threadId: id,
+      abortController,
+    });
+  };
   return chat.makeResumable(`chat-${id}`, source, {
     delivery: "replay",
     waitUntil: (p) => p.catch(console.error),
@@ -315,6 +353,11 @@ export async function GET(req: Request) {
 }
 ```
 
+For history loading, `readStoredChunks(stream)` from `./tanstack-ai` reads the
+currently stored chunks without waiting. It reassembles large chunks and yields
+`{ chunk, nextSeqNum }`; use `nextSeqNum` to resume replay, and close the S2 stream
+handle when finished.
+
 The `./tanstack-ai/client` subpath builds a `SubscribeConnectionAdapter` for
 TanStack `useChat`. It tracks the last seen SSE `id:` internally, so repeated
 `subscribe()` calls resume from the previous chunk without exposing cursor
@@ -333,8 +376,9 @@ const connection = createConnection({
 const chat = useChat({ connection, live: true });
 ```
 
-Server-side stop/cancel remains application code. For example, keep a
-process-local `Map<string, AbortController>` and expose a `DELETE` route that
-aborts the active model call. See
+Stop a generation from a server route with `await chat.stop(streamName)`.
+The stop is stored in S2, so it works even when another server owns the
+generation; the source's signal then aborts the upstream model call. Retry a
+failed stop request to finish closing the generation. See
 [`examples/tanstack-ai-chat`](../../examples/tanstack-ai-chat) for a complete
 TanStack `useChat` setup.

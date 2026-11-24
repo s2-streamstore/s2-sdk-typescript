@@ -55,7 +55,7 @@
   "sideEffects": false,
   "peerDependencies": {
     "@anthropic-ai/sdk": "*",
-    "@s2-dev/streamstore": ">=0.21.0",
+    "@s2-dev/streamstore": ">=0.24.3",
     "@tanstack/ai": "*",
     "@tanstack/ai-client": "*",
     "ai": ">=5.0.0"

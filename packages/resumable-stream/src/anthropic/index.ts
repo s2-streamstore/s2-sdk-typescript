@@ -12,6 +12,7 @@ export type {
 	ReplayOptions,
 	ResumableChatConfig,
 	ResumableChatMode,
+	ResumableSource,
 } from "../adapter.js";
 export type { Chunk } from "./types.js";
 
@@ -32,6 +33,7 @@ const adapter: ChatAdapter<Chunk> = {
 			error: { type: "api_error", message },
 		};
 	},
+	stopChunks: [{ type: "message_stop" }],
 	responseHeaders: SSE_HEADERS,
 	formatSseFrame(storedBody) {
 		try {
