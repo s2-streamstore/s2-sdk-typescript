@@ -244,7 +244,7 @@ export async function withRetries<T>(
 			}
 
 			// Calculate delay and wait before retrying. A server retry-after-ms
-			// hint raises it, and is not capped by maxBaseDelayMillis (spec T3).
+			// hint raises it, and is not capped by maxBaseDelayMillis.
 			const delay = Math.max(
 				calculateDelay(
 					attemptNo - 1,

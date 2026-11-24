@@ -551,7 +551,7 @@ export function makeServerError(
 	});
 }
 
-/** A malformed `retry-after-ms` value is ignored (spec T3). */
+/** A malformed `retry-after-ms` value is ignored. */
 function parseRetryAfterMillis(
 	value: string | null | undefined,
 ): number | undefined {
