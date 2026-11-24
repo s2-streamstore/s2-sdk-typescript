@@ -46,15 +46,19 @@ export class S2NetworkPolicies {
 		args?: Types.ListNetworkPoliciesInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListNetworkPoliciesResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listNetworkPolicies({
-					client: this.client,
-					query: toSnakeCase(args),
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listNetworkPolicies({
+						client: this.client,
+						query: toSnakeCase(args),
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return {
 			networkPolicies: response.network_policies.map(transformPolicyInfo),
 			hasMore: response.has_more,
@@ -92,15 +96,19 @@ export class S2NetworkPolicies {
 		args: Types.CreateNetworkPolicyInput,
 		options?: S2RequestOptions,
 	): Promise<Types.NetworkPolicyInfo> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				createNetworkPolicy({
-					client: this.client,
-					body: toSnakeCase(args),
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					createNetworkPolicy({
+						client: this.client,
+						body: toSnakeCase(args),
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return transformPolicyInfo(response);
 	}
 
@@ -113,15 +121,19 @@ export class S2NetworkPolicies {
 		args: Types.GetNetworkPolicyInput,
 		options?: S2RequestOptions,
 	): Promise<Types.NetworkPolicyInfo> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				getNetworkPolicy({
-					client: this.client,
-					path: args,
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					getNetworkPolicy({
+						client: this.client,
+						path: args,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return transformPolicyInfo(response);
 	}
 
@@ -134,14 +146,18 @@ export class S2NetworkPolicies {
 		args: Types.DeleteNetworkPolicyInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
-		await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				deleteNetworkPolicy({
-					client: this.client,
-					path: args,
-					...options,
-				}),
-			);
-		});
+		await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					deleteNetworkPolicy({
+						client: this.client,
+						path: args,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 	}
 }

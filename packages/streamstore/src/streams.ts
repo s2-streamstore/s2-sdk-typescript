@@ -81,15 +81,19 @@ export class S2Streams {
 		args?: Types.ListStreamsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListStreamsResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listStreams({
-					client: this.client,
-					query: toSnakeCase(args),
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listStreams({
+						client: this.client,
+						query: toSnakeCase(args),
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		const camelCased = toCamelCase<any>(response);
 		return {
 			...camelCased,
@@ -147,16 +151,20 @@ export class S2Streams {
 			...args,
 			config: toAPIStreamConfig(args.config),
 		};
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				createStream({
-					client: this.client,
-					body: toSnakeCase(apiArgs),
-					headers: { "s2-request-token": requestToken },
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					createStream({
+						client: this.client,
+						body: toSnakeCase(apiArgs),
+						headers: { "s2-request-token": requestToken },
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return transformStreamInfo(toCamelCase<any>(response));
 	}
 
@@ -169,15 +177,19 @@ export class S2Streams {
 		args: Types.GetStreamConfigInput,
 		options?: S2RequestOptions,
 	): Promise<Types.StreamConfig> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				getStreamConfig({
-					client: this.client,
-					path: args,
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					getStreamConfig({
+						client: this.client,
+						path: args,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		// Convert API format to SDK (age → ageSecs)
 		return toSDKStreamConfig(toCamelCase(response));
 	}
@@ -191,15 +203,19 @@ export class S2Streams {
 		args: Types.DeleteStreamInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
-		await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				deleteStream({
-					client: this.client,
-					path: args,
-					...options,
-				}),
-			);
-		});
+		await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					deleteStream({
+						client: this.client,
+						path: args,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 	}
 
 	/**
@@ -223,16 +239,20 @@ export class S2Streams {
 				: (toSnakeCase(
 						toAPIStreamConfig(args.config),
 					) as API.StreamConfig | null);
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2DataAndResponse<API.StreamInfo>(() =>
-				ensureStream({
-					client: this.client,
-					path: { stream: args.stream },
-					body,
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2DataAndResponse<API.StreamInfo>(() =>
+					ensureStream({
+						client: this.client,
+						path: { stream: args.stream },
+						body,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		const stream = toCamelCase<any>(response.data);
 		return {
 			result: provisionResultFromResponse(response.response),
@@ -256,16 +276,20 @@ export class S2Streams {
 			deleteOnEmpty: toAPIDeleteOnEmpty(reconfigArgs.deleteOnEmpty),
 			retentionPolicy: toAPIRetentionPolicy(args.retentionPolicy),
 		};
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				reconfigureStream({
-					client: this.client,
-					path: { stream },
-					body: toSnakeCase(apiArgs),
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					reconfigureStream({
+						client: this.client,
+						path: { stream },
+						body: toSnakeCase(apiArgs),
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		// Convert API format to SDK (age → ageSecs)
 		const camelCased = toCamelCase<any>(response);
 		return toSDKStreamConfig(camelCased);
