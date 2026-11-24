@@ -7,6 +7,7 @@ import {
 	AppendInput,
 	AppendRecord,
 	S2,
+	S2Environment,
 } from "@s2-dev/streamstore";
 import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 
@@ -33,19 +34,7 @@ if (!accessToken) throw new Error("Set S2_ACCESS_TOKEN");
 const basin = process.env.S2_BASIN;
 if (!basin) throw new Error("Set S2_BASIN");
 
-const accountEndpoint = process.env.S2_ACCOUNT_ENDPOINT || undefined;
-const basinEndpoint = process.env.S2_BASIN_ENDPOINT || undefined;
-const endpoints =
-	accountEndpoint || basinEndpoint
-		? (() => {
-				if (!accountEndpoint || !basinEndpoint) {
-					throw new Error(
-						"Set both S2_ACCOUNT_ENDPOINT and S2_BASIN_ENDPOINT together",
-					);
-				}
-				return { account: accountEndpoint, basin: basinEndpoint };
-			})()
-		: undefined;
+const { endpoints } = S2Environment.parse();
 
 const s2 = new S2({
 	accessToken,

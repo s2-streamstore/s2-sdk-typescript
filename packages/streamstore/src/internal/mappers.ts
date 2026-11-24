@@ -284,7 +284,7 @@ export function toAPIRetentionPolicy(
 	if ("ageSecs" in policy) {
 		return { age: Math.floor(policy.ageSecs) };
 	}
-	return { infinite: { ...policy.infinite } };
+	return policy; // { infinite: ... } passes through
 }
 
 /** Convert API RetentionPolicy (age) to SDK RetentionPolicy (ageSecs). */
@@ -322,12 +322,6 @@ export function toAPIStreamConfig(
 		...config,
 		deleteOnEmpty: toAPIDeleteOnEmpty(config.deleteOnEmpty),
 		retentionPolicy: toAPIRetentionPolicy(config.retentionPolicy),
-		...(config.timestamping !== undefined
-			? {
-					timestamping:
-						config.timestamping === null ? null : { ...config.timestamping },
-				}
-			: {}),
 	};
 }
 

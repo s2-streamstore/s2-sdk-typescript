@@ -140,76 +140,9 @@ export class S2AccessTokens {
 		options?: S2RequestOptions,
 	): Promise<Types.IssueAccessTokenResponse> {
 		validateAccessTokenId(args.id);
-		const { scope } = args;
-		const copiedScope = scope
-			? {
-					...(scope.accessTokens !== undefined
-						? {
-								accessTokens:
-									scope.accessTokens === null
-										? null
-										: { ...scope.accessTokens },
-							}
-						: {}),
-					...(scope.basins !== undefined
-						? {
-								basins: scope.basins === null ? null : { ...scope.basins },
-							}
-						: {}),
-					...(scope.streams !== undefined
-						? {
-								streams: scope.streams === null ? null : { ...scope.streams },
-							}
-						: {}),
-					...(scope.opGroups !== undefined
-						? {
-								opGroups:
-									scope.opGroups === null
-										? null
-										: {
-												...(scope.opGroups.account !== undefined
-													? {
-															account:
-																scope.opGroups.account === null
-																	? null
-																	: { ...scope.opGroups.account },
-														}
-													: {}),
-												...(scope.opGroups.basin !== undefined
-													? {
-															basin:
-																scope.opGroups.basin === null
-																	? null
-																	: { ...scope.opGroups.basin },
-														}
-													: {}),
-												...(scope.opGroups.stream !== undefined
-													? {
-															stream:
-																scope.opGroups.stream === null
-																	? null
-																	: { ...scope.opGroups.stream },
-														}
-													: {}),
-											},
-							}
-						: {}),
-					...(scope.ops !== undefined
-						? { ops: scope.ops === null ? null : [...scope.ops] }
-						: {}),
-				}
-			: scope;
-		// Convert Date to ISO string and snapshot before retries
 		const body = toSnakeCase<any>({
-			id: args.id,
-			scope: copiedScope,
-			...(args.autoPrefixStreams !== undefined
-				? { autoPrefixStreams: args.autoPrefixStreams }
-				: {}),
+			...args,
 			expiresAt: toISOString(args.expiresAt),
-			...(args.networkPolicy !== undefined
-				? { networkPolicy: args.networkPolicy }
-				: {}),
 		});
 		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {

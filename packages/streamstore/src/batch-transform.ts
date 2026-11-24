@@ -2,7 +2,9 @@ import { S2Error } from "./error.js";
 import {
 	AppendInput,
 	type AppendRecord,
+	type SnapshotResult,
 	snapshotAppendRecord,
+	trySnapshot,
 } from "./types.js";
 
 export interface BatchTransformOptions {
@@ -63,33 +65,21 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 	constructor(args?: BatchTransformOptions) {
 		let controller!: TransformStreamDefaultController<BatchOutput>;
-		const queuedSnapshots: Array<
-			{ ok: true; record: AppendRecord } | { ok: false; error: unknown }
-		> = [];
-		const trySnapshot = (
-			record: AppendRecord | undefined,
-		): { ok: true; record: AppendRecord } | { ok: false; error: unknown } => {
-			try {
-				return {
-					ok: true,
-					record: snapshotAppendRecord(record as AppendRecord),
-				};
-			} catch (error) {
-				return { ok: false, error };
-			}
-		};
+		const queuedSnapshots: SnapshotResult<AppendRecord>[] = [];
 		super(
 			{
 				start: (c) => {
 					controller = c;
 				},
 				transform: (chunk) => {
-					const queued = queuedSnapshots.shift() ?? trySnapshot(chunk);
+					const queued =
+						queuedSnapshots.shift() ??
+						trySnapshot(() => snapshotAppendRecord(chunk));
 					try {
 						if (!queued.ok) {
 							throw queued.error;
 						}
-						this.handleRecord(queued.record);
+						this.handleRecord(queued.value);
 					} catch (err) {
 						queuedSnapshots.length = 0;
 						// The throw errors the stream, so the timer must not fire on it.
@@ -107,12 +97,12 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 				},
 			} as Transformer<AppendRecord, BatchOutput> & { cancel: () => void },
 			{
-				// Snapshot mutable buffers synchronously at writer.write() queue entry
-				// so caller mutations while an earlier transform is blocked cannot alter
-				// queued records.
+				// size() runs synchronously in writer.write() before queuing behind backpressure.
 				highWaterMark: 1,
 				size: (chunk) => {
-					queuedSnapshots.push(trySnapshot(chunk));
+					queuedSnapshots.push(
+						trySnapshot(() => snapshotAppendRecord(chunk as AppendRecord)),
+					);
 					return 1;
 				},
 			},

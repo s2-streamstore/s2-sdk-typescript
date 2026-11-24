@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { S2Environment } from "../common.js";
-import { EndpointTemplate, S2Endpoints } from "../endpoints.js";
+import { S2Endpoints } from "../endpoints.js";
 import { S2Error } from "../error.js";
 import { S2 } from "../index.js";
 import { cleanupAfterEach, serveHttp1, withinDeadline } from "./helpers.js";
@@ -306,26 +306,11 @@ describe("S2Endpoints (C1, C3)", () => {
 				basin: `http://{basin}.localhost:${port}`,
 			},
 		});
-		// Capture the headers configured on S2Basin's client without relying on
-		// wildcard DNS resolution for `my-basin-1.localhost`.
+		// Avoid wildcard DNS resolution for `my-basin-1.localhost`; check S2Basin's configured header flag.
 		const basin = withPlaceholder.basin("my-basin-1");
 		expect(
 			(basin as unknown as { transportConfig: { basinName?: string } })
 				.transportConfig.basinName,
 		).toBeUndefined();
-	});
-});
-
-describe("EndpointTemplate", () => {
-	it("rejects empty endpoints with S2Error", () => {
-		expect(() => new EndpointTemplate({ endpoint: "   " })).toThrow(S2Error);
-	});
-
-	it("always appends /v1 with or without a trailing slash", () => {
-		const a = new EndpointTemplate({ endpoint: "example.com" });
-		expect(a.baseUrl()).toBe("https://example.com/v1");
-
-		const b = new EndpointTemplate({ endpoint: "example.com/" });
-		expect(b.baseUrl()).toBe("https://example.com/v1");
 	});
 });

@@ -9,20 +9,10 @@ import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import {
 	type AppendAck,
 	type AppendRecord,
+	type SnapshotResult,
 	snapshotAppendRecord,
+	trySnapshot,
 } from "./types.js";
-
-type SnapshotResult =
-	| { ok: true; record: AppendRecord }
-	| { ok: false; error: unknown };
-
-function trySnapshotRecord(record: AppendRecord | undefined): SnapshotResult {
-	try {
-		return { ok: true, record: snapshotAppendRecord(record as AppendRecord) };
-	} catch (error) {
-		return { ok: false, error };
-	}
-}
 
 const debugProducer = createDebug("s2:producer");
 
@@ -135,8 +125,7 @@ export class Producer implements AsyncDisposable {
 	private writableReceived = 0;
 	private writableEnded = false;
 	private readonly writableWaiters = new Set<() => void>();
-	/** Snapshots captured synchronously in `size()` at `writer.write()` queue entry. */
-	private readonly writableSnapshots: SnapshotResult[] = [];
+	private readonly writableSnapshots: SnapshotResult<AppendRecord>[] = [];
 
 	private terminalError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
@@ -196,7 +185,8 @@ export class Producer implements AsyncDisposable {
 				},
 				write: async (record) => {
 					const queued =
-						this.writableSnapshots.shift() ?? trySnapshotRecord(record);
+						this.writableSnapshots.shift() ??
+						trySnapshot(() => snapshotAppendRecord(record));
 					const afterClose = ++this.writableReceived > this.closeFence;
 					const submitted = this.enqueueOperation(() =>
 						this.submitInternal(queued, afterClose),
@@ -222,12 +212,12 @@ export class Producer implements AsyncDisposable {
 				},
 			},
 			{
-				// writer.write() calls size() synchronously, before the chunk waits in
-				// the stream queue behind an earlier write. Snapshot mutable buffers
-				// here so caller mutations before sink.write() runs cannot alter the
-				// queued record, and capture copy errors so sink.write() ends cleanly.
+				// size() runs synchronously in writer.write() before queuing; snapshot
+				// here and defer any copy error to sink.write() so close()/flush() cannot hang.
 				size: (record) => {
-					this.writableSnapshots.push(trySnapshotRecord(record));
+					this.writableSnapshots.push(
+						trySnapshot(() => snapshotAppendRecord(record as AppendRecord)),
+					);
 					this.writableAccepted += 1;
 					return 1;
 				},
@@ -370,7 +360,7 @@ export class Producer implements AsyncDisposable {
 	 * @throws S2Error if the Producer has failed, close() was called before this, or `record` is invalid or exceeds 1 MiB (only this record is rejected)
 	 */
 	submit(record: AppendRecord): Promise<RecordSubmitTicket> {
-		const snapshot = trySnapshotRecord(record);
+		const snapshot = trySnapshot(() => snapshotAppendRecord(record));
 		const afterClose = this.closePromise !== null;
 		return this.enqueueOperation(() =>
 			this.submitInternal(snapshot, afterClose),
@@ -412,7 +402,7 @@ export class Producer implements AsyncDisposable {
 	}
 
 	private async submitInternal(
-		snapshot: SnapshotResult,
+		snapshot: SnapshotResult<AppendRecord>,
 		afterClose: boolean,
 	): Promise<RecordSubmitTicket> {
 		const submitId = ++this.submitCounter;
@@ -443,7 +433,7 @@ export class Producer implements AsyncDisposable {
 		if (!snapshot.ok) {
 			throw snapshot.error;
 		}
-		const validated = snapshot.record;
+		const validated = snapshot.value;
 
 		// Create the ack promise (resolved later by pump)
 		let resolveAck!: (ack: IndexedAppendAck) => void;

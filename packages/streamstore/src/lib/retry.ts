@@ -1059,23 +1059,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		const abortFromWritable = (reason: unknown) =>
 			this.abort(abortedFromReason("AppendSession aborted", reason));
 
-		const queuedInputs: Array<
-			{ ok: true; input: Types.AppendInput } | { ok: false; error: unknown }
-		> = [];
-		const trySnapshotInput = (
-			chunk: Types.AppendInput | undefined,
-		):
-			| { ok: true; input: Types.AppendInput }
-			| { ok: false; error: unknown } => {
-			try {
-				return {
-					ok: true,
-					input: Types.snapshotAppendInput(chunk as Types.AppendInput),
-				};
-			} catch (error) {
-				return { ok: false, error };
-			}
-		};
+		const queuedInputs: Types.SnapshotResult<Types.AppendInput>[] = [];
 
 		this.writable = new WritableStream<Types.AppendInput>(
 			{
@@ -1092,7 +1076,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					);
 				},
 				write: async (chunk) => {
-					const queued = queuedInputs.shift() ?? trySnapshotInput(chunk);
+					const queued =
+						queuedInputs.shift() ??
+						Types.trySnapshot(() => Types.snapshotAppendInput(chunk));
 					if (this.fatalError || this.closing) {
 						queuedInputs.length = 0;
 						throw appendSessionClosedError(this.fatalError);
@@ -1101,15 +1087,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 						queuedInputs.length = 0;
 						throw queued.error;
 					}
-					// Reuse submitSnapshot() to leverage shared backpressure/pump logic
-					// without re-copying the snapshot taken at queue entry.
 					try {
-						const ticket = await this.submitSnapshot(queued.input);
-						// Writable stream API only needs enqueue semantics, so drop ack but
-						// suppress rejection noise (pump surfaces fatal errors elsewhere).
-						ticket.ack().catch(() => {
-							// Intentionally ignored.
-						});
+						const ticket = await this.submitSnapshot(queued.value);
+						ticket.ack().catch(() => {});
 					} catch (err) {
 						queuedInputs.length = 0;
 						throw err;
@@ -1125,11 +1105,13 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 				},
 			},
 			{
-				// Snapshot mutable buffers synchronously at writer.write() queue entry
-				// so caller mutations while an earlier write is blocked on capacity
-				// cannot alter queued batches.
+				// size() runs synchronously in writer.write() before queuing behind backpressure.
 				size: (chunk) => {
-					queuedInputs.push(trySnapshotInput(chunk));
+					queuedInputs.push(
+						Types.trySnapshot(() =>
+							Types.snapshotAppendInput(chunk as Types.AppendInput),
+						),
+					);
 					return 1;
 				},
 			},

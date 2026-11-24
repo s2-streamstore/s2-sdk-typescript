@@ -88,13 +88,23 @@ function isUint8Array(value: unknown): value is Uint8Array {
 	);
 }
 
-/**
- * Copy bytes into an independent `Uint8Array`.
- * Uses `new Uint8Array(bytes)` rather than `.slice()` because Node.js `Buffer`
- * overrides `.slice()` to return a view sharing the same underlying memory.
- */
+// new Uint8Array(bytes) rather than .slice(), because Node Buffer.slice() shares memory.
 function copyBytes(bytes: Uint8Array): Uint8Array {
 	return new Uint8Array(bytes);
+}
+
+/** @internal */
+export type SnapshotResult<T> =
+	| { ok: true; value: T }
+	| { ok: false; error: unknown };
+
+/** @internal */
+export function trySnapshot<T>(fn: () => T): SnapshotResult<T> {
+	try {
+		return { ok: true, value: fn() };
+	} catch (error) {
+		return { ok: false, error };
+	}
 }
 
 function cloneTimestamp(
@@ -280,19 +290,11 @@ export function snapshotAppendRecord(record: AppendRecord): AppendRecord {
 	return copyValidatedAppendRecord(record, bytes);
 }
 
-/**
- * Check a hand-built {@link AppendInput}'s batch limits, records, and
- * conditions before queueing or encoding. Returns the computed total metered
- * bytes across all records. Never trusts caller-supplied `meteredBytes`.
- *
- * @internal
- * @throws {S2Error} If the batch is empty, exceeds record/byte limits, has an invalid record, or has an invalid `fencingToken` / `matchSeqNum`
- */
-export function validateAppendInput(input: {
+function validateAndMeasureBatch(input: {
 	readonly records: ReadonlyArray<AppendRecord>;
 	readonly matchSeqNum?: number;
 	readonly fencingToken?: string;
-}): number {
+}): { totalBytes: number; recordSizes: number[] } {
 	if (
 		input == null ||
 		typeof input !== "object" ||
@@ -303,95 +305,19 @@ export function validateAppendInput(input: {
 			origin: "sdk",
 		});
 	}
-	const { records } = input;
+	const { records, fencingToken, matchSeqNum } = input;
 	if (records.length === 0) {
 		throw new S2Error({
 			message: "AppendInput must contain at least one record",
 			origin: "sdk",
 		});
 	}
-
 	if (records.length > MAX_APPEND_RECORDS) {
 		throw new S2Error({
 			message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${records.length})`,
 			origin: "sdk",
 		});
 	}
-
-	let totalBytes = 0;
-	for (const record of records) {
-		totalBytes += validateAppendRecord(record);
-	}
-	if (totalBytes > MAX_APPEND_BYTES) {
-		throw new S2Error({
-			message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
-			origin: "sdk",
-		});
-	}
-
-	if (
-		input.fencingToken != null &&
-		(typeof input.fencingToken !== "string" ||
-			utf8ByteLength(input.fencingToken) > 36)
-	) {
-		throw new S2Error({
-			message: "fencing token must not exceed 36 bytes in length",
-			origin: "sdk",
-			status: 422,
-		});
-	}
-
-	if (
-		input.matchSeqNum !== undefined &&
-		(!Number.isSafeInteger(input.matchSeqNum) || input.matchSeqNum < 0)
-	) {
-		throw new S2Error({
-			message: "matchSeqNum must be a non-negative safe integer",
-			origin: "sdk",
-		});
-	}
-
-	return totalBytes;
-}
-
-/**
- * Validate and snapshot an {@link AppendInput}, copying all records (`Uint8Array`
- * bodies/headers, header arrays, `Date` timestamps) and `streamConfig`, and
- * computing `meteredBytes` from the records.
- *
- * @internal
- */
-export function snapshotAppendInput(input: {
-	readonly records: ReadonlyArray<AppendRecord>;
-	readonly matchSeqNum?: number;
-	readonly fencingToken?: string;
-	readonly streamConfig?: StreamConfig;
-}): AppendInput {
-	if (
-		input == null ||
-		typeof input !== "object" ||
-		!Array.isArray(input.records)
-	) {
-		throw new S2Error({
-			message: "AppendInput must contain a records array",
-			origin: "sdk",
-		});
-	}
-	const { records, matchSeqNum, fencingToken, streamConfig } = input;
-	if (records.length === 0) {
-		throw new S2Error({
-			message: "AppendInput must contain at least one record",
-			origin: "sdk",
-		});
-	}
-
-	if (records.length > MAX_APPEND_RECORDS) {
-		throw new S2Error({
-			message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${records.length})`,
-			origin: "sdk",
-		});
-	}
-
 	if (
 		fencingToken != null &&
 		(typeof fencingToken !== "string" || utf8ByteLength(fencingToken) > 36)
@@ -402,7 +328,6 @@ export function snapshotAppendInput(input: {
 			status: 422,
 		});
 	}
-
 	if (
 		matchSeqNum !== undefined &&
 		(!Number.isSafeInteger(matchSeqNum) || matchSeqNum < 0)
@@ -413,8 +338,6 @@ export function snapshotAppendInput(input: {
 		});
 	}
 
-	// Validate every record and check the 1 MiB batch budget before copying any
-	// binary payloads so rejected oversized batches do not allocate memory.
 	let totalBytes = 0;
 	const recordSizes: number[] = new Array(records.length);
 	for (let i = 0; i < records.length; i++) {
@@ -422,24 +345,41 @@ export function snapshotAppendInput(input: {
 		totalBytes += size;
 		recordSizes[i] = size;
 	}
-
 	if (totalBytes > MAX_APPEND_BYTES) {
 		throw new S2Error({
 			message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
 			origin: "sdk",
 		});
 	}
+	return { totalBytes, recordSizes };
+}
 
-	const copiedRecords: AppendRecord[] = new Array(records.length);
-	for (let i = 0; i < records.length; i++) {
-		copiedRecords[i] = copyValidatedAppendRecord(records[i]!, recordSizes[i]!);
-	}
+/** @internal */
+export function validateAppendInput(input: {
+	readonly records: ReadonlyArray<AppendRecord>;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
+}): number {
+	return validateAndMeasureBatch(input).totalBytes;
+}
 
+/** @internal */
+export function snapshotAppendInput(input: {
+	readonly records: ReadonlyArray<AppendRecord>;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
+	readonly streamConfig?: StreamConfig;
+}): AppendInput {
+	// Measure before copying so rejected oversized batches do not allocate memory.
+	const { totalBytes, recordSizes } = validateAndMeasureBatch(input);
+	const copiedRecords = input.records.map((record, i) =>
+		copyValidatedAppendRecord(record, recordSizes[i]!),
+	);
 	return {
 		records: copiedRecords,
-		matchSeqNum,
-		fencingToken,
-		streamConfig: cloneStreamConfig(streamConfig),
+		matchSeqNum: input.matchSeqNum,
+		fencingToken: input.fencingToken,
+		streamConfig: cloneStreamConfig(input.streamConfig),
 		meteredBytes: totalBytes,
 	};
 }

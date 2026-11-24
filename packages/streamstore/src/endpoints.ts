@@ -127,7 +127,6 @@ export class EndpointTemplate {
 
 		this.raw = endpoint;
 
-		// 1. Parse optional scheme (defaults to https).
 		let scheme: Scheme = DEFAULT_SCHEME;
 		let rest = endpoint;
 		const schemeSep = endpoint.indexOf("://");
@@ -142,7 +141,6 @@ export class EndpointTemplate {
 			rest = endpoint.slice(schemeSep + 3);
 		}
 
-		// 2. Reject query string, hash fragment, non-trailing path, and user info.
 		if (rest.includes("?") || rest.includes("#")) {
 			throw validationError(
 				"Endpoint cannot include query string or hash fragment",
@@ -169,7 +167,6 @@ export class EndpointTemplate {
 			);
 		}
 
-		// 3. Split authority into host and optional port.
 		let hostPart: string;
 		let portPart = "";
 		if (authority.startsWith("[")) {
@@ -212,7 +209,6 @@ export class EndpointTemplate {
 			throw validationError(`Endpoint host cannot be empty: "${endpoint}"`);
 		}
 
-		// 4. Validate port (1-65535) if provided.
 		if (portPart !== "") {
 			if (!PORT_REGEX.test(portPart) || Number(portPart) > 65535) {
 				throw validationError(
@@ -221,7 +217,6 @@ export class EndpointTemplate {
 			}
 		}
 
-		// 5. Validate host and optional leading `{basin}.` placeholder.
 		let hasBasinPlaceholder = false;
 		let normalizedHost: string;
 		if (hostPart.startsWith(BASIN_PLACEHOLDER_PREFIX)) {
