@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { S2Environment } from "../common.js";
 import { S2Endpoints } from "../endpoints.js";
 import { S2Error } from "../error.js";
@@ -188,6 +188,8 @@ describe("S2Endpoints (C1, C3)", () => {
 			"https://alice:s3cr3t@example.com",
 			"https://alice:s3cr3t@example.com/v1",
 			"https://alice:s3cr3t@example.com?token=s3cr3t",
+			"alice:s3cr3t@example.com/a://b",
+			"example.com?token=s3cr3t&next=http://evil",
 		]) {
 			let error: unknown;
 			try {
@@ -202,6 +204,16 @@ describe("S2Endpoints (C1, C3)", () => {
 			expect((error as S2Error).message, bad).not.toContain("s3cr3t");
 			expect((error as S2Error).message, bad).not.toContain("alice");
 		}
+
+		// Resolved basin hostname exceeding the 253-character DNS limit rejects with SDK S2Error.
+		const longSuffix = `${"a".repeat(60)}.${"b".repeat(60)}.${"c".repeat(60)}.${"d".repeat(50)}.com`;
+		const longBasinEndpoints = new S2Endpoints({
+			account: "https://example.com",
+			basin: `https://{basin}.${longSuffix}`,
+		});
+		expect(() => longBasinEndpoints.basinBaseUrl("a".repeat(30))).toThrow(
+			S2Error,
+		);
 	});
 
 	it("validates S2Environment.parse() endpoint pairing and empty variables", () => {
@@ -296,8 +308,8 @@ describe("S2Endpoints (C1, C3)", () => {
 		await withinDeadline(withoutPlaceholder.basin("my-basin-1").streams.list());
 		expect(seenHeaders).toEqual(["my-basin-1"]);
 
-		// Construct a client whose basin endpoint uses `{basin}.` and verify it
-		// does not attach `s2-basin` to basin-scoped requests.
+		// Construct a client whose basin endpoint uses `{basin}.` and verify the
+		// outgoing HTTP request omits `s2-basin` (stubbing fetch to avoid wildcard DNS).
 		const port = new URL(server.origin).port;
 		const withPlaceholder = new S2({
 			accessToken: "token",
@@ -306,11 +318,30 @@ describe("S2Endpoints (C1, C3)", () => {
 				basin: `http://{basin}.localhost:${port}`,
 			},
 		});
-		// Avoid wildcard DNS resolution for `my-basin-1.localhost`; check S2Basin's configured header flag.
-		const basin = withPlaceholder.basin("my-basin-1");
-		expect(
-			(basin as unknown as { transportConfig: { basinName?: string } })
-				.transportConfig.basinName,
-		).toBeUndefined();
+		const observed: Array<{ url: string; basinHeader: string | null }> = [];
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async (input, init) => {
+				const req = new Request(input, init);
+				observed.push({
+					url: req.url,
+					basinHeader: req.headers.get("s2-basin"),
+				});
+				return new Response(JSON.stringify({ streams: [], has_more: false }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			});
+		try {
+			await withinDeadline(withPlaceholder.basin("my-basin-1").streams.list());
+		} finally {
+			fetchSpy.mockRestore();
+		}
+		expect(observed).toEqual([
+			{
+				url: `http://my-basin-1.localhost:${port}/v1/streams`,
+				basinHeader: null,
+			},
+		]);
 	});
 });

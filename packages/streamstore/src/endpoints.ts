@@ -129,16 +129,14 @@ export class EndpointTemplate {
 
 		let scheme: Scheme = DEFAULT_SCHEME;
 		let rest = endpoint;
-		const schemeSep = endpoint.indexOf("://");
-		if (schemeSep !== -1) {
-			const schemePart = endpoint.slice(0, schemeSep).toLowerCase();
+		const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//.exec(endpoint);
+		if (schemeMatch) {
+			const schemePart = schemeMatch[1]?.toLowerCase();
 			if (schemePart !== "http" && schemePart !== "https") {
-				throw validationError(
-					`Unsupported scheme "${endpoint.slice(0, schemeSep)}": expected http or https`,
-				);
+				throw validationError("Unsupported scheme: expected http or https");
 			}
 			scheme = schemePart;
-			rest = endpoint.slice(schemeSep + 3);
+			rest = endpoint.slice(schemeMatch[0].length);
 		}
 
 		if (rest.includes("?") || rest.includes("#")) {
@@ -268,6 +266,13 @@ export class EndpointTemplate {
 			basin && this.hasBasinPlaceholder
 				? this.hostTemplate.replace(BASIN_PLACEHOLDER_PREFIX, `${basin}.`)
 				: this.hostTemplate;
+
+		if (basin && this.hasBasinPlaceholder) {
+			const hostLength = host.endsWith(".") ? host.length - 1 : host.length;
+			if (hostLength > 253) {
+				throw validationError("Resolved basin hostname exceeds 253 characters");
+			}
+		}
 
 		const authority = this.port ? `${host}:${this.port}` : host;
 		return `${this.scheme}://${authority}${this.pathTemplate}`;
