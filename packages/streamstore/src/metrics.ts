@@ -102,21 +102,25 @@ export class S2Metrics {
 		args: Types.AccountMetricsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.MetricSetResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				accountMetrics({
-					client: this.client,
-					query: {
-						set: args.set,
-						start: toEpochSeconds(args.start),
-						end: toEpochSeconds(args.end),
-						interval: args.interval,
-						token_id: args.tokenIds,
-					},
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					accountMetrics({
+						client: this.client,
+						query: {
+							set: args.set,
+							start: toEpochSeconds(args.start),
+							end: toEpochSeconds(args.end),
+							interval: args.interval,
+							token_id: args.tokenIds,
+						},
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return fromAPIMetricSetResponse(response);
 	}
 
@@ -134,21 +138,25 @@ export class S2Metrics {
 		options?: S2RequestOptions,
 	): Promise<Types.MetricSetResponse> {
 		validateBasinName(args?.basin);
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				basinMetrics({
-					client: this.client,
-					path: { basin: args.basin },
-					query: toSnakeCase({
-						set: args.set,
-						start: toEpochSeconds(args.start),
-						end: toEpochSeconds(args.end),
-						interval: args.interval,
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					basinMetrics({
+						client: this.client,
+						path: { basin: args.basin },
+						query: toSnakeCase({
+							set: args.set,
+							start: toEpochSeconds(args.start),
+							end: toEpochSeconds(args.end),
+							interval: args.interval,
+						}),
+						...options,
 					}),
-					...options,
-				}),
-			);
-		});
+				);
+			},
+			options?.signal,
+		);
 		return fromAPIMetricSetResponse(response);
 	}
 
@@ -167,21 +175,25 @@ export class S2Metrics {
 		options?: S2RequestOptions,
 	): Promise<Types.MetricSetResponse> {
 		validateBasinName(args?.basin);
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				streamMetrics({
-					client: this.client,
-					path: { basin: args.basin, stream: args.stream },
-					query: toSnakeCase({
-						set: args.set,
-						start: toEpochSeconds(args.start),
-						end: toEpochSeconds(args.end),
-						interval: args.interval,
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					streamMetrics({
+						client: this.client,
+						path: { basin: args.basin, stream: args.stream },
+						query: toSnakeCase({
+							set: args.set,
+							start: toEpochSeconds(args.start),
+							end: toEpochSeconds(args.end),
+							interval: args.interval,
+						}),
+						...options,
 					}),
-					...options,
-				}),
-			);
-		});
+				);
+			},
+			options?.signal,
+		);
 		return fromAPIMetricSetResponse(response);
 	}
 }

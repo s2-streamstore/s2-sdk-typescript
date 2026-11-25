@@ -7,6 +7,7 @@ import {
 	invariantViolation,
 	isServerDraining,
 	RECONNECT_ADVISED_CODE,
+	retryAfterMillis,
 	S2Error,
 	s2Error,
 	withPriorUncertainty,
@@ -162,6 +163,8 @@ export function calculateDelay(
 	return Math.floor(baseDelay + jitter);
 }
 
+const MAX_TIMEOUT_MILLIS = 0x7fffffff;
+
 /**
  * Sleeps for the specified duration, or until `signal` aborts.
  */
@@ -176,7 +179,19 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			signal?.removeEventListener("abort", wake);
 			resolve();
 		};
-		const timer = setTimeout(wake, ms);
+		// setTimeout fires after 1ms for a delay over 2^31-1 ms, so a longer
+		// wait is taken in chunks.
+		const tick = () => {
+			// Written so that a NaN delay still ends in a timer.
+			if (!(ms > MAX_TIMEOUT_MILLIS)) {
+				timer = setTimeout(wake, ms);
+				return;
+			}
+			ms -= MAX_TIMEOUT_MILLIS;
+			timer = setTimeout(tick, MAX_TIMEOUT_MILLIS);
+		};
+		let timer: ReturnType<typeof setTimeout>;
+		tick();
 		signal?.addEventListener("abort", wake);
 	});
 }
@@ -186,6 +201,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * @param retryConfig Retry configuration (max attempts, backoff duration)
  * @param fn The async function to execute
+ * @param signal The caller's abort signal; aborting ends the wait before a retry
  * @param isPolicyCompliant Additional per-error retry gate (append retry policy)
  * @param trackAppendUncertainty When set, remember that a retried attempt may
  *   have taken effect so a later definite error is not reported as side-effect free
@@ -195,6 +211,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export async function withRetries<T>(
 	retryConfig: RetryConfig | undefined,
 	fn: () => Promise<T>,
+	signal?: AbortSignal,
 	isPolicyCompliant: (config: RetryConfig, error: S2Error) => boolean = () =>
 		true,
 	trackAppendUncertainty: boolean = false,
@@ -243,18 +260,25 @@ export async function withRetries<T>(
 				priorUncertainty = true;
 			}
 
-			// Calculate delay and wait before retrying
-			const delay = calculateDelay(
-				attemptNo - 1,
-				config.minBaseDelayMillis,
-				config.maxBaseDelayMillis,
+			// Calculate delay and wait before retrying. A server retry-after-ms
+			// hint raises it, and is not capped by maxBaseDelayMillis.
+			const delay = Math.max(
+				calculateDelay(
+					attemptNo - 1,
+					config.minBaseDelayMillis,
+					config.maxBaseDelayMillis,
+				),
+				retryAfterMillis(error) ?? 0,
 			);
 			debugWith(
 				"retryable error, backing off for %dms, status=%s",
 				delay,
 				error.status,
 			);
-			await sleep(delay);
+			await sleep(delay, signal);
+			if (signal?.aborted) {
+				throw withPriorUncertainty(abortedError(), priorUncertainty);
+			}
 		}
 	}
 

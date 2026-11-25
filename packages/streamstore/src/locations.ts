@@ -34,14 +34,18 @@ export class S2Locations {
 	public async list(
 		options?: S2RequestOptions,
 	): Promise<Types.ListLocationsResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listLocations({
-					client: this.client,
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listLocations({
+						client: this.client,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return response.map(transformLocationInfo);
 	}
 
@@ -51,14 +55,18 @@ export class S2Locations {
 	public async getDefault(
 		options?: S2RequestOptions,
 	): Promise<Types.GetDefaultLocationResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				getDefaultLocation({
-					client: this.client,
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					getDefaultLocation({
+						client: this.client,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return transformLocationInfo(response);
 	}
 
@@ -71,15 +79,19 @@ export class S2Locations {
 		args: Types.SetDefaultLocationInput,
 		options?: S2RequestOptions,
 	): Promise<Types.SetDefaultLocationResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				setDefaultLocation({
-					client: this.client,
-					body: args.location,
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					setDefaultLocation({
+						client: this.client,
+						body: args.location,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return transformLocationInfo(response);
 	}
 }

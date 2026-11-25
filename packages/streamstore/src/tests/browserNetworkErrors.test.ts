@@ -162,6 +162,7 @@ describe("browser network error classification (#117)", () => {
 				}
 				return "ok";
 			},
+			undefined,
 			(config, error) =>
 				config.appendRetryPolicy !== "noSideEffects" ||
 				error.hasNoSideEffects(),

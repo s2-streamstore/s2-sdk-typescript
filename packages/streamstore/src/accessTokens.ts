@@ -78,15 +78,19 @@ export class S2AccessTokens {
 		args?: Types.ListAccessTokensInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListAccessTokensResponse> {
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listAccessTokens({
-					client: this.client,
-					query: toSnakeCase(args),
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listAccessTokens({
+						client: this.client,
+						query: toSnakeCase(args),
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		const camelCased = toCamelCase<any>(response);
 		return {
 			...camelCased,
@@ -141,15 +145,19 @@ export class S2AccessTokens {
 			...args,
 			expiresAt: toISOString(args.expiresAt),
 		};
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				issueAccessToken({
-					client: this.client,
-					body: toSnakeCase(apiArgs),
-					...options,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					issueAccessToken({
+						client: this.client,
+						body: toSnakeCase(apiArgs),
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 		return toCamelCase<Types.IssueAccessTokenResponse>(response);
 	}
 
@@ -162,14 +170,18 @@ export class S2AccessTokens {
 		args: Types.RevokeAccessTokenInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
-		await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				revokeAccessToken({
-					client: this.client,
-					path: args,
-					...options,
-				}),
-			);
-		});
+		await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					revokeAccessToken({
+						client: this.client,
+						path: args,
+						...options,
+					}),
+				);
+			},
+			options?.signal,
+		);
 	}
 }
