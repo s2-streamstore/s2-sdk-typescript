@@ -7,6 +7,7 @@ import {
 	AppendInput,
 	AppendRecord,
 	S2,
+	S2Environment,
 } from "@s2-dev/streamstore";
 import { createResumableChat } from "@s2-dev/resumable-stream/aisdk";
 
@@ -33,15 +34,11 @@ if (!accessToken) throw new Error("Set S2_ACCESS_TOKEN");
 const basin = process.env.S2_BASIN;
 if (!basin) throw new Error("Set S2_BASIN");
 
-const endpointsInit = {
-	account: process.env.S2_ACCOUNT_ENDPOINT || undefined,
-	basin: process.env.S2_BASIN_ENDPOINT || undefined,
-};
+const { endpoints } = S2Environment.parse();
 
 const s2 = new S2({
 	accessToken,
-	endpoints:
-		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
+	endpoints,
 });
 
 const basinClient = s2.basin(basin);
@@ -49,8 +46,7 @@ const basinClient = s2.basin(basin);
 const chat = createResumableChat({
 	accessToken,
 	basin,
-	endpoints:
-		endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined,
+	endpoints,
 	mode: STREAM_MODE,
 });
 

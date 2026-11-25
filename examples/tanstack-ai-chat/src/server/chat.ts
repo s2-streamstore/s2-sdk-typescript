@@ -2,7 +2,7 @@ import {
 	type Chunk,
 	createResumableChat,
 } from "@s2-dev/resumable-stream/tanstack-ai";
-import { S2, S2Error } from "@s2-dev/streamstore";
+import { S2, S2Environment, S2Error } from "@s2-dev/streamstore";
 import {
 	convertMessagesToModelMessages,
 	type ModelMessage,
@@ -36,14 +36,6 @@ function requireEnv(name: string): string {
 	return value;
 }
 
-function endpointsFromEnv() {
-	const account = process.env.S2_ACCOUNT_ENDPOINT;
-	const basin = process.env.S2_BASIN_ENDPOINT;
-	return account || basin
-		? { account: account || undefined, basin: basin || undefined }
-		: undefined;
-}
-
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve) => {
 		const timeout = setTimeout(resolve, ms);
@@ -60,7 +52,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 const accessToken = requireEnv("S2_ACCESS_TOKEN");
 const basin = requireEnv("S2_BASIN");
-const endpoints = endpointsFromEnv();
+const { endpoints } = S2Environment.parse();
 
 const chat = createResumableChat({
 	accessToken,

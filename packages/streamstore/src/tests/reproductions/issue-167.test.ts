@@ -60,9 +60,9 @@ describe("Issue #167: endpoints without explicit path must not silently drop que
 		expect(t.explicitPathProvided).toBe(false);
 	});
 
-	it("still allows host with explicit path and no query/hash", () => {
-		const t = new EndpointTemplate({ endpoint: "host/custom" });
-		expect(t.baseUrl()).toBe("https://host/custom");
-		expect(t.explicitPathProvided).toBe(true);
+	it("rejects endpoints with paths (C3)", () => {
+		expect(() => new EndpointTemplate({ endpoint: "host/custom" })).toThrow(
+			/path/,
+		);
 	});
 });
