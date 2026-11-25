@@ -9,8 +9,10 @@ import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import {
 	type AppendAck,
 	type AppendRecord,
+	type QueuedSnapshot,
 	type SnapshotResult,
 	snapshotAppendRecord,
+	takeQueuedSnapshot,
 	trySnapshot,
 } from "./types.js";
 
@@ -125,7 +127,8 @@ export class Producer implements AsyncDisposable {
 	private writableReceived = 0;
 	private writableEnded = false;
 	private readonly writableWaiters = new Set<() => void>();
-	private readonly writableSnapshots: SnapshotResult<AppendRecord>[] = [];
+	private readonly writableSnapshots: QueuedSnapshot<AppendRecord>[] = [];
+	private writableError: S2Error | null = null;
 
 	private terminalError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
@@ -184,13 +187,22 @@ export class Producer implements AsyncDisposable {
 					);
 				},
 				write: async (record) => {
-					const queued =
-						this.writableSnapshots.shift() ??
-						trySnapshot(() => snapshotAppendRecord(record));
-					const afterClose = ++this.writableReceived > this.closeFence;
-					const submitted = this.enqueueOperation(() =>
-						this.submitInternal(queued, afterClose),
+					const queued = takeQueuedSnapshot(
+						this.writableSnapshots,
+						record,
+						() => snapshotAppendRecord(record),
 					);
+					const afterClose = ++this.writableReceived > this.closeFence;
+					const submitted = this.enqueueOperation(async () => {
+						try {
+							return await this.submitInternal(queued, afterClose);
+						} catch (err) {
+							if (!afterClose && !this.writableError) {
+								this.writableError = toS2Error(err);
+							}
+							throw err;
+						}
+					});
 					this.notifyWritableWaiters();
 					try {
 						await submitted;
@@ -215,9 +227,13 @@ export class Producer implements AsyncDisposable {
 				// size() runs synchronously in writer.write() before queuing; snapshot
 				// here and defer any copy error to sink.write() so close()/flush() cannot hang.
 				size: (record) => {
-					this.writableSnapshots.push(
-						trySnapshot(() => snapshotAppendRecord(record as AppendRecord)),
+					const result = trySnapshot(() =>
+						snapshotAppendRecord(record as AppendRecord),
 					);
+					if (!this.writable.locked) {
+						return 1;
+					}
+					this.writableSnapshots.push({ chunk: record, result });
 					this.writableAccepted += 1;
 					return 1;
 				},
@@ -514,8 +530,9 @@ export class Producer implements AsyncDisposable {
 			}
 			await Promise.allSettled(pendingAckPromises);
 
-			if (this.terminalError) {
-				throw this.terminalError;
+			const error = this.terminalError ?? this.writableError;
+			if (error) {
+				throw error;
 			}
 		});
 	}
@@ -700,8 +717,9 @@ export class Producer implements AsyncDisposable {
 		debugProducer("[%s] close complete", this.debugName);
 
 		// If an error occurred, throw it
-		if (this.terminalError) {
-			throw this.terminalError;
+		const error = this.terminalError ?? this.writableError;
+		if (error) {
+			throw error;
 		}
 	}
 

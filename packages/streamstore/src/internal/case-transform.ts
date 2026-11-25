@@ -164,6 +164,13 @@ export function toSnakeCase<T>(obj: unknown): SnakeCaseKeys<T> {
 		return obj as SnakeCaseKeys<T>;
 	}
 
+	if (typeof (obj as { toJSON?: unknown }).toJSON === "function") {
+		const json = (obj as { toJSON(): unknown }).toJSON();
+		if (json !== obj) {
+			return toSnakeCase(json);
+		}
+	}
+
 	const result: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(obj)) {
 		result[camelToSnakeString(key)] = toSnakeCase(value);

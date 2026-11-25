@@ -1,9 +1,11 @@
 import { S2Error } from "./error.js";
 import {
-	AppendInput,
+	type AppendInput,
 	type AppendRecord,
-	type SnapshotResult,
+	createAppendInputFromSnapshots,
+	type QueuedSnapshot,
 	snapshotAppendRecord,
+	takeQueuedSnapshot,
 	trySnapshot,
 } from "./types.js";
 
@@ -65,16 +67,16 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 	constructor(args?: BatchTransformOptions) {
 		let controller!: TransformStreamDefaultController<BatchOutput>;
-		const queuedSnapshots: SnapshotResult<AppendRecord>[] = [];
+		const queuedSnapshots: QueuedSnapshot<AppendRecord>[] = [];
 		super(
 			{
 				start: (c) => {
 					controller = c;
 				},
 				transform: (chunk) => {
-					const queued =
-						queuedSnapshots.shift() ??
-						trySnapshot(() => snapshotAppendRecord(chunk));
+					const queued = takeQueuedSnapshot(queuedSnapshots, chunk, () =>
+						snapshotAppendRecord(chunk),
+					);
 					try {
 						if (!queued.ok) {
 							throw queued.error;
@@ -100,9 +102,12 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 				// size() runs synchronously in writer.write() before queuing behind backpressure.
 				highWaterMark: 1,
 				size: (chunk) => {
-					queuedSnapshots.push(
-						trySnapshot(() => snapshotAppendRecord(chunk as AppendRecord)),
+					const result = trySnapshot(() =>
+						snapshotAppendRecord(chunk as AppendRecord),
 					);
+					if (this.writable.locked) {
+						queuedSnapshots.push({ chunk, result });
+					}
 					return 1;
 				},
 			},
@@ -234,9 +239,10 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			this.nextMatchSeqNum += this.currentBatch.length;
 		}
 
-		// Emit the batch downstream with optional fencing token and matchSeqNum
+		// Emit the batch downstream with optional fencing token and matchSeqNum.
+		// Records in currentBatch are already snapshotted and owned by BatchTransform.
 		if (this.controller) {
-			const batch = AppendInput.create(this.currentBatch, {
+			const batch = createAppendInputFromSnapshots(this.currentBatch, {
 				fencingToken: this.fencingToken,
 				matchSeqNum,
 			});

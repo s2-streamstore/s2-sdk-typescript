@@ -99,12 +99,33 @@ export type SnapshotResult<T> =
 	| { ok: false; error: unknown };
 
 /** @internal */
+export type QueuedSnapshot<T> = {
+	chunk: unknown;
+	result: SnapshotResult<T>;
+};
+
+/** @internal */
 export function trySnapshot<T>(fn: () => T): SnapshotResult<T> {
 	try {
 		return { ok: true, value: fn() };
 	} catch (error) {
 		return { ok: false, error };
 	}
+}
+
+/** @internal */
+export function takeQueuedSnapshot<T>(
+	queue: QueuedSnapshot<T>[],
+	chunk: unknown,
+	fallback: () => T,
+): SnapshotResult<T> {
+	while (queue.length > 0) {
+		const entry = queue.shift()!;
+		if (Object.is(entry.chunk, chunk)) {
+			return entry.result;
+		}
+	}
+	return trySnapshot(fallback);
 }
 
 function cloneTimestamp(
@@ -130,29 +151,53 @@ export function cloneStreamConfig(
 	if (config === null) {
 		return null as unknown as StreamConfig;
 	}
-	return {
-		...config,
-		...(config.deleteOnEmpty
-			? { deleteOnEmpty: { ...config.deleteOnEmpty } }
-			: {}),
-		...(config.retentionPolicy
-			? {
-					retentionPolicy:
-						"infinite" in config.retentionPolicy
-							? {
-									infinite:
-										config.retentionPolicy.infinite &&
-										typeof config.retentionPolicy.infinite === "object"
-											? { ...config.retentionPolicy.infinite }
-											: config.retentionPolicy.infinite,
-								}
-							: { ...config.retentionPolicy },
-				}
-			: {}),
-		...(config.timestamping
-			? { timestamping: { ...config.timestamping } }
-			: {}),
-	};
+	// Read declared fields directly so prototype getters on class instances are preserved.
+	const { storageClass, deleteOnEmpty, retentionPolicy, timestamping } = config;
+	const cloned: Record<string, unknown> = { ...config };
+	if (storageClass !== undefined) {
+		cloned.storageClass = storageClass;
+	}
+	if (deleteOnEmpty !== undefined) {
+		if (deleteOnEmpty === null) {
+			cloned.deleteOnEmpty = null;
+		} else {
+			const { minAgeSecs } = deleteOnEmpty;
+			cloned.deleteOnEmpty = {
+				...deleteOnEmpty,
+				...(minAgeSecs !== undefined ? { minAgeSecs } : {}),
+			};
+		}
+	}
+	if (retentionPolicy !== undefined) {
+		if (retentionPolicy === null) {
+			cloned.retentionPolicy = null;
+		} else if ("infinite" in retentionPolicy) {
+			const { infinite } = retentionPolicy;
+			cloned.retentionPolicy = {
+				infinite:
+					infinite && typeof infinite === "object" ? { ...infinite } : infinite,
+			};
+		} else {
+			const { ageSecs } = retentionPolicy;
+			cloned.retentionPolicy = {
+				...retentionPolicy,
+				...(ageSecs !== undefined ? { ageSecs } : {}),
+			};
+		}
+	}
+	if (timestamping !== undefined) {
+		if (timestamping === null) {
+			cloned.timestamping = null;
+		} else {
+			const { mode, uncapped } = timestamping;
+			cloned.timestamping = {
+				...timestamping,
+				...(mode !== undefined ? { mode } : {}),
+				...(uncapped !== undefined ? { uncapped } : {}),
+			};
+		}
+	}
+	return cloned as StreamConfig;
 }
 
 /** @internal */
@@ -162,9 +207,12 @@ export function cloneAppendSessionOptions(
 	if (!options) {
 		return undefined;
 	}
+	const { maxInflightBytes, maxInflightBatches, streamConfig } = options;
 	return {
 		...options,
-		streamConfig: cloneStreamConfig(options.streamConfig),
+		...(maxInflightBytes !== undefined ? { maxInflightBytes } : {}),
+		...(maxInflightBatches !== undefined ? { maxInflightBatches } : {}),
+		streamConfig: cloneStreamConfig(streamConfig),
 	};
 }
 
@@ -187,30 +235,56 @@ function validateTimestamp(timestamp: number | Date | null | undefined): void {
 	}
 }
 
-function validateAppendRecordFields(
-	body: unknown,
-	headers: unknown,
-	timestamp: unknown,
-): number {
+type StagedRecord = {
+	body: string | Uint8Array;
+	headers?: Array<readonly [string | Uint8Array, string | Uint8Array]>;
+	timestamp?: number | Date;
+	meteredBytes: number;
+};
+
+function readAndValidateRecord(record: AppendRecord): StagedRecord {
+	if (record == null || typeof record !== "object") {
+		throw new S2Error({
+			message: "record must be an object",
+			origin: "sdk",
+		});
+	}
+	// Read each field and header pair once so getters cannot change values between validation and copy.
+	const body = record.body;
+	const rawHeaders = record.headers;
+	const timestamp = record.timestamp;
+
 	if (typeof body !== "string" && !isUint8Array(body)) {
 		throw new S2Error({
 			message: "record body must be a string or Uint8Array",
 			origin: "sdk",
 		});
 	}
-	if (headers !== undefined) {
-		if (!Array.isArray(headers)) {
+	let headers:
+		| Array<readonly [string | Uint8Array, string | Uint8Array]>
+		| undefined;
+	if (rawHeaders !== undefined) {
+		if (!Array.isArray(rawHeaders)) {
 			throw new S2Error({
 				message: "record headers must be an array of [name, value] pairs",
 				origin: "sdk",
 			});
 		}
-		for (const entry of headers) {
+		headers = new Array(rawHeaders.length);
+		for (let i = 0; i < rawHeaders.length; i++) {
+			const entry = rawHeaders[i];
+			if (!Array.isArray(entry) || entry.length !== 2) {
+				throw new S2Error({
+					message:
+						"each record header must be a [name, value] pair of strings or Uint8Arrays",
+					origin: "sdk",
+				});
+			}
+			const name = entry[0];
+			const value = entry[1];
 			if (
-				!Array.isArray(entry) ||
-				entry.length !== 2 ||
-				(typeof entry[0] !== "string" && !isUint8Array(entry[0])) ||
-				(typeof entry[1] !== "string" && !isUint8Array(entry[1]))
+				(typeof name !== "string" && !isUint8Array(name)) ||
+				(typeof value !== "string" && !isUint8Array(value))
 			) {
 				throw new S2Error({
 					message:
@@ -218,31 +292,25 @@ function validateAppendRecordFields(
 					origin: "sdk",
 				});
 			}
+			headers[i] = [name, value] as const;
 		}
 	}
-	validateTimestamp(timestamp as number | Date | null | undefined);
-	const bytes = calculateMeteredBytes({
-		body,
-		headers: headers as
-			| ReadonlyArray<readonly [string | Uint8Array, string | Uint8Array]>
-			| undefined,
-	});
+	validateTimestamp(timestamp);
+	const bytes = calculateMeteredBytes({ body, headers });
 	if (bytes > MAX_APPEND_BYTES) {
 		throw new S2Error({
 			message: `Record size ${bytes} bytes exceeds maximum batch size of ${MAX_APPEND_BYTES} bytes`,
 			origin: "sdk",
 		});
 	}
-	return bytes;
+	return { body, headers, timestamp, meteredBytes: bytes };
 }
 
-function copyValidatedAppendRecord(
-	record: AppendRecord,
-	meteredBytes: number,
-): AppendRecord {
-	const { body, headers, timestamp } = record;
-	const copiedBody = isUint8Array(body) ? copyBytes(body) : body;
-	const copiedHeaders = headers?.map(
+function copyStagedRecord(staged: StagedRecord): AppendRecord {
+	const copiedBody = isUint8Array(staged.body)
+		? copyBytes(staged.body)
+		: staged.body;
+	const copiedHeaders = staged.headers?.map(
 		([name, value]) =>
 			[
 				isUint8Array(name) ? copyBytes(name) : name,
@@ -252,8 +320,8 @@ function copyValidatedAppendRecord(
 	return {
 		body: copiedBody,
 		headers: copiedHeaders,
-		timestamp: cloneTimestamp(timestamp),
-		meteredBytes,
+		timestamp: cloneTimestamp(staged.timestamp),
+		meteredBytes: staged.meteredBytes,
 	} as AppendRecord;
 }
 
@@ -266,17 +334,7 @@ function copyValidatedAppendRecord(
  * @throws {S2Error} If `body`, `headers`, or `timestamp` is invalid, or if the record exceeds {@link MAX_APPEND_BYTES}
  */
 export function validateAppendRecord(record: AppendRecord): number {
-	if (record == null || typeof record !== "object") {
-		throw new S2Error({
-			message: "record must be an object",
-			origin: "sdk",
-		});
-	}
-	return validateAppendRecordFields(
-		record.body,
-		record.headers,
-		record.timestamp,
-	);
+	return readAndValidateRecord(record).meteredBytes;
 }
 
 /**
@@ -286,35 +344,23 @@ export function validateAppendRecord(record: AppendRecord): number {
  * @internal
  */
 export function snapshotAppendRecord(record: AppendRecord): AppendRecord {
-	const bytes = validateAppendRecord(record);
-	return copyValidatedAppendRecord(record, bytes);
+	return copyStagedRecord(readAndValidateRecord(record));
 }
 
-function validateAndMeasureBatch(input: {
-	readonly records: ReadonlyArray<AppendRecord>;
-	readonly matchSeqNum?: number;
-	readonly fencingToken?: string;
-}): { totalBytes: number; recordSizes: number[] } {
-	if (
-		input == null ||
-		typeof input !== "object" ||
-		!Array.isArray(input.records)
-	) {
-		throw new S2Error({
-			message: "AppendInput must contain a records array",
-			origin: "sdk",
-		});
-	}
-	const { records, fencingToken, matchSeqNum } = input;
-	if (records.length === 0) {
+function validateBatchConditions(
+	recordCount: number,
+	fencingToken: unknown,
+	matchSeqNum: unknown,
+): void {
+	if (recordCount === 0) {
 		throw new S2Error({
 			message: "AppendInput must contain at least one record",
 			origin: "sdk",
 		});
 	}
-	if (records.length > MAX_APPEND_RECORDS) {
+	if (recordCount > MAX_APPEND_RECORDS) {
 		throw new S2Error({
-			message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${records.length})`,
+			message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${recordCount})`,
 			origin: "sdk",
 		});
 	}
@@ -330,20 +376,48 @@ function validateAndMeasureBatch(input: {
 	}
 	if (
 		matchSeqNum !== undefined &&
-		(!Number.isSafeInteger(matchSeqNum) || matchSeqNum < 0)
+		(!Number.isSafeInteger(matchSeqNum) || (matchSeqNum as number) < 0)
 	) {
 		throw new S2Error({
 			message: "matchSeqNum must be a non-negative safe integer",
 			origin: "sdk",
 		});
 	}
+}
+
+function validateAndStageBatch(input: {
+	readonly records: ReadonlyArray<AppendRecord>;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
+	readonly streamConfig?: StreamConfig;
+}): {
+	totalBytes: number;
+	stagedRecords: StagedRecord[];
+	matchSeqNum?: number;
+	fencingToken?: string;
+	streamConfig?: StreamConfig;
+} {
+	if (input == null || typeof input !== "object") {
+		throw new S2Error({
+			message: "AppendInput must contain a records array",
+			origin: "sdk",
+		});
+	}
+	const { records, fencingToken, matchSeqNum, streamConfig } = input;
+	if (!Array.isArray(records)) {
+		throw new S2Error({
+			message: "AppendInput must contain a records array",
+			origin: "sdk",
+		});
+	}
+	validateBatchConditions(records.length, fencingToken, matchSeqNum);
 
 	let totalBytes = 0;
-	const recordSizes: number[] = new Array(records.length);
+	const stagedRecords: StagedRecord[] = new Array(records.length);
 	for (let i = 0; i < records.length; i++) {
-		const size = validateAppendRecord(records[i]!);
-		totalBytes += size;
-		recordSizes[i] = size;
+		const staged = readAndValidateRecord(records[i]!);
+		totalBytes += staged.meteredBytes;
+		stagedRecords[i] = staged;
 	}
 	if (totalBytes > MAX_APPEND_BYTES) {
 		throw new S2Error({
@@ -351,7 +425,13 @@ function validateAndMeasureBatch(input: {
 			origin: "sdk",
 		});
 	}
-	return { totalBytes, recordSizes };
+	return {
+		totalBytes,
+		stagedRecords,
+		matchSeqNum,
+		fencingToken,
+		streamConfig,
+	};
 }
 
 /** @internal */
@@ -360,7 +440,7 @@ export function validateAppendInput(input: {
 	readonly matchSeqNum?: number;
 	readonly fencingToken?: string;
 }): number {
-	return validateAndMeasureBatch(input).totalBytes;
+	return validateAndStageBatch(input).totalBytes;
 }
 
 /** @internal */
@@ -370,16 +450,49 @@ export function snapshotAppendInput(input: {
 	readonly fencingToken?: string;
 	readonly streamConfig?: StreamConfig;
 }): AppendInput {
-	// Measure before copying so rejected oversized batches do not allocate memory.
-	const { totalBytes, recordSizes } = validateAndMeasureBatch(input);
-	const copiedRecords = input.records.map((record, i) =>
-		copyValidatedAppendRecord(record, recordSizes[i]!),
-	);
+	// Stage and measure before copying so rejected oversized batches do not copy buffers,
+	// and each caller property/getter is read only once.
+	const { totalBytes, stagedRecords, matchSeqNum, fencingToken, streamConfig } =
+		validateAndStageBatch(input);
 	return {
-		records: copiedRecords,
-		matchSeqNum: input.matchSeqNum,
-		fencingToken: input.fencingToken,
-		streamConfig: cloneStreamConfig(input.streamConfig),
+		records: stagedRecords.map(copyStagedRecord),
+		matchSeqNum,
+		fencingToken,
+		streamConfig: cloneStreamConfig(streamConfig),
+		meteredBytes: totalBytes,
+	};
+}
+
+/**
+ * Wrap already-snapshotted, privately owned records in a validated {@link AppendInput}
+ * without re-copying their payloads.
+ *
+ * @internal
+ */
+export function createAppendInputFromSnapshots(
+	records: ReadonlyArray<AppendRecord>,
+	options?: {
+		readonly matchSeqNum?: number;
+		readonly fencingToken?: string;
+	},
+): AppendInput {
+	const matchSeqNum = options?.matchSeqNum;
+	const fencingToken = options?.fencingToken;
+	validateBatchConditions(records.length, fencingToken, matchSeqNum);
+	let totalBytes = 0;
+	for (const record of records) {
+		totalBytes += record.meteredBytes;
+	}
+	if (totalBytes > MAX_APPEND_BYTES) {
+		throw new S2Error({
+			message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
+			origin: "sdk",
+		});
+	}
+	return {
+		records,
+		matchSeqNum,
+		fencingToken,
 		meteredBytes: totalBytes,
 	};
 }

@@ -1083,7 +1083,7 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		const abortFromWritable = (reason: unknown) =>
 			this.abort(abortedFromReason("AppendSession aborted", reason));
 
-		const queuedInputs: Types.SnapshotResult<Types.AppendInput>[] = [];
+		const queuedInputs: Types.QueuedSnapshot<Types.AppendInput>[] = [];
 
 		this.writable = new WritableStream<Types.AppendInput>(
 			{
@@ -1100,9 +1100,9 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 					);
 				},
 				write: async (chunk) => {
-					const queued =
-						queuedInputs.shift() ??
-						Types.trySnapshot(() => Types.snapshotAppendInput(chunk));
+					const queued = Types.takeQueuedSnapshot(queuedInputs, chunk, () =>
+						Types.snapshotAppendInput(chunk),
+					);
 					if (this.fatalError || this.closing) {
 						queuedInputs.length = 0;
 						throw appendSessionClosedError(this.fatalError);
@@ -1131,11 +1131,12 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 			{
 				// size() runs synchronously in writer.write() before queuing behind backpressure.
 				size: (chunk) => {
-					queuedInputs.push(
-						Types.trySnapshot(() =>
-							Types.snapshotAppendInput(chunk as Types.AppendInput),
-						),
+					const result = Types.trySnapshot(() =>
+						Types.snapshotAppendInput(chunk as Types.AppendInput),
 					);
+					if (this.writable.locked) {
+						queuedInputs.push({ chunk, result });
+					}
 					return 1;
 				},
 			},

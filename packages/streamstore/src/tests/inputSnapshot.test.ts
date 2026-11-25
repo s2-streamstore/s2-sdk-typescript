@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { S2Error } from "../error.js";
 import * as Proto from "../generated/proto/s2.js";
 import {
 	AppendInput,
@@ -152,7 +153,18 @@ describe("input snapshotting on acceptance (C10)", () => {
 		const bodyBytes = enc.encode("ORIGINAL");
 		const headerVal = enc.encode("ORIG-HDR");
 		const nodeBuf = Buffer.from("NODE-BUF");
-		const streamConfig: StreamConfig = { retentionPolicy: { ageSecs: 111 } };
+		// Getter-backed class config preserves values when cloned and isolates mutations.
+		class GetterRetention {
+			#age = 111;
+			get ageSecs() {
+				return this.#age;
+			}
+			set ageSecs(v: number) {
+				this.#age = v;
+			}
+		}
+		const getterRetention = new GetterRetention();
+		const streamConfig: StreamConfig = { retentionPolicy: getterRetention };
 		const appendPromise = stream.append({
 			records: [
 				{
@@ -168,7 +180,7 @@ describe("input snapshotting on acceptance (C10)", () => {
 		bodyBytes.set(enc.encode("MUTATED!"));
 		headerVal.set(enc.encode("MUT-HDR!"));
 		nodeBuf.write("MUTATED!");
-		(streamConfig.retentionPolicy as { ageSecs: number }).ageSecs = 999;
+		getterRetention.ageSecs = 999;
 
 		await withinDeadline(appendPromise);
 		expect(appendBodies).toHaveLength(2);
@@ -184,6 +196,21 @@ describe("input snapshotting on acceptance (C10)", () => {
 			'{"retention_policy":{"age":111}}',
 			'{"retention_policy":{"age":111}}',
 		]);
+
+		// AppendInput.create() reads record getters once so a body getter cannot expand between check and copy.
+		let bodyReads = 0;
+		const getterInput = AppendInput.create([
+			{
+				get body() {
+					bodyReads++;
+					return bodyReads === 1 ? enc.encode("ok") : new Uint8Array(2_000_000);
+				},
+				meteredBytes: 0,
+			},
+		]);
+		expect(bodyReads).toBe(1);
+		expect(getterInput.meteredBytes).toBe(10);
+		expect(dec.decode(getterInput.records[0]!.body as Uint8Array)).toBe("ok");
 
 		const readConfig: StreamConfig = { retentionPolicy: { ageSecs: 222 } };
 		const readInput = {
@@ -201,17 +228,34 @@ describe("input snapshotting on acceptance (C10)", () => {
 			'{"retention_policy":{"age":222}}',
 		]);
 
+		class CustomTimestamping {
+			#mode: "arrival" | "client-prefer" = "arrival";
+			setMode(mode: "arrival" | "client-prefer") {
+				this.#mode = mode;
+			}
+			toJSON() {
+				return { mode: this.#mode };
+			}
+		}
+		const customTs = new CustomTimestamping();
 		const reconfigInput = {
 			basin: "my-basin-1",
-			defaultStreamConfig: { retentionPolicy: { ageSecs: 333 } },
+			defaultStreamConfig: {
+				retentionPolicy: { ageSecs: 333 },
+				timestamping: customTs as unknown as StreamConfig["timestamping"],
+			},
 		};
 		const reconfigPromise = client.basins.reconfigure(reconfigInput);
 		reconfigInput.defaultStreamConfig.retentionPolicy.ageSecs = 777;
+		customTs.setMode("client-prefer");
 		await withinDeadline(reconfigPromise);
 		expect(mgmtBodies).toHaveLength(2);
 		for (const raw of mgmtBodies) {
 			expect(JSON.parse(raw)).toMatchObject({
-				default_stream_config: { retention_policy: { age: 333 } },
+				default_stream_config: {
+					retention_policy: { age: 333 },
+					timestamping: { mode: "arrival" },
+				},
 			});
 		}
 
@@ -434,8 +478,19 @@ describe("input snapshotting on acceptance (C10)", () => {
 			maxBatchRecords: 1,
 			lingerDurationMillis: 0,
 		});
-		const bWriter = batcher.writable.getWriter();
+		const bWriter1 = batcher.writable.getWriter();
 		const bReader = batcher.readable.getReader();
+		// A write whose getter releases the writer lock rejects and must not poison the next writer's record.
+		await expect(
+			bWriter1.write({
+				get body() {
+					bWriter1.releaseLock();
+					return enc.encode("REJECTED");
+				},
+				meteredBytes: 16,
+			}),
+		).rejects.toThrow(TypeError);
+		const bWriter = batcher.writable.getWriter();
 		const [b1, b2, b3] = [enc.encode("B1"), enc.encode("B2"), enc.encode("B3")];
 		const bw = [b1, b2, b3].map((body) =>
 			bWriter.write({ body, meteredBytes: 10 }),
@@ -480,7 +535,8 @@ describe("input snapshotting on acceptance (C10)", () => {
 		p2.set(enc.encode("YYYYY"));
 		p3.set(enc.encode("ZZZZZ"));
 
-		// Detached buffer fails its write copy; flush()/close() must settle instead of hanging.
+		// Detached buffer fails its write copy; earlier writes still flush, and
+		// flush()/close() reject with S2Error instead of hanging or silently resolving.
 		const detachedBuf = new ArrayBuffer(4);
 		const detachedView = new Uint8Array(detachedBuf);
 		structuredClone(detachedBuf, { transfer: [detachedBuf] });
@@ -491,8 +547,12 @@ describe("input snapshotting on acceptance (C10)", () => {
 		pSrv.held[0]!();
 		await withinDeadline(Promise.all([pw2, pw3]));
 		await expect(withinDeadline(pwBad)).rejects.toThrow(TypeError);
-		await withinDeadline(producer.flush());
-		await withinDeadline(producer.close());
+		await expect(withinDeadline(producer.flush())).rejects.toBeInstanceOf(
+			S2Error,
+		);
+		await expect(withinDeadline(producer.close())).rejects.toBeInstanceOf(
+			S2Error,
+		);
 		expect(pSrv.bodies).toEqual(["P-ONE", "P-TWO", "P-THR"]);
 	});
 });
