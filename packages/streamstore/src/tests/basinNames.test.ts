@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { S2Basin } from "../basin.js";
 import { S2Error } from "../error.js";
 import { S2 } from "../index.js";
+import * as Redacted from "../lib/redacted.js";
 import { cleanupAfterEach, serveHttp1 } from "./helpers.js";
 
 const VALID_BASIN_NAMES = [
@@ -51,6 +53,15 @@ describe("basin name validation (C9)", () => {
 
 		for (const bad of INVALID_BASIN_NAMES) {
 			expect(() => client.basin(bad), `S2.basin(${bad})`).toThrow(S2Error);
+			expect(
+				() =>
+					new S2Basin(bad, {
+						accessToken: Redacted.make("token"),
+						baseUrl: server.origin,
+						includeBasinHeader: false,
+					}),
+				`new S2Basin(${bad})`,
+			).toThrow(S2Error);
 
 			const ops: Array<[string, () => Promise<unknown>]> = [
 				["basins.create", () => client.basins.create({ basin: bad })],
@@ -89,6 +100,9 @@ describe("basin name validation (C9)", () => {
 				).toBe("sdk");
 			}
 		}
+
+		// Non-string JS inputs (including null-prototype objects) throw SDK S2Error, not TypeError.
+		expect(() => client.basin(Object.create(null) as string)).toThrow(S2Error);
 
 		expect(requests).toBe(0);
 	});

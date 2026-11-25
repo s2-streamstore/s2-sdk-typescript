@@ -119,7 +119,7 @@ export function validateBasinName(name: string): void {
 	if (typeof name !== "string" || !BASIN_NAME_REGEX.test(name)) {
 		throw new S2Error({
 			message:
-				`Invalid basin name: ${typeof name === "string" ? JSON.stringify(name) : String(name)}. Basin names must be 8-48 characters, ` +
+				`Invalid basin name${typeof name === "string" ? `: ${JSON.stringify(name)}` : ": expected a string"}. Basin names must be 8-48 characters, ` +
 				`contain only lowercase letters, numbers, and hyphens, and cannot start or end with a hyphen.`,
 			origin: "sdk",
 		});
