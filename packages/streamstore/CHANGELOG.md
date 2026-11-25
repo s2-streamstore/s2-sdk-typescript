@@ -1,5 +1,14 @@
 # @s2-dev/streamstore
 
+## 0.33.1
+
+### Patch Changes
+
+- 816c54b: Honor the `retry-after-ms` response header when retrying unary calls.
+- d1c0276: Never follow HTTP redirects. A 3xx response now fails with an `S2Error` on every transport. Before, `fetch` followed it and forwarded headers such as `s2-encryption-key` to the redirect target, and an `s2s` read session ended as if it had finished.
+- 780e279: `new S2()` now throws an `S2Error` if the access token is empty, ends with whitespace, or contains control characters such as a trailing newline. Before, the client was created and every request failed, and an invalid header value could echo the token in the error message.
+- 2c694e7: Validate basin names (`BasinNameStr`) consistently across `S2Basin`, `basins.create`, `basins.getConfig`, `basins.delete`, `basins.ensure`, `basins.reconfigure`, `metrics.basin`, and `metrics.stream` before making any request.
+
 ## 0.33.0
 
 ### Minor Changes
