@@ -80,15 +80,19 @@ export class S2AccessTokens {
 	): Promise<Types.ListAccessTokensResponse> {
 		const query = toSnakeCase<any>(args);
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listAccessTokens({
-					client: this.client,
-					query,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listAccessTokens({
+						client: this.client,
+						query,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		const camelCased = toCamelCase<any>(response);
 		return {
 			...camelCased,
@@ -145,15 +149,19 @@ export class S2AccessTokens {
 			expiresAt: toISOString(args.expiresAt),
 		});
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				issueAccessToken({
-					client: this.client,
-					body,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					issueAccessToken({
+						client: this.client,
+						body,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return toCamelCase<Types.IssueAccessTokenResponse>(response);
 	}
 
@@ -168,14 +176,18 @@ export class S2AccessTokens {
 	): Promise<void> {
 		const { id } = args;
 		const requestOptions = options ? { ...options } : undefined;
-		await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				revokeAccessToken({
-					client: this.client,
-					path: { id },
-					...requestOptions,
-				}),
-			);
-		});
+		await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					revokeAccessToken({
+						client: this.client,
+						path: { id },
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 	}
 }

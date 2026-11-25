@@ -149,7 +149,7 @@ export async function withS2Data<T>(
 		| {
 				data?: T;
 				error?: unknown;
-				response?: { status?: number; statusText?: string };
+				response?: Parameters<typeof makeServerError>[0];
 		  }
 		| T
 	>,
@@ -502,6 +502,30 @@ export class RangeNotSatisfiableError extends S2Error {
  * If the payload contains a structured { message, code }, those are preferred.
  */
 export function makeServerError(
+	response: {
+		status?: number;
+		statusText?: string;
+		headers?: { get(name: string): string | null };
+	},
+	payload?: unknown,
+): S2Error {
+	const error = serverError(response, payload);
+	const hint = parseRetryAfterMillis(response.headers?.get("retry-after-ms"));
+	if (hint !== undefined) {
+		retryAfterHints.set(error, hint);
+	}
+	return error;
+}
+
+// Kept off S2Error so the hint stays out of the public type and printed errors.
+const retryAfterHints = new WeakMap<S2Error, number>();
+
+/** The server's `retry-after-ms` hint for `error`, when its response carried one. */
+export function retryAfterMillis(error: S2Error): number | undefined {
+	return retryAfterHints.get(error);
+}
+
+function serverError(
 	response: { status?: number; statusText?: string },
 	payload?: unknown,
 ): S2Error {
@@ -532,6 +556,15 @@ export function makeServerError(
 		status,
 		origin: "server",
 	});
+}
+
+/** A malformed `retry-after-ms` value is ignored. */
+function parseRetryAfterMillis(
+	value: string | null | undefined,
+): number | undefined {
+	if (!value || !/^\d+$/.test(value)) return undefined;
+	const millis = Number(value);
+	return Number.isSafeInteger(millis) ? millis : undefined;
 }
 
 /** Map 412 Precondition Failed append errors to rich error types. */

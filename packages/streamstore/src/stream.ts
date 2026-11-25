@@ -131,18 +131,22 @@ export class S2Stream {
 	): Promise<Types.TailResponse> {
 		this.ensureOpen();
 		const requestOptions = options ? { ...options } : undefined;
-		return await withRetries(this.retryConfig, async () => {
-			const response = await withS2Data(() =>
-				checkTail({
-					client: this.client,
-					path: {
-						stream: this.name,
-					},
-					...requestOptions,
-				}),
-			);
-			return fromAPITailResponse(response);
-		});
+		return await withRetries(
+			this.retryConfig,
+			async () => {
+				const response = await withS2Data(() =>
+					checkTail({
+						client: this.client,
+						path: {
+							stream: this.name,
+						},
+						...requestOptions,
+					}),
+				);
+				return fromAPITailResponse(response);
+			},
+			requestOptions?.signal,
+		);
 	}
 
 	/**
@@ -173,27 +177,31 @@ export class S2Stream {
 			requestOptions,
 			input?.streamConfig,
 		);
-		return await withRetries(this.retryConfig, async () => {
-			const genBatch = await streamRead(
-				this.name,
-				this.client,
-				readArgs,
-				dataPlaneOptions,
-			);
-			// Convert from API to SDK ReadBatch
-			const batch = (
-				as === "bytes"
-					? fromAPIReadBatchBytes(genBatch)
-					: fromAPIReadBatchString(genBatch)
-			) as Types.ReadBatch<Format>;
-			if (!ignoreCommandRecords) {
-				return batch;
-			}
-			return {
-				...batch,
-				records: batch.records.filter((r) => !isCommandRecord(r)),
-			};
-		});
+		return await withRetries(
+			this.retryConfig,
+			async () => {
+				const genBatch = await streamRead(
+					this.name,
+					this.client,
+					readArgs,
+					dataPlaneOptions,
+				);
+				// Convert from API to SDK ReadBatch
+				const batch = (
+					as === "bytes"
+						? fromAPIReadBatchBytes(genBatch)
+						: fromAPIReadBatchString(genBatch)
+				) as Types.ReadBatch<Format>;
+				if (!ignoreCommandRecords) {
+					return batch;
+				}
+				return {
+					...batch,
+					records: batch.records.filter((r) => !isCommandRecord(r)),
+				};
+			},
+			requestOptions.signal,
+		);
 	}
 	/**
 	 * Append a batch of records to the stream.
@@ -229,6 +237,7 @@ export class S2Stream {
 					requestOptions,
 				);
 			},
+			requestOptions?.signal,
 			(config, error) => {
 				if ((config.appendRetryPolicy ?? "all") === "noSideEffects") {
 					return error.hasNoSideEffects();

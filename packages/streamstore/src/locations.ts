@@ -35,14 +35,18 @@ export class S2Locations {
 		options?: S2RequestOptions,
 	): Promise<Types.ListLocationsResponse> {
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listLocations({
-					client: this.client,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listLocations({
+						client: this.client,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return response.map(transformLocationInfo);
 	}
 
@@ -53,14 +57,18 @@ export class S2Locations {
 		options?: S2RequestOptions,
 	): Promise<Types.GetDefaultLocationResponse> {
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				getDefaultLocation({
-					client: this.client,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					getDefaultLocation({
+						client: this.client,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return transformLocationInfo(response);
 	}
 
@@ -75,15 +83,19 @@ export class S2Locations {
 	): Promise<Types.SetDefaultLocationResponse> {
 		const { location } = args;
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				setDefaultLocation({
-					client: this.client,
-					body: location,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					setDefaultLocation({
+						client: this.client,
+						body: location,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return transformLocationInfo(response);
 	}
 }

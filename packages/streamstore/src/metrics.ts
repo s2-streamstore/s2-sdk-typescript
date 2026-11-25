@@ -109,15 +109,19 @@ export class S2Metrics {
 			token_id: args.tokenIds ? [...args.tokenIds] : undefined,
 		};
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				accountMetrics({
-					client: this.client,
-					query,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					accountMetrics({
+						client: this.client,
+						query,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return fromAPIMetricSetResponse(response);
 	}
 
@@ -142,16 +146,20 @@ export class S2Metrics {
 			interval: args.interval,
 		});
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				basinMetrics({
-					client: this.client,
-					path: { basin },
-					query,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					basinMetrics({
+						client: this.client,
+						path: { basin },
+						query,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return fromAPIMetricSetResponse(response);
 	}
 
@@ -178,16 +186,20 @@ export class S2Metrics {
 			interval: args.interval,
 		});
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				streamMetrics({
-					client: this.client,
-					path: { basin, stream },
-					query,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					streamMetrics({
+						client: this.client,
+						path: { basin, stream },
+						query,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return fromAPIMetricSetResponse(response);
 	}
 }

@@ -130,15 +130,19 @@ export class S2Basins {
 	): Promise<Types.ListBasinsResponse> {
 		const query = toSnakeCase<any>(args);
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listBasins({
-					client: this.client,
-					query,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listBasins({
+						client: this.client,
+						query,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		const camelCased = toCamelCase<any>(response);
 		return {
 			...camelCased,
@@ -198,16 +202,20 @@ export class S2Basins {
 			config: toAPIBasinConfig(args.config),
 		});
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				createBasin({
-					client: this.client,
-					body,
-					headers: { "s2-request-token": requestToken },
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					createBasin({
+						client: this.client,
+						body,
+						headers: { "s2-request-token": requestToken },
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return transformBasinInfo(toCamelCase(response));
 	}
 
@@ -222,15 +230,19 @@ export class S2Basins {
 	): Promise<Types.BasinConfig> {
 		const basin = args?.basin;
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				getBasinConfig({
-					client: this.client,
-					path: { basin },
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					getBasinConfig({
+						client: this.client,
+						path: { basin },
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		// Convert API format to SDK (age → ageSecs)
 		return toSDKBasinConfig(toCamelCase(response));
 	}
@@ -246,15 +258,19 @@ export class S2Basins {
 	): Promise<void> {
 		const basin = args?.basin;
 		const requestOptions = options ? { ...options } : undefined;
-		await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				deleteBasin({
-					client: this.client,
-					path: { basin },
-					...requestOptions,
-				}),
-			);
-		});
+		await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					deleteBasin({
+						client: this.client,
+						path: { basin },
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 	}
 
 	/**
@@ -280,16 +296,20 @@ export class S2Basins {
 			apiArgs.config !== undefined || apiArgs.location !== undefined;
 		const body = hasBody ? toSnakeCase<any>(apiArgs) : undefined;
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2DataAndResponse<API.BasinInfo>(() =>
-				ensureBasin({
-					client: this.client,
-					path: { basin },
-					body,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2DataAndResponse<API.BasinInfo>(() =>
+					ensureBasin({
+						client: this.client,
+						path: { basin },
+						body,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return {
 			result: provisionResultFromResponse(response.response),
 			basin: transformBasinInfo(toCamelCase(response.data)),
@@ -312,16 +332,20 @@ export class S2Basins {
 			defaultStreamConfig: toAPIStreamConfig(args.defaultStreamConfig),
 		});
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				reconfigureBasin({
-					client: this.client,
-					path: { basin },
-					body,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					reconfigureBasin({
+						client: this.client,
+						path: { basin },
+						body,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		// Convert API format to SDK (age → ageSecs)
 		return toSDKBasinConfig(toCamelCase(response));
 	}

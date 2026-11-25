@@ -45,6 +45,7 @@ export type RetryConfig = {
 	 * Maximum base delay in milliseconds for exponential backoff.
 	 * Once the exponential backoff reaches this value, it stays capped here.
 	 * Note: actual delay with jitter can be up to 2*maxBaseDelayMillis.
+	 * A unary call waits longer when the server sends a larger `retry-after-ms`.
 	 * @default 1000
 	 */
 	maxBaseDelayMillis?: number;

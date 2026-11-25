@@ -83,15 +83,19 @@ export class S2Streams {
 	): Promise<Types.ListStreamsResponse> {
 		const query = toSnakeCase<any>(args);
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				listStreams({
-					client: this.client,
-					query,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					listStreams({
+						client: this.client,
+						query,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		const camelCased = toCamelCase<any>(response);
 		return {
 			...camelCased,
@@ -151,16 +155,20 @@ export class S2Streams {
 			config: toAPIStreamConfig(args.config),
 		});
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				createStream({
-					client: this.client,
-					body,
-					headers: { "s2-request-token": requestToken },
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					createStream({
+						client: this.client,
+						body,
+						headers: { "s2-request-token": requestToken },
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		return transformStreamInfo(toCamelCase<any>(response));
 	}
 
@@ -175,15 +183,19 @@ export class S2Streams {
 	): Promise<Types.StreamConfig> {
 		const { stream } = args;
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				getStreamConfig({
-					client: this.client,
-					path: { stream },
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					getStreamConfig({
+						client: this.client,
+						path: { stream },
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		// Convert API format to SDK (age → ageSecs)
 		return toSDKStreamConfig(toCamelCase(response));
 	}
@@ -199,15 +211,19 @@ export class S2Streams {
 	): Promise<void> {
 		const { stream } = args;
 		const requestOptions = options ? { ...options } : undefined;
-		await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				deleteStream({
-					client: this.client,
-					path: { stream },
-					...requestOptions,
-				}),
-			);
-		});
+		await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					deleteStream({
+						client: this.client,
+						path: { stream },
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 	}
 
 	/**
@@ -233,16 +249,20 @@ export class S2Streams {
 						toAPIStreamConfig(args.config),
 					) as API.StreamConfig | null);
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2DataAndResponse<API.StreamInfo>(() =>
-				ensureStream({
-					client: this.client,
-					path: { stream },
-					body,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2DataAndResponse<API.StreamInfo>(() =>
+					ensureStream({
+						client: this.client,
+						path: { stream },
+						body,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		const streamInfo = toCamelCase<any>(response.data);
 		return {
 			result: provisionResultFromResponse(response.response),
@@ -267,16 +287,20 @@ export class S2Streams {
 			retentionPolicy: toAPIRetentionPolicy(args.retentionPolicy),
 		});
 		const requestOptions = options ? { ...options } : undefined;
-		const response = await withRetries(this.retryConfig, async () => {
-			return await withS2Data(() =>
-				reconfigureStream({
-					client: this.client,
-					path: { stream },
-					body,
-					...requestOptions,
-				}),
-			);
-		});
+		const response = await withRetries(
+			this.retryConfig,
+			async () => {
+				return await withS2Data(() =>
+					reconfigureStream({
+						client: this.client,
+						path: { stream },
+						body,
+						...requestOptions,
+					}),
+				);
+			},
+			requestOptions?.signal,
+		);
 		// Convert API format to SDK (age → ageSecs)
 		const camelCased = toCamelCase<any>(response);
 		return toSDKStreamConfig(camelCased);
