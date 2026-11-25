@@ -1,5 +1,5 @@
 import type { RetryConfig, S2RequestOptions } from "./common.js";
-import { withS2Data } from "./error.js";
+import { S2Error, withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
 import {
 	createBasin,
@@ -104,6 +104,29 @@ function toSDKBasinConfig(config: any): Types.BasinConfig {
 }
 
 /**
+ * Basin names must be 8-48 characters, lowercase alphanumeric and hyphens,
+ * cannot start or end with a hyphen.
+ */
+const BASIN_NAME_REGEX = /^[a-z0-9][a-z0-9-]{6,46}[a-z0-9]$/;
+
+/**
+ * Validate a basin name against `BasinNameStr` (8-48 lowercase alphanumeric
+ * characters and hyphens, no leading or trailing hyphen).
+ *
+ * @throws {S2Error} If the basin name is invalid.
+ */
+export function validateBasinName(name: string): void {
+	if (typeof name !== "string" || !BASIN_NAME_REGEX.test(name)) {
+		throw new S2Error({
+			message:
+				`Invalid basin name: ${typeof name === "string" ? JSON.stringify(name) : String(name)}. Basin names must be 8-48 characters, ` +
+				`contain only lowercase letters, numbers, and hyphens, and cannot start or end with a hyphen.`,
+			origin: "sdk",
+		});
+	}
+}
+
+/**
  * Account-scoped helper for listing, creating, ensuring, deleting, and reconfiguring basins.
  *
  * Retrieve this via {@link S2.basins}. Each method retries according to the client-level retry config.
@@ -188,6 +211,7 @@ export class S2Basins {
 		args: Types.CreateBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.CreateBasinResponse> {
+		validateBasinName(args?.basin);
 		const requestToken = randomToken();
 		// Convert SDK config to API format (ageSecs → age)
 		const apiArgs = {
@@ -216,6 +240,7 @@ export class S2Basins {
 		args: Types.GetBasinConfigInput,
 		options?: S2RequestOptions,
 	): Promise<Types.BasinConfig> {
+		validateBasinName(args?.basin);
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getBasinConfig({
@@ -238,6 +263,7 @@ export class S2Basins {
 		args: Types.DeleteBasinInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
+		validateBasinName(args?.basin);
 		await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				deleteBasin({
@@ -263,6 +289,7 @@ export class S2Basins {
 		args: Types.EnsureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.EnsureBasinResponse> {
+		validateBasinName(args?.basin);
 		const { basin, ...ensureArgs } = args;
 		const apiArgs = {
 			...ensureArgs,
@@ -295,6 +322,7 @@ export class S2Basins {
 		args: Types.ReconfigureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureBasinResponse> {
+		validateBasinName(args?.basin);
 		// Convert SDK config to API format (ageSecs → age)
 		const { basin, ...reconfigArgs } = args;
 		const apiArgs = {

@@ -1,3 +1,4 @@
+import { validateBasinName } from "./basins.js";
 import type { RetryConfig, S2RequestOptions } from "./common.js";
 import { withS2Data } from "./error.js";
 import type { Client } from "./generated/client/types.gen.js";
@@ -132,6 +133,7 @@ export class S2Metrics {
 		args: Types.BasinMetricsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.MetricSetResponse> {
+		validateBasinName(args?.basin);
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				basinMetrics({
@@ -164,6 +166,7 @@ export class S2Metrics {
 		args: Types.StreamMetricsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.MetricSetResponse> {
+		validateBasinName(args?.basin);
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				streamMetrics({

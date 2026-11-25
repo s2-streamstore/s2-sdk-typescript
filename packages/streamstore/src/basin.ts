@@ -1,3 +1,4 @@
+import { validateBasinName } from "./basins.js";
 import type { RetryConfig, S2Compression } from "./common.js";
 import type { Client } from "./generated/client/types.gen.js";
 import { createApiClient } from "./lib/client.js";
@@ -41,6 +42,7 @@ export class S2Basin {
 			http2?: Http2Settings;
 		},
 	) {
+		validateBasinName(name);
 		this.name = name;
 		this.retryConfig = options.retryConfig;
 		this.transportConfig = {
