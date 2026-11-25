@@ -9,7 +9,11 @@ import type { AppendSession, BatchSubmitTicket } from "./lib/stream/types.js";
 import {
 	type AppendAck,
 	type AppendRecord,
-	validateAppendRecord,
+	type QueuedSnapshot,
+	type SnapshotResult,
+	snapshotAppendRecord,
+	takeQueuedSnapshot,
+	trySnapshot,
 } from "./types.js";
 
 const debugProducer = createDebug("s2:producer");
@@ -123,6 +127,8 @@ export class Producer implements AsyncDisposable {
 	private writableReceived = 0;
 	private writableEnded = false;
 	private readonly writableWaiters = new Set<() => void>();
+	private readonly writableSnapshots: QueuedSnapshot<AppendRecord>[] = [];
+	private writableError: S2Error | null = null;
 
 	private terminalError: S2Error | null = null;
 	private readableController: ReadableStreamDefaultController<IndexedAppendAck> | null =
@@ -181,10 +187,22 @@ export class Producer implements AsyncDisposable {
 					);
 				},
 				write: async (record) => {
-					const afterClose = ++this.writableReceived > this.closeFence;
-					const submitted = this.enqueueOperation(() =>
-						this.submitInternal(record, afterClose),
+					const queued = takeQueuedSnapshot(
+						this.writableSnapshots,
+						record,
+						() => snapshotAppendRecord(record),
 					);
+					const afterClose = ++this.writableReceived > this.closeFence;
+					const submitted = this.enqueueOperation(async () => {
+						try {
+							return await this.submitInternal(queued, afterClose);
+						} catch (err) {
+							if (!afterClose && !this.writableError) {
+								this.writableError = toS2Error(err);
+							}
+							throw err;
+						}
+					});
 					this.notifyWritableWaiters();
 					try {
 						await submitted;
@@ -206,10 +224,16 @@ export class Producer implements AsyncDisposable {
 				},
 			},
 			{
-				// writer.write() calls size() synchronously, but the sink sees queued
-				// records one at a time, later. close() uses this count to wait for
-				// the records written before it.
-				size: () => {
+				// size() runs synchronously in writer.write() before queuing; snapshot
+				// here and defer any copy error to sink.write() so close()/flush() cannot hang.
+				size: (record) => {
+					const result = trySnapshot(() =>
+						snapshotAppendRecord(record as AppendRecord),
+					);
+					if (!this.writable.locked) {
+						return 1;
+					}
+					this.writableSnapshots.push({ chunk: record, result });
 					this.writableAccepted += 1;
 					return 1;
 				},
@@ -349,16 +373,20 @@ export class Producer implements AsyncDisposable {
 	 * accepted. The promise blocks if the underlying AppendSession is at capacity
 	 * (backpressure is applied via the transform stream).
 	 *
-	 * @throws S2Error if the Producer has failed, close() was called before this, or `record` has an invalid `meteredBytes` or `timestamp` (only this record is rejected)
+	 * @throws S2Error if the Producer has failed, close() was called before this, or `record` is invalid or exceeds 1 MiB (only this record is rejected)
 	 */
 	submit(record: AppendRecord): Promise<RecordSubmitTicket> {
+		const snapshot = trySnapshot(() => snapshotAppendRecord(record));
 		const afterClose = this.closePromise !== null;
-		return this.enqueueOperation(() => this.submitInternal(record, afterClose));
+		return this.enqueueOperation(() =>
+			this.submitInternal(snapshot, afterClose),
+		);
 	}
 
 	/** The writable has closed, aborted or errored, and will hand over no more records. */
 	private endWritable(): void {
 		this.writableEnded = true;
+		this.writableSnapshots.length = 0;
 		this.notifyWritableWaiters();
 	}
 
@@ -390,7 +418,7 @@ export class Producer implements AsyncDisposable {
 	}
 
 	private async submitInternal(
-		record: AppendRecord,
+		snapshot: SnapshotResult<AppendRecord>,
 		afterClose: boolean,
 	): Promise<RecordSubmitTicket> {
 		const submitId = ++this.submitCounter;
@@ -418,7 +446,10 @@ export class Producer implements AsyncDisposable {
 		}
 
 		// Fails only this record: once batched, it would fail the whole batch.
-		validateAppendRecord(record);
+		if (!snapshot.ok) {
+			throw snapshot.error;
+		}
+		const validated = snapshot.value;
 
 		// Create the ack promise (resolved later by pump)
 		let resolveAck!: (ack: IndexedAppendAck) => void;
@@ -447,7 +478,7 @@ export class Producer implements AsyncDisposable {
 
 		try {
 			// Write to transform - BLOCKS on backpressure
-			await this.transformWriter.write(record);
+			await this.transformWriter.write(validated);
 
 			debugProducer(
 				"[%s] submit #%d: write completed",
@@ -499,8 +530,9 @@ export class Producer implements AsyncDisposable {
 			}
 			await Promise.allSettled(pendingAckPromises);
 
-			if (this.terminalError) {
-				throw this.terminalError;
+			const error = this.terminalError ?? this.writableError;
+			if (error) {
+				throw error;
 			}
 		});
 	}
@@ -685,8 +717,9 @@ export class Producer implements AsyncDisposable {
 		debugProducer("[%s] close complete", this.debugName);
 
 		// If an error occurred, throw it
-		if (this.terminalError) {
-			throw this.terminalError;
+		const error = this.terminalError ?? this.writableError;
+		if (error) {
+			throw error;
 		}
 	}
 

@@ -41,17 +41,21 @@ export class S2Basin {
 			http2?: Http2Settings;
 		},
 	) {
+		const retryConfig = options.retryConfig
+			? { ...options.retryConfig }
+			: undefined;
+		const http2 = options.http2 ? { ...options.http2 } : undefined;
 		this.name = name;
-		this.retryConfig = options.retryConfig;
+		this.retryConfig = retryConfig;
 		this.transportConfig = {
 			baseUrl: options.baseUrl,
 			accessToken: options.accessToken,
 			basinName: options.includeBasinHeader ? name : undefined,
-			connectionTimeoutMillis: options.retryConfig?.connectionTimeoutMillis,
-			requestTimeoutMillis: options.retryConfig?.requestTimeoutMillis,
-			retry: options.retryConfig,
+			connectionTimeoutMillis: retryConfig?.connectionTimeoutMillis,
+			requestTimeoutMillis: retryConfig?.requestTimeoutMillis,
+			retry: retryConfig,
 			compression: options.compression,
-			http2: options.http2,
+			http2,
 		};
 		const headers: Record<string, string> = {};
 		if (options.includeBasinHeader) {

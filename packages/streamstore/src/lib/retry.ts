@@ -355,6 +355,10 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 		config?: RetryConfig,
 		options?: SessionOptions,
 	) {
+		const snapshotArgs: ReadArgs<Format> = {
+			...args,
+			stream_config: Types.cloneStreamConfig(args.stream_config),
+		};
 		const retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
 			...config,
@@ -373,7 +377,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 				}
 				let session: TransportReadSession<Format>;
 				try {
-					session = await generator(args, abort.signal);
+					session = await generator(snapshotArgs, abort.signal);
 				} catch (err) {
 					if (abort.signal.aborted) {
 						throw abortedError();
@@ -410,7 +414,7 @@ export class RetryReadSession<Format extends "string" | "bytes" = "string">
 					throw abortedError();
 				}
 				return new RetryReadSession<Format>(
-					args,
+					snapshotArgs,
 					generator,
 					config,
 					session,
@@ -1028,15 +1032,18 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		return this.fatalError;
 	}
 
+	private readonly sessionOptions?: AppendSessionOptions;
+
 	constructor(
 		private readonly generator: (
 			options?: AppendSessionOptions,
 		) => Promise<TransportAppendSession>,
-		private readonly sessionOptions?: AppendSessionOptions,
+		sessionOptions?: AppendSessionOptions,
 		config?: RetryConfig,
 		streamName?: string,
 		options?: SessionOptions,
 	) {
+		this.sessionOptions = Types.cloneAppendSessionOptions(sessionOptions);
 		this.streamName = streamName ?? "unknown";
 		this.retryConfig = {
 			...DEFAULT_RETRY_CONFIG,
@@ -1076,35 +1083,64 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		const abortFromWritable = (reason: unknown) =>
 			this.abort(abortedFromReason("AppendSession aborted", reason));
 
-		this.writable = new WritableStream<Types.AppendInput>({
-			start: (controller) => {
-				// controller.signal aborts immediately even while sink.write() is
-				// blocked on submit() capacity, whereas sink.abort() waits for it.
-				controller.signal?.addEventListener(
-					"abort",
-					() => {
-						void abortFromWritable(controller.signal.reason);
-					},
-					{ once: true },
-				);
+		const queuedInputs: Types.QueuedSnapshot<Types.AppendInput>[] = [];
+
+		this.writable = new WritableStream<Types.AppendInput>(
+			{
+				start: (controller) => {
+					// controller.signal aborts immediately even while sink.write() is
+					// blocked on submit() capacity, whereas sink.abort() waits for it.
+					controller.signal?.addEventListener(
+						"abort",
+						() => {
+							queuedInputs.length = 0;
+							void abortFromWritable(controller.signal.reason);
+						},
+						{ once: true },
+					);
+				},
+				write: async (chunk) => {
+					const queued = Types.takeQueuedSnapshot(queuedInputs, chunk, () =>
+						Types.snapshotAppendInput(chunk),
+					);
+					if (this.fatalError || this.closing) {
+						queuedInputs.length = 0;
+						throw appendSessionClosedError(this.fatalError);
+					}
+					if (!queued.ok) {
+						queuedInputs.length = 0;
+						throw queued.error;
+					}
+					try {
+						const ticket = await this.submitSnapshot(queued.value);
+						ticket.ack().catch(() => {});
+					} catch (err) {
+						queuedInputs.length = 0;
+						throw err;
+					}
+				},
+				close: async () => {
+					queuedInputs.length = 0;
+					await this.close();
+				},
+				abort: async (reason) => {
+					queuedInputs.length = 0;
+					await abortFromWritable(reason);
+				},
 			},
-			write: async (chunk) => {
-				// chunk is already AppendInput with meteredBytes computed
-				// Reuse submit() to leverage shared backpressure/pump logic.
-				const ticket = await this.submit(chunk);
-				// Writable stream API only needs enqueue semantics, so drop ack but
-				// suppress rejection noise (pump surfaces fatal errors elsewhere).
-				ticket.ack().catch(() => {
-					// Intentionally ignored.
-				});
+			{
+				// size() runs synchronously in writer.write() before queuing behind backpressure.
+				size: (chunk) => {
+					const result = Types.trySnapshot(() =>
+						Types.snapshotAppendInput(chunk as Types.AppendInput),
+					);
+					if (this.writable.locked) {
+						queuedInputs.push({ chunk, result });
+					}
+					return 1;
+				},
 			},
-			close: async () => {
-				await this.close();
-			},
-			abort: async (reason) => {
-				await abortFromWritable(reason);
-			},
-		});
+		);
 
 		this.release = attachSession(
 			options,
@@ -1151,35 +1187,27 @@ export class RetryAppendSession implements AsyncDisposable, AppendSessionType {
 		if (this.fatalError || this.closing) {
 			throw appendSessionClosedError(this.fatalError);
 		}
-		// A NaN here would stick in queuedBytes and stall capacity for good.
-		if (!Number.isSafeInteger(input.meteredBytes) || input.meteredBytes < 0) {
-			throw new S2Error({
-				message:
-					"AppendInput meteredBytes must be a non-negative safe integer; create inputs with AppendInput.create()",
-				origin: "sdk",
-			});
-		}
-		if (input.meteredBytes > Types.MAX_APPEND_BYTES) {
-			throw new S2Error({
-				message: `AppendInput exceeds maximum of ${Types.MAX_APPEND_BYTES} bytes (got ${input.meteredBytes} bytes)`,
-				origin: "sdk",
-			});
-		}
-		Types.validateAppendInput(input);
+		// Validate, compute real meteredBytes, and copy mutable Uint8Array/Date inputs.
+		const snapshot = Types.snapshotAppendInput(input);
+		return this.submitSnapshot(snapshot);
+	}
 
+	private submitSnapshot(
+		snapshot: Types.AppendInput,
+	): Promise<BatchSubmitTicket> {
 		// This needs to happen in the sync path.
 		this.ensurePump();
 
 		// Behind any earlier submit still waiting, so batches keep their order.
-		if (this.capacityWaiters.length === 0 && this.hasCapacity(input)) {
-			return this.enqueue(input);
+		if (this.capacityWaiters.length === 0 && this.hasCapacity(snapshot)) {
+			return Promise.resolve(this.enqueue(snapshot));
 		}
 		debugSession(
 			"[%s] [CAPACITY] no capacity, waiting for release",
 			this.streamName,
 		);
 		return new Promise((resolve, reject) => {
-			this.capacityWaiters.push({ input, resolve, reject });
+			this.capacityWaiters.push({ input: snapshot, resolve, reject });
 		});
 	}
 

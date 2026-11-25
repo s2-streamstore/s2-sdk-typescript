@@ -80,6 +80,142 @@ export type AppendRecord = StringAppendRecord | BytesAppendRecord;
 
 const textEncoder = new TextEncoder();
 
+function isUint8Array(value: unknown): value is Uint8Array {
+	return (
+		value instanceof Uint8Array ||
+		(ArrayBuffer.isView(value) &&
+			Object.prototype.toString.call(value) === "[object Uint8Array]")
+	);
+}
+
+// new Uint8Array(bytes) rather than .slice(), because Node Buffer.slice() shares memory.
+function copyBytes(bytes: Uint8Array): Uint8Array {
+	return new Uint8Array(bytes);
+}
+
+/** @internal */
+export type SnapshotResult<T> =
+	| { ok: true; value: T }
+	| { ok: false; error: unknown };
+
+/** @internal */
+export type QueuedSnapshot<T> = {
+	chunk: unknown;
+	result: SnapshotResult<T>;
+};
+
+/** @internal */
+export function trySnapshot<T>(fn: () => T): SnapshotResult<T> {
+	try {
+		return { ok: true, value: fn() };
+	} catch (error) {
+		return { ok: false, error };
+	}
+}
+
+/** @internal */
+export function takeQueuedSnapshot<T>(
+	queue: QueuedSnapshot<T>[],
+	chunk: unknown,
+	fallback: () => T,
+): SnapshotResult<T> {
+	while (queue.length > 0) {
+		const entry = queue.shift()!;
+		if (Object.is(entry.chunk, chunk)) {
+			return entry.result;
+		}
+	}
+	return trySnapshot(fallback);
+}
+
+function cloneTimestamp(
+	timestamp: number | Date | undefined,
+): number | Date | undefined {
+	if (timestamp == null || typeof timestamp !== "object") {
+		return timestamp;
+	}
+	try {
+		return new Date(Date.prototype.getTime.call(timestamp));
+	} catch {
+		return timestamp;
+	}
+}
+
+/** @internal */
+export function cloneStreamConfig(
+	config: StreamConfig | undefined,
+): StreamConfig | undefined {
+	if (config === undefined) {
+		return undefined;
+	}
+	if (config === null) {
+		return null as unknown as StreamConfig;
+	}
+	// Read declared fields directly so prototype getters on class instances are preserved.
+	const { storageClass, deleteOnEmpty, retentionPolicy, timestamping } = config;
+	const cloned: Record<string, unknown> = { ...config };
+	if (storageClass !== undefined) {
+		cloned.storageClass = storageClass;
+	}
+	if (deleteOnEmpty !== undefined) {
+		if (deleteOnEmpty === null) {
+			cloned.deleteOnEmpty = null;
+		} else {
+			const { minAgeSecs } = deleteOnEmpty;
+			cloned.deleteOnEmpty = {
+				...deleteOnEmpty,
+				...(minAgeSecs !== undefined ? { minAgeSecs } : {}),
+			};
+		}
+	}
+	if (retentionPolicy !== undefined) {
+		if (retentionPolicy === null) {
+			cloned.retentionPolicy = null;
+		} else if ("infinite" in retentionPolicy) {
+			const { infinite } = retentionPolicy;
+			cloned.retentionPolicy = {
+				infinite:
+					infinite && typeof infinite === "object" ? { ...infinite } : infinite,
+			};
+		} else {
+			const { ageSecs } = retentionPolicy;
+			cloned.retentionPolicy = {
+				...retentionPolicy,
+				...(ageSecs !== undefined ? { ageSecs } : {}),
+			};
+		}
+	}
+	if (timestamping !== undefined) {
+		if (timestamping === null) {
+			cloned.timestamping = null;
+		} else {
+			const { mode, uncapped } = timestamping;
+			cloned.timestamping = {
+				...timestamping,
+				...(mode !== undefined ? { mode } : {}),
+				...(uncapped !== undefined ? { uncapped } : {}),
+			};
+		}
+	}
+	return cloned as StreamConfig;
+}
+
+/** @internal */
+export function cloneAppendSessionOptions(
+	options: AppendSessionOptions | undefined,
+): AppendSessionOptions | undefined {
+	if (!options) {
+		return undefined;
+	}
+	const { maxInflightBytes, maxInflightBatches, streamConfig } = options;
+	return {
+		...options,
+		...(maxInflightBytes !== undefined ? { maxInflightBytes } : {}),
+		...(maxInflightBatches !== undefined ? { maxInflightBatches } : {}),
+		streamConfig: cloneStreamConfig(streamConfig),
+	};
+}
+
 function isValidTimestamp(timestamp: number | Date): boolean {
 	try {
 		const ms = epochMillis(timestamp);
@@ -99,55 +235,252 @@ function validateTimestamp(timestamp: number | Date | null | undefined): void {
 	}
 }
 
-/**
- * Check a record that may have been built by hand rather than with
- * {@link AppendRecord.string} or {@link AppendRecord.bytes}.
- *
- * @internal
- * @throws {S2Error} If `meteredBytes` is not a non-negative safe integer, or `timestamp` is invalid
- */
-export function validateAppendRecord(record: AppendRecord): void {
-	if (!Number.isSafeInteger(record.meteredBytes) || record.meteredBytes < 0) {
+type StagedRecord = {
+	body: string | Uint8Array;
+	headers?: Array<readonly [string | Uint8Array, string | Uint8Array]>;
+	timestamp?: number | Date;
+	meteredBytes: number;
+};
+
+function readAndValidateRecord(record: AppendRecord): StagedRecord {
+	if (record == null || typeof record !== "object") {
 		throw new S2Error({
-			message:
-				"record meteredBytes must be a non-negative safe integer; create records with AppendRecord.string() or AppendRecord.bytes()",
+			message: "record must be an object",
 			origin: "sdk",
 		});
 	}
-	validateTimestamp(record.timestamp);
+	// Read each field and header pair once so getters cannot change values between validation and copy.
+	const body = record.body;
+	const rawHeaders = record.headers;
+	const timestamp = record.timestamp;
+
+	if (typeof body !== "string" && !isUint8Array(body)) {
+		throw new S2Error({
+			message: "record body must be a string or Uint8Array",
+			origin: "sdk",
+		});
+	}
+	let headers:
+		| Array<readonly [string | Uint8Array, string | Uint8Array]>
+		| undefined;
+	if (rawHeaders !== undefined) {
+		if (!Array.isArray(rawHeaders)) {
+			throw new S2Error({
+				message: "record headers must be an array of [name, value] pairs",
+				origin: "sdk",
+			});
+		}
+		headers = new Array(rawHeaders.length);
+		for (let i = 0; i < rawHeaders.length; i++) {
+			const entry = rawHeaders[i];
+			if (!Array.isArray(entry) || entry.length !== 2) {
+				throw new S2Error({
+					message:
+						"each record header must be a [name, value] pair of strings or Uint8Arrays",
+					origin: "sdk",
+				});
+			}
+			const name = entry[0];
+			const value = entry[1];
+			if (
+				(typeof name !== "string" && !isUint8Array(name)) ||
+				(typeof value !== "string" && !isUint8Array(value))
+			) {
+				throw new S2Error({
+					message:
+						"each record header must be a [name, value] pair of strings or Uint8Arrays",
+					origin: "sdk",
+				});
+			}
+			headers[i] = [name, value] as const;
+		}
+	}
+	validateTimestamp(timestamp);
+	const bytes = calculateMeteredBytes({ body, headers });
+	if (bytes > MAX_APPEND_BYTES) {
+		throw new S2Error({
+			message: `Record size ${bytes} bytes exceeds maximum batch size of ${MAX_APPEND_BYTES} bytes`,
+			origin: "sdk",
+		});
+	}
+	return { body, headers, timestamp, meteredBytes: bytes };
+}
+
+function copyStagedRecord(staged: StagedRecord): AppendRecord {
+	const copiedBody = isUint8Array(staged.body)
+		? copyBytes(staged.body)
+		: staged.body;
+	const copiedHeaders = staged.headers?.map(
+		([name, value]) =>
+			[
+				isUint8Array(name) ? copyBytes(name) : name,
+				isUint8Array(value) ? copyBytes(value) : value,
+			] as const,
+	);
+	return {
+		body: copiedBody,
+		headers: copiedHeaders,
+		timestamp: cloneTimestamp(staged.timestamp),
+		meteredBytes: staged.meteredBytes,
+	} as AppendRecord;
 }
 
 /**
- * Check a hand-built {@link AppendInput}'s batch limits, records, and
- * conditions before queueing or encoding. Returns the summed record metered
- * bytes.
+ * Validate a record (including one built by hand rather than with
+ * {@link AppendRecord.string} or {@link AppendRecord.bytes}) and return its
+ * computed metered size in bytes. Never trusts caller-supplied `meteredBytes`.
  *
  * @internal
- * @throws {S2Error} If the batch is empty, exceeds record/byte limits, has an invalid record, or has an invalid `fencingToken` / `matchSeqNum`
+ * @throws {S2Error} If `body`, `headers`, or `timestamp` is invalid, or if the record exceeds {@link MAX_APPEND_BYTES}
  */
-export function validateAppendInput(input: {
-	readonly records: ReadonlyArray<AppendRecord>;
-	readonly matchSeqNum?: number;
-	readonly fencingToken?: string;
-}): number {
-	const { records } = input;
-	if (records.length === 0) {
+export function validateAppendRecord(record: AppendRecord): number {
+	return readAndValidateRecord(record).meteredBytes;
+}
+
+/**
+ * Validate and snapshot an {@link AppendRecord}, copying mutable `Uint8Array`,
+ * header array, and `Date` inputs and setting `meteredBytes` to the computed size.
+ *
+ * @internal
+ */
+export function snapshotAppendRecord(record: AppendRecord): AppendRecord {
+	return copyStagedRecord(readAndValidateRecord(record));
+}
+
+function validateBatchConditions(
+	recordCount: number,
+	fencingToken: unknown,
+	matchSeqNum: unknown,
+): void {
+	if (recordCount === 0) {
 		throw new S2Error({
 			message: "AppendInput must contain at least one record",
 			origin: "sdk",
 		});
 	}
-
-	if (records.length > MAX_APPEND_RECORDS) {
+	if (recordCount > MAX_APPEND_RECORDS) {
 		throw new S2Error({
-			message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${records.length})`,
+			message: `AppendInput cannot contain more than ${MAX_APPEND_RECORDS} records (got ${recordCount})`,
 			origin: "sdk",
 		});
 	}
+	if (
+		fencingToken != null &&
+		(typeof fencingToken !== "string" || utf8ByteLength(fencingToken) > 36)
+	) {
+		throw new S2Error({
+			message: "fencing token must not exceed 36 bytes in length",
+			origin: "sdk",
+			status: 422,
+		});
+	}
+	if (
+		matchSeqNum !== undefined &&
+		(!Number.isSafeInteger(matchSeqNum) || (matchSeqNum as number) < 0)
+	) {
+		throw new S2Error({
+			message: "matchSeqNum must be a non-negative safe integer",
+			origin: "sdk",
+		});
+	}
+}
+
+function validateAndStageBatch(input: {
+	readonly records: ReadonlyArray<AppendRecord>;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
+	readonly streamConfig?: StreamConfig;
+}): {
+	totalBytes: number;
+	stagedRecords: StagedRecord[];
+	matchSeqNum?: number;
+	fencingToken?: string;
+	streamConfig?: StreamConfig;
+} {
+	if (input == null || typeof input !== "object") {
+		throw new S2Error({
+			message: "AppendInput must contain a records array",
+			origin: "sdk",
+		});
+	}
+	const { records, fencingToken, matchSeqNum, streamConfig } = input;
+	if (!Array.isArray(records)) {
+		throw new S2Error({
+			message: "AppendInput must contain a records array",
+			origin: "sdk",
+		});
+	}
+	validateBatchConditions(records.length, fencingToken, matchSeqNum);
 
 	let totalBytes = 0;
+	const stagedRecords: StagedRecord[] = new Array(records.length);
+	for (let i = 0; i < records.length; i++) {
+		const staged = readAndValidateRecord(records[i]!);
+		totalBytes += staged.meteredBytes;
+		stagedRecords[i] = staged;
+	}
+	if (totalBytes > MAX_APPEND_BYTES) {
+		throw new S2Error({
+			message: `AppendInput exceeds maximum of ${MAX_APPEND_BYTES} bytes (got ${totalBytes} bytes)`,
+			origin: "sdk",
+		});
+	}
+	return {
+		totalBytes,
+		stagedRecords,
+		matchSeqNum,
+		fencingToken,
+		streamConfig,
+	};
+}
+
+/** @internal */
+export function validateAppendInput(input: {
+	readonly records: ReadonlyArray<AppendRecord>;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
+}): number {
+	return validateAndStageBatch(input).totalBytes;
+}
+
+/** @internal */
+export function snapshotAppendInput(input: {
+	readonly records: ReadonlyArray<AppendRecord>;
+	readonly matchSeqNum?: number;
+	readonly fencingToken?: string;
+	readonly streamConfig?: StreamConfig;
+}): AppendInput {
+	// Stage and measure before copying so rejected oversized batches do not copy buffers,
+	// and each caller property/getter is read only once.
+	const { totalBytes, stagedRecords, matchSeqNum, fencingToken, streamConfig } =
+		validateAndStageBatch(input);
+	return {
+		records: stagedRecords.map(copyStagedRecord),
+		matchSeqNum,
+		fencingToken,
+		streamConfig: cloneStreamConfig(streamConfig),
+		meteredBytes: totalBytes,
+	};
+}
+
+/**
+ * Wrap already-snapshotted, privately owned records in a validated {@link AppendInput}
+ * without re-copying their payloads.
+ *
+ * @internal
+ */
+export function createAppendInputFromSnapshots(
+	records: ReadonlyArray<AppendRecord>,
+	options?: {
+		readonly matchSeqNum?: number;
+		readonly fencingToken?: string;
+	},
+): AppendInput {
+	const matchSeqNum = options?.matchSeqNum;
+	const fencingToken = options?.fencingToken;
+	validateBatchConditions(records.length, fencingToken, matchSeqNum);
+	let totalBytes = 0;
 	for (const record of records) {
-		validateAppendRecord(record);
 		totalBytes += record.meteredBytes;
 	}
 	if (totalBytes > MAX_APPEND_BYTES) {
@@ -156,26 +489,12 @@ export function validateAppendInput(input: {
 			origin: "sdk",
 		});
 	}
-
-	if (input.fencingToken != null && utf8ByteLength(input.fencingToken) > 36) {
-		throw new S2Error({
-			message: "fencing token must not exceed 36 bytes in length",
-			origin: "sdk",
-			status: 422,
-		});
-	}
-
-	if (
-		input.matchSeqNum !== undefined &&
-		(!Number.isSafeInteger(input.matchSeqNum) || input.matchSeqNum < 0)
-	) {
-		throw new S2Error({
-			message: "matchSeqNum must be a non-negative safe integer",
-			origin: "sdk",
-		});
-	}
-
-	return totalBytes;
+	return {
+		records,
+		matchSeqNum,
+		fencingToken,
+		meteredBytes: totalBytes,
+	};
 }
 
 /**
@@ -191,11 +510,13 @@ export namespace AppendRecord {
 		readonly timestamp?: number | Date;
 	}): StringAppendRecord {
 		validateTimestamp(params.timestamp);
-		// Create record with placeholder, then calculate actual size
+		const headers = params.headers?.map(
+			([name, value]) => [name, value] as const,
+		);
 		const record: StringAppendRecord = {
 			body: params.body,
-			headers: params.headers,
-			timestamp: params.timestamp,
+			headers,
+			timestamp: cloneTimestamp(params.timestamp),
 			meteredBytes: 0,
 		};
 		// Safe to cast: we're setting a readonly property during construction
@@ -206,7 +527,8 @@ export namespace AppendRecord {
 
 	/**
 	 * Create a bytes-format append record with pre-calculated metered size.
-	 * String header names and values are encoded as UTF-8.
+	 * String header names and values are encoded as UTF-8, and `Uint8Array`
+	 * inputs are copied so subsequent caller mutations do not affect the record.
 	 */
 	export function bytes(params: {
 		readonly body: Uint8Array;
@@ -216,18 +538,20 @@ export namespace AppendRecord {
 		readonly timestamp?: number | Date;
 	}): BytesAppendRecord {
 		validateTimestamp(params.timestamp);
+		const body = copyBytes(params.body);
 		const headers = params.headers?.map(
 			([name, value]) =>
 				[
-					typeof name === "string" ? textEncoder.encode(name) : name,
-					typeof value === "string" ? textEncoder.encode(value) : value,
+					typeof name === "string" ? textEncoder.encode(name) : copyBytes(name),
+					typeof value === "string"
+						? textEncoder.encode(value)
+						: copyBytes(value),
 				] as const,
 		);
-		// Create record with placeholder, then calculate actual size
 		const record: BytesAppendRecord = {
-			body: params.body,
+			body,
 			headers,
-			timestamp: params.timestamp,
+			timestamp: cloneTimestamp(params.timestamp),
 			meteredBytes: 0,
 		};
 		// Safe to cast: we're setting a readonly property during construction
@@ -357,7 +681,7 @@ export namespace AppendInput {
 	 * Create an AppendInput with validation.
 	 * A batch may contain both string and bytes records.
 	 *
-	 * @throws {S2Error} If validation fails (empty, too many records, too large, or a record has an invalid `meteredBytes` or `timestamp`)
+	 * @throws {S2Error} If validation fails (empty, too many records, exceeds 1 MiB, or a record has an invalid body, headers, or timestamp)
 	 */
 	export function create(
 		records: ReadonlyArray<AppendRecord>,
@@ -367,19 +691,12 @@ export namespace AppendInput {
 			readonly streamConfig?: StreamConfig;
 		},
 	): AppendInput {
-		const totalBytes = validateAppendInput({
-			records,
-			matchSeqNum: options?.matchSeqNum,
-			fencingToken: options?.fencingToken,
-		});
-
-		return {
+		return snapshotAppendInput({
 			records,
 			matchSeqNum: options?.matchSeqNum,
 			fencingToken: options?.fencingToken,
 			streamConfig: options?.streamConfig,
-			meteredBytes: totalBytes,
-		};
+		});
 	}
 }
 

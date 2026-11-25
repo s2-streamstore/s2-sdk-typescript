@@ -1,8 +1,12 @@
 import { S2Error } from "./error.js";
 import {
-	AppendInput,
+	type AppendInput,
 	type AppendRecord,
-	validateAppendRecord,
+	createAppendInputFromSnapshots,
+	type QueuedSnapshot,
+	snapshotAppendRecord,
+	takeQueuedSnapshot,
+	trySnapshot,
 } from "./types.js";
 
 export interface BatchTransformOptions {
@@ -63,26 +67,51 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 
 	constructor(args?: BatchTransformOptions) {
 		let controller!: TransformStreamDefaultController<BatchOutput>;
-		super({
-			start: (c) => {
-				controller = c;
-			},
-			transform: (chunk) => {
-				try {
-					this.handleRecord(chunk);
-				} catch (err) {
-					// The throw errors the stream, so the timer must not fire on it.
+		const queuedSnapshots: QueuedSnapshot<AppendRecord>[] = [];
+		super(
+			{
+				start: (c) => {
+					controller = c;
+				},
+				transform: (chunk) => {
+					const queued = takeQueuedSnapshot(queuedSnapshots, chunk, () =>
+						snapshotAppendRecord(chunk),
+					);
+					try {
+						if (!queued.ok) {
+							throw queued.error;
+						}
+						this.handleRecord(queued.value);
+					} catch (err) {
+						queuedSnapshots.length = 0;
+						// The throw errors the stream, so the timer must not fire on it.
+						this.cancelLingerTimer();
+						throw err;
+					}
+				},
+				flush: () => {
+					queuedSnapshots.length = 0;
+					this.flushCurrentBatch();
+				},
+				cancel: () => {
+					queuedSnapshots.length = 0;
 					this.cancelLingerTimer();
-					throw err;
-				}
+				},
+			} as Transformer<AppendRecord, BatchOutput> & { cancel: () => void },
+			{
+				// size() runs synchronously in writer.write() before queuing behind backpressure.
+				highWaterMark: 1,
+				size: (chunk) => {
+					const result = trySnapshot(() =>
+						snapshotAppendRecord(chunk as AppendRecord),
+					);
+					if (this.writable.locked) {
+						queuedSnapshots.push({ chunk, result });
+					}
+					return 1;
+				},
 			},
-			flush: () => {
-				this.flushCurrentBatch();
-			},
-			cancel: () => {
-				this.cancelLingerTimer();
-			},
-		} as Transformer<AppendRecord, BatchOutput> & { cancel: () => void });
+		);
 
 		// Set controller reference captured during start
 		this.controller = controller;
@@ -136,10 +165,8 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		this.nextMatchSeqNum = args?.matchSeqNum;
 	}
 
-	private handleRecord(record: AppendRecord): void {
-		// Reject an invalid record on its own write, not when its batch flushes.
-		validateAppendRecord(record);
-		const recordSize = record.meteredBytes;
+	private handleRecord(snapshot: AppendRecord): void {
+		const recordSize = snapshot.meteredBytes;
 		if (recordSize > this.maxBatchBytes) {
 			throw new S2Error({
 				message: `Record size ${recordSize} bytes exceeds maximum batch size of ${this.maxBatchBytes} bytes`,
@@ -168,7 +195,7 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 		}
 
 		// Add record to current batch
-		this.currentBatch.push(record);
+		this.currentBatch.push(snapshot);
 		this.currentBatchSize += recordSize;
 
 		// Check if we've now reached the limits
@@ -212,9 +239,10 @@ export class BatchTransform extends TransformStream<AppendRecord, BatchOutput> {
 			this.nextMatchSeqNum += this.currentBatch.length;
 		}
 
-		// Emit the batch downstream with optional fencing token and matchSeqNum
+		// Emit the batch downstream with optional fencing token and matchSeqNum.
+		// Records in currentBatch are already snapshotted and owned by BatchTransform.
 		if (this.controller) {
-			const batch = AppendInput.create(this.currentBatch, {
+			const batch = createAppendInputFromSnapshots(this.currentBatch, {
 				fencingToken: this.fencingToken,
 				matchSeqNum,
 			});
