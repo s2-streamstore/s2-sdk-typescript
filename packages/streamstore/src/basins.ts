@@ -128,12 +128,14 @@ export class S2Basins {
 		args?: Types.ListBasinsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListBasinsResponse> {
+		const query = toSnakeCase<any>(args);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listBasins({
 					client: this.client,
-					query: toSnakeCase(args),
-					...options,
+					query,
+					...requestOptions,
 				}),
 			);
 		});
@@ -162,9 +164,10 @@ export class S2Basins {
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.BasinInfo> {
 		const { includeDeleted, ...listArgs } = args ?? {};
+		const requestOptions = options ? { ...options } : undefined;
 		const allItems = paginate(
 			(a) =>
-				this.list(a, options).then((r) => ({
+				this.list(a, requestOptions).then((r) => ({
 					items: r.basins,
 					hasMore: r.hasMore,
 				})),
@@ -189,18 +192,19 @@ export class S2Basins {
 		options?: S2RequestOptions,
 	): Promise<Types.CreateBasinResponse> {
 		const requestToken = randomToken();
-		// Convert SDK config to API format (ageSecs → age)
-		const apiArgs = {
+		// Convert SDK config to API format (ageSecs → age) and snapshot before retries
+		const body = toSnakeCase<any>({
 			...args,
 			config: toAPIBasinConfig(args.config),
-		};
+		});
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createBasin({
 					client: this.client,
-					body: toSnakeCase(apiArgs),
+					body,
 					headers: { "s2-request-token": requestToken },
-					...options,
+					...requestOptions,
 				}),
 			);
 		});
@@ -216,12 +220,14 @@ export class S2Basins {
 		args: Types.GetBasinConfigInput,
 		options?: S2RequestOptions,
 	): Promise<Types.BasinConfig> {
+		const basin = args?.basin;
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getBasinConfig({
 					client: this.client,
-					path: args,
-					...options,
+					path: { basin },
+					...requestOptions,
 				}),
 			);
 		});
@@ -238,12 +244,14 @@ export class S2Basins {
 		args: Types.DeleteBasinInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
+		const basin = args?.basin;
+		const requestOptions = options ? { ...options } : undefined;
 		await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				deleteBasin({
 					client: this.client,
-					path: args,
-					...options,
+					path: { basin },
+					...requestOptions,
 				}),
 			);
 		});
@@ -270,13 +278,15 @@ export class S2Basins {
 		};
 		const hasBody =
 			apiArgs.config !== undefined || apiArgs.location !== undefined;
+		const body = hasBody ? toSnakeCase<any>(apiArgs) : undefined;
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2DataAndResponse<API.BasinInfo>(() =>
 				ensureBasin({
 					client: this.client,
 					path: { basin },
-					body: hasBody ? toSnakeCase(apiArgs) : undefined,
-					...options,
+					body,
+					...requestOptions,
 				}),
 			);
 		});
@@ -295,19 +305,20 @@ export class S2Basins {
 		args: Types.ReconfigureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureBasinResponse> {
-		// Convert SDK config to API format (ageSecs → age)
+		// Convert SDK config to API format (ageSecs → age) and snapshot before retries
 		const { basin, ...reconfigArgs } = args;
-		const apiArgs = {
+		const body = toSnakeCase<any>({
 			...reconfigArgs,
 			defaultStreamConfig: toAPIStreamConfig(args.defaultStreamConfig),
-		};
+		});
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureBasin({
 					client: this.client,
 					path: { basin },
-					body: toSnakeCase(apiArgs),
-					...options,
+					body,
+					...requestOptions,
 				}),
 			);
 		});

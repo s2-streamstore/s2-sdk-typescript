@@ -46,12 +46,14 @@ export class S2NetworkPolicies {
 		args?: Types.ListNetworkPoliciesInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListNetworkPoliciesResponse> {
+		const query = toSnakeCase<any>(args);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listNetworkPolicies({
 					client: this.client,
-					query: toSnakeCase(args),
-					...options,
+					query,
+					...requestOptions,
 				}),
 			);
 		});
@@ -71,13 +73,15 @@ export class S2NetworkPolicies {
 		args?: Types.ListAllNetworkPoliciesInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.NetworkPolicyInfo> {
+		const listArgs = args ? { ...args } : {};
+		const requestOptions = options ? { ...options } : undefined;
 		return paginate(
 			(a) =>
-				this.list(a, options).then((r) => ({
+				this.list(a, requestOptions).then((r) => ({
 					items: r.networkPolicies,
 					hasMore: r.hasMore,
 				})),
-			args ?? {},
+			listArgs,
 			(policy) => policy.slug,
 		);
 	}
@@ -92,12 +96,14 @@ export class S2NetworkPolicies {
 		args: Types.CreateNetworkPolicyInput,
 		options?: S2RequestOptions,
 	): Promise<Types.NetworkPolicyInfo> {
+		const body = toSnakeCase<any>(args);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createNetworkPolicy({
 					client: this.client,
-					body: toSnakeCase(args),
-					...options,
+					body,
+					...requestOptions,
 				}),
 			);
 		});
@@ -113,12 +119,14 @@ export class S2NetworkPolicies {
 		args: Types.GetNetworkPolicyInput,
 		options?: S2RequestOptions,
 	): Promise<Types.NetworkPolicyInfo> {
+		const { id } = args;
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getNetworkPolicy({
 					client: this.client,
-					path: args,
-					...options,
+					path: { id },
+					...requestOptions,
 				}),
 			);
 		});
@@ -134,12 +142,14 @@ export class S2NetworkPolicies {
 		args: Types.DeleteNetworkPolicyInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
+		const { id } = args;
+		const requestOptions = options ? { ...options } : undefined;
 		await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				deleteNetworkPolicy({
 					client: this.client,
-					path: args,
-					...options,
+					path: { id },
+					...requestOptions,
 				}),
 			);
 		});

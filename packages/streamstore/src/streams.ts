@@ -81,12 +81,14 @@ export class S2Streams {
 		args?: Types.ListStreamsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListStreamsResponse> {
+		const query = toSnakeCase<any>(args);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listStreams({
 					client: this.client,
-					query: toSnakeCase(args),
-					...options,
+					query,
+					...requestOptions,
 				}),
 			);
 		});
@@ -115,9 +117,10 @@ export class S2Streams {
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.StreamInfo> {
 		const { includeDeleted, ...listArgs } = args ?? {};
+		const requestOptions = options ? { ...options } : undefined;
 		const allItems = paginate(
 			(a) =>
-				this.list(a, options).then((r) => ({
+				this.list(a, requestOptions).then((r) => ({
 					items: r.streams,
 					hasMore: r.hasMore,
 				})),
@@ -142,18 +145,19 @@ export class S2Streams {
 	): Promise<Types.CreateStreamResponse> {
 		validateStreamName(args.stream);
 		const requestToken = randomToken();
-		// Convert SDK config to API format (ageSecs → age)
-		const apiArgs = {
+		// Convert SDK config to API format (ageSecs → age) and snapshot before retries
+		const body = toSnakeCase<any>({
 			...args,
 			config: toAPIStreamConfig(args.config),
-		};
+		});
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				createStream({
 					client: this.client,
-					body: toSnakeCase(apiArgs),
+					body,
 					headers: { "s2-request-token": requestToken },
-					...options,
+					...requestOptions,
 				}),
 			);
 		});
@@ -169,12 +173,14 @@ export class S2Streams {
 		args: Types.GetStreamConfigInput,
 		options?: S2RequestOptions,
 	): Promise<Types.StreamConfig> {
+		const { stream } = args;
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				getStreamConfig({
 					client: this.client,
-					path: args,
-					...options,
+					path: { stream },
+					...requestOptions,
 				}),
 			);
 		});
@@ -191,12 +197,14 @@ export class S2Streams {
 		args: Types.DeleteStreamInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
+		const { stream } = args;
+		const requestOptions = options ? { ...options } : undefined;
 		await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				deleteStream({
 					client: this.client,
-					path: args,
-					...options,
+					path: { stream },
+					...requestOptions,
 				}),
 			);
 		});
@@ -216,27 +224,29 @@ export class S2Streams {
 		args: Types.EnsureStreamInput,
 		options?: S2RequestOptions,
 	): Promise<Types.EnsureStreamResponse> {
-		validateStreamName(args.stream);
+		const stream = args.stream;
+		validateStreamName(stream);
 		const body =
 			args.config === undefined
 				? undefined
 				: (toSnakeCase(
 						toAPIStreamConfig(args.config),
 					) as API.StreamConfig | null);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2DataAndResponse<API.StreamInfo>(() =>
 				ensureStream({
 					client: this.client,
-					path: { stream: args.stream },
+					path: { stream },
 					body,
-					...options,
+					...requestOptions,
 				}),
 			);
 		});
-		const stream = toCamelCase<any>(response.data);
+		const streamInfo = toCamelCase<any>(response.data);
 		return {
 			result: provisionResultFromResponse(response.response),
-			stream: transformStreamInfo(stream),
+			stream: transformStreamInfo(streamInfo),
 		};
 	}
 
@@ -249,20 +259,21 @@ export class S2Streams {
 		args: Types.ReconfigureStreamInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureStreamResponse> {
-		// Convert SDK config to API format (ageSecs → age)
+		// Convert SDK config to API format (ageSecs → age) and snapshot before retries
 		const { stream, ...reconfigArgs } = args;
-		const apiArgs = {
+		const body = toSnakeCase<any>({
 			...reconfigArgs,
 			deleteOnEmpty: toAPIDeleteOnEmpty(reconfigArgs.deleteOnEmpty),
 			retentionPolicy: toAPIRetentionPolicy(args.retentionPolicy),
-		};
+		});
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				reconfigureStream({
 					client: this.client,
 					path: { stream },
-					body: toSnakeCase(apiArgs),
-					...options,
+					body,
+					...requestOptions,
 				}),
 			);
 		});

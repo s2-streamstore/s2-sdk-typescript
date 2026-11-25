@@ -15,7 +15,7 @@ import type { Client } from "../../../../generated/client/index.js";
 import type * as API from "../../../../generated/index.js";
 import { read } from "../../../../generated/index.js";
 import type * as Types from "../../../../types.js";
-import { computeAppendRecordFormat } from "../../../../utils.js";
+import { computeAppendRecordFormat, meteredBytes } from "../../../../utils.js";
 import { decodeFromBase64 } from "../../../base64.js";
 import { createApiClient } from "../../../client.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
@@ -483,8 +483,11 @@ export class FetchAppendSession implements TransportAppendSession {
 			);
 		}
 
-		// Validate metered size (use cached value from AppendInput)
-		const batchMeteredSize = input.meteredBytes;
+		// Validate metered size computed from records (never trust caller's meteredBytes)
+		let batchMeteredSize = 0;
+		for (const record of input.records) {
+			batchMeteredSize += meteredBytes(record);
+		}
 
 		if (batchMeteredSize > 1024 * 1024) {
 			debug(

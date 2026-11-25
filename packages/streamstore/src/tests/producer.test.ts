@@ -289,7 +289,17 @@ describe("Producer", () => {
 
 		await producer.submit(AppendRecord.string({ body: "a" }));
 		await expect(
-			producer.submit({ body: "bad" } as AppendRecordType),
+			producer.submit({
+				body: "bad",
+				timestamp: Number.NaN,
+				meteredBytes: 11,
+			} as AppendRecordType),
+		).rejects.toBeInstanceOf(S2Error);
+		await expect(
+			producer.submit({
+				body: new Uint8Array(2 * 1024 * 1024),
+				meteredBytes: 10,
+			} as AppendRecordType),
 		).rejects.toBeInstanceOf(S2Error);
 		await producer.submit(AppendRecord.string({ body: "b" }));
 		await withinDeadline(producer.close());

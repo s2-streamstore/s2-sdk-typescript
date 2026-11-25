@@ -151,8 +151,20 @@ describe("hand-built AppendInput validation (bug_b68786e2)", () => {
 				records: [badRecord],
 				meteredBytes: 11,
 			};
+			const forgedLargeRecord: StringAppendRecord = {
+				body: "x".repeat(2 * 1024 * 1024),
+				meteredBytes: 10,
+			};
+			const forgedLargeInput: AppendInput = {
+				records: [forgedLargeRecord],
+				meteredBytes: 10,
+			};
 
+			expect(() => AppendInput.create([forgedLargeRecord])).toThrow(S2Error);
 			await expect(stream.append(badInput)).rejects.toBeInstanceOf(S2Error);
+			await expect(stream.append(forgedLargeInput)).rejects.toBeInstanceOf(
+				S2Error,
+			);
 			expect(requests).toBe(0);
 
 			const session = await stream.appendSession();
@@ -160,12 +172,9 @@ describe("hand-built AppendInput validation (bug_b68786e2)", () => {
 			await expect(
 				session.submit({ records: [], meteredBytes: 0 }),
 			).rejects.toBeInstanceOf(S2Error);
-			await expect(
-				session.submit({
-					records: [AppendRecord.string({ body: "ok" })],
-					meteredBytes: MAX_APPEND_BYTES + 1,
-				}),
-			).rejects.toBeInstanceOf(S2Error);
+			await expect(session.submit(forgedLargeInput)).rejects.toBeInstanceOf(
+				S2Error,
+			);
 			expect(requests).toBe(0);
 			expect(session.failureCause()).toBeUndefined();
 

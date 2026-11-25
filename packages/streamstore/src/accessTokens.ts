@@ -78,12 +78,14 @@ export class S2AccessTokens {
 		args?: Types.ListAccessTokensInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ListAccessTokensResponse> {
+		const query = toSnakeCase<any>(args);
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				listAccessTokens({
 					client: this.client,
-					query: toSnakeCase(args),
-					...options,
+					query,
+					...requestOptions,
 				}),
 			);
 		});
@@ -111,13 +113,15 @@ export class S2AccessTokens {
 		args?: Types.ListAllAccessTokensInput,
 		options?: S2RequestOptions,
 	): AsyncIterable<Types.AccessTokenInfo> {
+		const listArgs = args ? { ...args } : {};
+		const requestOptions = options ? { ...options } : undefined;
 		return paginate(
 			(a) =>
-				this.list(a, options).then((r) => ({
+				this.list(a, requestOptions).then((r) => ({
 					items: r.accessTokens,
 					hasMore: r.hasMore,
 				})),
-			args ?? {},
+			listArgs,
 			(token) => token.id,
 		);
 	}
@@ -136,17 +140,17 @@ export class S2AccessTokens {
 		options?: S2RequestOptions,
 	): Promise<Types.IssueAccessTokenResponse> {
 		validateAccessTokenId(args.id);
-		// Convert Date to ISO string for API
-		const apiArgs = {
+		const body = toSnakeCase<any>({
 			...args,
 			expiresAt: toISOString(args.expiresAt),
-		};
+		});
+		const requestOptions = options ? { ...options } : undefined;
 		const response = await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				issueAccessToken({
 					client: this.client,
-					body: toSnakeCase(apiArgs),
-					...options,
+					body,
+					...requestOptions,
 				}),
 			);
 		});
@@ -162,12 +166,14 @@ export class S2AccessTokens {
 		args: Types.RevokeAccessTokenInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
+		const { id } = args;
+		const requestOptions = options ? { ...options } : undefined;
 		await withRetries(this.retryConfig, async () => {
 			return await withS2Data(() =>
 				revokeAccessToken({
 					client: this.client,
-					path: args,
-					...options,
+					path: { id },
+					...requestOptions,
 				}),
 			);
 		});

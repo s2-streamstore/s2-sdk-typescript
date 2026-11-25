@@ -155,9 +155,12 @@ export function toSnakeCase<T>(obj: unknown): SnakeCaseKeys<T> {
 		return obj as SnakeCaseKeys<T>;
 	}
 
-	// Don't transform non-plain objects (Date, Map, Set, custom classes, etc.)
-	const proto = Object.getPrototypeOf(obj);
-	if (proto !== Object.prototype && proto !== null) {
+	if (
+		obj instanceof Date ||
+		obj instanceof RegExp ||
+		obj instanceof Map ||
+		obj instanceof Set
+	) {
 		return obj as SnakeCaseKeys<T>;
 	}
 

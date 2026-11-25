@@ -30,6 +30,7 @@ import type * as API from "../../../../generated/index.js";
 import * as Proto from "../../../../generated/proto/s2.js";
 import { fromAPIStreamPosition } from "../../../../internal/mappers.js";
 import type * as Types from "../../../../types.js";
+import { meteredBytes } from "../../../../utils.js";
 import { S2_ENCRYPTION_KEY_HEADER } from "../../../encryption.js";
 import { FifoQueue } from "../../../queue.js";
 import { AdvisedReconnects } from "../../../reconnect.js";
@@ -935,6 +936,7 @@ class S2SAppendSession implements TransportAppendSession {
 	 */
 	private async sendBatch(
 		input: Types.AppendInput,
+		batchMeteredSize: number,
 		onSend: () => void,
 	): Promise<AppendResult> {
 		if (this.closed) {
@@ -975,7 +977,7 @@ class S2SAppendSession implements TransportAppendSession {
 		return new Promise((resolve) => {
 			this.pendingAcks.push({
 				resolve,
-				batchSize: input.meteredBytes,
+				batchSize: batchMeteredSize,
 			});
 
 			// Send the frame (pipelined - non-blocking)
@@ -1076,17 +1078,22 @@ class S2SAppendSession implements TransportAppendSession {
 			);
 		}
 
-		if (input.meteredBytes > 1024 * 1024) {
+		let batchMeteredSize = 0;
+		for (const record of input.records) {
+			batchMeteredSize += meteredBytes(record);
+		}
+
+		if (batchMeteredSize > 1024 * 1024) {
 			return err(
 				new S2Error({
-					message: `Batch size ${input.meteredBytes} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
+					message: `Batch size ${batchMeteredSize} bytes exceeds maximum of 1 MiB (1048576 bytes)`,
 					status: 400,
 					code: "INVALID_ARGUMENT",
 				}),
 			);
 		}
 
-		return this.sendBatch(input, onSend);
+		return this.sendBatch(input, batchMeteredSize, onSend);
 	}
 }
 
