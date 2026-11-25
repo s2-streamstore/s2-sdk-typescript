@@ -1,4 +1,5 @@
 import { S2Endpoints, type S2EndpointsInit } from "./endpoints.js";
+import { S2Error } from "./error.js";
 import type { CompressionType } from "./lib/stream/transport/s2s/framing.js";
 import type { Http2Settings } from "./lib/stream/types.js";
 
@@ -94,11 +95,17 @@ export class S2Environment {
 		const accountEndpoint = process.env.S2_ACCOUNT_ENDPOINT;
 		const basinEndpoint = process.env.S2_BASIN_ENDPOINT;
 		if (accountEndpoint || basinEndpoint) {
-			const endpointsInit: S2EndpointsInit = {
-				account: accountEndpoint || undefined,
-				basin: basinEndpoint || undefined,
-			};
-			config.endpoints = new S2Endpoints(endpointsInit);
+			if (!accountEndpoint || !basinEndpoint) {
+				throw new S2Error({
+					message:
+						"Both S2_ACCOUNT_ENDPOINT and S2_BASIN_ENDPOINT must be set together",
+					origin: "sdk",
+				});
+			}
+			config.endpoints = new S2Endpoints({
+				account: accountEndpoint,
+				basin: basinEndpoint,
+			});
 		}
 
 		return config;

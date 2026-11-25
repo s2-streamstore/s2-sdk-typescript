@@ -25,7 +25,12 @@ import type {
 	MessageParam,
 	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages";
-import { AppendInput, AppendRecord, S2 } from "@s2-dev/streamstore";
+import {
+	AppendInput,
+	AppendRecord,
+	S2,
+	S2Environment,
+} from "@s2-dev/streamstore";
 import { createResumableChat } from "@s2-dev/resumable-stream/anthropic";
 
 const PORT = Number.parseInt(process.env.PORT || "3458", 10);
@@ -44,12 +49,7 @@ if (!basin) throw new Error("Set S2_BASIN");
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
 if (!anthropicKey) throw new Error("Set ANTHROPIC_API_KEY");
 
-const endpointsInit = {
-	account: process.env.S2_ACCOUNT_ENDPOINT || undefined,
-	basin: process.env.S2_BASIN_ENDPOINT || undefined,
-};
-const endpoints =
-	endpointsInit.account || endpointsInit.basin ? endpointsInit : undefined;
+const { endpoints } = S2Environment.parse();
 
 const s2 = new S2({ accessToken, endpoints });
 const basinClient = s2.basin(basin);

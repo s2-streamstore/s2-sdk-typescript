@@ -488,11 +488,7 @@ describeIf("resumable-stream/aisdk", () => {
 	});
 });
 
-function s2EndpointsFromEnv(): {
-	endpoints?: { account?: string; basin?: string };
-} {
-	const account = process.env.S2_ACCOUNT_ENDPOINT || undefined;
-	const basin = process.env.S2_BASIN_ENDPOINT || undefined;
-	if (account || basin) return { endpoints: { account, basin } };
-	return {};
+function s2EndpointsFromEnv() {
+	const { endpoints } = S2Environment.parse();
+	return endpoints ? { endpoints } : {};
 }
