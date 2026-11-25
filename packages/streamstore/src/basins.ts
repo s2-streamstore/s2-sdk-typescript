@@ -215,11 +215,13 @@ export class S2Basins {
 		args: Types.CreateBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.CreateBasinResponse> {
-		validateBasinName(args?.basin);
+		const basin = args?.basin;
+		validateBasinName(basin);
 		const requestToken = randomToken();
 		// Convert SDK config to API format (ageSecs → age)
 		const apiArgs = {
 			...args,
+			basin,
 			config: toAPIBasinConfig(args.config),
 		};
 		const response = await withRetries(
@@ -248,14 +250,15 @@ export class S2Basins {
 		args: Types.GetBasinConfigInput,
 		options?: S2RequestOptions,
 	): Promise<Types.BasinConfig> {
-		validateBasinName(args?.basin);
+		const basin = args?.basin;
+		validateBasinName(basin);
 		const response = await withRetries(
 			this.retryConfig,
 			async () => {
 				return await withS2Data(() =>
 					getBasinConfig({
 						client: this.client,
-						path: args,
+						path: { basin },
 						...options,
 					}),
 				);
@@ -275,14 +278,15 @@ export class S2Basins {
 		args: Types.DeleteBasinInput,
 		options?: S2RequestOptions,
 	): Promise<void> {
-		validateBasinName(args?.basin);
+		const basin = args?.basin;
+		validateBasinName(basin);
 		await withRetries(
 			this.retryConfig,
 			async () => {
 				return await withS2Data(() =>
 					deleteBasin({
 						client: this.client,
-						path: args,
+						path: { basin },
 						...options,
 					}),
 				);
@@ -305,8 +309,8 @@ export class S2Basins {
 		args: Types.EnsureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.EnsureBasinResponse> {
-		validateBasinName(args?.basin);
-		const { basin, ...ensureArgs } = args;
+		const { basin, ...ensureArgs } = args ?? ({} as Types.EnsureBasinInput);
+		validateBasinName(basin);
 		const apiArgs = {
 			...ensureArgs,
 			config: toAPIBasinConfig(args.config),
@@ -342,9 +346,10 @@ export class S2Basins {
 		args: Types.ReconfigureBasinInput,
 		options?: S2RequestOptions,
 	): Promise<Types.ReconfigureBasinResponse> {
-		validateBasinName(args?.basin);
 		// Convert SDK config to API format (ageSecs → age)
-		const { basin, ...reconfigArgs } = args;
+		const { basin, ...reconfigArgs } =
+			args ?? ({} as Types.ReconfigureBasinInput);
+		validateBasinName(basin);
 		const apiArgs = {
 			...reconfigArgs,
 			defaultStreamConfig: toAPIStreamConfig(args.defaultStreamConfig),

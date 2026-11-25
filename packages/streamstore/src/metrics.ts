@@ -137,14 +137,15 @@ export class S2Metrics {
 		args: Types.BasinMetricsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.MetricSetResponse> {
-		validateBasinName(args?.basin);
+		const basin = args?.basin;
+		validateBasinName(basin);
 		const response = await withRetries(
 			this.retryConfig,
 			async () => {
 				return await withS2Data(() =>
 					basinMetrics({
 						client: this.client,
-						path: { basin: args.basin },
+						path: { basin },
 						query: toSnakeCase({
 							set: args.set,
 							start: toEpochSeconds(args.start),
@@ -174,14 +175,15 @@ export class S2Metrics {
 		args: Types.StreamMetricsInput,
 		options?: S2RequestOptions,
 	): Promise<Types.MetricSetResponse> {
-		validateBasinName(args?.basin);
+		const basin = args?.basin;
+		validateBasinName(basin);
 		const response = await withRetries(
 			this.retryConfig,
 			async () => {
 				return await withS2Data(() =>
 					streamMetrics({
 						client: this.client,
-						path: { basin: args.basin, stream: args.stream },
+						path: { basin, stream: args.stream },
 						query: toSnakeCase({
 							set: args.set,
 							start: toEpochSeconds(args.start),
