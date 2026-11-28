@@ -502,7 +502,8 @@ export type PermittedOperationGroups = {
 };
 
 /**
- * Heartbeat emitted while waiting at the tail for new records, sent only once all records before `tail` have been delivered.
+ * Heartbeat carrying the tail, sent only once all records before `tail` have been delivered.
+ * Emitted while waiting at the tail for new records, and before `[DONE]` if the read ends at the tail and the preceding event did not already report it.
  */
 export type PingEventData = {
     /**
@@ -781,6 +782,10 @@ export type ListAccessTokensErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type ListAccessTokensError = ListAccessTokensErrors[keyof ListAccessTokensErrors];
@@ -803,6 +808,10 @@ export type IssueAccessTokenErrors = {
     403: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type IssueAccessTokenError = IssueAccessTokenErrors[keyof IssueAccessTokenErrors];
@@ -833,6 +842,10 @@ export type RevokeAccessTokenErrors = {
      */
     404: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type RevokeAccessTokenError = RevokeAccessTokenErrors[keyof RevokeAccessTokenErrors];
@@ -867,6 +880,10 @@ export type ListBasinsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type ListBasinsError = ListBasinsErrors[keyof ListBasinsErrors];
@@ -895,6 +912,10 @@ export type CreateBasinErrors = {
     403: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type CreateBasinError = CreateBasinErrors[keyof CreateBasinErrors];
@@ -926,6 +947,10 @@ export type DeleteBasinErrors = {
     404: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type DeleteBasinError = DeleteBasinErrors[keyof DeleteBasinErrors];
@@ -955,6 +980,10 @@ export type GetBasinConfigErrors = {
     404: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type GetBasinConfigError = GetBasinConfigErrors[keyof GetBasinConfigErrors];
@@ -982,6 +1011,10 @@ export type ReconfigureBasinErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type ReconfigureBasinError = ReconfigureBasinErrors[keyof ReconfigureBasinErrors];
@@ -1009,6 +1042,10 @@ export type EnsureBasinErrors = {
     403: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type EnsureBasinError = EnsureBasinErrors[keyof EnsureBasinErrors];
@@ -1037,6 +1074,10 @@ export type ListLocationsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type ListLocationsError = ListLocationsErrors[keyof ListLocationsErrors];
@@ -1057,6 +1098,10 @@ export type GetDefaultLocationData = {
 export type GetDefaultLocationErrors = {
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type GetDefaultLocationError = GetDefaultLocationErrors[keyof GetDefaultLocationErrors];
@@ -1078,6 +1123,10 @@ export type SetDefaultLocationErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type SetDefaultLocationError = SetDefaultLocationErrors[keyof SetDefaultLocationErrors];
@@ -1120,6 +1169,10 @@ export type AccountMetricsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type AccountMetricsError = AccountMetricsErrors[keyof AccountMetricsErrors];
@@ -1163,6 +1216,10 @@ export type BasinMetricsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type BasinMetricsError = BasinMetricsErrors[keyof BasinMetricsErrors];
@@ -1210,6 +1267,10 @@ export type StreamMetricsErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type StreamMetricsError = StreamMetricsErrors[keyof StreamMetricsErrors];
@@ -1244,6 +1305,10 @@ export type ListNetworkPoliciesErrors = {
     400: ErrorInfo;
     403: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type ListNetworkPoliciesError = ListNetworkPoliciesErrors[keyof ListNetworkPoliciesErrors];
@@ -1266,6 +1331,10 @@ export type CreateNetworkPolicyErrors = {
     403: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type CreateNetworkPolicyError = CreateNetworkPolicyErrors[keyof CreateNetworkPolicyErrors];
@@ -1294,6 +1363,10 @@ export type DeleteNetworkPolicyErrors = {
     404: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type DeleteNetworkPolicyError = DeleteNetworkPolicyErrors[keyof DeleteNetworkPolicyErrors];
@@ -1321,6 +1394,10 @@ export type GetNetworkPolicyErrors = {
     403: ErrorInfo;
     404: ErrorInfo;
     408: ErrorInfo;
+    /**
+     * Rate limit exceeded (`rate_limited`).
+     */
+    429: ErrorInfo;
 };
 
 export type GetNetworkPolicyError = GetNetworkPolicyErrors[keyof GetNetworkPolicyErrors];
@@ -1562,8 +1639,8 @@ export type ReadData = {
          */
         tail_offset?: number;
         /**
-         * Start reading from the tail if the requested position is beyond it.
-         * Otherwise, a `416 Range Not Satisfiable` response is returned.
+         * Start reading from the tail if the requested position is beyond it (`seq_num > tail.seq_num` or `timestamp > tail.timestamp`).
+         * Without `clamp`, such a request returns `416 Range Not Satisfiable`.
          */
         clamp?: boolean;
         /**
@@ -1585,6 +1662,7 @@ export type ReadData = {
          * The default duration is 0 if there is a bound on `count`, `bytes`, or `until`, and otherwise infinite.
          * Non-streaming reads are always bounded on `count` and `bytes`, so you can achieve long poll semantics by specifying a non-zero duration up to 60 seconds.
          * In the context of an SSE or S2S streaming read, the duration will bound how much time can elapse between records throughout the lifetime of the session.
+         * When `wait` is 0 (explicitly or by default), a unary read that reaches the tail with no records returns `416`. A streaming read that reaches the tail before `count`, `bytes`, or `until` stops it ends cleanly after a message carrying the tail, as it also does once `wait` elapses.
          */
         wait?: number;
     };
@@ -1597,6 +1675,9 @@ export type ReadErrors = {
     404: ErrorInfo;
     408: ErrorInfo;
     409: ErrorInfo;
+    /**
+     * Requested starting position is beyond the tail without `clamp` (`seq_num > tail.seq_num` or `timestamp > tail.timestamp`), or a unary read with `wait` of `0` reached the tail with no records to return.
+     */
     416: TailResponse;
 };
 
